@@ -30,10 +30,14 @@
 //! A missing identity file does not invent a parent link, so the directory
 //! stays its own session. If the file exists but cannot be read, discovery
 //! still indexes each directory as its own session and does not invent a
-//! parent link. Cancellation still stops the scan. A parent id cycle is not
-//! followed. `auth/`, `llm-call.json`, and the runtime token table are not
-//! opened.
+//! parent link. A later listing in the same refresh, while an account context
+//! is active, reuses that snapshot and does not read or replace it. The next
+//! listing without an account context reads again. Parsing keeps the snapshot
+//! from the listing even if the identity file disappears. Cancellation still
+//! stops the scan. A parent id cycle is not followed. `auth/`,
+//! `llm-call.json`, and the runtime token table are not opened.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -261,8 +265,8 @@ pub fn parse_controlled(
     {
         return Err("会话 ID 与清单不一致".into());
     }
-    let identities = match runtime_database(directory) {
-        Some(path) => pinned_identities(&path, cancelled)?,
+    let identities = match identity_database(&directory) {
+        Some(path) => identities_for_parse(&path, cancelled)?,
         None => Arc::new(HashMap::new()),
     };
     let identity = identities.get(&manifest.id);
@@ -518,10 +522,6 @@ fn identity_database(start: &Path) -> Option<PathBuf> {
     }
 }
 
-fn runtime_database(start: &Path) -> Option<PathBuf> {
-    identity_database(start).filter(|database| is_real_file(database))
-}
-
 fn discovery_identities(
     sessions: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -529,14 +529,52 @@ fn discovery_identities(
     let Some(path) = identity_database(sessions) else {
         return Ok(Arc::new(HashMap::new()));
     };
-    if !is_real_file(&path) {
+    // Refresh lists once with no account context, then again for each saved
+    // context. Those later calls must keep the snapshot behind the first
+    // fingerprints. A missing file or a failed open must not replace it.
+    if account_context_active() && held_database(&path) {
+        check_cancelled(cancelled)?;
+        return Ok(pinned_snapshot(&path).unwrap_or_else(|| Arc::new(HashMap::new())));
+    }
+    let snapshot = if !is_real_file(&path) {
         // No file is an empty snapshot for this discovery. Replace any older
         // pin so a file created before parse cannot add links the listing missed.
         let empty = Arc::new(HashMap::new());
         pin_identities(&path, empty.clone());
-        return Ok(empty);
-    }
-    identities(&path, cancelled)
+        empty
+    } else {
+        match identities(&path, cancelled) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                // Cancellation drops the pin. Drop the hold too so a later
+                // context listing cannot pretend that discarded snapshot exists.
+                clear_hold();
+                return Err(error);
+            }
+        }
+    };
+    hold_database(&path);
+    Ok(snapshot)
+}
+
+fn account_context_active() -> bool {
+    crate::accounts::selection::current("minimax_code").is_some()
+}
+
+thread_local! {
+    static HELD_DATABASE: RefCell<Option<PathBuf>> = RefCell::new(None);
+}
+
+fn held_database(path: &Path) -> bool {
+    HELD_DATABASE.with(|held| held.borrow().as_ref().is_some_and(|held_path| held_path == path))
+}
+
+fn hold_database(path: &Path) {
+    HELD_DATABASE.with(|held| *held.borrow_mut() = Some(path.to_path_buf()));
+}
+
+fn clear_hold() {
+    HELD_DATABASE.with(|held| *held.borrow_mut() = None);
 }
 
 fn session_directory(path: &Path) -> Option<&Path> {
@@ -606,21 +644,29 @@ fn identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<HashM
     }
 }
 
-fn pinned_identities(
+fn identities_for_parse(
     database: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Arc<HashMap<String, Identity>>, String> {
-    if let Some(snapshot) = identity_store()
+    // The listing pinned the snapshot that produced this source. Keep it even
+    // when the identity file has since disappeared; do not start a new empty table.
+    if let Some(snapshot) = pinned_snapshot(database) {
+        check_cancelled(cancelled)?;
+        return Ok(snapshot);
+    }
+    if !is_real_file(database) {
+        return Ok(Arc::new(HashMap::new()));
+    }
+    identities(database, cancelled)
+}
+
+fn pinned_snapshot(database: &Path) -> Option<Arc<HashMap<String, Identity>>> {
+    identity_store()
         .pinned
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .get(database)
         .cloned()
-    {
-        check_cancelled(cancelled)?;
-        return Ok(snapshot);
-    }
-    identities(database, cancelled)
 }
 
 fn read_identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, Identity>, String> {
@@ -1545,6 +1591,134 @@ mod tests {
         let parsed = parse(parent_source).unwrap();
         assert!(parsed.children.is_empty());
         assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+    }
+
+    #[test]
+    fn account_context_listing_reuses_the_pinned_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let (_parent, child, child_id) = linked_directories(home);
+        let database = home.join(".minimax").join("v2").join("sqlite").join("runtime-state.sqlite");
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+        ]);
+        let before_child = fs::read(child.join("messages.jsonl")).unwrap();
+        let first = sources(home).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].native_id.as_deref(), Some(SESSION));
+        fs::remove_file(&database).unwrap();
+
+        let during = {
+            let _context = crate::accounts::selection::enter(Some(minimax_context(home)));
+            assert!(sources_controlled(home, &|| true).unwrap_err().contains("取消"));
+            let listed = sources(home).unwrap();
+            assert_eq!(listed.len(), 1, "{listed:?}");
+            assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
+            assert_eq!(listed[0].fingerprint, first[0].fingerprint);
+            assert!(!database.exists());
+            listed
+        };
+        let parsed = parse(&during[0]).unwrap();
+        assert_eq!(fs::read(child.join("messages.jsonl")).unwrap(), before_child);
+        assert!(parsed.messages.iter().any(|message| message.text == "父目录自己的正文"));
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].key, child_id);
+        assert!(parsed.children[0].readable);
+        assert!(parsed.children[0].messages.iter().any(|message| message.text.contains("子目录正文")));
+        assert_eq!(parsed.usage.len(), 2);
+        assert_eq!(parsed.usage.iter().filter(|event| event.input == Some(4)).count(), 1);
+        let child_event = parsed.usage.iter().find(|event| event.input == Some(4)).unwrap();
+        assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(child_id));
+        assert!(!database.exists());
+
+        let again = sources(home).unwrap();
+        assert_eq!(again.len(), 2, "{again:?}");
+        let parent_source = again.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        let child_source = again.iter().find(|source| source.native_id.as_deref() == Some(child_id)).unwrap();
+        let parent_parsed = parse(parent_source).unwrap();
+        assert!(parent_parsed.children.is_empty());
+        assert!(parent_parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        assert_eq!(parent_parsed.usage.len(), 1);
+        let child_parsed = parse(child_source).unwrap();
+        assert!(child_parsed.messages.iter().any(|message| message.text.contains("子目录正文")));
+        assert_eq!(child_parsed.usage.len(), 1);
+    }
+
+    #[test]
+    fn failed_snapshot_stays_unlinked_when_a_context_lists_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let (_parent, child, child_id) = linked_directories(home);
+        let database = home.join(".minimax").join("v2").join("sqlite").join("runtime-state.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        fs::write(&database, b"not a sqlite database").unwrap();
+        let before_child = fs::read(child.join("messages.jsonl")).unwrap();
+        let first = sources(home).unwrap();
+        assert_eq!(first.len(), 2, "{first:?}");
+        fs::remove_file(&database).unwrap();
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+        ]);
+
+        let during = {
+            let _context = crate::accounts::selection::enter(Some(minimax_context(home)));
+            sources(home).unwrap()
+        };
+        assert_eq!(during.len(), 2, "{during:?}");
+        let parent_source = during.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        let child_source = during.iter().find(|source| source.native_id.as_deref() == Some(child_id)).unwrap();
+        let first_parent = first.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        assert_eq!(parent_source.fingerprint, first_parent.fingerprint);
+        let parsed = parse(parent_source).unwrap();
+        assert!(parsed.children.is_empty());
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        assert!(parsed.usage.iter().all(|event| event.input != Some(4)));
+        let child_parsed = parse(child_source).unwrap();
+        assert!(child_parsed.children.is_empty());
+        assert!(child_parsed.messages.iter().any(|message| message.text.contains("子目录正文")));
+        assert_eq!(child_parsed.usage.iter().filter(|event| event.input == Some(4)).count(), 1);
+        assert_eq!(fs::read(child.join("messages.jsonl")).unwrap(), before_child);
+
+        let again = sources(home).unwrap();
+        assert_eq!(again.len(), 1, "{again:?}");
+        let linked = parse(&again[0]).unwrap();
+        assert_eq!(linked.children.len(), 1);
+        assert_eq!(linked.children[0].key, child_id);
+        assert_eq!(linked.usage.iter().filter(|event| event.input == Some(4)).count(), 1);
+    }
+
+    fn linked_directories(home: &Path) -> (PathBuf, PathBuf, &'static str) {
+        let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
+        let parent = day.join("01-00-00-000-session_parent");
+        let child = day.join("02-00-00-000-session_child");
+        let child_id = "mvs_11111111111111111111111111111111";
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        write_manifest(&parent, SESSION, LOCAL_SOURCE);
+        write_manifest(&child, child_id, LOCAL_SOURCE);
+        let parent_usage = json!({"input": 10, "output": 2, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 12});
+        let child_usage = json!({"input": 4, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 5});
+        fs::write(parent.join("messages.jsonl"), format!("{}\n{}\n", user_line("", "父目录自己的正文"), assistant_line(Some(parent_usage)))).unwrap();
+        fs::write(child.join("messages.jsonl"), format!("{}\n", line_with("child-assistant", "assistant", "子目录正文不进父消息", Some(child_usage)))).unwrap();
+        (parent, child, child_id)
+    }
+
+    fn minimax_context(home: &Path) -> crate::accounts::NativeContext {
+        crate::accounts::NativeContext {
+            id: "minimax-refresh".into(),
+            tool_id: "minimax_code".into(),
+            root: home.to_path_buf(),
+            config_root: home.to_path_buf(),
+            auth_files: Vec::new(),
+            history_roots: Vec::new(),
+            resource_root: home.to_path_buf(),
+            environment: std::collections::BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }
     }
 
     #[test]
