@@ -385,6 +385,12 @@ impl CliAdapter for CodeBuddy {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<super::Facet> {
+        Some(super::Facet {
+            state: "available",
+            reason: "已核对子日志可挂到父会话，同一请求只计一次用量",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         version.starts_with("2.")
     }
