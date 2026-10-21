@@ -29,9 +29,10 @@
 //! Usage from each attached transcript is counted once on the root session.
 //! A missing identity file does not invent a parent link, so the directory
 //! stays its own session. If the file exists but cannot be read, discovery
-//! and parsing return an error instead of storing an unlinked session.
-//! A parent id cycle is not followed. `auth/`, `llm-call.json`, and the
-//! runtime token table are not opened.
+//! still indexes each directory as its own session and does not invent a
+//! parent link. Cancellation still stops the scan. A parent id cycle is not
+//! followed. `auth/`, `llm-call.json`, and the runtime token table are not
+//! opened.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -107,10 +108,7 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
     let mut directories = Vec::new();
     collect_sessions(&sessions, cancelled, &mut directories)?;
     directories.sort();
-    let identities = match runtime_database(&sessions) {
-        Some(path) => identities(&path, cancelled).map_err(identity_error)?,
-        None => Arc::new(HashMap::new()),
-    };
+    let identities = discovery_identities(&sessions, cancelled)?;
     let mut ready = Vec::new();
     let mut result = Vec::new();
     for directory in directories {
@@ -264,7 +262,7 @@ pub fn parse_controlled(
         return Err("会话 ID 与清单不一致".into());
     }
     let identities = match runtime_database(directory) {
-        Some(path) => pinned_identities(&path, cancelled).map_err(identity_error)?,
+        Some(path) => pinned_identities(&path, cancelled)?,
         None => Arc::new(HashMap::new()),
     };
     let identity = identities.get(&manifest.id);
@@ -510,15 +508,35 @@ fn valid_session_id(id: &str) -> bool {
     valid_native_id(id) && rest.len() == 32 && rest.chars().all(|character| character.is_ascii_hexdigit())
 }
 
-fn runtime_database(start: &Path) -> Option<PathBuf> {
+fn identity_database(start: &Path) -> Option<PathBuf> {
     let mut current = start;
     loop {
         if current.file_name().and_then(|name| name.to_str()) == Some("v2") {
-            let database = current.join("sqlite").join("runtime-state.sqlite");
-            return is_real_file(&database).then_some(database);
+            return Some(current.join("sqlite").join("runtime-state.sqlite"));
         }
         current = current.parent()?;
     }
+}
+
+fn runtime_database(start: &Path) -> Option<PathBuf> {
+    identity_database(start).filter(|database| is_real_file(database))
+}
+
+fn discovery_identities(
+    sessions: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Arc<HashMap<String, Identity>>, String> {
+    let Some(path) = identity_database(sessions) else {
+        return Ok(Arc::new(HashMap::new()));
+    };
+    if !is_real_file(&path) {
+        // No file is an empty snapshot for this discovery. Replace any older
+        // pin so a file created before parse cannot add links the listing missed.
+        let empty = Arc::new(HashMap::new());
+        pin_identities(&path, empty.clone());
+        return Ok(empty);
+    }
+    identities(&path, cancelled)
 }
 
 fn session_directory(path: &Path) -> Option<&Path> {
@@ -540,14 +558,6 @@ fn identity_store() -> &'static IdentityStore {
     &STORE
 }
 
-fn identity_error(error: String) -> String {
-    if error.contains("取消") {
-        error
-    } else {
-        format!("MiniMax Code 身份库无法读取：{error}")
-    }
-}
-
 fn clear_identity_pin(database: &Path) {
     identity_store()
         .pinned
@@ -556,26 +566,44 @@ fn clear_identity_pin(database: &Path) {
         .remove(database);
 }
 
+fn pin_identities(database: &Path, value: Arc<HashMap<String, Identity>>) {
+    identity_store()
+        .pinned
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(database.to_owned(), value);
+}
+
 fn identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<HashMap<String, Identity>>, String> {
     // Discovery primes this shared cache before the concurrent session parsers.
     // Arc avoids copying every identity for each transcript. The shared cache
     // checks both DB and WAL revisions and never retains failed reads.
     // A successful read is pinned so later parsers in this scan reuse it.
-    // A failed read drops the pin instead of becoming an empty snapshot.
+    // A failed read replaces that pin with an empty snapshot: directories stay
+    // independent and parse does not attach links this discovery did not see.
+    // Cancellation still fails the scan and drops the pin.
     let result = identity_store().cache.read(database, cancelled, || {
         read_identities(database, cancelled).map(Arc::new)
     });
-    if cancelled() || result.is_err() {
+    if let Err(error) = check_cancelled(cancelled) {
         clear_identity_pin(database);
+        return Err(error);
     }
-    check_cancelled(cancelled)?;
-    let value = result?;
-    identity_store()
-        .pinned
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(database.to_owned(), value.clone());
-    Ok(value)
+    match result {
+        Ok(value) => {
+            pin_identities(database, value.clone());
+            Ok(value)
+        }
+        Err(error) if error.contains("取消") => {
+            clear_identity_pin(database);
+            Err(error)
+        }
+        Err(_) => {
+            let empty = Arc::new(HashMap::new());
+            pin_identities(database, empty.clone());
+            Ok(empty)
+        }
+    }
 }
 
 fn pinned_identities(
@@ -979,13 +1007,31 @@ mod tests {
     #[test]
     fn unavailable_identity_schema_is_retried() {
         let temp = tempfile::tempdir().unwrap();
-        let database = temp.path().join(".minimax/v2/sqlite/runtime-state.sqlite");
+        let home = temp.path();
+        let database = home.join(".minimax/v2/sqlite/runtime-state.sqlite");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         drop(Connection::open(&database).unwrap());
-        let error = identities(&database, &|| false).unwrap_err();
-        assert!(error.contains("local_runtime_sessions"), "{error}");
-        write_runtime(temp.path(), &[(SESSION, Some("recovered"), None, "conversation", "visible", 0, None)]);
+        assert!(identities(&database, &|| false).unwrap().is_empty());
+        let directory = home
+            .join(".minimax")
+            .join("v2")
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("11")
+            .join("01-00-00-000-session_one");
+        fs::create_dir_all(&directory).unwrap();
+        write_manifest(&directory, SESSION, LOCAL_SOURCE);
+        fs::write(directory.join("messages.jsonl"), format!("{}\n", user_line("", "缺表仍索引"))).unwrap();
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        let parsed = parse(&listed[0]).unwrap();
+        assert!(parsed.children.is_empty());
+        assert_eq!(parsed.messages[0].text, "缺表仍索引");
+        write_runtime(home, &[(SESSION, Some("recovered"), None, "conversation", "visible", 0, None)]);
         assert_eq!(identities(&database, &|| false).unwrap()[SESSION].title.as_deref(), Some("recovered"));
+        let again = sources(home).unwrap();
+        assert_eq!(parse(&again[0]).unwrap().title, "recovered");
     }
 
     #[test]
@@ -1398,10 +1444,20 @@ mod tests {
         fs::write(child.join("messages.jsonl"), format!("{}\n", user_line("", "子目录仍是独立会话"))).unwrap();
         let listed = sources(home).unwrap();
         assert_eq!(listed.len(), 2);
-        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
-        let parsed = parse(parent_source).unwrap();
+        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap().clone();
+        let parsed = parse(&parent_source).unwrap();
         assert!(parsed.children.is_empty());
         assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+        ]);
+        let late = parse(&parent_source).unwrap();
+        assert!(late.children.is_empty(), "a file written after discovery must not invent links");
+        assert!(late.messages.iter().all(|message| !message.text.contains("子目录")));
+        let again = sources(home).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(parse(&again[0]).unwrap().children.len(), 1);
     }
 
     #[test]
@@ -1445,7 +1501,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_identity_file_fails_instead_of_dropping_the_pinned_child() {
+    fn corrupt_identity_file_lists_directories_and_drops_a_stale_pin() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
         let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
@@ -1461,16 +1517,16 @@ mod tests {
         let database = home.join(".minimax").join("v2").join("sqlite").join("runtime-state.sqlite");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         fs::write(&database, b"not a sqlite database").unwrap();
-        let error = sources(home).unwrap_err();
-        assert!(error.contains("身份库无法读取"), "{error}");
-        let source = HistorySource {
-            native_title: None,
-            path: parent.join("messages.jsonl"),
-            native_id: Some(SESSION.into()),
-            fingerprint: String::new(),
-            fingerprint_error: None,
-        };
-        assert!(parse(&source).unwrap_err().contains("身份库无法读取"));
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        let child_source = listed.iter().find(|source| source.native_id.as_deref() == Some(child_id)).unwrap();
+        let parsed = parse(parent_source).unwrap();
+        assert!(parsed.children.is_empty());
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        let child_parsed = parse(child_source).unwrap();
+        assert!(child_parsed.children.is_empty());
+        assert!(child_parsed.messages.iter().any(|message| message.text.contains("子目录正文")));
         fs::remove_file(&database).unwrap();
         write_runtime(home, &[
             (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
@@ -1483,9 +1539,12 @@ mod tests {
         assert_eq!(parsed.children.len(), 1);
         assert_eq!(parsed.children[0].key, child_id);
         assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
-        let error = sources(home).unwrap_err();
-        assert!(error.contains("身份库无法读取"), "{error}");
-        assert!(parse(&listed[0]).unwrap_err().contains("身份库无法读取"));
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        let parsed = parse(parent_source).unwrap();
+        assert!(parsed.children.is_empty());
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
     }
 
     #[test]
