@@ -163,24 +163,108 @@ fn hex(bytes: &[u8]) -> String {
 /// Folds name and shared change-time revision of every regular file in the session directory
 /// into one order-independent digest, so any append to the messages file, a
 /// new subagent stem or a rewritten manifest reindexes that session only.
+/// A child-file stamp or a directory listing failure stays in that digest.
+/// The manifest and the main transcript still fail the parent fingerprint.
 fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
     check_cancelled(cancelled)?;
-    let mut combined = [0u8; 16];
-    let mut count = 0usize;
+    let session_id = dir.file_name().and_then(|name| name.to_str()).unwrap_or("");
     let mut rows = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
-        check_cancelled(cancelled)?;
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
-            continue;
+    let mut list_failed = false;
+    match fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                check_cancelled(cancelled)?;
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) if cancelled() || scan_cancelled(&error.to_string()) => {
+                        return Err(error.to_string())
+                    }
+                    Err(_) => {
+                        list_failed = true;
+                        continue;
+                    }
+                };
+                let kind = match entry.file_type() {
+                    Ok(kind) => kind,
+                    Err(error) if cancelled() || scan_cancelled(&error.to_string()) => {
+                        return Err(error.to_string())
+                    }
+                    Err(_) => {
+                        list_failed = true;
+                        continue;
+                    }
+                };
+                if !kind.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                rows.push(fingerprint_row(&entry.path(), &name, session_id, cancelled)?);
+            }
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let stamp = crate::history::source_fingerprint_controlled(&entry.path(), cancelled)?;
-        rows.push(format!("{name}:{stamp}"));
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+        Err(_) => list_failed = true,
     }
+    if list_failed {
+        rows.push(format!("children-unread:{}", unread_material_stamp(dir)));
+        for name in known_parent_files(session_id) {
+            if rows.iter().any(|row| row.starts_with(&format!("{name}:"))) {
+                continue;
+            }
+            let path = dir.join(&name);
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            let stamp = crate::history::source_fingerprint_controlled(&path, cancelled)?;
+            rows.push(format!("{name}:{stamp}"));
+        }
+    }
+    fold_fingerprint(rows)
+}
+
+fn known_parent_files(session_id: &str) -> [String; 3] {
+    [
+        format!("{session_id}.json"),
+        format!("{session_id}.messages.json"),
+        format!("{session_id}.compaction.json"),
+    ]
+}
+
+fn child_messages_name(name: &str, session_id: &str) -> bool {
+    name.strip_suffix(".messages.json")
+        .is_some_and(|stem| stem != session_id && stem.contains("__"))
+}
+
+fn fingerprint_row(
+    path: &Path,
+    name: &str,
+    session_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let child = child_messages_name(name, session_id);
+    let stamp = match crate::history::source_fingerprint_controlled(path, cancelled) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) if child => return Ok(format!("{name}:{}", unread_material_stamp(path))),
+        Err(error) => return Err(error),
+    };
+    if child && fs::File::open(path).is_err() {
+        if cancelled() {
+            return Err("扫描已取消，原索引已保留".into());
+        }
+        return Ok(format!("{name}:unread:{stamp}"));
+    }
+    Ok(format!("{name}:{stamp}"))
+}
+
+fn fold_fingerprint(rows: Vec<String>) -> Result<String, String> {
     if rows.is_empty() {
         return Err("Cline 会话目录没有可指纹的文件".into());
     }
+    let mut combined = [0u8; 16];
+    let mut count = 0usize;
     for row in rows {
         for (slot, byte) in combined.iter_mut().zip(md5_hex(row.as_bytes())) {
             *slot ^= byte;
@@ -190,8 +274,51 @@ fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Str
     Ok(format!("cline-session-v3|{count}|{}", hex(&combined)))
 }
 
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
 /// The index database path for a session directory:
 /// `<data>/sessions/<id>` → `<data>/db/sessions.db`.
+fn child_message_files(
+    session_dir: &Path,
+    id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    check_cancelled(cancelled)?;
+    let mut stems = Vec::new();
+    for entry in fs::read_dir(session_dir).map_err(|error| error.to_string())? {
+        check_cancelled(cancelled)?;
+        let entry = entry.map_err(|error| error.to_string())?;
+        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".messages.json") else {
+            continue;
+        };
+        if stem == id || !stem.contains("__") {
+            continue;
+        }
+        stems.push((stem.to_owned(), entry.path()));
+    }
+    stems.sort();
+    Ok(stems)
+}
+
 fn database_for(session_dir: &Path) -> Option<PathBuf> {
     session_dir
         .parent()
@@ -431,27 +558,26 @@ pub fn parse_controlled(
         session.partial = true;
     }
     // Subagent/team stems: usage folds into this conversation; the transcript
-    // of the internal task line stays out of the main timeline.
-    let mut stems: Vec<(String, PathBuf)> = Vec::new();
-    for entry in fs::read_dir(&session_dir).map_err(|error| error.to_string())? {
-        check_cancelled(cancelled)?;
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
-            continue;
+    // of the internal task line stays out of the main timeline. Failing to
+    // list this directory keeps the parent messages already read.
+    let stems = match child_message_files(&session_dir, &id, cancelled) {
+        Ok(stems) => stems,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => {
+            session.partial = true;
+            session.children.push(ChildSession {
+                key: "child".into(),
+                name: None,
+                messages: Vec::new(),
+                readable: false,
+                children: Vec::new(),
+            });
+            Vec::new()
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(stem) = name.strip_suffix(".messages.json") else {
-            continue;
-        };
-        if stem == id.as_str() || !stem.contains("__") {
-            continue;
-        }
-        stems.push((stem.to_owned(), entry.path()));
-    }
-    stems.sort();
+    };
     for (stem, path) in stems {
         let mut child_messages = Vec::new();
-        let readable = read_messages(
+        let readable = match read_messages(
             &mut session,
             &path,
             &stem,
@@ -459,8 +585,11 @@ pub fn parse_controlled(
             &manifest_model,
             Some(&mut child_messages),
             cancelled,
-        )
-        .is_ok();
+        ) {
+            Ok(()) => true,
+            Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+            Err(_) => false,
+        };
         if !readable {
             session.partial = true;
             child_messages.clear();
@@ -859,5 +988,122 @@ mod tests {
     fn md5_hex_is_stable_for_identical_rows() {
         assert_eq!(md5_hex(b"abc"), md5_hex(b"abc"));
         assert_ne!(md5_hex(b"abc"), md5_hex(b"abd"));
+    }
+
+    fn lock_exclusive(path: &Path) -> fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            return fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = fs::File::open(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            file
+        }
+    }
+
+    /// Denies directory listing only. Files already named in the session can
+    /// still be opened, which is the parent-message path.
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(RD)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(path).unwrap().permissions().mode();
+                fs::set_permissions(path, fs::Permissions::from_mode(mode & !0o111)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    #[test]
+    fn locked_child_file_keeps_the_parent_without_its_usage() {
+        let home = fixture_home();
+        let source = source_of(home.path(), MAIN_ID);
+        let locked = source.path.parent().unwrap().join("explore__task_0001.messages.json");
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let parent = source_of(home.path(), MAIN_ID);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            assert!(parent.fingerprint.starts_with("cline-session-v3|"), "{}", parent.fingerprint);
+            assert_ne!(parent.fingerprint, source.fingerprint, "子文件读不到时父指纹仍要带上未读戳");
+            let session = parse(&parent).unwrap();
+            assert!(session.messages.iter().any(|message| message.text.contains("构建")));
+            assert!(session.messages.iter().all(|message| !message.text.contains("子代理")));
+            assert!(session.usage.iter().all(|event| event.attributions.iter().all(|item| item.kind == AgentKind::Main)));
+            let unread = session.children.iter().find(|child| child.key == "explore__task_0001").unwrap();
+            assert!(!unread.readable);
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint
+        };
+        let parent = source_of(home.path(), MAIN_ID);
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let session = parse(&parent).unwrap();
+        let child = session.children.iter().find(|child| child.key == "explore__task_0001").unwrap();
+        assert!(child.readable);
+        assert!(child.messages.iter().any(|message| message.text.contains("子代理")));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子代理")));
+        assert!(session.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Subagent)));
+    }
+
+    #[test]
+    fn unlistable_session_directory_keeps_parent_messages() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "ses_20261022_1200_parent0001";
+        let directory = super::super::data_root(home.path()).join("sessions").join(id);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("{id}.json")),
+            format!(r#"{{"session_id":"{id}","prompt":"父会话仍在","cwd":"C:/demo","model":"fixture"}}"#),
+        )
+        .unwrap();
+        fs::write(
+            directory.join(format!("{id}.messages.json")),
+            r#"[{"id":"m1","role":"user","text":"父会话正文","ts":1791000000000}]"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("explore__task_0009.messages.json"),
+            r#"[{"id":"c1","role":"assistant","text":"子代理正文","ts":1791000001000,"metrics":{"inputTokens":3,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0}}]"#,
+        )
+        .unwrap();
+        let before = sources(home.path()).unwrap().remove(0).fingerprint;
+        let _deny = DenyList::new(&directory);
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert_ne!(found[0].fingerprint, before, "会话目录列举失败要改变父指纹，恢复后才能重扫");
+        let session = parse(&found[0]).unwrap();
+        assert!(session.messages.iter().any(|message| message.text == "父会话正文"));
+        assert!(session.messages.iter().all(|message| message.text != "子代理正文"));
+        assert!(session.usage.iter().all(|event| event.attributions.iter().all(|item| item.session_key.is_none())));
+        let unread = session.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty() && unread.name.is_none());
     }
 }

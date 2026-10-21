@@ -64,28 +64,47 @@ fn sources_with(
             if !state.is_file() || state.is_symlink() {
                 continue;
             }
-            let mut parts = vec![fingerprint(&state)];
-            for wire in agent_wires(&path, cancelled)? {
-                parts.push(fingerprint(&wire));
-            }
-            // Adapter-local parser version: existing indexes are rebuilt once
-            // per parser change even when the native files themselves have not
-            // changed.
-            let checked = parts
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .map(|parts| format!("kimi-session-v4|{}", parts.join("|")));
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .filter(|id| valid_native_id(id))
                 .map(str::to_owned);
-            result.push(HistorySource { native_title: None,
-                path,
-                native_id,
-                fingerprint: checked.as_ref().map(|value| value.as_str()).unwrap_or("").into(),
-                fingerprint_error: checked.err(),
-            });
+            // state.json is the only parent fingerprint. A wire stamp or agents
+            // listing failure stays in that stamp so this session is still
+            // parsed. Cancellation still stops the scan.
+            let source = match fingerprint(&state) {
+                Ok(state_stamp) => {
+                    let mut parts = vec![state_stamp];
+                    match agent_wires(&path, cancelled) {
+                        Ok(wires) => {
+                            for wire in wires {
+                                parts.push(wire_stamp(&wire, &fingerprint, cancelled)?);
+                            }
+                        }
+                        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+                        Err(_) => parts.push(format!(
+                            "children-unread:{}",
+                            unread_material_stamp(&path.join("agents"))
+                        )),
+                    }
+                    HistorySource {
+                        native_title: None,
+                        path,
+                        native_id,
+                        fingerprint: format!("kimi-session-v4|{}", parts.join("|")),
+                        fingerprint_error: None,
+                    }
+                }
+                Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+                Err(error) => HistorySource {
+                    native_title: None,
+                    path,
+                    native_id,
+                    fingerprint: String::new(),
+                    fingerprint_error: Some(error),
+                },
+            };
+            result.push(source);
             if result.len() > MAX_SOURCES {
                 return Err("Kimi Code 会话源超过 5000 个，本次未删除旧索引".into());
             }
@@ -97,10 +116,22 @@ fn sources_with(
 fn agent_wires(session: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<PathBuf>, String> {
     check_cancelled(cancelled)?;
     let agents = session.join("agents");
-    let mut wires = Vec::new();
-    if !agents.is_dir() {
-        return Ok(wires);
+    match fs::symlink_metadata(&agents) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
+        Ok(metadata) => {
+            let directory = if metadata.file_type().is_symlink() {
+                agents.is_dir()
+            } else {
+                metadata.is_dir()
+            };
+            if !directory {
+                return Ok(Vec::new());
+            }
+        }
     }
+    let mut wires = Vec::new();
     for agent in fs::read_dir(&agents).map_err(|error| error.to_string())? {
         let agent = agent.map_err(|error| error.to_string())?;
         if !agent.file_type().map_err(|error| error.to_string())?.is_dir() {
@@ -113,6 +144,46 @@ fn agent_wires(session: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<PathB
     }
     wires.sort();
     Ok(wires)
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+fn wire_stamp(
+    path: &Path,
+    fingerprint: &impl Fn(&Path) -> Result<String, String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    // Attribute metadata can succeed while a sharing lock still blocks the
+    // body. The unread prefix keeps the parent fingerprint different until
+    // the body can be opened again. A readable wire keeps the historical stamp.
+    let stamp = match fingerprint(path) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(unread_material_stamp(path)),
+    };
+    if fs::File::open(path).is_ok() {
+        Ok(stamp)
+    } else if cancelled() {
+        Err("扫描已取消，原索引已保留".into())
+    } else {
+        Ok(format!("unread:{stamp}"))
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -198,7 +269,22 @@ pub fn parse_controlled(
         .map(str::to_owned);
     session.started_at = state.get("createdAt").and_then(timestamp);
     session.updated_at = state.get("updatedAt").and_then(timestamp);
-    for wire in agent_wires(&source.path, cancelled)? {
+    let wires = match agent_wires(&source.path, cancelled) {
+        Ok(wires) => wires,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => {
+            session.partial = true;
+            session.children.push(ChildSession {
+                key: "child".into(),
+                name: None,
+                messages: Vec::new(),
+                readable: false,
+                children: Vec::new(),
+            });
+            return session.finish(source);
+        }
+    };
+    for wire in wires {
         check_cancelled(cancelled)?;
         let agent_dir = wire
             .parent()
@@ -329,6 +415,7 @@ pub fn parse_controlled(
                 session.partial |= partial;
                 true
             }
+            Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
             Err(_) => {
                 session.partial = true;
                 false
@@ -539,5 +626,128 @@ mod tests {
         assert!(source.fingerprint.starts_with("kimi-session-v4|"));
         let parsed = parse(&source).unwrap();
         assert_eq!(parsed.cwd.as_deref(), Some("C:/Legacy/project"));
+    }
+
+    fn lock_exclusive(path: &Path) -> fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            return fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = fs::File::open(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            file
+        }
+    }
+
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success());
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(OI)(CI)(RX)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    #[test]
+    fn unlistable_agents_directory_keeps_every_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = session_tree(temp.path());
+        std::fs::create_dir_all(blocked.join("agents/researcher")).unwrap();
+        std::fs::write(
+            blocked.join("agents/researcher/wire.jsonl"),
+            "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"子代理检索输入\"}]}}\n",
+        )
+        .unwrap();
+        let other = temp
+            .path()
+            .join(".kimi-code/sessions/wd_example_000000000000/session_other_0001");
+        std::fs::create_dir_all(other.join("agents/main")).unwrap();
+        std::fs::write(other.join("state.json"), r#"{"title":"另一父会话","createdAt":"2026-08-02T03:22:11.567Z"}"#).unwrap();
+        std::fs::write(other.join("agents/main/wire.jsonl"), "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"另一父会话正文\"}]}}\n").unwrap();
+        let _deny = DenyList::new(&blocked.join("agents"));
+        let found = sources(temp.path()).unwrap();
+        assert_eq!(found.len(), 2, "一个 agents 目录列举失败不能让本次发现整体失败");
+        assert!(found.iter().all(|item| item.fingerprint_error.is_none() && item.fingerprint.starts_with("kimi-session-v4|")));
+        let parent = found.iter().find(|item| item.path == blocked).unwrap();
+        assert!(parent.fingerprint.contains("children-unread") || parent.fingerprint.contains("unread:"));
+        let parsed = parse(parent).unwrap();
+        assert!(parsed.title.contains("示例项目"));
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
+        assert!(parsed.usage.is_empty());
+        let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty() && unread.name.is_none());
+        let other_source = found.iter().find(|item| item.native_id.as_deref() == Some("session_other_0001")).unwrap();
+        let other_parsed = parse(other_source).unwrap();
+        assert!(other_parsed.messages.iter().any(|message| message.text == "另一父会话正文"));
+    }
+
+    #[test]
+    fn locked_child_wire_keeps_the_parent_and_known_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = session_tree(temp.path());
+        std::fs::create_dir_all(session.join("agents/researcher")).unwrap();
+        let locked = session.join("agents/researcher/wire.jsonl");
+        std::fs::write(
+            &locked,
+            concat!(
+                "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"子代理检索输入\"}]},\"time\":\"2026-08-02T03:23:00.000Z\"}\n",
+                "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:00.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":42,\"output\":7,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+            ),
+        )
+        .unwrap();
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let parent = sources(temp.path()).unwrap().remove(0);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            assert!(parent.fingerprint.contains("unread:"), "{}", parent.fingerprint);
+            let parsed = parse(&parent).unwrap();
+            assert!(parsed.messages.iter().any(|message| message.role == "user"));
+            assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
+            assert_eq!(parsed.usage.len(), 2, "锁住的子日志不新增用量");
+            assert!(parsed.usage.iter().all(|event| event.attributions.iter().all(|item| item.kind == AgentKind::Main)));
+            let unread = parsed.children.iter().find(|child| child.key == "agents/researcher").unwrap();
+            assert!(!unread.readable);
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint
+        };
+        let parent = sources(temp.path()).unwrap().remove(0);
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let parsed = parse(&parent).unwrap();
+        assert_eq!(parsed.usage.len(), 3, "没有原生请求 id 的子日志用量保持分开");
+        let child = parsed.children.iter().find(|child| child.key == "agents/researcher").unwrap();
+        assert!(child.readable);
+        assert_eq!(child.messages[0].text, "子代理检索输入");
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
     }
 }
