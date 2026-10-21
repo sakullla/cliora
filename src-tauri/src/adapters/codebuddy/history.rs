@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
-    check_cancelled, discover_jsonl_controlled, raw_string_after, read_jsonl_filtered,
+    check_cancelled, discover_jsonl_controlled_in, raw_string_after, read_jsonl_filtered,
     source_fingerprint_controlled, text_content, timestamp, valid_native_id, AgentKind,
     ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
     ParsedSession, UsageAttribution, UsageEvent,
@@ -29,7 +29,7 @@ pub fn sources_controlled(
     let root = crate::accounts::selection::history_root("codebuddy", || {
         super::config_root(home).join("projects")
     });
-    let mut sources = discover_jsonl_controlled(
+    let mut sources = discover_jsonl_controlled_in(
         &root,
         |path| {
             path.extension().is_some_and(|value| value == "jsonl")
@@ -39,45 +39,94 @@ pub fn sources_controlled(
                     .is_some_and(session_file_stem)
         },
         cancelled,
+        // Child logs are not sessions. Listing them here would fail every
+        // parent when that directory cannot be read.
+        |path| path.file_name().is_none_or(|name| name != "subagents"),
     )?;
     // Adapter-local parser version: existing indexes are rebuilt once per
     // parser change even when the native file itself has not changed. The
     // fingerprint also covers the session's subagent wires, so a later
-    // subagent run reindexes the parent session.
+    // subagent run reindexes the parent session. A child listing or
+    // fingerprint failure is not a parent fingerprint_error: the scan must
+    // still parse the parent, and the extra changes when the child can be
+    // read again.
     for source in &mut sources {
+        if source.fingerprint_error.is_some() {
+            continue;
+        }
         let mut parts = vec![source.fingerprint.clone()];
-        let mut error = source.fingerprint_error.take();
-        for wire in subagent_wires(&source.path, cancelled)? {
-            match source_fingerprint_controlled(&wire, cancelled) {
-                Ok(stamp) => parts.push(stamp),
-                Err(message) => {
-                    error = Some(message);
-                    break;
-                }
-            }
-        }
-        if let Some(message) = error {
-            source.fingerprint = String::new();
-            source.fingerprint_error = Some(message);
-        } else {
-            source.fingerprint = format!("codebuddy-session-v5|{}", parts.join("|"));
-        }
+        parts.extend(child_fingerprint_parts(&source.path, cancelled)?);
+        source.fingerprint = format!("codebuddy-session-v5|{}", parts.join("|"));
     }
     Ok(sources)
+}
+
+fn child_fingerprint_parts(session_file: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<String>, String> {
+    let wires = match subagent_wires(session_file, cancelled) {
+        Ok(wires) => wires,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => {
+            let Some(directory) = subagent_directory(session_file) else {
+                return Ok(Vec::new());
+            };
+            return Ok(vec![format!("children-unread:{}", unread_material_stamp(&directory))]);
+        }
+    };
+    let mut parts = Vec::with_capacity(wires.len());
+    for wire in wires {
+        parts.push(child_material_stamp(&wire, cancelled)?);
+    }
+    Ok(parts)
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+fn child_material_stamp(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    // Attribute metadata can succeed while a sharing lock still blocks the
+    // body. The unread prefix keeps the parent fingerprint different until
+    // the body can be opened again. A readable wire keeps the historical
+    // metadata stamp so an unchanged child does not force another rescan.
+    let stamp = match source_fingerprint_controlled(path, cancelled) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(unread_material_stamp(path)),
+    };
+    if fs::File::open(path).is_ok() {
+        Ok(stamp)
+    } else if cancelled() {
+        Err("扫描已取消，原索引已保留".into())
+    } else {
+        Ok(format!("unread:{stamp}"))
+    }
 }
 
 /// Subagent wires of one session: `projects/<slug>/<session-id>/subagents/
 /// agent-*.jsonl`. Rows inside carry the subagent's own session id, so the
 /// parent linkage is positional (the session-id directory name).
+fn subagent_directory(session_file: &Path) -> Option<PathBuf> {
+    let stem = session_file.file_stem().and_then(|value| value.to_str())?;
+    Some(session_file.parent()?.join(stem).join("subagents"))
+}
+
 fn subagent_wires(session_file: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<PathBuf>, String> {
     check_cancelled(cancelled)?;
-    let Some(stem) = session_file.file_stem().and_then(|value| value.to_str()) else {
-        return Ok(Vec::new());
-    };
-    let Some(directory) = session_file
-        .parent()
-        .map(|parent| parent.join(stem).join("subagents"))
-    else {
+    let Some(directory) = subagent_directory(session_file) else {
         return Ok(Vec::new());
     };
     if !directory.is_dir() {
@@ -388,14 +437,23 @@ pub fn parse_controlled(
     // Subagent wires keep their own session id and body. Usage still joins the
     // parent total. A call already seen on the parent (same conversation
     // request and message id, or the same row id) is not counted again.
+    let mut used_keys = HashSet::new();
     let wires = match subagent_wires(&source.path, cancelled) {
         Ok(wires) => wires,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
         Err(_) => {
             session.partial = true;
+            let key = claim_child_key(&mut used_keys, None, "child".into());
+            session.children.push(ChildSession {
+                key,
+                name: None,
+                messages: Vec::new(),
+                readable: false,
+                children: Vec::new(),
+            });
             Vec::new()
         }
     };
-    let mut used_keys = HashSet::new();
     for wire in wires {
         check_cancelled(cancelled)?;
         let agent = wire
@@ -473,7 +531,10 @@ pub fn parse_controlled(
                     children: Vec::new(),
                 });
             }
-            Err(_) => {
+            Err(error) => {
+                if cancelled() || scan_cancelled(&error) {
+                    return Err(error);
+                }
                 session.partial = true;
                 let key = claim_child_key(&mut used_keys, None, path_key);
                 session.children.push(ChildSession {
@@ -845,7 +906,12 @@ mod tests {
         let locked = projects.join(format!("{session_id}/subagents/agent-locked.jsonl"));
         fs::write(&locked, r#"{"id":"c1","type":"message","role":"assistant","content":[{"type":"text","text":"不可读正文"}]}"#).unwrap();
         let _lock = lock_exclusive(&locked);
-        let parsed = parse(&sources(temp.path()).unwrap().remove(0)).unwrap();
+        let found = sources(temp.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert!(found[0].fingerprint.starts_with("codebuddy-session-v5|"));
+        assert!(found[0].fingerprint.contains("unread:"), "不可读子文件仍要进入父指纹，恢复可读后才能重扫");
+        let parsed = parse(&found[0]).unwrap();
         assert!(parsed.messages.iter().any(|message| message.text == "父会话仍在"));
         assert!(parsed.messages.iter().all(|message| !message.text.contains("不可读")));
         assert!(parsed.usage.is_empty());
@@ -886,5 +952,144 @@ mod tests {
         .unwrap();
         let after = sources(temp.path()).unwrap().remove(0).fingerprint;
         assert_ne!(before, after, "子代理线文件变化必须触发重扫");
+    }
+
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success());
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(OI)(CI)(RX)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn refresh(db: &crate::database::Database, home: &Path, tool: &str) -> Vec<crate::history::HistoryDetail> {
+        let registry = crate::adapters::Registry::builtins();
+        let reports = crate::history::refresh_controlled(db, &registry, home, &[tool.to_owned()], &|| false).unwrap();
+        let report = reports.iter().find(|item| item.tool_id == tool).expect("scan report");
+        assert!(!report.incomplete, "{}", report.detail);
+        assert_eq!(report.failed_count, 0, "{}", report.detail);
+        crate::history::list(db, &crate::history::HistoryFilter { tool_id: Some(tool.to_owned()), ..crate::history::HistoryFilter::default() })
+            .unwrap()
+            .into_iter()
+            .map(|session| {
+                assert!(!session.stale, "{}", session.title);
+                crate::history::detail(db, &session.id).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unlistable_child_directory_keeps_every_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        let other = "11111111-1111-4111-8111-111111111111";
+        let wires = projects.join(format!("{session_id}/subagents"));
+        fs::create_dir_all(&wires).unwrap();
+        fs::write(projects.join(format!("{session_id}.jsonl")), format!(
+            r#"{{"id":"m1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-1"}},"content":[{{"type":"text","text":"父会话仍在"}}]}}
+{{"id":"parent-row","type":"message","role":"assistant","timestamp":1789000001000,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-1","model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":10,"outputTokens":1,"totalTokens":11,"inputTokensDetails":[],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"父回复"}}]}}"#
+        )).unwrap();
+        fs::write(wires.join("agent-hidden.jsonl"), r#"{"id":"c1","type":"message","role":"assistant","content":[{"type":"text","text":"子日志正文"}]}"#).unwrap();
+        fs::write(projects.join(format!("{other}.jsonl")), format!(
+            r#"{{"id":"o1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{other}","content":[{{"type":"text","text":"另一父会话"}}]}}"#
+        )).unwrap();
+        let _deny = DenyList::new(&wires);
+        let found = sources(temp.path()).unwrap();
+        assert_eq!(found.len(), 2, "子目录列举失败不能让本次发现整体失败");
+        assert!(found.iter().all(|item| item.fingerprint_error.is_none() && item.fingerprint.starts_with("codebuddy-session-v5|")));
+        let parent = found.iter().find(|item| item.path.ends_with(format!("{session_id}.jsonl"))).unwrap();
+        assert!(parent.fingerprint.contains("children-unread"));
+        let parsed = parse(parent).unwrap();
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话仍在"));
+        assert!(parsed.messages.iter().all(|message| message.text != "子日志正文"));
+        assert!(parsed.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main && item.name.as_deref() == Some("cli"))));
+        let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty() && unread.name.is_none());
+    }
+
+    #[test]
+    fn locked_child_is_indexed_on_the_parent_and_reread_when_it_unlocks() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        let wires = projects.join(format!("{session_id}/subagents"));
+        fs::create_dir_all(&wires).unwrap();
+        let usage = |tokens: u64| {
+            format!(r#"{{"requests":1,"inputTokens":{tokens},"outputTokens":1,"totalTokens":{tokens},"inputTokensDetails":[],"outputTokensDetails":[]}}"#)
+        };
+        fs::write(projects.join(format!("{session_id}.jsonl")), format!(
+            r#"{{"id":"m1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{session_id}","providerData":{{"agent":"cli"}},"content":[{{"type":"text","text":"父会话仍在"}}]}}
+{{"id":"parent-row","type":"message","role":"assistant","timestamp":1789000001000,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-1","model":"kimi-k3-2","usage":{usage}}},"content":[{{"type":"text","text":"父回复"}}]}}
+{{"id":"parent-other","type":"function_call","timestamp":1789000001100,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-2","model":"kimi-k3-2","usage":{other}}}}}
+"#,
+            usage = usage(10),
+            other = usage(20),
+        )).unwrap();
+        let locked = wires.join("agent-locked.jsonl");
+        fs::write(&locked, format!(
+            r#"{{"id":"child-row","type":"message","role":"assistant","timestamp":1789000002000,"sessionId":"child-session-id","providerData":{{"agent":"Explore","isSubAgent":true,"conversationRequestId":"turn-1","messageId":"call-1","model":"kimi-k3-2","usage":{usage}}},"content":[{{"type":"text","text":"子日志正文"}}]}}
+{{"id":"child-other","type":"function_call","timestamp":1789000002100,"sessionId":"child-session-id","providerData":{{"agent":"Explore","conversationRequestId":"turn-1","messageId":"call-9","usage":{other}}}}}
+"#,
+            usage = usage(99),
+            other = usage(7),
+        )).unwrap();
+        let db = crate::database::Database::open(&temp.path().join("index.db")).unwrap();
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let parent = sources(temp.path()).unwrap().remove(0);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            let details = refresh(&db, temp.path(), "codebuddy");
+            assert_eq!(details.len(), 1);
+            let detail = &details[0];
+            assert_eq!(detail.session.native_id.as_deref(), Some(session_id));
+            assert!(detail.messages.iter().any(|message| message.text == "父会话仍在"));
+            assert!(detail.messages.iter().all(|message| message.text != "子日志正文"));
+            assert!(detail.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main && item.name.as_deref() == Some("cli"))));
+            assert!(detail.usage.iter().all(|event| !event.id.contains("child-other")));
+            let unread = detail.children.iter().find(|child| !child.readable).unwrap();
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint
+        };
+        let parent = sources(temp.path()).unwrap().remove(0);
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let details = refresh(&db, temp.path(), "codebuddy");
+        let detail = &details[0];
+        assert!(detail.messages.iter().all(|message| message.text != "子日志正文"));
+        assert_eq!(detail.usage.len(), 3, "同一 messageId 不新增用量");
+        let shared = detail.usage.iter().find(|event| event.id == "codebuddy:usage:parent-row").unwrap();
+        assert_eq!(shared.input, Some(10));
+        assert!(shared.attributions.iter().any(|item| item.kind == AgentKind::Main));
+        assert!(shared.attributions.iter().any(|item| item.kind == AgentKind::Subagent && item.name.as_deref() == Some("Explore") && item.session_key.as_deref() == Some("child-session-id")));
+        let child = detail.children.iter().find(|child| child.readable).unwrap();
+        assert!(child.messages.iter().any(|message| message.text == "子日志正文"));
     }
 }

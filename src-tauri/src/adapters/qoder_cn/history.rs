@@ -2,6 +2,7 @@
 //! Credits are native usage, not currency or remaining balance. Zero token
 //! buckets in this release are placeholders and cannot establish a token price.
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -20,29 +21,71 @@ fn session_stem(value: &str) -> bool {
 pub fn sources(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
     let root = super::QODER_CN.config_root(home)?.join("projects");
     history::check_source_path(&root)?;
-    let mut sources = history::discover_jsonl_controlled(&root, |path| {
+    let mut sources = history::discover_jsonl_controlled_in(&root, |path| {
         path.strip_prefix(&root).is_ok_and(|relative| relative.components().count() == 2)
             && path.extension().is_some_and(|extension| extension == "jsonl")
             && path.file_stem().and_then(|stem| stem.to_str()).is_some_and(session_stem)
-    }, cancelled)?;
+    }, cancelled, |path| path.file_name().is_none_or(|name| name != "subagents"))?;
     for source in &mut sources {
         source.native_id = source.path.file_stem().and_then(|stem| stem.to_str()).map(str::to_owned);
-        let mut parts = vec![source.fingerprint.clone()];
-        let wires = subagents(&source.path, cancelled);
-        match wires {
-            Ok(wires) => for wire in wires {
-                match &wire.fingerprint_error {
-                    None => parts.push(format!("{}:{}", wire.key(), wire.fingerprint)),
-                    Some(error) => source.fingerprint_error = Some(error.clone()),
-                }
-            },
-            Err(error) => source.fingerprint_error = Some(error),
+        // The parent file's own fingerprint failure still skips the scan.
+        // Child listing and fingerprint failures do not: they stay in the
+        // parent stamp so a later readable child is rescanned.
+        if source.fingerprint_error.is_some() {
+            continue;
         }
+        let mut parts = vec![source.fingerprint.clone()];
+        parts.extend(child_fingerprint_parts(&source.path, cancelled)?);
         history::check_cancelled(cancelled)?;
-        source.fingerprint = if source.fingerprint_error.is_some() { String::new() }
-            else { format!("qoder-cn-session-v4|{}", parts.join("|")) };
+        source.fingerprint = format!("qoder-cn-session-v4|{}", parts.join("|"));
     }
     Ok(sources)
+}
+
+fn child_fingerprint_parts(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<String>, String> {
+    match subagents(path, cancelled) {
+        Ok(wires) => {
+            let mut parts = Vec::with_capacity(wires.len());
+            for wire in wires {
+                if let Some(error) = &wire.fingerprint_error {
+                    if cancelled() || scan_cancelled(error) {
+                        return Err(error.clone());
+                    }
+                    parts.push(format!("{}:{}", wire.key(), unread_material_stamp(&wire.path)));
+                } else if fs::File::open(&wire.path).is_err() {
+                    // Metadata can be stamped while the body is still locked.
+                    if cancelled() { return Err("扫描已取消，原索引已保留".into()); }
+                    parts.push(format!("{}:unread:{}", wire.key(), wire.fingerprint));
+                } else {
+                    parts.push(format!("{}:{}", wire.key(), wire.fingerprint));
+                }
+            }
+            Ok(parts)
+        }
+        Err(error) if cancelled() || scan_cancelled(&error) => Err(error),
+        Err(_) => {
+            let directory = subagent_directory(path).unwrap_or_else(|| path.to_path_buf());
+            Ok(vec![format!("children-unread:{}", unread_material_stamp(&directory))])
+        }
+    }
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata.modified().ok().and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok()).map(|value| value.as_nanos()).unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+fn subagent_directory(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| session_stem(stem))?;
+    Some(parent.join(stem).join("subagents"))
 }
 
 fn subagents(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
@@ -50,10 +93,12 @@ fn subagents(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySou
     let stem = path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| session_stem(stem)).ok_or("Qoder CN 会话 ID 无效")?;
     let root: PathBuf = parent.join(stem).join("subagents");
     history::check_source_path(&root)?;
-    let mut wires = history::discover_jsonl_controlled(&root, |path| {
+    // Direct agent wires only. Nested directories are not child sessions, and
+    // listing one of them must not hide the wires that can be read.
+    let mut wires = history::discover_jsonl_controlled_in(&root, |path| {
         path.parent() == Some(root.as_path()) && path.extension().is_some_and(|extension| extension == "jsonl")
             && path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("agent-"))
-    }, cancelled)?;
+    }, cancelled, |_| false)?;
     wires.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(wires)
 }
@@ -213,11 +258,17 @@ pub fn parse(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<Par
     if !recognized { return Err("未识别到 Qoder CN 会话记录".into()); }
     transcript.append(&mut session, cancelled)?;
     if let Some(title) = title { session.title = title; }
+    let mut used_keys = HashSet::new();
     let wires = match subagents(&source.path, cancelled) {
         Ok(wires) => wires,
-        Err(_) => { session.partial = true; Vec::new() }
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => {
+            session.partial = true;
+            let key = claim_child_key(&mut used_keys, None, "child".into());
+            session.children.push(ChildSession { key, name: None, messages: Vec::new(), readable: false, children: Vec::new() });
+            Vec::new()
+        }
     };
-    let mut used_keys = HashSet::new();
     for wire in wires {
         if history::check_source_path(&wire.path).is_err() {
             session.partial = true;
@@ -259,7 +310,10 @@ pub fn parse(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<Par
                 retarget_child(&mut session, &path_key, &key, native_name.as_deref());
                 session.children.push(ChildSession { key, name: native_name, messages, readable: true, children: Vec::new() });
             }
-            Err(_) => {
+            Err(error) => {
+                if cancelled() || scan_cancelled(&error) {
+                    return Err(error);
+                }
                 session.partial = true;
                 let key = claim_child_key(&mut used_keys, None, path_key);
                 session.children.push(ChildSession { key, name: None, messages: Vec::new(), readable: false, children: Vec::new() });
@@ -344,6 +398,9 @@ mod tests {
         let _lock = lock_exclusive(&locked);
         let sources = sources(temp.path(), &|| false).unwrap();
         assert_eq!(sources.len(), 1);
+        assert!(sources[0].fingerprint_error.is_none(), "{:?}", sources[0].fingerprint_error);
+        assert!(sources[0].fingerprint.starts_with("qoder-cn-session-v4|"));
+        assert!(sources[0].fingerprint.contains("unread:"), "不可读子文件仍要进入父指纹，恢复可读后才能重扫");
         let parsed = parse(&sources[0], &|| false).unwrap();
         assert_eq!(parsed.messages.len(), 2);
         assert!(parsed.messages.iter().all(|message| !message.text.contains("不可读")));
@@ -581,5 +638,123 @@ mod tests {
         }
         eprintln!("Qoder read-only native-chain comparison: sessions={} matched_conversation_messages={messages} usage_records={records} independent_request_count={independent_records} unknown_token_records={unknown_tokens}", sources.len());
         assert!(!sources.is_empty());
+    }
+
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success());
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(OI)(CI)(RX)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn refresh(db: &crate::database::Database, home: &Path, tool: &str) -> Vec<crate::history::HistoryDetail> {
+        let registry = crate::adapters::Registry::builtins();
+        let reports = crate::history::refresh_controlled(db, &registry, home, &[tool.to_owned()], &|| false).unwrap();
+        let report = reports.iter().find(|item| item.tool_id == tool).expect("scan report");
+        assert!(!report.incomplete, "{}", report.detail);
+        assert_eq!(report.failed_count, 0, "{}", report.detail);
+        crate::history::list(db, &crate::history::HistoryFilter { tool_id: Some(tool.to_owned()), ..crate::history::HistoryFilter::default() })
+            .unwrap()
+            .into_iter()
+            .map(|session| {
+                assert!(!session.stale, "{}", session.title);
+                crate::history::detail(db, &session.id).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unlistable_child_directory_keeps_every_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join(".qoder-cn/projects/synthetic");
+        let other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let wires = project.join(format!("{ID}/subagents"));
+        fs::create_dir_all(&wires).unwrap();
+        fs::write(project.join(format!("{ID}.jsonl")), MAIN).unwrap();
+        fs::write(wires.join("agent-hidden.jsonl"), r#"{"type":"assistant","uuid":"x","timestamp":"2026-10-20T08:00:00Z","sessionId":"99999999-9999-4999-8999-999999999999","message":{"content":[{"type":"text","text":"子日志正文"}],"usage":{"request_id":"request-hidden","credits":9}}}"#).unwrap();
+        fs::write(project.join(format!("{other}.jsonl")), format!(
+            r#"{{"type":"user","uuid":"u","sessionId":"{other}","timestamp":"2026-10-20T08:00:00Z","message":{{"content":"另一父会话"}}}}
+{{"type":"assistant","uuid":"a","parentUuid":"u","sessionId":"{other}","timestamp":"2026-10-20T08:00:01Z","message":{{"id":"a","content":"另一回复","usage":{{"request_id":"other-call","credits":1}}}}}}"#
+        )).unwrap();
+        let _deny = DenyList::new(&wires);
+        let found = sources(temp.path(), &|| false).unwrap();
+        assert_eq!(found.len(), 2, "子目录列举失败不能让本次发现整体失败");
+        assert!(found.iter().all(|item| item.fingerprint_error.is_none() && item.fingerprint.starts_with("qoder-cn-session-v4|")));
+        let parent = found.iter().find(|item| item.native_id.as_deref() == Some(ID)).unwrap();
+        assert!(parent.fingerprint.contains("children-unread"));
+        let parsed = parse(parent, &|| false).unwrap();
+        assert!(parsed.messages.iter().any(|message| message.text == "Synthetic answer"));
+        assert!(parsed.messages.iter().all(|message| message.text != "子日志正文"));
+        assert!(parsed.usage.iter().all(|event| event.id != "request:request-hidden"));
+        assert!(parsed.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main)));
+        let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty() && unread.name.is_none());
+    }
+
+    #[test]
+    fn locked_child_is_indexed_on_the_parent_and_reread_when_it_unlocks() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join(".qoder-cn/projects/synthetic");
+        fs::create_dir_all(project.join(format!("{ID}/subagents"))).unwrap();
+        fs::write(project.join(format!("{ID}.jsonl")), MAIN).unwrap();
+        let locked = project.join(format!("{ID}/subagents/agent-locked.jsonl"));
+        let child = r#"{"type":"user","uuid":"cu","timestamp":"2026-10-20T08:00:02Z","sessionId":"99999999-9999-4999-8999-999999999999","message":{"content":[{"type":"text","text":"子日志正文"}]}}
+{"type":"assistant","uuid":"x","timestamp":"2026-10-20T08:00:03Z","sessionId":"99999999-9999-4999-8999-999999999999","message":{"content":[{"type":"text","text":"子日志回复"}],"usage":{"request_id":"request-hidden","credits":9}}}"#;
+        fs::write(&locked, child).unwrap();
+        let db = crate::database::Database::open(&temp.path().join("index.db")).unwrap();
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let parent = sources(temp.path(), &|| false).unwrap().remove(0);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            let details = refresh(&db, temp.path(), "qoder_cn");
+            assert_eq!(details.len(), 1);
+            let detail = &details[0];
+            assert_eq!(detail.session.native_id.as_deref(), Some(ID));
+            assert!(!detail.session.stale);
+            assert!(detail.messages.iter().all(|message| !message.text.contains("子日志")));
+            assert!(detail.usage.iter().all(|event| event.id != "request:request-hidden"));
+            assert!(detail.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main)));
+            let unread = detail.children.iter().find(|child| !child.readable).unwrap();
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint
+        };
+        let parent = sources(temp.path(), &|| false).unwrap().remove(0);
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let details = refresh(&db, temp.path(), "qoder_cn");
+        let detail = &details[0];
+        assert!(detail.messages.iter().all(|message| !message.text.contains("子日志")));
+        assert_eq!(detail.usage.iter().filter(|event| event.id == "request:request-hidden").count(), 1);
+        let child_session = detail.children.iter().find(|child| child.readable).unwrap();
+        assert!(child_session.messages.iter().any(|message| message.text == "子日志正文"));
+        assert!(child_session.messages.iter().any(|message| message.text == "子日志回复"));
     }
 }
