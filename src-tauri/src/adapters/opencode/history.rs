@@ -279,7 +279,7 @@ fn legacy_usage(id: String, message: &Value, time: Option<i64>) -> Option<UsageE
         request_count: Some(1), id, model: message_model(message), timestamp: time,
         input: token(tokens, "input"),
         output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
-        cache_read: token(cache, "read"), cache_write: token(cache, "write"), input_includes_cache: false,
+        cache_read: token(cache, "read"), cache_write: token(cache, "write"), input_includes_cache: false, attributions: Vec::new(),
     })
 }
 
@@ -354,7 +354,7 @@ fn parse_v2(
                         output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
                         cache_read: token(cache, "read"),
                         cache_write: token(cache, "write"),
-                        input_includes_cache: false,
+                        input_includes_cache: false, attributions: Vec::new(),
                     });
                 }
                 let text = message

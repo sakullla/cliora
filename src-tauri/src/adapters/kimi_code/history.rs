@@ -274,7 +274,7 @@ pub fn parse_controlled(
                         output: Some(counts.output),
                         cache_read: Some(counts.read),
                         cache_write: Some(counts.write),
-                        input_includes_cache: false,
+                        input_includes_cache: false, attributions: Vec::new(),
                     });
                     usage_index += 1;
                 }

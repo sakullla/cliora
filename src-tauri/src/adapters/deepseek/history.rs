@@ -183,7 +183,7 @@ pub fn parse_controlled(
             // TokenUsage semantics: inputTokens excludes cached input, so the
             // four buckets stay disjoint (billed input = input + cacheRead +
             // cacheWrite; reasoning tokens are already inside outputTokens).
-            input_includes_cache: false,
+            input_includes_cache: false, attributions: Vec::new(),
         })
         .collect();
     session.finish(source)

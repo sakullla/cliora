@@ -123,6 +123,49 @@ pub struct UsageEvent {
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
     pub input_includes_cache: bool,
+    /// Native roles for this one call. Empty stored JSON means unknown, not a guessed agent.
+    /// A session key opens a child and is not a display name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attributions: Vec<UsageAttribution>,
+}
+
+/// Role taken from the native log. Missing or blank names stay unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentKind {
+    Main,
+    Subagent,
+    #[default]
+    Unknown,
+}
+
+/// One native role attached to a usage event. Several can share one event when
+/// the same call was observed on both the parent and a child log.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageAttribution {
+    pub kind: AgentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Internal key of a direct child session. Absent means there is no jump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_key: Option<String>,
+}
+
+/// Direct child of a parent session. Its messages are not part of the parent transcript.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildSession {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub messages: Vec<HistoryMessage>,
+    /// False when the native body could not be read. Messages are then empty.
+    #[serde(default)]
+    pub readable: bool,
+    #[serde(default)]
+    pub children: Vec<ChildSession>,
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +178,8 @@ pub struct ParsedSession {
     pub updated_at: Option<i64>,
     pub messages: Vec<HistoryMessage>,
     pub usage: Vec<UsageEvent>,
+    /// Direct child sessions. Not written into `messages` or `history_sessions` rows.
+    pub children: Vec<ChildSession>,
     pub partial: bool,
 }
 
@@ -149,6 +194,7 @@ impl ParsedSession {
             updated_at: None,
             messages: Vec::new(),
             usage: Vec::new(),
+            children: Vec::new(),
             partial: false,
         }
     }
@@ -642,6 +688,8 @@ pub struct HistoryDetail {
     pub session: HistorySession,
     pub messages: Vec<HistoryMessage>,
     pub usage: Vec<UsageEvent>,
+    /// Direct child sessions. Export omits this so child bodies stay out of the file.
+    pub children: Vec<ChildSession>,
     pub resume_reason: Option<String>,
     pub totals: report::UsageTotals,
 }
@@ -704,6 +752,139 @@ fn billable_usage_model(model: Option<&str>) -> bool {
     model != Some("<synthetic>")
 }
 
+const MAX_CHILD_DEPTH: usize = 32;
+const MAX_CHILD_NODES: usize = 2_000;
+
+fn clean_label(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|text| !text.is_empty()).map(|text| text.chars().take(256).collect())
+}
+
+fn valid_child_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 512 && key.chars().all(|ch| !ch.is_control())
+}
+
+fn sanitize_attributions(items: Vec<UsageAttribution>) -> Vec<UsageAttribution> {
+    items
+        .into_iter()
+        .map(|item| UsageAttribution {
+            kind: item.kind,
+            name: clean_label(item.name.as_deref()),
+            session_key: item.session_key.as_deref().map(str::trim).filter(|key| !key.is_empty()).map(str::to_owned),
+        })
+        .collect()
+}
+
+fn bound_messages(messages: &[HistoryMessage], partial: &mut bool) -> Vec<HistoryMessage> {
+    let mut bounded = Vec::new();
+    for message in messages {
+        if bounded.len() >= MAX_MESSAGES {
+            *partial = true;
+            break;
+        }
+        let mut text = message.text.clone();
+        if text.trim().is_empty() {
+            continue;
+        }
+        if text.chars().count() > MAX_MESSAGE_CHARS {
+            text = text.chars().take(MAX_MESSAGE_CHARS).collect();
+            *partial = true;
+        }
+        bounded.push(HistoryMessage { text, ..message.clone() });
+    }
+    bounded
+}
+
+/// Child bodies stay on the parent row's own JSON. They do not become sessions or usage rows.
+fn sanitize_children(
+    nodes: &[ChildSession],
+    partial: &mut bool,
+    seen: &mut HashSet<String>,
+    depth: usize,
+    count: &mut usize,
+) -> Result<Vec<ChildSession>, String> {
+    if depth > MAX_CHILD_DEPTH {
+        *partial = true;
+        return Ok(Vec::new());
+    }
+    let mut stored = Vec::new();
+    for node in nodes {
+        if *count >= MAX_CHILD_NODES {
+            *partial = true;
+            break;
+        }
+        let key = node.key.trim();
+        if !valid_child_key(key) {
+            return Err("子会话内部键无效".into());
+        }
+        if !seen.insert(key.to_owned()) {
+            return Err("子会话内部键重复".into());
+        }
+        *count += 1;
+        let children = sanitize_children(&node.children, partial, seen, depth + 1, count)?;
+        stored.push(ChildSession {
+            key: key.to_owned(),
+            name: clean_label(node.name.as_deref()),
+            messages: if node.readable { bound_messages(&node.messages, partial) } else { Vec::new() },
+            readable: node.readable,
+            children,
+        });
+    }
+    Ok(stored)
+}
+
+fn prepare_stored_session(parsed: &mut ParsedSession) -> Result<(), String> {
+    let nodes = std::mem::take(&mut parsed.children);
+    let mut seen = HashSet::new();
+    let mut count = 0;
+    parsed.children = sanitize_children(&nodes, &mut parsed.partial, &mut seen, 0, &mut count)?;
+    for event in &mut parsed.usage {
+        event.attributions = sanitize_attributions(std::mem::take(&mut event.attributions));
+    }
+    Ok(())
+}
+
+/// A missing attribution field is unknown and has no child jump. Names are not invented.
+fn present_usage(usage: Vec<UsageEvent>) -> Vec<UsageEvent> {
+    usage
+        .into_iter()
+        .map(|mut event| {
+            event.attributions = sanitize_attributions(std::mem::take(&mut event.attributions));
+            if event.attributions.is_empty() {
+                event.attributions.push(UsageAttribution { kind: AgentKind::Unknown, name: None, session_key: None });
+            }
+            event
+        })
+        .collect()
+}
+
+fn present_children(nodes: Vec<ChildSession>) -> Vec<ChildSession> {
+    nodes
+        .into_iter()
+        .filter_map(|mut node| {
+            let key = node.key.trim().to_owned();
+            if !valid_child_key(&key) {
+                return None;
+            }
+            if !node.readable {
+                node.messages.clear();
+            }
+            node.key = key;
+            node.name = clean_label(node.name.as_deref());
+            node.children = present_children(node.children);
+            Some(node)
+        })
+        .collect()
+}
+
+fn decode_children(raw: Option<&str>) -> Result<Vec<ChildSession>, String> {
+    match raw.map(str::trim).filter(|text| !text.is_empty()) {
+        None => Ok(Vec::new()),
+        Some(text) => serde_json::from_str::<Vec<ChildSession>>(text)
+            .map(present_children)
+            .map_err(|_| "子会话缓存损坏".into()),
+    }
+}
+
 #[cfg(test)]
 fn store_session(
     conn: &Connection,
@@ -712,9 +893,12 @@ fn store_session(
     parsed: &ParsedSession,
     projects: &HashMap<String, String>,
 ) -> Result<(), String> {
+    let mut parsed = parsed.clone();
+    prepare_stored_session(&mut parsed)?;
     let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
     let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
-    store_encoded_session(conn, tool, source, parsed, projects, &messages, &usage)
+    let children = serde_json::to_string(&parsed.children).map_err(|error| error.to_string())?;
+    store_encoded_session(conn, tool, source, &parsed, projects, &messages, &usage, &children)
 }
 
 fn store_encoded_session(
@@ -725,6 +909,7 @@ fn store_encoded_session(
     projects: &HashMap<String, String>,
     messages: &str,
     usage: &str,
+    children: &str,
 ) -> Result<(), String> {
     let key = source.key();
     let id = stable_id(tool, &key);
@@ -734,15 +919,16 @@ fn store_encoded_session(
         .and_then(|cwd| projects.get(&cwd.to_ascii_lowercase()).cloned());
     let session_model = model_label(parsed.model.clone());
     conn.execute(
-        "INSERT INTO history_sessions (id, tool, source_key, source_path, source_fingerprint, native_id, title, cwd, model, started_at, updated_at, messages_json, usage_json, message_count, usage_count, partial, stale, project_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,0,?17)
+        "INSERT INTO history_sessions (id, tool, source_key, source_path, source_fingerprint, native_id, title, cwd, model, started_at, updated_at, messages_json, usage_json, children_json, message_count, usage_count, partial, stale, project_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18)
          ON CONFLICT(id) DO UPDATE SET source_fingerprint=excluded.source_fingerprint, native_id=excluded.native_id,
          title=excluded.title, cwd=excluded.cwd, model=excluded.model, started_at=excluded.started_at,
          updated_at=excluded.updated_at, messages_json=excluded.messages_json, usage_json=excluded.usage_json,
+         children_json=excluded.children_json,
          message_count=excluded.message_count, usage_count=excluded.usage_count,
          partial=excluded.partial, stale=0, project_id=COALESCE(history_sessions.project_id, excluded.project_id)",
         params![id,tool,key,source.path.display().to_string(),source.fingerprint,parsed.native_id,parsed.title,
-            parsed.cwd,session_model,parsed.started_at,parsed.updated_at,messages,usage,
+            parsed.cwd,session_model,parsed.started_at,parsed.updated_at,messages,usage,children,
             parsed.messages.len() as i64,parsed.usage.len() as i64,parsed.partial as i64,project_id])
         .map_err(|error| error.to_string())?;
     conn.execute("DELETE FROM history_usage WHERE session_id = ?1", [&id])
@@ -829,7 +1015,7 @@ fn parse_and_store(
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let halted = || stop.load(Ordering::Relaxed) || cancelled();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<(ParsedSession, String, String), String>)>(workers * 2);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<(ParsedSession, String, String, String), String>)>(workers * 2);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let sender = sender.clone();
@@ -839,10 +1025,12 @@ fn parse_and_store(
                 if index >= sources.len() || halted() {
                     break;
                 }
-                let parsed = adapter.parse_history_controlled(&sources[index], halted).and_then(|parsed| {
+                let parsed = adapter.parse_history_controlled(&sources[index], halted).and_then(|mut parsed| {
+                    prepare_stored_session(&mut parsed)?;
                     let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
                     let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
-                    Ok((parsed, messages, usage))
+                    let children = serde_json::to_string(&parsed.children).map_err(|error| error.to_string())?;
+                    Ok((parsed, messages, usage, children))
                 });
                 if sender.send((index, parsed)).is_err() {
                     break;
@@ -857,8 +1045,8 @@ fn parse_and_store(
             // Give concurrent parsers a short, bounded window to fill a write
             // batch instead of fsyncing a separate transaction for each file.
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4);
-            let encoded_size = |item: &(usize, Result<(ParsedSession, String, String), String>)| {
-                item.1.as_ref().map_or(0, |(_, messages, usage)| messages.len() + usage.len())
+            let encoded_size = |item: &(usize, Result<(ParsedSession, String, String, String), String>)| {
+                item.1.as_ref().map_or(0, |(_, messages, usage, children)| messages.len() + usage.len() + children.len())
             };
             let mut bytes = encoded_size(&batch[0]);
             while batch.len() < WRITE_BATCH && bytes < 16 * 1024 * 1024 && !cancelled() {
@@ -877,9 +1065,9 @@ fn parse_and_store(
                 let mut batch_failures = Vec::new();
                 for (index, parsed) in &batch {
                     let source = &sources[*index];
-                    let outcome = parsed.as_ref().map_err(String::clone).and_then(|(parsed, messages, usage)| {
+                    let outcome = parsed.as_ref().map_err(String::clone).and_then(|(parsed, messages, usage, children)| {
                         let savepoint = transaction.savepoint().map_err(|error| error.to_string())?;
-                        store_encoded_session(&savepoint, adapter.id(), source, parsed, projects, messages, usage)?;
+                        store_encoded_session(&savepoint, adapter.id(), source, parsed, projects, messages, usage, children)?;
                         savepoint.commit().map_err(|error| error.to_string())
                     });
                     if let Err(error) = outcome {
@@ -1132,11 +1320,12 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
 
 pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
     let session = db.with_read_connection(|conn| conn.query_row(
-        "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,messages_json,usage_json
-         FROM history_sessions WHERE id = ?1",[id], |row| Ok((row_session(row)?,row.get::<_,String>(14)?,row.get::<_,String>(15)?)))
+        "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,messages_json,usage_json,children_json
+         FROM history_sessions WHERE id = ?1",[id], |row| Ok((row_session(row)?,row.get::<_,String>(14)?,row.get::<_,String>(15)?,row.get::<_,Option<String>>(16)?)))
          .optional().map_err(|error| error.to_string()))?.ok_or("会话已从本机索引移除")?;
     let messages = serde_json::from_str(&session.1).map_err(|_| "会话正文缓存损坏")?;
-    let usage = serde_json::from_str(&session.2).map_err(|_| "会话用量缓存损坏")?;
+    let usage = present_usage(serde_json::from_str(&session.2).map_err(|_| "会话用量缓存损坏")?);
+    let children = decode_children(session.3.as_deref())?;
     let linked_path = session
         .0
         .project_id
@@ -1169,6 +1358,7 @@ pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
         session: session.0,
         messages,
         usage,
+        children,
         resume_reason: reason,
         totals: report::session_totals(db, id)?,
     })
@@ -1375,6 +1565,19 @@ pub fn copy_resume_command(
     crate::launch::native_command(&resume_plan(db, registry, home, id, mode)?)
 }
 
+fn attribution_label(attribution: &UsageAttribution) -> String {
+    let kind = match attribution.kind {
+        AgentKind::Main => "主代理",
+        AgentKind::Subagent => "子代理",
+        AgentKind::Unknown => "未知",
+    };
+    match attribution.name.as_deref() {
+        Some(name) => format!("{kind}：{name}"),
+        None if attribution.kind == AgentKind::Subagent => format!("{kind}（名称未知）"),
+        None => kind.to_owned(),
+    }
+}
+
 pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Result<String, String> {
     if !matches!(format, "markdown" | "json") {
         return Err("请选择 Markdown 或 JSON 格式".into());
@@ -1411,7 +1614,23 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
     }
     let detail = detail(db, id)?;
     let contents = if format == "json" {
-        serde_json::to_string_pretty(&detail).map_err(|error| error.to_string())?
+        // Child bodies stay on the parent detail. Export keeps attribution only.
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ExportedHistory<'a> {
+            session: &'a HistorySession,
+            messages: &'a [HistoryMessage],
+            usage: &'a [UsageEvent],
+            resume_reason: &'a Option<String>,
+            totals: &'a report::UsageTotals,
+        }
+        serde_json::to_string_pretty(&ExportedHistory {
+            session: &detail.session,
+            messages: &detail.messages,
+            usage: &detail.usage,
+            resume_reason: &detail.resume_reason,
+            totals: &detail.totals,
+        }).map_err(|error| error.to_string())?
     } else {
         let mut text = format!(
             "# {}\n\n工具：{}\n\n原生会话 ID：{}\n\n项目目录：{}\n\n",
@@ -1433,6 +1652,15 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
                     usage.original_value.map(|value| value.to_string()).unwrap_or_else(|| "未知".into()), status, usage.unknown_original_records));
             }
             if !detail.totals.native_usage.is_empty() { text.push_str("\n原生单位用量不表示余额或金额。\n\n"); }
+        }
+        if detail.usage.iter().any(|event| !event.attributions.is_empty()) {
+            text.push_str("## 归属\n\n");
+            for event in &detail.usage {
+                for attribution in &event.attributions {
+                    text.push_str(&format!("- 归属：{}\n", attribution_label(attribution)));
+                }
+            }
+            text.push('\n');
         }
         for message in detail.messages {
             text.push_str(&format!("## {}\n\n{}\n\n", message.role, message.text));

@@ -100,7 +100,7 @@ fn record_usage(session: &mut ParsedSession, seen: &mut HashMap<String, UsageObs
     let observed = seen.entry(id.clone()).or_insert_with(|| {
         let index = session.usage.len();
         session.usage.push(UsageEvent { native_usage: None, request_count, id, model, timestamp: time,
-            input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false });
+            input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new() });
         UsageObservation { index, credits: None, original: None, billable: None }
     });
     // Each field is an independent observation, including metadata arriving

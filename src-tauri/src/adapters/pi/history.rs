@@ -158,7 +158,7 @@ pub fn parse_controlled(
             output: Some(event.counts.output),
             cache_read: Some(event.counts.read),
             cache_write: Some(event.counts.write),
-            input_includes_cache: false,
+            input_includes_cache: false, attributions: Vec::new(),
         })
         .collect();
     session.finish(source)
