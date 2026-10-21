@@ -32,12 +32,13 @@ test.beforeEach(async ({ page }) => {
       isTauri: true, __reader: control, __readerRecords: records, __readerMessages: messages,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' }, association: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') { control.filters.push(args.filter); return structuredClone(records); }
         if (command === 'get_history_session') {
           if (control.failDetail) { control.failDetail = false; throw new Error('读取暂时失败'); }
-          return structuredClone({ session: records.find((item) => item.id === args.id), messages: args.id === 'a' ? messages : [{ ...messages[0], text: '文档正文' }], usage: [], resumeReason: null });
+          const extra = (window as typeof window & { __readerAssociation?: { usage?: unknown[]; children?: unknown[] } }).__readerAssociation;
+          return structuredClone({ session: records.find((item) => item.id === args.id), messages: args.id === 'a' ? messages : [{ ...messages[0], text: '文档正文' }], usage: args.id === 'a' ? extra?.usage ?? [] : [], children: args.id === 'a' ? extra?.children ?? [] : [], resumeReason: null });
         }
         if (command === 'copy_history_resume_command') return `codex resume ${args.id}`;
         if (command === 'get_tray_status') return { available: false, error: null };
@@ -176,4 +177,39 @@ test('long conversations defer distant Markdown and render it when jumping to la
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toHaveCount(0);
   await reader.getByRole('button', { name: '最新', exact: true }).click();
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toBeVisible();
+});
+
+test('child session reader shows only that level and hides favorite, resume and export', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as unknown as { __readerAssociation: unknown }).__readerAssociation = {
+      usage: [{ id: 'u1', model: 'gpt-6-astra', timestamp: 1790668800000, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, inputIncludesCache: false, attributions: [{ kind: 'subagent', name: 'Reviewer', sessionKey: 'child-review' }] }],
+      children: [{
+        key: 'child-review', name: 'Reviewer', readable: true,
+        messages: [{ id: 'c1', role: 'assistant', text: 'CHILD_ONLY_SENTINEL', timestamp: 1790668802000 }],
+        children: [{ key: 'grand-1', name: 'Nested', readable: true, messages: [{ id: 'g1', role: 'assistant', text: 'GRAND_ONLY_SENTINEL', timestamp: 1790668803000 }], children: [] }],
+      }],
+    };
+  });
+  await page.getByRole('button', { name: /完善文档/ }).click();
+  await page.getByRole('button', { name: /检查缓存策略/ }).click();
+  const reader = page.getByLabel('会话正文');
+  await expect(reader).toContainText('请检查缓存策略');
+  await expect(reader).not.toContainText('CHILD_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('child-review');
+  await page.getByRole('region', { name: '主子关联' }).getByRole('button', { name: '打开 Reviewer' }).click();
+  await expect(reader).toContainText('CHILD_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('请检查缓存策略');
+  await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
+  await expect(page.getByRole('button', { name: '收藏会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出 Markdown' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出 JSON' })).toHaveCount(0);
+  await expect(page.getByText('会话选项', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Nested', exact: true }).click();
+  await expect(reader).toContainText('GRAND_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('CHILD_ONLY_SENTINEL');
+  await page.getByRole('button', { name: '返回上一级' }).click();
+  await expect(reader).toContainText('CHILD_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
 });

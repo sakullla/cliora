@@ -18,6 +18,7 @@ import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
+import { childTitle, childTrail, SessionAssociation } from './SessionAssociation';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import { useDisclosure } from './useDisclosure';
 import { navigateChoices } from '../../lib/choiceNavigation';
@@ -128,6 +129,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [scans, setScans] = useState<ScanStatus[]>([]);
   const [detail, setDetail] = useState<HistoryDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [childPath, setChildPath] = useState<string[]>([]);
   const [mobileDetail, setMobileDetail] = useState(false);
   const pendingSession = useRef<string | null>(null);
   const [prices, setPrices] = useState<HistoryPrice[]>([]);
@@ -236,6 +238,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [selectedId, detailRetry, scanVersion]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
+  const selectedFacet = tools.find((item) => item.id === selected?.session.toolId)?.association;
+  const openedTrail = selected && selectedFacet?.state === 'available' ? childTrail(selected.children, childPath) : null;
+  const openedChild = openedTrail && childPath.length > 0 && openedTrail.length === childPath.length ? openedTrail[openedTrail.length - 1] : null;
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
   const resumeKey = selected ? JSON.stringify([selected.session.id, selected.session.updatedAt, selected.session.projectId,
     selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
@@ -253,6 +258,11 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       .catch((value) => { if (live) { setResumeCommand(null); setResumeError({ key: resumeKey, text: formatFailure(value, t('records.page.operationFailed'), recordNext()) }); } });
     return () => { live = false; };
   }, [resumeKey]);
+  useEffect(() => { setChildPath([]); }, [selectedId]);
+  useEffect(() => {
+    if (!childPath.length || !selected) return;
+    if (selectedFacet?.state !== 'available' || !childTrail(selected.children, childPath)) setChildPath([]);
+  }, [childPath, selected, selectedFacet]);
 
   useEffect(() => {
     if (!scanning || !active) return;
@@ -356,7 +366,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       if (window.matchMedia('(max-width: 760px)').matches) detailRef.current?.querySelector('button')?.focus({ preventScroll: true });
     });
   }
-  useEffect(() => { detailRef.current?.scrollTo({ top: 0 }); }, [selectedId]);
+  useEffect(() => { detailRef.current?.scrollTo({ top: 0 }); }, [selectedId, childPath]);
   const groupedSessions = useMemo(() => {
     const groups = new Map<SessionGroup, HistorySession[]>();
     const sorted = [...sessions].sort((a, b) => sort === 'messages' ? b.messageCount - a.messageCount : sort === 'oldest' ? (a.updatedAt ?? Infinity) - (b.updatedAt ?? Infinity) : (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -449,11 +459,22 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
         {selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span><button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button></div>
-        <div className={styles.detailHead}><h2 title={selected.session.title}>{selected.session.title || t('records.page.untitled')}</h2></div>
-        <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown')}</span><time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>
-        {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
-        <div className={styles.resume}>
+        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>{!openedChild && <button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button>}</div>
+        {openedChild && openedTrail ? <nav className={styles.childTrail} aria-label={t('records.association.trail')}>
+          <button type="button" onClick={() => setChildPath([])}>{selected.session.title || t('records.page.untitled')}</button>
+          {openedTrail.map((node, index) => {
+            const title = childTitle(node.name, t('records.association.unnamed'));
+            const last = index === openedTrail.length - 1;
+            return <span key={node.key}>
+              <span aria-hidden="true">/</span>
+              {last ? <span aria-current="page">{title}</span> : <button type="button" onClick={() => setChildPath(childPath.slice(0, index + 1))}>{title}</button>}
+            </span>;
+          })}
+        </nav> : null}
+        <div className={styles.detailHead}><h2 title={openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : selected.session.title}>{openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : (selected.session.title || t('records.page.untitled'))}</h2></div>
+        {!openedChild && <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown')}</span><time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>}
+        {!openedChild && (selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
+        {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : <div className={styles.resume}>
           {readyCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}><Icon name="tool" size={14} />{busy ? t('records.page.resuming') : t('records.page.resume')}{mode === 'yolo' && ' · YOLO'}</button>}
           <details className={styles.moreActions} ref={actionsRef} key={selected.session.id}><summary>{t('records.page.options')}</summary><div className={styles.actionPanel}>
             <div className={styles.resumeBar}><label>{t('records.page.resumeMode')} <select aria-label={t('records.page.resumeMode')} value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">{t('settings.terminal.modeNormal')}</option>{yolo && <option value="yolo">{t('settings.terminal.modeYolo')}</option>}</select></label>{readyCommand && <button type="button" aria-label={t('records.page.copyCommand')} data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? t('home.launcher.copied') : t('records.page.copyCommand')}</button>}</div>
@@ -463,10 +484,11 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           </div></details>
           {!readyCommand && <p className={styles.resumeStatus}>{shownResumeError || t('records.page.checkingResume')}</p>}
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>{t('records.page.relinkProject')}</button>}
+        </div>}
         </div>
-        </div>
-        {selected.totals && <NativeUsageSummary totals={selected.totals} />}
-        <SessionReader key={selected.session.id} detail={selected} toolName={toolName(selected.session.toolId)} />
+        <SessionAssociation association={selectedFacet} usage={openedChild ? [] : selected.usage} children={(openedChild ? openedChild.children : selected.children) ?? []} onOpen={(key) => setChildPath((path) => [...path, key])} />
+        {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
+        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected} toolName={toolName(selected.session.toolId)} />}
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>

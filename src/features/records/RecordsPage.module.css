@@ -170,6 +170,9 @@
 .detailMeta > span > svg { flex: none; }
 .detailMeta time { flex: none; }
 .detailHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.childTrail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; color: var(--text-3); font-size: var(--fs-body); }
+.childTrail button { min-height: 26px; padding: 0 6px; border-color: transparent; background: transparent; box-shadow: none; color: var(--accent); }
+.childTrail span[aria-current="page"] { color: var(--text); font-weight: var(--fw-semibold); }
 .detailHead h2 { margin: 0; overflow: hidden; color: var(--text); font-family: var(--font-display); font-size: 18px; font-weight: var(--fw-semibold); line-height: 1.42; letter-spacing: -.15px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
 .resume { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 5px; }
 .resume > .primary { min-height: var(--control-h-sm); font-size: var(--fs-caption); }

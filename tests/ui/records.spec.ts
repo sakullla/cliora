@@ -575,3 +575,130 @@ test('known Qoder request with unknown credits and tokens stays visible as one c
   await expect(trend).toContainText('日志未提供已知 token');
   await expect(trend.getByRole('group')).toHaveCount(0);
 });
+
+test('session detail shows usage attribution and opens child sessions one level at a time', async ({ page }) => {
+  await page.addInitScript((report) => {
+    const usage = (id: string, attributions?: Array<Record<string, unknown>>) => ({ id, model: 'opus', timestamp: 1790668800000, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, inputIncludesCache: false, attributions });
+    const records = [
+      { id: 'linked', toolId: 'claude_code', nativeId: 'parent-native-42', title: 'Linked parent', cwd: 'C:\\project', model: 'opus', projectId: null, startedAt: 1790668803000, updatedAt: 1790668803000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 4 },
+      { id: 'absent', toolId: 'codex', nativeId: null, title: 'No association', cwd: null, model: 'gpt', projectId: null, startedAt: 1790668802000, updatedAt: 1790668802000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+      { id: 'empty', toolId: 'claude_code', nativeId: null, title: 'No children', cwd: null, model: 'haiku', projectId: null, startedAt: 1790668801000, updatedAt: 1790668801000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+    ];
+    const details: Record<string, unknown> = {
+      linked: {
+        session: records[0],
+        messages: [{ id: 'p1', role: 'assistant', text: 'PARENT_ONLY', timestamp: 1790668803000 }],
+        usage: [
+          usage('u-main', [{ kind: 'main', name: 'Planner', sessionKey: null }]),
+          usage('u-child', [{ kind: 'subagent', name: null, sessionKey: 'child-review' }]),
+          usage('u-deep', [{ kind: 'subagent', name: 'Deep', sessionKey: 'grand-1' }]),
+          usage('u-none'),
+          usage('u-unknown', [{ kind: 'unknown' }]),
+        ],
+        children: [
+          {
+            key: 'child-review', name: 'Reviewer', readable: true,
+            messages: [{ id: 'c1', role: 'assistant', text: 'CHILD_BODY', timestamp: 1790668803000 }],
+            children: [{ key: 'grand-1', name: 'Nested', readable: true, messages: [{ id: 'g1', role: 'assistant', text: 'GRAND_BODY', timestamp: 1790668803000 }], children: [] }],
+          },
+          { key: 'child-gap', name: null, readable: false, messages: [{ id: 'bad', role: 'assistant', text: 'SHOULD_NOT_APPEAR', timestamp: 1790668803000 }], children: [] },
+        ],
+        resumeReason: null,
+      },
+      absent: {
+        session: records[1],
+        messages: [{ id: 'a1', role: 'user', text: 'ABSENT_PARENT', timestamp: 1790668802000 }],
+        usage: [usage('u-absent')],
+        children: [{ key: 'hidden-child', name: 'Hidden child', readable: true, messages: [{ id: 'h1', role: 'assistant', text: 'HIDDEN_BODY', timestamp: 1790668802000 }], children: [] }],
+        resumeReason: '原始记录没有可验证的恢复 ID',
+      },
+      empty: {
+        session: records[2],
+        messages: [{ id: 'e1', role: 'user', text: 'EMPTY_PARENT', timestamp: 1790668801000 }],
+        usage: [usage('u-empty')],
+        children: [],
+        resumeReason: '原始记录没有可验证的恢复 ID',
+      },
+    };
+    const launches: unknown[] = [];
+    const reads: string[] = [];
+    Object.assign(window, {
+      isTauri: true, __associationLaunches: launches,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code', 'codex'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [
+          { id: 'claude_code', name: 'Claude Code', yoloAvailable: false, history: { state: 'available', reason: '' }, association: { state: 'available', reason: '' } },
+          { id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' }, association: { state: 'unavailable', reason: '不提供主子代理关联' } },
+        ], managedIds: ['claude_code', 'codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') return records;
+        if (command === 'get_history_session') { reads.push(args.id); return details[args.id]; }
+        if (command === 'get_usage_report') return report;
+        if (command === 'copy_history_resume_command') return `claude resume '${records.find((item) => item.id === args.id)?.nativeId}'`;
+        if (command === 'resume_history_session') { launches.push(args); return { toolId: 'claude_code', projectId: null, mode: args.mode, terminal: 'power_shell', status: 'terminal_requested' }; }
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+    Object.assign(window, { __associationReads: reads });
+  }, emptyReport());
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  const reader = page.getByLabel('会话正文');
+  const association = page.getByRole('region', { name: '主子关联' });
+  await expect(reader).toContainText('PARENT_ONLY');
+  await expect(reader).not.toContainText('CHILD_BODY');
+  await expect(association).toContainText('主代理 · Planner');
+  await expect(association).toContainText('子代理');
+  await expect(association).toContainText('子代理 · Deep');
+  await expect(association).toContainText('归属未知');
+  await expect(association).not.toContainText('child-review');
+  await expect(association).not.toContainText('grand-1');
+  await expect(association).not.toContainText('不提供主子代理关联');
+  await expect(association.getByRole('button', { name: '打开 Nested' })).toHaveCount(0);
+  await expect(association.getByText('正文不可读取')).toBeVisible();
+  await expect(association.getByRole('button', { name: '未命名子会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '收藏会话' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
+  await association.getByRole('button', { name: '打开 Reviewer' }).click();
+  await expect(reader).toContainText('CHILD_BODY');
+  await expect(reader).not.toContainText('PARENT_ONLY');
+  await expect(reader).not.toContainText('GRAND_BODY');
+  await expect(reader).not.toContainText('SHOULD_NOT_APPEAR');
+  await expect(page.getByRole('button', { name: '收藏会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出 Markdown' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '导出 JSON' })).toHaveCount(0);
+  await expect(page.getByText('会话选项', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Nested', exact: true }).click();
+  await expect(reader).toContainText('GRAND_BODY');
+  await expect(reader).not.toContainText('CHILD_BODY');
+  await page.getByRole('navigation', { name: '子会话层级' }).getByRole('button', { name: 'Linked parent', exact: true }).click();
+  await expect(reader).toContainText('PARENT_ONLY');
+  await expect(page.getByRole('button', { name: '收藏会话' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
+  await page.getByText('会话选项', { exact: true }).click();
+  await page.getByText('查看恢复命令', { exact: true }).click();
+  await expect(page.getByLabel('原生恢复命令')).toContainText('parent-native-42');
+  await expect(page.getByLabel('原生恢复命令')).not.toContainText('child-review');
+  expect(await page.evaluate(() => (window as unknown as { __associationReads: string[] }).__associationReads.every((id) => id === 'linked'))).toBe(true);
+  expect(await page.evaluate(() => (window as unknown as { __associationLaunches: unknown[] }).__associationLaunches)).toEqual([]);
+
+  await page.getByRole('button', { name: /No association/ }).click();
+  const absent = page.getByRole('region', { name: '主子关联' });
+  await expect(absent).toContainText('不提供主子代理关联');
+  await expect(absent).toContainText('归属未知');
+  await expect(absent).not.toContainText('Hidden child');
+  await expect(absent.getByRole('heading', { name: '子会话' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /打开/ })).toHaveCount(0);
+  await expect(reader).not.toContainText('HIDDEN_BODY');
+
+  await page.getByRole('button', { name: /No children/ }).click();
+  const empty = page.getByRole('region', { name: '主子关联' });
+  await expect(empty).toContainText('归属未知');
+  await expect(empty).not.toContainText('不提供主子代理关联');
+  await expect(empty.getByRole('heading', { name: '子会话' })).toHaveCount(0);
+  await expect(empty.getByRole('button')).toHaveCount(0);
+});
