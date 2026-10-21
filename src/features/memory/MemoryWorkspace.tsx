@@ -46,7 +46,6 @@ type Row = { entry: MemoryStoreEntry; key: string; store: string; parsed: Parsed
 type Destination = { value: string; label: string; detail?: string; note?: string; target: MemoryTarget };
 export type MemoryProject = { name: string; path: string };
 
-const writeOperations: MemoryOperation[] = ['create', 'edit', 'delete', 'master_switch', 'item_enable'];
 const knownTypes = ['user', 'feedback', 'project', 'reference'];
 
 function isExternalChange(error: unknown): boolean {
@@ -108,7 +107,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
   const can = (operation: MemoryOperation) => memory.operations.includes(operation);
   const limitation = (memory.limitation || '').trim();
-  const showWrites = writeOperations.some(operation => can(operation));
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -651,22 +649,19 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const anyOff = stores.some(store => !store.inUse);
   const offWithoutSwitch = anyOff && !can('master_switch');
 
+  const actions = <div className={styles.headActions}>
+    {aggregate && master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
+      <span className={styles.autoDot} aria-hidden="true" />
+      <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></span>
+      <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />
+    </span>}
+    {aggregate && limitation && !master && <span className={styles.readOnlyPill} title={limitation}><Icon name="lock" size={13} />{t('common.memory.readOnly')}</span>}
+    <button type="button" className={styles.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()}><Icon name="refresh" size={15} /></button>
+    {can('create') && <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : undefined} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button>}
+  </div>;
+
   return <section ref={root} className={styles.page} aria-label={t('tools.workspace.view.memory')} onKeyDown={onEditorKey}>
-    <header className={styles.head}>
-      <div className={styles.headCopy}>
-        <h2>{t('common.memory.title')}</h2>
-        <p>{t('common.memory.description', { tool })}</p>
-      </div>
-      <div className={styles.headActions}>
-        {aggregate && master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
-          <span className={styles.autoDot} aria-hidden="true" />
-          <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></span>
-          <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />
-        </span>}
-        <button type="button" className={styles.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()}><Icon name="refresh" size={15} /></button>
-        {can('create') && <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : undefined} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button>}
-      </div>
-    </header>
+    {!(aggregate && total > 0) && actions}
 
     {aggregate && switchGroups.length > 0 && <div className={styles.scopeSwitches}>
       {switchGroups.map(group => <div key={group.id} className={styles.scopeSwitch}>
@@ -679,7 +674,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </div>}
 
     {aggregate && (master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status"><Icon name="eyeOff" size={14} /><strong>{t('common.memory.notInUse')}</strong><span>{((detail: string) => detail && detail !== t('common.memory.notInUse') ? detail : t('common.memory.notInUseHint'))((master ? master.detail : stores.find(store => !store.inUse)?.detail) ?? '')}</span></p>}
-    {aggregate && limitation && <p className={styles.limitNote}><Icon name={showWrites ? 'info' : 'lock'} size={13} /><span role="status">{limitation}</span></p>}
 
     {missingDraft && <StatusBanner tone="warning">{t('common.memory.missingDraft')}</StatusBanner>}
     {Object.keys(docErrors).length > 0 && <StatusBanner tone="warning" action={<button type="button" className="button" disabled={busy || refreshing} onClick={() => void reload()}>{t('common.memory.retryBodies')}</button>}>{t('common.memory.partialBodies', { count: Object.keys(docErrors).length })} {Object.values(docErrors)[0]}</StatusBanner>}
@@ -700,6 +694,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
           {['all', ...types].map(value => <button key={value} type="button" aria-pressed={kind === value} data-type={value} onClick={() => setKind(value)}>{value === 'all' ? t('common.memory.typeAll') : typeLabel(value)}</button>)}
         </div>}
         <span className={styles.count}>{filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length })}</span>
+        {actions}
       </div>}
 
       <div ref={setSplit} className={styles.split} data-view={showDetail ? 'detail' : 'list'} data-writing={focusWriting || undefined}>

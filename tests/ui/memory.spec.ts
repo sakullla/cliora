@@ -19,16 +19,20 @@ async function setMode(page: Page, mode: string) {
   await page.evaluate(value => { (window as unknown as { __memory: { mode: string } }).__memory.mode = value; }, mode);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
+  const copies = options.copies ?? 0;
   const storePaths = { alphaGlobal: alphaGlobalStore, alphaA: alphaAStore, alphaB: alphaBStore, beta: betaStore, epsilon: epsilonStores };
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores }) => {
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies }) => {
     const state = {
       mode,
       reads: 0,
       deleted: [] as string[],
-      texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global', 'one-note': 'from-one', 'two-note': 'from-two' } as Record<string, string>,
+      texts: {
+        'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global', 'one-note': 'from-one', 'two-note': 'from-two',
+        ...Object.fromEntries(Array.from({ length: copies }, (_, index) => [`copy-${index}`, `---\nname: Requirement docs new not revise ${index}\ndescription: 延续已关闭 workflow 的需求时新建独立需求文档，不复用旧编号，避免和已发布的需求混在一起。\ntype: ${['user', 'feedback', 'project', 'reference'][index % 4]}\nmodified: 2026-10-${String((index % 20) + 1).padStart(2, '0')}T08:00:00Z\n---\n\n本机 Windows 宿主机跑不了 player 真实子进程测试用例。\n`])),
+      } as Record<string, string>,
       fingerprints: {} as Record<string, string>,
       failSource: null as string | null,
       calls: [] as MemoryCall[],
@@ -89,6 +93,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         entry('global-note', stores.alphaGlobal, '全局', globalTarget),
         entry('a-note', stores.alphaA, '项目 · 栖点 A', aTarget),
         entry('b-note', stores.alphaB, '项目 · 栖点 B', bTarget),
+        ...Array.from({ length: copies }, (_, index) => entry(`copy-${index}`, stores.alphaA, '项目 · 栖点 A', aTarget)),
       ].filter(item => !state.deleted.includes(item.id));
       const failedSources = state.failSource ? [{ label: state.failSource, reason: '项目目录不存在或无法访问' }] : [];
       return { toolId, entries, failedSources, stores: summarize(entries, [['全局', stores.alphaGlobal, globalTarget], ['项目 · 栖点 A', stores.alphaA, aTarget], ['项目 · 栖点 B', stores.alphaB, bTarget]]), switchShared: false };
@@ -133,7 +138,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies });
 }
 
 async function openWorkspace(page: Page) {
@@ -171,6 +176,33 @@ test('a session-only CLI does not get a memory tab', async ({ page }) => {
   await install(page, { catalog: 'session', suggestion: null });
   await openWorkspace(page);
   await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
+});
+
+test('memory rows keep title, summary, and meta apart when the list scrolls', async ({ page }) => {
+  await install(page, { copies: 16 });
+  await openMemory(page);
+  await expect(entryButton(page, 'copy-0')).toContainText('Requirement docs new not revise 0');
+  const report = await page.getByRole('navigation', { name: '记忆列表' }).evaluate(list => {
+    const buttons = [...list.querySelectorAll('button')];
+    const boxes = buttons.map(node => {
+      const rect = node.getBoundingClientRect();
+      const children = [...node.children].map(child => child.getBoundingClientRect());
+      return {
+        height: rect.height,
+        top: rect.top,
+        bottom: rect.bottom,
+        escaped: children.some(box => box.bottom > rect.bottom + 1 || box.top < rect.top - 1),
+      };
+    });
+    return {
+      count: boxes.length,
+      short: boxes.filter(box => box.height < 64).length,
+      escaped: boxes.filter(box => box.escaped).length,
+      overlaps: boxes.slice(1).filter((box, index) => box.top < boxes[index].bottom - 1).length,
+      scrolls: list.scrollHeight > list.clientHeight,
+    };
+  });
+  expect(report).toEqual({ count: 19, short: 0, escaped: 0, overlaps: 0, scrolls: true });
 });
 
 test('the memory list leads with title, summary, and user or project scope', async ({ page }) => {
@@ -216,7 +248,9 @@ test('the memory list leads with title, summary, and user or project scope', asy
   // A read-only CLI lists and reads but hides every write control.
   await page.getByRole('tab', { name: 'Beta', exact: true }).click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
-  await expect(page.getByText(readOnlyLimitation)).toBeVisible();
+  await expect(page.getByTitle(readOnlyLimitation)).toBeVisible();
+  await expect(region.getByRole('heading', { name: '记忆', exact: true })).toHaveCount(0);
+  await expect(region.getByText(/跨会话保留/)).toHaveCount(0);
   await expect(entryButton(page, 'beta-note')).toContainText('Beta note');
   await expect(entryButton(page, 'beta-note')).toContainText('from-beta');
   await expect(entryButton(page, 'beta-note')).toContainText('用户');
