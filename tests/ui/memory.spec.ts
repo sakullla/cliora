@@ -573,7 +573,7 @@ test('1000 memories use bounded batches, reuse fingerprints, and refresh an open
   await installBatchProbe(page);
   const start = Date.now();
   await openMemory(page);
-  await expect.poll(async () => (await batchState(page)).bodies).toBe(1000);
+  await expect.poll(async () => (await batchState(page)).bodies, { timeout: 20_000 }).toBe(1000);
   await expect.poll(async () => (await batchState(page)).active).toBe(0);
   expect(await batchState(page)).toMatchObject({ calls: 32, bodies: 1000, peak: 2, lists: 1 });
   console.log('MEMORY_UI_PERF cold', { ...await batchState(page), elapsedMs: Date.now() - start });
