@@ -75,9 +75,9 @@ function MetricSummary({ metric, label, now, samples }: { metric: UsageMetric; l
   const resetText = !metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') ? usageReset(metric, now) : '';
   const meta = [amountText, resetText].filter(Boolean).join(' · ');
   return <div className={styles.summaryMetric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0}>
-    <div><span>{label}</span><strong>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : t('tools.quota.percentUsed', { percent: new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(percent) })}</strong></div>
+    <div><span title={label}>{label}</span><strong>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : t('tools.quota.percentUsed', { percent: new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(percent) })}</strong></div>
     {percent !== null && <progress aria-label={t('tools.quota.percentAria', { label })} max={100} value={Math.min(100, Math.max(0, percent))} />}
-    {meta && <small className={styles.metricMeta} title={meta}>{(metric.unlimited || amount) && <span>{amountText}</span>}{resetText && <span>{resetText}</span>}</small>}
+    {meta && <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span title={amountText}>{amountText}</span>}{resetText && <span title={resetText}>{resetText}</span>}</small>}
     <BurnDown metric={metric} label={label} samples={samples} now={now} />
   </div>;
 }

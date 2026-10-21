@@ -240,6 +240,40 @@ test('burn-down curve shows sampled history and a linear depletion estimate', as
   await page.screenshot({ path: 'test-results/quota-burn-down.png', fullPage: true });
 });
 
+test('quota summary stacks a long remaining count and reset so neither wraps mid-phrase', async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 800 });
+  await setup(page);
+  await harness(page, `(() => {
+    const metric = window.quotaHarness.cache[0].success.result.metrics[0];
+    const soon = new Date(Date.now() + (27 * 24 + 5) * 3600 * 1000).toISOString();
+    const base = { ...metric, remaining: 3929, used: 71, total: 4000, sourcePercent: 1.8, unit: { kind: 'requests' }, window: { durationSeconds: null, resetsAt: soon, recovery: 'unknown' } };
+    window.quotaHarness.cache[0].success.result.metrics = [
+      { ...base, id: 'mcp', label: 'MCP 调用额度' },
+      { ...base, id: 'plan', label: 'Coding Plan 额度', remaining: null, used: 40, total: 100, sourcePercent: 40 },
+      { ...base, id: 'hour', label: 'Coding Plan · 5 小时动态恢复', remaining: null, used: 1, total: 100, sourcePercent: 1, window: { durationSeconds: 18000, resetsAt: new Date(Date.now() + (4 * 60 + 55) * 60 * 1000).toISOString(), recovery: 'rolling' } },
+    ];
+  })()`);
+  const reset = page.getByText(/^窗口结束：/).first();
+  await expect(reset).toBeVisible();
+  await expect(page.getByText('剩余 3,929 次', { exact: true })).toBeVisible();
+  const lines = await reset.evaluate(node => {
+    const meta = node.closest('small');
+    if (!meta) return [];
+    return [...meta.querySelectorAll(':scope > span')].map(item => {
+      const style = getComputedStyle(item);
+      const rect = item.getBoundingClientRect();
+      const lineHeight = parseFloat(style.lineHeight);
+      return { text: item.textContent ?? '', whiteSpace: style.whiteSpace, singleLine: rect.height > 0 && rect.height < lineHeight * 1.6 };
+    });
+  });
+  expect(lines.map(line => line.text)).toEqual(['剩余 3,929 次', expect.stringMatching(/^窗口结束：/)]);
+  for (const line of lines) {
+    expect(line.whiteSpace).toBe('nowrap');
+    expect(line.singleLine).toBe(true);
+  }
+  await page.screenshot({ path: 'test-results/quota-summary-stack.png', fullPage: true });
+});
+
 test('depletion estimate stays hidden with short segments, resets or no consumption', async ({ page }) => {
   await setup(page);
   // Two readings draw a curve but are below the three-point estimate threshold.

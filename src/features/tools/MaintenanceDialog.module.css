@@ -81,7 +81,7 @@
 
 /* Indeterminate sweep along the strip's bottom edge while the action runs. */
 .track { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.track > span { position: absolute; top: 0; bottom: 0; left: 0; width: 38%; background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--accent-bright) 65%, transparent); animation: sweep 1.25s var(--ease) infinite; }
+.track > span { position: absolute; top: 0; bottom: 0; left: 0; width: 38%; background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--accent-bright) 65%, transparent); animation: sweep 2.6s linear infinite; }
 
 .inlineError { margin: -6px 0 0; color: var(--danger); font-size: var(--fs-caption); }
 
@@ -188,7 +188,7 @@
 .pillOpen:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .pillClose, .pillClose:hover:not(:disabled) { flex: none; display: grid; place-items: center; width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: var(--text-3); }
 .pillClose:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.pillTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: pill-sweep 1.4s linear infinite; }
+.pillTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: pill-sweep 2.6s linear infinite; }
 
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
 @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
