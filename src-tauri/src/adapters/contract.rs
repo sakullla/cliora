@@ -584,6 +584,13 @@ pub trait CliAdapter: Sync {
     fn history_supported(&self) -> bool {
         false
     }
+    /// Verified parent/child association for usage records.
+    /// `None` means this adapter has not declared one. The catalog then
+    /// publishes `unavailable` when history itself is supported, and omits
+    /// the facet entirely when it is not.
+    fn history_association(&self) -> Option<Facet> {
+        None
+    }
     fn history_resume_version_supported(&self, _version: &str) -> bool {
         true
     }
@@ -950,14 +957,44 @@ pub struct UnknownAdapterRecord {
     pub reason: &'static str,
 }
 
-/// Catalog entry. Resume-latest is published here so existing descriptor
-/// literals stay valid; it is never inferred from the tool id.
+/// Reason published when a history adapter has not declared association.
+pub const HISTORY_ASSOCIATION_UNAVAILABLE_REASON: &str = "不提供主子代理关联";
+
+/// Association facet for the catalog. History adapters that do not declare one
+/// get `unavailable`. A CLI that does not provide usage records gets `None`,
+/// so the field does not create an association entry. The tool id is not read.
+pub fn history_association_facet(adapter: &dyn CliAdapter) -> Option<Facet> {
+    if !adapter.history_supported() {
+        return None;
+    }
+    Some(adapter.history_association().unwrap_or(Facet {
+        state: "unavailable",
+        reason: HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+    }))
+}
+
+/// Catalog entry. Resume-latest and parent/child association are published
+/// here so existing descriptor literals stay valid. Neither is inferred from
+/// the tool id.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublishedDescriptor {
     #[serde(flatten)]
     pub descriptor: AdapterDescriptor,
     pub resume_latest_available: bool,
+    /// Omitted when this CLI does not provide usage records.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub association: Option<Facet>,
+}
+
+impl PublishedDescriptor {
+    pub fn from_adapter(adapter: &dyn CliAdapter) -> Self {
+        Self {
+            resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
+            association: history_association_facet(adapter),
+            descriptor: adapter.descriptor(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -966,4 +1003,142 @@ pub struct AdapterCatalog {
     pub registered: Vec<PublishedDescriptor>,
     pub managed_ids: Vec<String>,
     pub preserved_unknown: Vec<UnknownAdapterRecord>,
+}
+
+#[cfg(test)]
+mod association_facet_tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::credentials::CredentialStore;
+    use crate::native::adapter::{NativeFile, Scope};
+    use crate::native::apply::NativeSecrets;
+    use crate::native::format::FileKind;
+    use crate::native::profile::{Connection, RegisteredProfile};
+
+    /// Fixture ids are not registered CLI ids. The facet must follow the
+    /// declaration and history support, not the id text.
+    #[derive(Clone, Copy)]
+    enum AssociationCase {
+        Undeclared,
+        Declared,
+        NoHistory,
+    }
+
+    struct AssociationCli(AssociationCase);
+
+    impl CliAdapter for AssociationCli {
+        fn id(&self) -> &'static str {
+            match self.0 {
+                AssociationCase::Undeclared => "association_undeclared",
+                AssociationCase::Declared => "association_declared",
+                AssociationCase::NoHistory => "association_no_history",
+            }
+        }
+        fn name(&self) -> &'static str {
+            "association fixture"
+        }
+        fn command(&self) -> &'static str {
+            "association-fixture"
+        }
+        fn npm_package(&self) -> &'static str {
+            ""
+        }
+        fn version_identity(&self, _basename: &str, _output: &str) -> bool {
+            false
+        }
+        fn native_files(
+            &self,
+            _scope: Scope,
+            _home: &Path,
+            _project: Option<&Path>,
+            _known: bool,
+        ) -> Vec<NativeFile> {
+            Vec::new()
+        }
+        fn interface_formats(&self) -> &'static [&'static str] {
+            &[]
+        }
+        fn file_kind(&self, _role: &str) -> Result<FileKind, String> {
+            Err("fixture has no native config".into())
+        }
+        fn connection_documents(
+            &self,
+            _connection: &Connection,
+            _scope: Scope,
+        ) -> Result<BTreeMap<String, Value>, String> {
+            Ok(BTreeMap::new())
+        }
+        fn write_connection_secret(
+            &self,
+            _profile: &RegisteredProfile,
+            _scope: Scope,
+            _credentials: &dyn CredentialStore,
+            _secrets: &mut NativeSecrets,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn has_native_secret(&self, _role: &str, _root: &Value) -> bool {
+            false
+        }
+        fn inspect_values(
+            &self,
+            _settings: &Value,
+            _local_settings: &Value,
+            _models: &Value,
+        ) -> InspectionFields {
+            InspectionFields::default()
+        }
+        fn launch_args(&self, _session: Option<&str>, _mode: LaunchMode) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+        fn install_guidance(&self) -> (&'static str, &'static str) {
+            ("https://example.invalid/association", "fixture only")
+        }
+        fn history_supported(&self) -> bool {
+            !matches!(self.0, AssociationCase::NoHistory)
+        }
+        fn history_association(&self) -> Option<Facet> {
+            match self.0 {
+                AssociationCase::Undeclared => None,
+                AssociationCase::Declared | AssociationCase::NoHistory => Some(Facet {
+                    state: "available",
+                    reason: "已核对直接子会话",
+                }),
+            }
+        }
+    }
+
+    #[test]
+    fn undeclared_history_adapter_is_unavailable_without_using_its_id() {
+        let published = PublishedDescriptor::from_adapter(&AssociationCli(AssociationCase::Undeclared));
+        let facet = published.association.as_ref().expect("history adapter publishes association");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let value = serde_json::to_value(&published).unwrap();
+        assert_eq!(value["association"]["state"], "unavailable");
+        assert_eq!(value["association"]["reason"], HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+    }
+
+    #[test]
+    fn declared_association_stays_available_with_the_adapter_reason() {
+        let published = PublishedDescriptor::from_adapter(&AssociationCli(AssociationCase::Declared));
+        let facet = published.association.as_ref().expect("declared association");
+        assert_eq!(facet.state, "available");
+        assert_eq!(facet.reason, "已核对直接子会话");
+        assert_eq!(published.descriptor.history.state, "available");
+    }
+
+    #[test]
+    fn cli_without_usage_records_omits_association_even_when_declared() {
+        let published = PublishedDescriptor::from_adapter(&AssociationCli(AssociationCase::NoHistory));
+        assert!(published.association.is_none());
+        assert_eq!(published.descriptor.history.state, "unknown");
+        let value = serde_json::to_value(&published).unwrap();
+        assert!(value.get("association").is_none());
+        assert!(value.get("history").is_some());
+    }
 }
