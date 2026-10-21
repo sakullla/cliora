@@ -396,7 +396,7 @@ fn jsonl_fingerprint_failure_isolated_then_recovered_without_losing_old_index() 
         let fingerprint = source_fingerprint(path);
         stop.store(true, Ordering::SeqCst);
         fingerprint
-    }, &|| stop.load(Ordering::SeqCst));
+    }, &|| stop.load(Ordering::SeqCst), &|_| true);
     assert!(discovered.as_ref().unwrap_err().contains("已取消"));
     let cancelled = scan_adapter_sources_controlled(&db, &CODEX, discovered, &|| stop.load(Ordering::SeqCst));
     assert!(cancelled.incomplete);
