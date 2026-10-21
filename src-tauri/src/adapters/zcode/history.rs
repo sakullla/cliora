@@ -25,6 +25,7 @@
 //!   snapshot format (`ZCodeSessionFile`: `meta` + `messages`), still written
 //!   for imported/legacy tasks. Snapshots carry no token counters, so a
 //!   snapshot-only session lists without usage instead of inventing numbers.
+//! * `querySource` on model-io rows is not parent/child identity and is not read.
 //!
 //! `~/.zcode/v2/tasks-index.sqlite` is deliberately not read (ADR-10: avoid
 //! coupling the internal schema).
@@ -657,6 +658,14 @@ mod tests {
     use super::*;
     use rusqlite::params;
 
+    fn assert_unlinked(session: &ParsedSession) {
+        assert!(session.children.is_empty(), "不得新增子会话");
+        assert!(
+            session.usage.iter().all(|event| event.attributions.is_empty()),
+            "不得新增归属跳转"
+        );
+    }
+
     const ROLLOUT_FIXTURE: &str = include_str!(
         "../../../../tests/fixtures/history/zcode-3.14.4-model-io.jsonl"
     );
@@ -709,6 +718,7 @@ mod tests {
             .map(|event| event.input.unwrap_or(0) + event.output.unwrap_or(0))
             .sum();
         assert_eq!(total, 115_507 + 1_941 + 139_638 + 1_117 + 140_865 + 100);
+        assert_unlinked(&session);
     }
 
     #[test]
@@ -747,6 +757,7 @@ mod tests {
             session.usage.is_empty(),
             "快照格式没有 token 字段，不得伪造用量"
         );
+        assert_unlinked(&session);
     }
 
     #[test]
@@ -770,6 +781,74 @@ mod tests {
             .and_then(|name| name.to_str())
             .unwrap()
             .starts_with("model-io-"));
+    }
+
+    #[test]
+    fn declares_no_parent_child_association() {
+        use crate::adapters::{CliAdapter, HISTORY_ASSOCIATION_UNAVAILABLE_REASON, PublishedDescriptor};
+
+        let facet = super::super::ZCode
+            .history_association()
+            .expect("zcode declares association");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = PublishedDescriptor::from_adapter(&super::super::ZCode);
+        assert_eq!(published.descriptor.history.state, "available");
+        assert_eq!(
+            published.association.as_ref().map(|item| (item.state, item.reason)),
+            Some(("unavailable", HISTORY_ASSOCIATION_UNAVAILABLE_REASON))
+        );
+    }
+
+    #[test]
+    fn query_source_and_unread_fields_do_not_create_parent_child_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout = temp.path().join(".zcode/cli/rollout");
+        std::fs::create_dir_all(&rollout).unwrap();
+        std::fs::write(
+            rollout.join("model-io-sess_unread-2026_10_03-1.jsonl"),
+            concat!(
+                r#"{"type":"model_io","sessionId":"sess_unread-2026_10_03-1","requestId":"aaaaaaaa-bbbb-4ccc-8ddd-000000000001","querySource":"main_turn","parentId":null,"startedAt":"2026-10-03T14:53:03.784Z","model":{"modelId":"GLM-5.3"},"request":{"body":{"messages":[{"role":"user","content":[{"type":"text","text":"父行问题"}]}]}},"response":{"usage":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cacheReadTokens":1,"cacheWriteTokens":0},"text":"父行回答"}}"#,
+                "\n",
+                r#"{"type":"model_io","sessionId":"sess_childish","requestId":"aaaaaaaa-bbbb-4ccc-8ddd-000000000002","querySource":"subagent","parentId":"sess_unread-2026_10_03-1","parentSessionId":"sess_unread-2026_10_03-1","agentId":"explore","agentPreset":"plan","delegationDepth":1,"source":"agent","startedAt":"2026-10-03T14:54:03.784Z","model":{"modelId":"GLM-5.3"},"request":{"body":{"messages":[{"role":"user","content":[{"type":"text","text":"子字段问题"}]}]}},"response":{"usage":{"inputTokens":20,"outputTokens":3,"totalTokens":23,"cacheReadTokens":0,"cacheWriteTokens":0},"text":"子字段回答"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let indexed = sources(temp.path()).unwrap();
+        assert_eq!(indexed.len(), 1, "{indexed:?}");
+        let session = parse(&indexed[0]).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some("sess_unread-2026_10_03-1"));
+        assert_eq!(session.usage.len(), 2, "未核对字段不得合并或拆开用量");
+        assert_eq!(session.usage[0].input, Some(10));
+        assert_eq!(session.usage[1].input, Some(20));
+        let text = session
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(text.contains(&"父行问题") && text.contains(&"子字段回答"));
+        assert!(session.messages.iter().all(|message| message.text != "explore"));
+        assert_unlinked(&session);
+
+        let sessions = temp.path().join(".zcode/v2/sessions/workspace");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("sess_snapshot-query.json"),
+            r#"{"meta":{"taskId":"sess_snapshot-query","title":"快照","workspacePath":"C:/demo","model":"GLM-5.3","querySource":"subagent","parentId":"sess_parent","agentId":"explore"},"messages":[{"id":"m1","role":"user","content":"问","querySource":"main_turn"},{"id":"m2","role":"assistant","content":"答","querySource":"subagent","parentId":"sess_parent","source":"agent"}]}"#,
+        )
+        .unwrap();
+        let snapshot = super::sources(temp.path())
+            .unwrap()
+            .into_iter()
+            .find(|source| source.native_id.as_deref() == Some("sess_snapshot-query"))
+            .expect("snapshot stays its own session");
+        let session = parse(&snapshot).unwrap();
+        assert_eq!(session.title, "快照");
+        assert_eq!(session.messages.len(), 2);
+        assert!(session.usage.is_empty());
+        assert_ne!(session.native_id.as_deref(), Some("sess_parent"));
+        assert_unlinked(&session);
     }
 
     #[test]

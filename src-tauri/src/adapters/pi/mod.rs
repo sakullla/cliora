@@ -10,8 +10,9 @@ use std::env;
 use std::path::Path;
 
 use super::{
-    assign_existing_fields, file, project_root, CliAdapter, InspectionFields, LaunchMode,
-    McpLocation, NativeCredentialRefs, PendingSecrets,
+    assign_existing_fields, file, project_root, CliAdapter, Facet, InspectionFields,
+    HISTORY_ASSOCIATION_UNAVAILABLE_REASON, LaunchMode, McpLocation, NativeCredentialRefs,
+    PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -605,6 +606,13 @@ impl CliAdapter for Pi {
     }
     fn history_supported(&self) -> bool {
         true
+    }
+    fn history_association(&self) -> Option<Facet> {
+        // Unread fields, including querySource, are not a parent/child link.
+        Some(Facet {
+            state: "unavailable",
+            reason: HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
     }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         version_policy().accepts(version)

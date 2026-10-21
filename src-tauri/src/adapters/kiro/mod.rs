@@ -47,8 +47,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::{
-    file, project_root, AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchMode,
-    ManagementCapabilities, McpLocation, RuleSupport,
+    file, project_root, AdapterDescriptor, CliAdapter, Facet, InspectionFields,
+    HISTORY_ASSOCIATION_UNAVAILABLE_REASON, LaunchMode, ManagementCapabilities, McpLocation,
+    RuleSupport,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -362,6 +363,13 @@ impl CliAdapter for Kiro {
     }
     fn history_supported(&self) -> bool {
         true
+    }
+    fn history_association(&self) -> Option<Facet> {
+        // Unread fields, including querySource, are not a parent/child link.
+        Some(Facet {
+            state: "unavailable",
+            reason: HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {

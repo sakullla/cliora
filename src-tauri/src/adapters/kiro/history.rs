@@ -357,6 +357,14 @@ mod tests {
         home
     }
 
+    fn assert_unlinked(session: &ParsedSession) {
+        assert!(session.children.is_empty(), "不得新增子会话");
+        assert!(
+            session.usage.iter().all(|event| event.attributions.is_empty()),
+            "不得新增归属跳转"
+        );
+    }
+
     fn source_for(path: PathBuf) -> HistorySource {
         HistorySource {
             native_title: None,
@@ -460,6 +468,7 @@ mod tests {
         assert!(!session.partial);
         // No format carries token fields: no usage events, ever.
         assert!(session.usage.is_empty());
+        assert_unlinked(&session);
     }
 
     #[test]
@@ -492,6 +501,7 @@ mod tests {
         assert!(session.messages.iter().all(|message| message.timestamp.is_some()));
         assert!(!session.partial);
         assert!(session.usage.is_empty(), "三种格式均无 token 字段");
+        assert_unlinked(&session);
     }
 
     #[test]
@@ -529,6 +539,7 @@ mod tests {
             let session = parse(source).unwrap();
             assert!(session.partial, "未知行形状必须标记 partial：{source:?}");
             assert!(!session.messages.is_empty(), "已知行仍须进入时间线");
+            assert_unlinked(&session);
         }
     }
 
@@ -562,5 +573,67 @@ mod tests {
         assert!(legacy_session_stem("6f5813aa-9d04-4d7b-b3e2-5c1f0a67d2e4"));
         assert!(!legacy_session_stem("notes"));
         assert!(!legacy_session_stem("0aa0fb400b9c74c98d7ccd5d630dc6f0"));
+    }
+
+    #[test]
+    fn declares_no_parent_child_association() {
+        use crate::adapters::{CliAdapter, HISTORY_ASSOCIATION_UNAVAILABLE_REASON, PublishedDescriptor};
+
+        let facet = super::super::Kiro
+            .history_association()
+            .expect("kiro declares association");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = PublishedDescriptor::from_adapter(&super::super::Kiro);
+        assert_eq!(published.descriptor.history.state, "available");
+        assert_eq!(
+            published.association.as_ref().map(|item| (item.state, item.reason)),
+            Some(("unavailable", HISTORY_ASSOCIATION_UNAVAILABLE_REASON))
+        );
+    }
+
+    #[test]
+    fn unread_fields_do_not_create_parent_child_links() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy_dir = temp.path().join(".kiro/sessions/cli");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0.jsonl"),
+            concat!(
+                r#"{"kind":"Prompt","parentId":"other-session","querySource":"subagent","agentId":"explore","delegationDepth":1,"agentPreset":"standard","source":"agent","data":{"content":[{"type":"text","text":"问"}]}}"#,
+                "\n",
+                r#"{"kind":"AssistantMessage","parentSessionId":"other-session","querySource":"main_turn","data":{"content":[{"type":"text","text":"答"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let current_dir = temp.path().join(".kiro/demo-workspace/sess_b1b2c3d4e5f67890");
+        fs::create_dir_all(&current_dir).unwrap();
+        fs::write(
+            current_dir.join("messages.jsonl"),
+            concat!(
+                r#"{"payload":{"type":"user","querySource":"subagent","parentId":"sess_parent","agentId":"explore","content":[{"type":"text","text":"问"}]},"timestamp":"2026-09-30T08:00:00Z"}"#,
+                "\n",
+                r#"{"payload":{"type":"assistant","querySource":"agent","parentSessionId":"sess_parent","source":"agent","reasoningModelId":"claude-sonnet-4-5","content":[{"type":"text","text":"答"}]},"timestamp":"2026-09-30T08:01:00Z"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            current_dir.join("session.json"),
+            r#"{"title":"仍是本会话","workspacePaths":["C:\\work\\demo"],"querySource":"subagent","parentId":"sess_parent"}"#,
+        )
+        .unwrap();
+        let sources = sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 2, "{sources:?}");
+        for source in &sources {
+            let session = parse(source).unwrap();
+            assert_eq!(session.messages.len(), 2, "原有对话仍可查看");
+            assert!(session.usage.is_empty(), "未核对字段不得造出用量");
+            assert!(!session.partial, "已知行上的额外字段不是新形状");
+            assert_unlinked(&session);
+            assert_ne!(session.native_id.as_deref(), Some("sess_parent"));
+            assert_ne!(session.native_id.as_deref(), Some("other-session"));
+        }
     }
 }

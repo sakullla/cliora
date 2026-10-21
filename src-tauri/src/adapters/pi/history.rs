@@ -163,3 +163,92 @@ pub fn parse_controlled(
         .collect();
     session.finish(source)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn assert_unlinked(session: &ParsedSession) {
+        assert!(session.children.is_empty(), "不得新增子会话");
+        assert!(
+            session.usage.iter().all(|event| event.attributions.is_empty()),
+            "不得新增归属跳转"
+        );
+    }
+
+    #[test]
+    fn declares_no_parent_child_association() {
+        use crate::adapters::{CliAdapter, HISTORY_ASSOCIATION_UNAVAILABLE_REASON, PublishedDescriptor};
+
+        let facet = super::super::Pi
+            .history_association()
+            .expect("pi declares association");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = PublishedDescriptor::from_adapter(&super::super::Pi);
+        assert_eq!(published.descriptor.history.state, "available");
+        assert_eq!(
+            published.association.as_ref().map(|item| (item.state, item.reason)),
+            Some(("unavailable", HISTORY_ASSOCIATION_UNAVAILABLE_REASON))
+        );
+    }
+
+    #[test]
+    fn verified_fixture_stays_viewable_without_parent_child_link() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".pi/agent/sessions");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("fixture.jsonl"),
+            include_str!("../../../../tests/fixtures/history/pi-0.87-v3.jsonl"),
+        )
+        .unwrap();
+        let sources = sources(home.path()).unwrap();
+        assert_eq!(sources.len(), 1);
+        let session = parse(&sources[0]).unwrap();
+        assert_eq!(
+            session.native_id.as_deref(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+        assert_eq!(session.usage.len(), 2, "原有用量仍可查看");
+        assert!(!session.messages.is_empty());
+        assert_unlinked(&session);
+    }
+
+    #[test]
+    fn unread_fields_do_not_create_parent_child_links() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".pi/agent/sessions");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("unread.jsonl"),
+            concat!(
+                r#"{"type":"session","version":3,"id":"44444444-4444-4444-8444-444444444444","timestamp":"2026-09-29T08:00:00Z","cwd":"/fixture/project","parentId":"33333333-3333-4333-8333-333333333333","querySource":"subagent","agentId":"explore","delegationDepth":2,"agentPreset":"plan","source":"agent"}"#,
+                "\n",
+                r#"{"type":"message","id":"user-1","timestamp":"2026-09-29T08:00:02Z","querySource":"main_turn","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"Build tests"}],"agent":{"name":"explore"}}}"#,
+                "\n",
+                r#"{"type":"message","id":"assistant-1","timestamp":"2026-09-29T08:00:03Z","querySource":"subagent","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"model":"gpt-5","parentAgentId":"main","usage":{"input":11,"output":7,"cacheRead":3,"cacheWrite":2,"totalTokens":23}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let sources = sources(home.path()).unwrap();
+        assert_eq!(sources.len(), 1);
+        let session = parse(&sources[0]).unwrap();
+        assert_eq!(
+            session.native_id.as_deref(),
+            Some("44444444-4444-4444-8444-444444444444")
+        );
+        assert_ne!(
+            session.native_id.as_deref(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.usage.len(), 1);
+        assert_eq!(session.usage[0].input, Some(11));
+        assert_eq!(session.usage[0].output, Some(7));
+        assert_ne!(session.title, "explore");
+        assert_unlinked(&session);
+    }
+}

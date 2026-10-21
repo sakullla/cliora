@@ -10,9 +10,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use super::{
-    assign_existing_fields, file, install_line_for, pointer_token, project_root, CliAdapter,
-    InspectionFields, InstallLine, LaunchMode, MajorUpgradeAction, McpLocation, NativeCredentialRefs,
-    PendingSecrets,
+    assign_existing_fields, file, install_line_for, pointer_token, project_root, CliAdapter, Facet,
+    InspectionFields, HISTORY_ASSOCIATION_UNAVAILABLE_REASON, InstallLine, LaunchMode,
+    MajorUpgradeAction, McpLocation, NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -1047,6 +1047,13 @@ impl CliAdapter for OpenCode {
     }
     fn history_supported(&self) -> bool {
         true
+    }
+    fn history_association(&self) -> Option<Facet> {
+        // Unread fields, including querySource, are not a parent/child link.
+        Some(Facet {
+            state: "unavailable",
+            reason: HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
     }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Both verified lines resume with the same `--session <id>` argument

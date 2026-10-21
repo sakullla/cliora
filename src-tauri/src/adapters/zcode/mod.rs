@@ -26,8 +26,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::{
-    file, AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchForm, LaunchMode,
-    ManagementCapabilities, McpLocation,
+    file, AdapterDescriptor, CliAdapter, Facet, InspectionFields,
+    HISTORY_ASSOCIATION_UNAVAILABLE_REASON, LaunchForm, LaunchMode, ManagementCapabilities,
+    McpLocation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -292,6 +293,13 @@ impl CliAdapter for ZCode {
     }
     fn history_supported(&self) -> bool {
         true
+    }
+    fn history_association(&self) -> Option<Facet> {
+        // Unread fields, including querySource, are not a parent/child link.
+        Some(Facet {
+            state: "unavailable",
+            reason: HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
