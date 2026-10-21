@@ -334,6 +334,12 @@ impl CliAdapter for Antigravity {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "直接 parent_conversation_id 子行挂到父会话；用量库或记录缺失时该子节点不可读",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // [RE] storage evidence covers agy 1.2.x and the local 1.3.1; allow
         // ordinary movement inside major 1, nothing beyond.
@@ -737,6 +743,14 @@ mod tests {
             assert_eq!(facet.state, "available", "antigravity 的 {dimension}");
             assert!(!facet.reason.trim().is_empty());
         }
+        let association = Antigravity.history_association().expect("association");
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.trim().is_empty());
+        assert_ne!(association.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        assert_eq!(
+            crate::adapters::history_association_facet(&Antigravity).unwrap().state,
+            "available"
+        );
         assert!(descriptor.login.is_none());
         assert!(descriptor.management.mcp && descriptor.management.skills);
         assert!(!descriptor.management.accounts);
