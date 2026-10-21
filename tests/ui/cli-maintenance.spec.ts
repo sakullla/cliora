@@ -56,6 +56,22 @@ test('version lookup retries and background installation can cancel then retry',
   await expect(progress.getByText('正在后台安装，请稍候…')).toBeVisible();
   await expect(progress.getByRole('heading', { name: '正在更新 Devin' })).toBeVisible();
   await expect(progress.getByLabel('版本从 3000.11.2 到 3000.11.3')).toBeVisible();
+  // Authored motion, not the computed style: the suite reduces motion to a single frame.
+  const sweep = await progress.evaluate((dialog) => {
+    const bar = [...dialog.querySelectorAll('[aria-hidden="true"] > span')].find((node) => getComputedStyle(node.parentElement!).height === '2px');
+    const trackClass = bar?.parentElement?.className.split(/\s+/).find(Boolean);
+    if (!trackClass) return null;
+    const motions: string[] = [];
+    const walk = (rules: CSSRuleList) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSMediaRule || rule instanceof CSSSupportsRule) walk(rule.cssRules);
+        else if (rule instanceof CSSStyleRule && rule.selectorText.includes(trackClass) && rule.style.animation) motions.push(rule.style.animation);
+      }
+    };
+    for (const sheet of document.styleSheets) { try { walk(sheet.cssRules); } catch { /* cross-origin sheet */ } }
+    return motions;
+  });
+  expect(sweep).toEqual([expect.stringContaining('2.6s linear')]);
   await expect(progress.getByLabel('安装日志')).toContainText('Running postinstall');
   // The log stays folded behind its latest line until asked for.
   await expect(progress.getByLabel('安装日志')).toBeHidden();

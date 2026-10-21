@@ -855,6 +855,7 @@ test('configuration list separates saved connection from frozen last-used source
   await setupConfigurationWorkspace(page, 'codex', true, true);
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row).toContainText('保存设置：API 密钥 · gateway.example.test');
+  await expect(row).toContainText('最后使用版本 2 · 保存版本 3');
   await expect(row).toContainText('上次已使用：CLI 当前凭据 · old-provider · old.example.test · old-model');
   await expect(row.getByRole('button', { name: '使用新版本', exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply')))).toEqual([]);
@@ -901,6 +902,8 @@ test('known full applied identity keeps its source distinct and has no pending u
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row.getByText('正在使用', { exact: true })).toBeVisible();
   await expect(row.getByRole('button', { name: '使用新版本', exact: true })).toHaveCount(0);
+  await expect(row.getByText(/最后使用版本/)).toHaveCount(0);
+  await expect(row).toContainText('上次已使用：API 密钥 · gateway · gateway.example.test · one');
 });
 
 test('cancel request button stops a delayed directory while keeping draft edits and key lease', async ({ page }) => {
