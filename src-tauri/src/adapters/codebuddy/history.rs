@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,8 +7,9 @@ use serde_json::Value;
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
     check_cancelled, discover_jsonl_controlled, raw_string_after, read_jsonl_filtered,
-    source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
-    ParsedSession, UsageEvent,
+    source_fingerprint_controlled, text_content, timestamp, valid_native_id, AgentKind,
+    ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
+    ParsedSession, UsageAttribution, UsageEvent,
 };
 
 /// Sessions live in `~/.codebuddy/projects/<workspace-slug>/<session-id>.jsonl`
@@ -59,7 +60,7 @@ pub fn sources_controlled(
             source.fingerprint = String::new();
             source.fingerprint_error = Some(message);
         } else {
-            source.fingerprint = format!("codebuddy-session-v4|{}", parts.join("|"));
+            source.fingerprint = format!("codebuddy-session-v5|{}", parts.join("|"));
         }
     }
     Ok(sources)
@@ -130,13 +131,18 @@ fn skip_row(raw: &[u8]) -> bool {
 /// Usage is per API call and may sit on any row carrying `providerData.usage`
 /// (assistant messages and `function_call` rows). Row ids are unique per call,
 /// so forked copies of the same row collapse to one usage event.
+/// `conversationRequestId` is a turn id shared by many billed rows. Together
+/// with `messageId` it identifies one call, including the same call repeated
+/// in a child log. Without that pair, the row id stays the identity.
 fn record_usage(
     session: &mut ParsedSession,
     records: &mut HashSet<String>,
+    calls: &mut HashMap<String, usize>,
     event: String,
     provider: Option<&Value>,
     model: Option<String>,
     time: Option<i64>,
+    attribution: UsageAttribution,
 ) {
     let Some(counts) = provider
         .and_then(|data| data.get("usage"))
@@ -146,18 +152,114 @@ fn record_usage(
     else {
         return;
     };
-    if records.insert(event.clone()) {
-        session.usage.push(UsageEvent { native_usage: None,
-            request_count: Some(1),
-            id: event,
-            model,
-            timestamp: time,
-            input: Some(counts.input),
-            output: Some(counts.output),
-            cache_read: Some(counts.read),
-            cache_write: Some(counts.write),
-            input_includes_cache: true, attributions: Vec::new(),
-        });
+    let identity = call_identity(provider, &event);
+    if let Some(&index) = calls.get(&identity) {
+        attach(&mut session.usage[index], attribution);
+        return;
+    }
+    if !records.insert(event.clone()) {
+        if let Some(index) = session.usage.iter().position(|item| item.id == event) {
+            attach(&mut session.usage[index], attribution);
+            calls.insert(identity, index);
+        }
+        return;
+    }
+    let index = session.usage.len();
+    session.usage.push(UsageEvent {
+        native_usage: None,
+        request_count: Some(1),
+        id: event,
+        model,
+        timestamp: time,
+        input: Some(counts.input),
+        output: Some(counts.output),
+        cache_read: Some(counts.read),
+        cache_write: Some(counts.write),
+        input_includes_cache: true,
+        attributions: vec![attribution],
+    });
+    calls.insert(identity, index);
+}
+
+fn call_identity(provider: Option<&Value>, event: &str) -> String {
+    let request = provider
+        .and_then(|data| data.get("conversationRequestId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let message = provider
+        .and_then(|data| data.get("messageId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    match (request, message) {
+        (Some(request), Some(message)) => format!("request:{request}:{message}"),
+        _ => format!("row:{event}"),
+    }
+}
+
+fn attach(event: &mut UsageEvent, attribution: UsageAttribution) {
+    if !event.attributions.iter().any(|item| item == &attribution) {
+        event.attributions.push(attribution);
+    }
+}
+
+fn agent_name(provider: Option<&Value>) -> Option<String> {
+    provider
+        .and_then(|data| data.get("agent"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().take(256).collect())
+}
+
+fn distinct_session_id(row: &Value, parent: Option<&str>) -> Option<String> {
+    let id = row.get("sessionId").and_then(Value::as_str)?;
+    if !valid_native_id(id) || parent == Some(id) {
+        return None;
+    }
+    Some(id.to_owned())
+}
+
+fn wire_key(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && name.len() <= 512)
+        .unwrap_or("child")
+        .to_owned()
+}
+
+fn push_child_message(messages: &mut Vec<HistoryMessage>, id: String, role: &str, text: String, time: Option<i64>) {
+    if text.trim().is_empty() {
+        return;
+    }
+    messages.push(HistoryMessage {
+        id,
+        role: role.to_owned(),
+        text,
+        timestamp: time,
+        timestamp_source: if time.is_some() { MessageTimeSource::Native } else { MessageTimeSource::Unknown },
+        kind: HistoryMessageKind::Conversation,
+    });
+}
+
+fn retarget_child(session: &mut ParsedSession, from_key: &str, to_key: &str, name: Option<&str>) {
+    for event in &mut session.usage {
+        for item in &mut event.attributions {
+            if item.kind == AgentKind::Subagent && item.session_key.as_deref() == Some(from_key) {
+                item.session_key = Some(to_key.to_owned());
+                if item.name.is_none() {
+                    item.name = name.map(str::to_owned);
+                }
+            }
+        }
+        let mut kept = Vec::new();
+        for item in event.attributions.drain(..) {
+            if !kept.iter().any(|other: &UsageAttribution| other == &item) {
+                kept.push(item);
+            }
+        }
+        event.attributions = kept;
     }
 }
 
@@ -200,6 +302,7 @@ pub fn parse_controlled(
     let mut session = ParsedSession::new();
     let mut model: Option<String> = None;
     let mut records = HashSet::<String>::new();
+    let mut calls = HashMap::<String, usize>::new();
     let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let provider = row.get("providerData");
@@ -219,10 +322,12 @@ pub fn parse_controlled(
         record_usage(
             &mut session,
             &mut records,
+            &mut calls,
             format!("codebuddy:usage:{id}"),
             provider,
             row_model,
             time,
+            UsageAttribution { kind: AgentKind::Main, name: agent_name(provider), session_key: None },
         );
         match row.get("type").and_then(Value::as_str) {
             Some("message") => {
@@ -280,26 +385,44 @@ pub fn parse_controlled(
         }
     })?;
     session.partial |= partial;
-    // Subagent wires carry their own session ids and conversations, so they
-    // never contribute transcript rows or identity; their billed calls join
-    // the parent session total under agent-scoped event ids. Inside a wire the
-    // same all-rows usage rule applies (assistant messages plus function_call
-    // rows).
-    for wire in subagent_wires(&source.path, cancelled)? {
+    // Subagent wires keep their own session id and body. Usage still joins the
+    // parent total. A call already seen on the parent (same conversation
+    // request and message id, or the same row id) is not counted again.
+    let wires = match subagent_wires(&source.path, cancelled) {
+        Ok(wires) => wires,
+        Err(_) => {
+            session.partial = true;
+            Vec::new()
+        }
+    };
+    let mut used_keys = HashSet::new();
+    for wire in wires {
         check_cancelled(cancelled)?;
         let agent = wire
             .file_stem()
             .and_then(|name| name.to_str())
             .unwrap_or("agent")
             .to_owned();
-        let wire_source = HistorySource { native_title: None,
+        let path_key = wire_key(&wire);
+        let wire_source = HistorySource {
+            native_title: None,
             path: wire,
             native_id: None,
             fingerprint: String::new(),
             fingerprint_error: None,
         };
+        let mut messages = Vec::new();
+        let mut native_key = None;
+        let mut native_name = None;
+        let parent_id = session.native_id.clone();
         let read = read_jsonl_filtered(&wire_source, cancelled, skip_row, |line, row| {
             let provider = row.get("providerData");
+            if native_key.is_none() {
+                native_key = distinct_session_id(&row, parent_id.as_deref());
+            }
+            if native_name.is_none() {
+                native_name = agent_name(provider);
+            }
             let row_model = provider
                 .and_then(|data| data.get("model"))
                 .and_then(Value::as_str)
@@ -313,18 +436,75 @@ pub fn parse_controlled(
             record_usage(
                 &mut session,
                 &mut records,
+                &mut calls,
                 format!("{agent}:usage:{id}"),
                 provider,
                 row_model,
                 row.get("timestamp").and_then(timestamp),
+                UsageAttribution {
+                    kind: AgentKind::Subagent,
+                    name: native_name.clone(),
+                    session_key: Some(path_key.clone()),
+                },
             );
+            if row.get("type").and_then(Value::as_str) != Some("message") {
+                return;
+            }
+            let role = row.get("role").and_then(Value::as_str).unwrap_or("");
+            if role != "user" && role != "assistant" {
+                return;
+            }
+            if provider.and_then(|data| data.get("skipRun")).and_then(Value::as_bool) == Some(true) {
+                return;
+            }
+            let body = row.get("content").map(text_content).unwrap_or_default();
+            push_child_message(&mut messages, id, role, body, row.get("timestamp").and_then(timestamp));
         });
         match read {
-            Ok(agent_partial) => session.partial |= agent_partial,
-            Err(_) => session.partial = true,
+            Ok(agent_partial) => {
+                session.partial |= agent_partial;
+                let key = claim_child_key(&mut used_keys, native_key.clone(), path_key.clone());
+                retarget_child(&mut session, &path_key, &key, native_name.as_deref());
+                session.children.push(ChildSession {
+                    key,
+                    name: native_name,
+                    messages,
+                    readable: true,
+                    children: Vec::new(),
+                });
+            }
+            Err(_) => {
+                session.partial = true;
+                let key = claim_child_key(&mut used_keys, None, path_key);
+                session.children.push(ChildSession {
+                    key,
+                    name: None,
+                    messages: Vec::new(),
+                    readable: false,
+                    children: Vec::new(),
+                });
+            }
         }
     }
     session.finish(source)
+}
+
+fn claim_child_key(used: &mut HashSet<String>, native: Option<String>, fallback: String) -> String {
+    let preferred = native.filter(|key| !key.is_empty() && key.len() <= 512).unwrap_or_else(|| fallback.clone());
+    if used.insert(preferred.clone()) {
+        return preferred;
+    }
+    if used.insert(fallback.clone()) {
+        return fallback;
+    }
+    let mut n = 2u32;
+    loop {
+        let key = format!("{fallback}#{n}");
+        if used.insert(key.clone()) {
+            return key;
+        }
+        n += 1;
+    }
 }
 
 #[cfg(test)]
@@ -347,6 +527,12 @@ mod tests {
     }
 
     #[test]
+    fn association_descriptor_is_available() {
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&crate::adapters::codebuddy::CodeBuddy);
+        assert_eq!(published.association.expect("association").state, "available");
+    }
+
+    #[test]
     fn sources_discover_only_uuid_named_session_files() {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".codebuddy/projects/demo-workspace");
@@ -360,7 +546,7 @@ mod tests {
         fs::write(projects.join("scratch.txt"), "{}\n").unwrap();
         let sources = sources(home.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v4|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v5|"));
         assert!(sources[0]
             .path
             .file_name()
@@ -393,6 +579,17 @@ mod tests {
         // message) plus 7 rows from the Explore subagent wire (6 function_call
         // + the wire-final assistant message).
         assert_eq!(parsed.usage.len(), 24);
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].name.as_deref(), Some("Explore"));
+        assert_eq!(parsed.children[0].key, "01a0c8f8-e7f1-7396-a7c4-025157353f8d");
+        assert!(parsed.children[0].readable);
+        assert!(parsed.children[0].messages.iter().any(|message| message.text.contains("助手回复占位")));
+        assert!(parsed.usage.iter().filter(|event| event.id.starts_with("codebuddy:usage:")).all(|event| {
+            event.attributions.iter().any(|item| item.kind == AgentKind::Main && item.name.as_deref() == Some("cli") && item.session_key.is_none())
+        }));
+        assert!(parsed.usage.iter().filter(|event| event.id.starts_with("agent-")).all(|event| {
+            event.attributions.iter().any(|item| item.kind == AgentKind::Subagent && item.name.as_deref() == Some("Explore") && item.session_key.as_deref() == Some("01a0c8f8-e7f1-7396-a7c4-025157353f8d"))
+        }));
         let parent = parsed
             .usage
             .iter()
@@ -529,7 +726,7 @@ mod tests {
         .unwrap();
         let sources = sources(temp.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v4|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v5|"));
         let parsed = parse(&sources[0]).unwrap();
         assert_eq!(
             parsed.native_id.as_deref(),
@@ -570,6 +767,107 @@ mod tests {
         assert_eq!(parent_input, 1500, "父会话取全 usage 行(含 function_call)");
         assert_eq!(wire_input, 2300, "子代理线内同样取全 usage 行");
         assert!(parsed.usage.iter().all(|event| event.input_includes_cache));
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].key, "subagent-own-id");
+        assert!(parsed.children[0].name.is_none(), "没有原生代理名时不拿文件名当名称");
+        assert!(parsed.children[0].readable);
+        assert!(parsed.children[0].messages.iter().any(|message| message.text.contains("子代理输入")));
+        assert!(parsed.children[0].messages.iter().any(|message| message.text == "子代理输出"));
+        assert!(parsed.usage.iter().filter(|event| event.id.starts_with("codebuddy:")).all(|event| {
+            event.attributions.iter().any(|item| item.kind == AgentKind::Main && item.session_key.is_none())
+        }));
+        assert!(parsed.usage.iter().filter(|event| event.id.starts_with("agent-")).all(|event| {
+            event.attributions.iter().any(|item| item.kind == AgentKind::Subagent && item.session_key.as_deref() == Some("subagent-own-id"))
+        }));
+    }
+
+    #[test]
+    fn same_conversation_request_and_message_id_is_one_usage_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        fs::create_dir_all(projects.join(format!("{session_id}/subagents"))).unwrap();
+        let usage = |tokens: u64| {
+            format!(r#"{{"requests":1,"inputTokens":{tokens},"outputTokens":1,"totalTokens":{tokens},"inputTokensDetails":[],"outputTokensDetails":[]}}"#)
+        };
+        fs::write(
+            projects.join(format!("{session_id}.jsonl")),
+            format!(
+                r#"{{"id":"parent-row","type":"message","role":"assistant","timestamp":1789000001000,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-1","model":"kimi-k3-2","usage":{usage}}},"content":[{{"type":"text","text":"父回复"}}]}}
+{{"id":"parent-other","type":"function_call","timestamp":1789000001100,"sessionId":"{session_id}","providerData":{{"agent":"cli","conversationRequestId":"turn-1","messageId":"call-2","model":"kimi-k3-2","usage":{other}}}}}
+"#,
+                usage = usage(10),
+                other = usage(20),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            projects.join(format!("{session_id}/subagents/agent-same.jsonl")),
+            format!(
+                r#"{{"id":"child-row","type":"message","role":"assistant","timestamp":1789000002000,"sessionId":"child-session-id","providerData":{{"agent":"Explore","isSubAgent":true,"conversationRequestId":"turn-1","messageId":"call-1","model":"kimi-k3-2","usage":{usage}}},"content":[{{"type":"text","text":"子日志正文"}}]}}
+{{"id":"child-other","type":"function_call","timestamp":1789000002100,"sessionId":"child-session-id","providerData":{{"agent":"Explore","conversationRequestId":"turn-1","messageId":"call-9","usage":{other}}}}}
+"#,
+                usage = usage(99),
+                other = usage(7),
+            ),
+        )
+        .unwrap();
+        let parsed = parse(&sources(temp.path()).unwrap().remove(0)).unwrap();
+        assert_eq!(parsed.native_id.as_deref(), Some(session_id));
+        assert_eq!(parsed.usage.len(), 3, "同一 messageId 不新增；同一 turn 里的另一调用仍保留");
+        let shared = parsed.usage.iter().find(|event| event.id == "codebuddy:usage:parent-row").unwrap();
+        assert_eq!(shared.input, Some(10), "重复观察不把子日志用量再加一次");
+        assert_eq!(shared.attributions.len(), 2);
+        assert!(shared.attributions.iter().any(|item| item.kind == AgentKind::Main && item.name.as_deref() == Some("cli")));
+        assert!(shared.attributions.iter().any(|item| {
+            item.kind == AgentKind::Subagent && item.name.as_deref() == Some("Explore") && item.session_key.as_deref() == Some("child-session-id")
+        }));
+        assert!(parsed.messages.iter().all(|message| message.text != "子日志正文"));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].name.as_deref(), Some("Explore"));
+        assert!(parsed.children[0].messages.iter().any(|message| message.text == "子日志正文"));
+    }
+
+    #[test]
+    fn unreadable_child_keeps_the_parent_without_inventing_a_body() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        fs::create_dir_all(projects.join(format!("{session_id}/subagents"))).unwrap();
+        fs::write(
+            projects.join(format!("{session_id}.jsonl")),
+            format!(
+                r#"{{"id":"m1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{session_id}","providerData":{{"agent":"cli"}},"content":[{{"type":"text","text":"父会话仍在"}}]}}"#
+            ),
+        )
+        .unwrap();
+        let locked = projects.join(format!("{session_id}/subagents/agent-locked.jsonl"));
+        fs::write(&locked, r#"{"id":"c1","type":"message","role":"assistant","content":[{"type":"text","text":"不可读正文"}]}"#).unwrap();
+        let _lock = lock_exclusive(&locked);
+        let parsed = parse(&sources(temp.path()).unwrap().remove(0)).unwrap();
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话仍在"));
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("不可读")));
+        assert!(parsed.usage.is_empty());
+        assert_eq!(parsed.children.len(), 1);
+        assert!(!parsed.children[0].readable);
+        assert!(parsed.children[0].messages.is_empty());
+        assert!(parsed.children[0].name.is_none());
+    }
+
+    fn lock_exclusive(path: &Path) -> fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            return fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = fs::File::open(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            file
+        }
     }
 
     #[test]

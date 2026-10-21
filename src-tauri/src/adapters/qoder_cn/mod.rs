@@ -368,6 +368,12 @@ impl CliAdapter for QoderAdapter {
         history::parse(source, cancelled)
     }
     fn history_supported(&self) -> bool { true }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "已核对子日志可挂到父会话，同一请求只计一次用量",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // 1.1.74 is tested evidence; ordinary compatible 1.x updates are accepted.
         version.starts_with("1.")
