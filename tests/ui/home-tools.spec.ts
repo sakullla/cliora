@@ -824,9 +824,14 @@ test('the fresh onboarding checklist checks its steps and retires once complete'
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await expect(card.locator('li[data-done]')).toHaveCount(1);
 
-  // Step 2: the entry opens the tools page; a saved profile marks the step after returning home.
+  // Step 2: the entry opens the new-profile dialog. Close it before navigating
+  // home, then simulate a saved profile to check the onboarding progress.
   await card.getByRole('button', { name: '去创建', exact: true }).click();
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  const profileDialog = page.getByRole('dialog', { name: '新建配置', exact: true });
+  await expect(profileDialog).toBeVisible();
+  await profileDialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(profileDialog).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __fresh: { profiles: Array<{ id: string; name: string }> } }).__fresh.profiles = [{ id: 'daily', name: '日常' }]; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await expect(card.locator('li[data-done]')).toHaveCount(2);
