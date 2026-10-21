@@ -9,8 +9,10 @@
 //!
 //! * `conversation_summaries.db` — SQLite index with `conversation_summaries`
 //!   rows (`id`, `title`, `workspace`, `status`, `parent_conversation_id`);
-//!   rows with a parent stay with their host conversation and are never
-//!   listed as independent sessions.
+//!   a direct `parent_conversation_id` is attached to that parent and is not
+//!   an independent session. The child is readable only when both its
+//!   transcript and usage database exist; if either is missing the parent
+//!   remains and that child is unreadable. Deeper descendants are not merged.
 //! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` —
 //!   one JSON object per line: `{step_index, source, type, status,
 //!   created_at, content, thinking?}` with `type` ∈ `USER_INPUT` /
@@ -42,8 +44,8 @@ use serde_json::Value;
 
 use super::protobuf::{Mismatch, Reader};
 use crate::history::{
-    check_cancelled, text_content, timestamp as parse_timestamp, valid_native_id, HistorySource,
-    ParsedSession, UsageEvent, MAX_SOURCES,
+    check_cancelled, text_content, timestamp as parse_timestamp, valid_native_id, AgentKind,
+    ChildSession, HistorySource, ParsedSession, UsageAttribution, UsageEvent, MAX_SOURCES,
 };
 
 const MAX_TRANSCRIPT_LINES: usize = 4_000;
@@ -66,49 +68,94 @@ pub fn sources_controlled(
     let mut statement = connection
         .prepare(
             "SELECT id, title, workspace, status, parent_conversation_id
-             FROM conversation_summaries WHERE parent_conversation_id IS NULL
-             ORDER BY rowid DESC LIMIT ?1",
+             FROM conversation_summaries ORDER BY rowid DESC",
         )
         .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
     let rows = statement
-        .query_map([MAX_SOURCES as i64 + 1], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
+        .query_map([], |row| {
+            Ok(SummaryRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                workspace: row.get(2)?,
+                status: row.get(3)?,
+                parent: row.get(4)?,
+            })
         })
         .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
-    let mut out = Vec::new();
+    let mut summaries = Vec::new();
     for row in rows {
         check_cancelled(cancelled)?;
-        let (id, title, workspace, status) = row.map_err(|error| error.to_string())?;
-        if !valid_native_id(&id) {
+        summaries.push(row.map_err(|error| error.to_string())?);
+    }
+    let mut children_of: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
+        std::collections::HashMap::new();
+    for row in &summaries {
+        if let Some(parent) = linked_parent(row.parent.as_deref()) {
+            if valid_native_id(&row.id) && valid_native_id(parent) {
+                children_of.entry(parent.to_owned()).or_default().push((row.id.clone(), row.title.clone()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for row in &summaries {
+        if row.parent.is_some() || !valid_native_id(&row.id) {
             continue;
         }
         if out.len() >= MAX_SOURCES {
             return Err("Antigravity 会话源超过 5000 个，本次未删除旧索引".into());
         }
+        let id = &row.id;
+        let title = &row.title;
+        let workspace = &row.workspace;
+        let status = &row.status;
         // Discovery reads only revisions, never every transcript/protobuf blob.
-        // Include WAL commits and explicit missing markers; parsing still reports
-        // absent or malformed native data through its existing partial state.
+        // Direct-child revisions are part of the parent fingerprint. Parsing
+        // still reports absent or malformed native data as partial or unreadable.
         let checked = (|| -> Result<String, String> {
-            let transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, &id), cancelled)?;
-            let database = conversation_db(&root, &id);
-            let usage = if database.exists() {
-                crate::history::source_cache::database_stamp(&database, cancelled)?
-            } else { "missing".into() };
-            Ok(format!("antigravity-session-v2|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}"))
+            let transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, id), cancelled)?;
+            let usage = usage_stamp(&root, id, cancelled)?;
+            let mut children = Vec::new();
+            for (child_id, child_title) in children_of.get(id).into_iter().flatten() {
+                let child_transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, child_id), cancelled)?;
+                let child_usage = usage_stamp(&root, child_id, cancelled)?;
+                children.push(format!("{child_id}|{child_title:?}|{child_transcript}|{child_usage}"));
+            }
+            children.sort();
+            Ok(format!(
+                "antigravity-session-v3|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}|{}",
+                children.join(",")
+            ))
         })();
         out.push(HistorySource {
-            native_title: title.filter(|title| !title.trim().is_empty()),
-            path: index.clone(), native_id: Some(id),
+            native_title: title.clone().filter(|title| !title.trim().is_empty()),
+            path: index.clone(),
+            native_id: Some(id.clone()),
             fingerprint: checked.as_ref().cloned().unwrap_or_default(),
             fingerprint_error: checked.err(),
         });
     }
     Ok(out)
+}
+
+struct SummaryRow {
+    id: String,
+    title: Option<String>,
+    workspace: Option<String>,
+    status: Option<String>,
+    parent: Option<String>,
+}
+
+fn linked_parent(parent: Option<&str>) -> Option<&str> {
+    parent.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn usage_stamp(root: &Path, id: &str, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    let database = conversation_db(root, id);
+    if database.is_file() {
+        crate::history::source_cache::database_stamp(&database, cancelled)
+    } else {
+        Ok("missing".into())
+    }
 }
 
 fn transcript_path(root: &Path, id: &str) -> PathBuf {
@@ -204,93 +251,194 @@ pub fn parse_controlled(
         .to_path_buf();
     // Transcript: only the three documented row types enter the timeline.
     let transcript = transcript_path(&root, &id);
-    if !transcript.is_file() {
-        // The index knows the conversation but its transcript is gone: the
-        // session degrades to partial instead of failing wholesale.
-        session.partial = true;
-    } else {
-        let text = std::fs::read_to_string(&transcript)
-            .map_err(|error| format!("Antigravity 会话记录无法读取：{error}"))?;
-        for (index, line) in text.lines().enumerate() {
-            check_cancelled(cancelled)?;
-            if index >= MAX_TRANSCRIPT_LINES {
-                session.partial = true;
-                break;
-            }
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(row) = serde_json::from_str::<Value>(line) else {
-                session.partial = true;
-                continue;
-            };
-            let role = match row.get("type").and_then(Value::as_str) {
-                Some("USER_INPUT") => "user",
-                Some("PLANNER_RESPONSE") | Some("AGENT_RESPONSE") => "assistant",
-                _ => continue,
-            };
-            let content = row.get("content").cloned().unwrap_or(Value::Null);
-            session.add_message(
-                format!("{id}:{index}"),
-                role,
-                text_content(&content),
-                row.get("created_at").and_then(parse_timestamp),
-            );
+    match read_transcript(&id, &transcript, cancelled) {
+        Ok(body) => {
+            session.partial |= body.partial;
+            session.messages = body.messages;
         }
+        Err(error) if error == "missing" => session.partial = true,
+        Err(error) => return Err(format!("Antigravity 会话记录无法读取：{error}")),
     }
     check_cancelled(cancelled)?;
     // Usage: protobuf rows in conversations/<id>.db, strictly validated.
+    let mut seen = HashSet::new();
     let usage_db = conversation_db(&root, &id);
     if !usage_db.is_file() {
         session.partial = true;
     } else {
-        let usage = open_conversation(&usage_db)?;
-        let mut statement = usage
-            .prepare("SELECT data FROM gen_metadata ORDER BY rowid")
-            .map_err(|_| "Antigravity 会话用量库 gen_metadata 结构变化".to_string())?;
-        let rows = statement
-            .query_map([], |row| row.get::<_, Vec<u8>>(0))
-            .map_err(|error| error.to_string())?;
-        let mut seen = HashSet::new();
-        for blob in rows.flatten() {
-            check_cancelled(cancelled)?;
-            match parse_generation(&blob) {
-                // Ok(None): a gen_metadata row that carries no usage stats is
-                // not a billed call; it stays out without degrading anything.
-                Ok(None) => {}
-                Ok(Some(event)) => {
-                    if !seen.insert(event.response_id.clone()) {
-                        // response_id repeats across stores of the same
-                        // generation: documented dedup, not degradation.
-                        continue;
-                    }
-                    let response_id = event.response_id.clone();
-                    // The session-level model label keeps the first seen
-                    // generation's model; per-event models stay authoritative.
-                    if session.model.is_none() {
-                        session.model.clone_from(&event.model);
-                    }
-                    session.usage.push(UsageEvent { native_usage: None,
-                        request_count: Some(1),
-                        id: response_id,
-                        model: event.model,
-                        timestamp: event.timestamp,
-                        input: Some(event.input),
-                        output: Some(event.output),
-                        cache_read: Some(event.cache_read),
-                        cache_write: Some(event.cache_write),
-                        // Verified [RE] semantics: field 2 counts only the
-                        // uncached share; cache read/write are separate fields.
-                        input_includes_cache: false, attributions: Vec::new(),
-                    });
-                }
-                Err(Mismatch) => session.partial = true,
-            }
-        }
+        // A root usage database that cannot be opened is still a parse failure.
+        // Child databases degrade the child node instead of dropping the parent.
+        append_usage(&mut session, &usage_db, &mut seen, None, cancelled)?;
     }
+    attach_direct_children(&mut session, &connection, &root, &id, &mut seen, cancelled)?;
     check_cancelled(cancelled)?;
     session.finish(source)
+}
+
+fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+    if !transcript.is_file() {
+        return Err("missing".into());
+    }
+    let text = std::fs::read_to_string(transcript).map_err(|error| error.to_string())?;
+    let mut session = ParsedSession::new();
+    for (index, line) in text.lines().enumerate() {
+        check_cancelled(cancelled)?;
+        if index >= MAX_TRANSCRIPT_LINES {
+            session.partial = true;
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            session.partial = true;
+            continue;
+        };
+        let role = match row.get("type").and_then(Value::as_str) {
+            Some("USER_INPUT") => "user",
+            Some("PLANNER_RESPONSE") | Some("AGENT_RESPONSE") => "assistant",
+            _ => continue,
+        };
+        let content = row.get("content").cloned().unwrap_or(Value::Null);
+        session.add_message(
+            format!("{id}:{index}"),
+            role,
+            text_content(&content),
+            row.get("created_at").and_then(parse_timestamp),
+        );
+    }
+    Ok(session)
+}
+
+fn append_usage(
+    session: &mut ParsedSession,
+    usage_db: &Path,
+    seen: &mut HashSet<String>,
+    attribution: Option<UsageAttribution>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let usage = open_conversation(usage_db)?;
+    let mut statement = usage
+        .prepare("SELECT data FROM gen_metadata ORDER BY rowid")
+        .map_err(|_| "Antigravity 会话用量库 gen_metadata 结构变化".to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(|error| error.to_string())?;
+    for blob in rows.flatten() {
+        check_cancelled(cancelled)?;
+        match parse_generation(&blob) {
+            Ok(None) => {}
+            Ok(Some(event)) => {
+                let response_id = event.response_id.clone();
+                record_usage(session, seen, UsageEvent {
+                    native_usage: None,
+                    request_count: Some(1),
+                    id: response_id,
+                    model: event.model,
+                    timestamp: event.timestamp,
+                    input: Some(event.input),
+                    output: Some(event.output),
+                    cache_read: Some(event.cache_read),
+                    cache_write: Some(event.cache_write),
+                    // Verified [RE] semantics: field 2 counts only the uncached share.
+                    input_includes_cache: false,
+                    attributions: attribution.clone().into_iter().collect(),
+                });
+            }
+            Err(Mismatch) => session.partial = true,
+        }
+    }
+    Ok(())
+}
+
+fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, event: UsageEvent) {
+    if !seen.insert(event.id.clone()) {
+        // The same response_id on a child log is still one call. Keep the
+        // child jump on that existing event instead of adding a second row.
+        if let Some(existing) = session.usage.iter_mut().find(|item| item.id == event.id) {
+            for attribution in event.attributions {
+                if attribution.session_key.is_some()
+                    && !existing.attributions.iter().any(|item| item.session_key == attribution.session_key)
+                {
+                    existing.attributions.push(attribution);
+                }
+            }
+        }
+        return;
+    }
+    if session.model.is_none() {
+        session.model.clone_from(&event.model);
+    }
+    session.usage.push(event);
+}
+
+fn attach_direct_children(
+    session: &mut ParsedSession,
+    connection: &Connection,
+    root: &Path,
+    parent: &str,
+    seen: &mut HashSet<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, title FROM conversation_summaries
+             WHERE parent_conversation_id = ?1 ORDER BY id",
+        )
+        .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
+    let rows = statement
+        .query_map([parent], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, title) = row.map_err(|error| error.to_string())?;
+        if !valid_native_id(&id) {
+            continue;
+        }
+        let name = title.and_then(|title| {
+            let trimmed = title.trim();
+            (!trimmed.is_empty()).then(|| trimmed.chars().take(256).collect())
+        });
+        let transcript = transcript_path(root, &id);
+        let usage_db = conversation_db(root, &id);
+        let transcript_ok = transcript.is_file();
+        let usage_ok = usage_db.is_file();
+        let mut readable = transcript_ok && usage_ok;
+        let mut messages = Vec::new();
+        if readable {
+            match read_transcript(&id, &transcript, cancelled) {
+                Ok(body) => {
+                    session.partial |= body.partial;
+                    messages = body.messages;
+                }
+                Err(_) => {
+                    readable = false;
+                    session.partial = true;
+                }
+            }
+        }
+        if usage_ok {
+            let attribution = UsageAttribution {
+                kind: AgentKind::Subagent,
+                name: name.clone(),
+                session_key: Some(id.clone()),
+            };
+            if append_usage(session, &usage_db, seen, Some(attribution), cancelled).is_err() {
+                readable = false;
+                messages.clear();
+                session.partial = true;
+            }
+        }
+        session.children.push(ChildSession {
+            key: id,
+            name,
+            messages: if readable { messages } else { Vec::new() },
+            readable,
+            children: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 /// A strictly parsed `gen_metadata` usage row.
@@ -591,7 +739,7 @@ mod tests {
             .all(|source| source.native_id.as_deref() != Some(CHILD_ID)));
         assert_eq!(found[0].native_id.as_deref(), Some(ROOT_ID));
         assert_eq!(found[0].native_title.as_deref(), Some("帮我把部署脚本改成幂等版本"));
-        assert!(found[0].fingerprint.starts_with("antigravity-session-v2|"));
+        assert!(found[0].fingerprint.starts_with("antigravity-session-v3|"));
         let before = found[0].fingerprint.clone();
         // A new usage row in the conversation database changes the fingerprint.
         let usage = Connection::open(&conversation_db(
@@ -616,6 +764,11 @@ mod tests {
         drop(usage);
         let after = sources(home.path()).unwrap();
         assert_ne!(before, after[0].fingerprint);
+        let with_root_usage = after[0].fingerprint.clone();
+        let transcript = transcript_path(&super::super::data_root(home.path()), CHILD_ID);
+        std::fs::write(&transcript, "{\"type\":\"AGENT_RESPONSE\",\"content\":\"子记录已改\"}\n").unwrap();
+        let after_child = sources(home.path()).unwrap();
+        assert_ne!(with_root_usage, after_child[0].fingerprint);
     }
 
     #[test]
@@ -668,6 +821,16 @@ mod tests {
         // absent.
         assert_eq!(second.model.as_deref(), Some("Gemini 3 Pro"));
         assert!(session.usage.iter().all(|event| event.request_count == Some(1)));
+        // The fixture child has a transcript and no usage database, so the
+        // node is unreadable and its text stays out of the parent timeline.
+        assert_eq!(session.children.len(), 1);
+        assert_eq!(session.children[0].key, CHILD_ID);
+        assert_eq!(session.children[0].name.as_deref(), Some("task: 检查重复资源"));
+        assert!(!session.children[0].readable);
+        assert!(session.children[0].messages.is_empty());
+        assert!(session.children[0].children.is_empty());
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        assert!(session.usage.iter().all(|event| event.attributions.is_empty()));
     }
 
     #[test]
@@ -696,6 +859,96 @@ mod tests {
         // its usage cannot be verified.
         assert_eq!(session.messages.len(), 3);
         assert!(session.partial);
+    }
+
+    #[test]
+    fn direct_child_with_both_materials_is_readable_and_counted_once() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let root = super::super::data_root(home.path());
+        let database = conversation_db(&root, CHILD_ID);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let usage = Connection::open(&database).unwrap();
+        usage.execute_batch("CREATE TABLE gen_metadata (key TEXT, data BLOB);").unwrap();
+        let child_row = json!({
+            "response_id": "resp_child_agy_fixture",
+            "generation_uuid": "cascade_child:resp_child_agy_fixture",
+            "input_tokens": 11, "output_tokens": 4,
+            "thinking_output_tokens": 1, "response_output_tokens": 3,
+            "cache_write_tokens": 0, "cache_read_tokens": 0,
+            "model_id": "gemini-3-pro-preview", "timestamp": 1791000040000u64
+        });
+        let duplicate = json!({
+            "response_id": "resp_0001_agy_fixture",
+            "generation_uuid": "cascade_child:resp_0001_agy_fixture",
+            "input_tokens": 1200, "output_tokens": 300,
+            "thinking_output_tokens": 24, "response_output_tokens": 276,
+            "cache_write_tokens": 3000, "cache_read_tokens": 8000,
+            "model_id": "gemini-3-pro-preview", "timestamp": 1791000010000u64
+        });
+        usage.execute(
+            "INSERT INTO gen_metadata (key, data) VALUES (?1, ?2)",
+            params!["cascade_child:resp_child_agy_fixture", encode_well_formed_generation(&child_row)],
+        ).unwrap();
+        usage.execute(
+            "INSERT INTO gen_metadata (key, data) VALUES (?1, ?2)",
+            params!["cascade_child:resp_0001_agy_fixture", encode_well_formed_generation(&duplicate)],
+        ).unwrap();
+        drop(usage);
+        let index = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        index.execute(
+            "INSERT INTO conversation_summaries (id, title, workspace, status, parent_conversation_id)
+             VALUES ('conv_grand_20261005_abcdefghijklmnopqrstuvwx', 'grandchild', ?1, 'active', ?2)",
+            params![r"C:\Users\example\agy-demo", CHILD_ID],
+        ).unwrap();
+        drop(index);
+        let grand_transcript = transcript_path(&root, "conv_grand_20261005_abcdefghijklmnopqrstuvwx");
+        std::fs::create_dir_all(grand_transcript.parent().unwrap()).unwrap();
+        std::fs::write(&grand_transcript, "{\"type\":\"AGENT_RESPONSE\",\"content\":\"孙会话不挂到根\"}\n").unwrap();
+        let before = std::fs::read(transcript_path(&root, CHILD_ID)).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found.iter().all(|source| source.native_id.as_deref() != Some(CHILD_ID)));
+        let session = parse(&found[0]).unwrap();
+        assert_eq!(std::fs::read(transcript_path(&root, CHILD_ID)).unwrap(), before);
+        assert_eq!(session.children.len(), 1);
+        assert!(session.children[0].readable, "{:?}", session.children[0]);
+        assert!(session.children[0].children.is_empty());
+        assert_eq!(session.children[0].messages.len(), 1);
+        assert!(session.children[0].messages[0].text.contains("子会话时间线"));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        assert!(session.messages.iter().chain(session.children[0].messages.iter()).all(|message| !message.text.contains("孙会话")));
+        assert_eq!(session.usage.len(), 3, "{:?}", session.usage.iter().map(|event| event.id.as_str()).collect::<Vec<_>>());
+        let child_event = session.usage.iter().find(|event| event.id == "resp_child_agy_fixture").unwrap();
+        assert_eq!(child_event.input, Some(11));
+        assert_eq!(child_event.attributions.len(), 1);
+        assert_eq!(child_event.attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(child_event.attributions[0].name.as_deref(), Some("task: 检查重复资源"));
+        assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(CHILD_ID));
+        let shared = session.usage.iter().find(|event| event.id == "resp_0001_agy_fixture").unwrap();
+        assert_eq!(shared.attributions.len(), 1);
+        assert_eq!(shared.attributions[0].session_key.as_deref(), Some(CHILD_ID));
+        std::fs::remove_file(transcript_path(&root, CHILD_ID)).unwrap();
+        let missing_transcript = parse(&found[0]).unwrap();
+        assert_eq!(missing_transcript.native_id.as_deref(), Some(ROOT_ID));
+        assert_eq!(missing_transcript.messages.len(), 3);
+        assert_eq!(missing_transcript.children.len(), 1);
+        assert!(!missing_transcript.children[0].readable);
+        assert!(missing_transcript.children[0].messages.is_empty());
+        assert!(missing_transcript.usage.iter().any(|event| event.id == "resp_child_agy_fixture"));
+        assert!(missing_transcript.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+    }
+
+    #[test]
+    fn missing_child_usage_database_keeps_parent_and_hides_child_body() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        let session = parse(&found[0]).unwrap();
+        assert_eq!(session.messages.len(), 3);
+        assert!(!session.usage.iter().any(|event| event.id.contains("child")));
+        assert!(!session.children[0].readable);
+        assert!(session.children[0].messages.iter().all(|message| !message.text.contains("子会话时间线")));
     }
 
     #[test]

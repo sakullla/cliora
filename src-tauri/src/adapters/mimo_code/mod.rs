@@ -586,6 +586,12 @@ impl CliAdapter for MiMoCode {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "会话内 agent_id 只记归属不跳转；parent_id 直接子会话可打开，用量并入父会话且只计一次",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Schema evidence covers 0.1.x; allow ordinary minor movement inside 0.
         semver::Version::parse(version.trim().trim_start_matches('v'))
@@ -1107,5 +1113,13 @@ mod tests {
         assert_eq!(descriptor.resources.state, "available");
         assert_eq!(descriptor.history.state, "available");
         assert!(descriptor.configuration.is_some());
+        let association = MiMoCode.history_association().expect("association");
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.trim().is_empty());
+        assert_ne!(association.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        assert_eq!(
+            crate::adapters::history_association_facet(&MiMoCode).unwrap().state,
+            "available"
+        );
     }
 }

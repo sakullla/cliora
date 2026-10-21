@@ -26,13 +26,16 @@
 //! * `step-finish` parts repeat the message's token object; parts never
 //!   contribute usage, each assistant message row is one billed call.
 //!
-//! Attribution: `message.agent_id` (column, default "main") tags in-session
-//! subagent calls; child sessions (`session.parent_id`) fold their billed
-//! messages into the parent session's usage while their transcripts stay with
-//! the child (root transcripts only). The database is opened read-only and any
-//! schema drift fails that session as a parse error instead of guessing.
+//! Attribution: `message.agent_id` (column, default "main") records the actor
+//! on that usage event and does not open a child. `main` is the primary line;
+//! any other id is a subagent. The display name comes only from `data.agent`.
+//! Direct `session.parent_id` children are child nodes: their part text stays
+//! out of the parent transcript, and their billed messages stay on the parent
+//! usage list once. Empty `parent_id` forks and grandchildren are not linked.
+//! The database is opened read-only and any schema drift fails that session
+//! as a parse error instead of guessing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
@@ -40,8 +43,8 @@ use serde_json::Value;
 
 use crate::history::usage;
 use crate::history::{
-    check_cancelled, text_content, valid_native_id, HistorySource, ParsedSession, UsageEvent,
-    MAX_SOURCES,
+    check_cancelled, text_content, valid_native_id, AgentKind, ChildSession, HistorySource,
+    ParsedSession, UsageAttribution, UsageEvent, MAX_SOURCES,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -126,17 +129,44 @@ fn discover_database(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<Hi
         }
     }
     drop(statement);
-    // Transcript parts can change independently from message token metadata.
+    // Direct-child parts fold into the parent fingerprint. A grandchild's
+    // parent id is the child, which is not a listed root, so it stays out.
     let mut statement = connection.prepare(
-        "SELECT session_id, json_array(id,message_id,data,time_created) FROM part ORDER BY session_id,id"
-    ).map_err(|e| e.to_string())?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+        "SELECT COALESCE(s.parent_id, p.session_id), json_array(p.id, p.message_id, p.data, p.time_created)
+         FROM part p JOIN session s ON s.id = p.session_id
+         ORDER BY p.session_id, p.id",
+    ).map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
     for row in rows {
         check_cancelled(cancelled)?;
-        let (id, data) = row.map_err(|e| e.to_string())?;
-        if let Some((count, hash)) = hashes.get_mut(&id) {
+        let (owner, data) = row.map_err(|error| error.to_string())?;
+        if let Some((count, hash)) = hashes.get_mut(&owner) {
             *count += 1;
-            for (slot, byte) in hash.iter_mut().zip(md5_hex(data.as_bytes())) { *slot ^= byte; }
+            for (slot, byte) in hash.iter_mut().zip(md5_hex(data.as_bytes())) {
+                *slot ^= byte;
+            }
+        }
+    }
+    drop(statement);
+    let mut statement = connection
+        .prepare(
+            "SELECT parent_id, json_array(id, title, time_created, time_updated)
+             FROM session WHERE parent_id IS NOT NULL",
+        )
+        .map_err(|error| format!("MiMo Code 会话库结构无法识别：{error}"))?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (parent, digest) = row.map_err(|error| error.to_string())?;
+        if let Some((count, hash)) = hashes.get_mut(&parent) {
+            *count += 1;
+            for (slot, byte) in hash.iter_mut().zip(md5_hex(digest.as_bytes())) {
+                *slot ^= byte;
+            }
         }
     }
     for (id, (count, hash)) in hashes {
@@ -144,7 +174,7 @@ fn discover_database(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<Hi
             native_title: None,
             path: path.to_path_buf(),
             native_id: Some(id),
-            fingerprint: format!("mimo-session-v2|{count}|{}", hex(&hash)),
+            fingerprint: format!("mimo-session-v3|{count}|{}", hex(&hash)),
             fingerprint_error: None,
         });
     }
@@ -226,12 +256,14 @@ pub fn parse_controlled(
     session.cwd = directory.filter(|directory| !directory.trim().is_empty());
     session.started_at = created;
     session.updated_at = updated;
+    let children = direct_children(&connection, &id)?;
+    let child_ids: HashSet<String> = children.iter().map(|(child_id, _)| child_id.clone()).collect();
     // Root session plus direct children (peer actor subagents). One billed
     // assistant message row is one usage event; the message primary key is
     // globally unique so parent and child events never collide.
     let mut statement = connection
         .prepare(
-            "SELECT m.id, m.agent_id, m.data, m.time_created
+            "SELECT m.id, m.session_id, m.agent_id, m.data, m.time_created
              FROM message m
              WHERE m.session_id = ?1 OR m.session_id IN
                    (SELECT id FROM session WHERE parent_id = ?1)
@@ -244,14 +276,16 @@ pub fn parse_controlled(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<i64>>(4)?,
             ))
         })
         .map_err(|error| error.to_string())?;
     let mut roles = HashMap::<String, (String, Option<i64>)>::new();
     for row in rows {
         check_cancelled(cancelled)?;
-        let (message_id, _agent_id, data, time) = row.map_err(|error| error.to_string())?;
+        let (message_id, message_session, agent_id, data, time) =
+            row.map_err(|error| error.to_string())?;
         let Ok(message) = serde_json::from_str::<Value>(&data) else {
             session.partial = true;
             continue;
@@ -261,10 +295,9 @@ pub fn parse_controlled(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        // agent_id attribution: the column (default "main") names the actor
-        // that produced the row — "main" for the primary line, the subagent
-        // name for actor calls. In-session subagent rows and folded child rows
-        // both count as billed calls of this conversation.
+        // agent_id selects the kind only. In-session rows keep a null session
+        // key, so the id does not become a jump. Direct child rows point at
+        // that child and are still one billed call on this parent.
         if role == "user" || role == "assistant" {
             roles.insert(message_id.clone(), (role.clone(), time));
         }
@@ -274,9 +307,9 @@ pub fn parse_controlled(
         let model = message
             .get("modelID")
             .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
+            .filter(|model_id| !model_id.is_empty())
             .map(str::to_owned);
-        if model.is_some() {
+        if message_session == id && model.is_some() {
             session.model.clone_from(&model);
         }
         let Some(tokens) = message.get("tokens") else {
@@ -294,6 +327,7 @@ pub fn parse_controlled(
         if !usage::active(counts) {
             continue;
         }
+        let session_key = child_ids.contains(&message_session).then(|| message_session.clone());
         // message.data.cost (per-message provider cost accumulation) has no
         // channel in the shared UsageEvent contract; see the module docs.
         session.usage.push(UsageEvent { native_usage: None,
@@ -306,13 +340,83 @@ pub fn parse_controlled(
             cache_read: Some(counts.read),
             cache_write: Some(counts.write),
             // Verified source semantics: stored input already excludes cache.
-            input_includes_cache: false, attributions: Vec::new(),
+            input_includes_cache: false,
+            attributions: vec![attribution(&agent_id, &message, session_key)],
         });
     }
     drop(statement);
-    // Transcript from the root session's parts only; child transcripts stay
-    // with their actor hosts. Non-text parts (including step-finish rows that
-    // repeat token counters) never enter the transcript or the usage.
+    // Root parts stay on the parent transcript, including in-session subagent
+    // text. Direct-child parts become that child's body. Non-text parts
+    // (including step-finish rows that repeat token counters) never enter the
+    // transcript or the usage.
+    append_text_parts(&connection, &mut session, &id, &roles, cancelled)?;
+    for (child_id, title) in children {
+        let mut body = ParsedSession::new();
+        append_text_parts(&connection, &mut body, &child_id, &roles, cancelled)?;
+        if body.partial {
+            session.partial = true;
+        }
+        session.children.push(ChildSession {
+            key: child_id,
+            name: title,
+            messages: body.messages,
+            readable: true,
+            children: Vec::new(),
+        });
+    }
+    check_cancelled(cancelled)?;
+    session.finish(source)
+}
+
+fn direct_children(connection: &Connection, parent: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let mut statement = connection
+        .prepare("SELECT id, title FROM session WHERE parent_id = ?1 ORDER BY time_created, id")
+        .map_err(|_| "MiMo Code 会话库 session 结构变化".to_string())?;
+    let rows = statement
+        .query_map([parent], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    let mut children = Vec::new();
+    for row in rows {
+        let (id, title) = row.map_err(|error| error.to_string())?;
+        if !valid_native_id(&id) {
+            continue;
+        }
+        let name = {
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.chars().take(256).collect())
+            }
+        };
+        children.push((id, name));
+    }
+    Ok(children)
+}
+
+/// `agent_id` is an id, never the display name. `data.agent` is the native name.
+fn attribution(agent_id: &str, message: &Value, session_key: Option<String>) -> UsageAttribution {
+    let kind = match agent_id.trim() {
+        "" => AgentKind::Unknown,
+        "main" => AgentKind::Main,
+        _ => AgentKind::Subagent,
+    };
+    let name = message
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().take(256).collect());
+    UsageAttribution { kind, name, session_key }
+}
+
+fn append_text_parts(
+    connection: &Connection,
+    target: &mut ParsedSession,
+    session_id: &str,
+    roles: &HashMap<String, (String, Option<i64>)>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
     let mut statement = connection
         .prepare(
             "SELECT id, message_id, data, time_created FROM part WHERE session_id = ?1
@@ -320,7 +424,7 @@ pub fn parse_controlled(
         )
         .map_err(|_| "MiMo Code 会话库 part 结构变化".to_string())?;
     let rows = statement
-        .query_map([&id], |row| {
+        .query_map([session_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -332,12 +436,12 @@ pub fn parse_controlled(
     for (index, row) in rows.enumerate() {
         check_cancelled(cancelled)?;
         if index >= 4000 {
-            session.partial = true;
+            target.partial = true;
             break;
         }
         let (part_id, message_id, data, time) = row.map_err(|error| error.to_string())?;
         let Ok(part) = serde_json::from_str::<Value>(&data) else {
-            session.partial = true;
+            target.partial = true;
             continue;
         };
         if part.get("type").and_then(Value::as_str) != Some("text") {
@@ -345,7 +449,7 @@ pub fn parse_controlled(
         }
         let (role, message_time) = roles.get(&message_id).cloned().unwrap_or_default();
         if role == "user" || role == "assistant" {
-            session.add_message(
+            target.add_message(
                 part_id,
                 &role,
                 part.get("text").map(text_content).unwrap_or_default(),
@@ -353,8 +457,7 @@ pub fn parse_controlled(
             );
         }
     }
-    check_cancelled(cancelled)?;
-    session.finish(source)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -462,7 +565,7 @@ mod tests {
             sources[0].native_id.as_deref(),
             Some("ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m")
         );
-        assert!(sources[0].fingerprint.starts_with("mimo-session-v2|"));
+        assert!(sources[0].fingerprint.starts_with("mimo-session-v3|"));
         let before = sources[0].fingerprint.clone();
         // A new billed message in the child session changes the parent fingerprint.
         let connection = Connection::open(&database).unwrap();
@@ -478,6 +581,17 @@ mod tests {
         drop(connection);
         let after = super::sources(home.path()).unwrap();
         assert_ne!(before, after[0].fingerprint);
+        let with_child_message = after[0].fingerprint.clone();
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE part SET data = ?1 WHERE id = 'prt_child_actor_text_0001'",
+                [r#"{"type":"text","text":"子代理正文已改，父指纹必须变化。"}"#],
+            )
+            .unwrap();
+        drop(connection);
+        let after_part = super::sources(home.path()).unwrap();
+        assert_ne!(with_child_message, after_part[0].fingerprint);
     }
 
     #[test]
@@ -546,6 +660,83 @@ mod tests {
         assert_eq!(totals, (1_911, 472, 8_000, 3_000));
         // Cost stays off the shared pipeline: no UsageEvent field carries it.
         assert!(session.usage.iter().all(|event| event.request_count == Some(1)));
+        let child_id = "ses_actor_2026_10_05_z9y8x7w6v5u4t3s2r1q0p1o2n";
+        assert_eq!(session.usage[0].attributions.len(), 1);
+        assert_eq!(session.usage[0].attributions[0].kind, AgentKind::Main);
+        assert_eq!(session.usage[0].attributions[0].name.as_deref(), Some("build"));
+        assert!(session.usage[0].attributions[0].session_key.is_none());
+        // In-session agent_id is attribution only: no child jump.
+        assert_eq!(session.usage[1].attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(session.usage[1].attributions[0].name.as_deref(), Some("explore"));
+        assert!(session.usage[1].attributions[0].session_key.is_none());
+        assert_eq!(session.usage[3].id, "msg_child_actor_000000000000001");
+        assert_eq!(session.usage[3].attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(session.usage[3].attributions[0].session_key.as_deref(), Some(child_id));
+        assert_eq!(session.children.len(), 1);
+        assert_eq!(session.children[0].key, child_id);
+        assert_eq!(session.children[0].name.as_deref(), Some("actor: explore"));
+        assert!(session.children[0].readable);
+        assert!(session.children[0].children.is_empty());
+        assert_eq!(session.children[0].messages.len(), 1);
+        assert!(session.children[0].messages[0].text.contains("子代理会话内文本"));
+        assert!(session.messages.iter().any(|message| message.text.contains("检查结论")));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子代理会话内文本")));
+    }
+
+    #[test]
+    fn grandchild_and_blank_parent_fork_do_not_invent_links() {
+        let home = tempfile::tempdir().unwrap();
+        let database = super::super::data_root(home.path()).join("mimocode.db");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        write_database(&database);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated)
+                 VALUES ('ses_grand_2026_10_05_abcdefghijklmnopqrstuv', 'prj_demo_000000000000000000000000001',
+                         'ses_actor_2026_10_05_z9y8x7w6v5u4t3s2r1q0p1o2n', 'grand', 'C:\\\\Users\\\\example\\\\mimo-demo',
+                         'grandchild', '0.1.15', 1791000200000, 1791000205000)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, agent_id, time_created, time_updated, data)
+                 VALUES ('msg_grand_000000000000000000001', 'ses_grand_2026_10_05_abcdefghijklmnopqrstuv', 'explore',
+                         1791000201000, 1791000201000,
+                         '{\"role\":\"assistant\",\"agent\":\"explore\",\"modelID\":\"mimo-v2.5\",\"tokens\":{\"input\":7,\"output\":1,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                 VALUES ('prt_grand_text_0001', 'msg_grand_000000000000000000001', 'ses_grand_2026_10_05_abcdefghijklmnopqrstuv',
+                         1791000202000, 1791000202000, '{\"type\":\"text\",\"text\":\"孙会话正文不应挂上。\"}')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated)
+                 VALUES ('ses_fork_2026_10_05_abcdefghijklmnopqrstuvwx', 'prj_demo_000000000000000000000000001',
+                         NULL, 'fork', 'C:\\\\Users\\\\example\\\\mimo-demo', 'fork', '0.1.15', 1791000400000, 1791000405000)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let sources = sources(home.path()).unwrap();
+        assert_eq!(sources.len(), 2, "{sources:?}");
+        let root = sources
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some("ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m"))
+            .unwrap();
+        let session = parse(root).unwrap();
+        assert_eq!(session.usage.len(), 4);
+        assert_eq!(session.children.len(), 1);
+        assert!(session.children[0].children.is_empty());
+        assert!(session.messages.iter().chain(session.children[0].messages.iter()).all(|message| !message.text.contains("孙会话")));
+        assert!(session.usage.iter().all(|event| event.id != "msg_grand_000000000000000000001"));
     }
 
     #[test]

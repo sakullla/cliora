@@ -22,7 +22,12 @@
 //! `local_runtime_sessions.title` and `workspace_dir` (else
 //! `project_workspace_dir`) in `v2/sqlite/runtime-state.sqlite`, opened
 //! read-only. Only those identity columns are selected. Archived, hidden,
-//! non-conversation, and child rows stay out of the list. `auth/`,
+//! and non-conversation rows stay out of the list. A direct child
+//! (`parent_session_id`) is left out of the list only when that identity
+//! database can be read, and its transcript is then attached to the parent.
+//! Usage from that child is counted on the parent once. An unreadable
+//! identity database does not invent a parent link, so the directory stays
+//! its own session. Grandchildren are not attached to the root. `auth/`,
 //! `llm-call.json`, and the runtime token table are not opened.
 
 use std::collections::HashMap;
@@ -36,14 +41,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{data_dir, DataDir};
-use crate::history::usage;
 use crate::history::source_cache::RevisionCache;
+use crate::history::usage;
 use crate::history::{
     check_cancelled, read_jsonl_filtered, source_fingerprint_controlled, timestamp, valid_native_id,
-    HistorySource, ParsedSession, UsageEvent, MAX_SOURCES,
+    AgentKind, ChildSession, HistorySource, ParsedSession, UsageAttribution, UsageEvent, MAX_SOURCES,
 };
 
-const PARSER_VERSION: &str = "minimax-code-session-v2";
+const PARSER_VERSION: &str = "minimax-code-session-v3";
 const LAYOUT: &str = "v2-final-dated-session";
 const LOCAL_SOURCE: &str = "local-runtime";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -61,10 +66,15 @@ struct Manifest {
     updated_at: Option<i64>,
 }
 
+#[derive(Clone)]
 struct Identity {
     title: Option<String>,
     cwd: Option<String>,
     include: bool,
+    /// Set only when the identity row has a non-empty parent id.
+    parent: Option<String>,
+    /// True when the row would be a normal conversation if it had no parent.
+    linkable: bool,
 }
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -98,6 +108,7 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
         .map(|path| identities(&path, cancelled))
         .transpose()?
         .unwrap_or_default();
+    let mut ready = Vec::new();
     let mut result = Vec::new();
     for directory in directories {
         check_cancelled(cancelled)?;
@@ -109,27 +120,20 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
             Ok(None) => continue,
             Ok(Some(manifest)) => {
                 let identity = identities.get(&manifest.id);
-                if identity.is_some_and(|item| !item.include) {
-                    continue;
-                }
                 let messages = directory.join("messages.jsonl");
-                let path = if is_real_file(&messages) {
-                    messages
-                } else {
-                    manifest_path
-                };
+                let path = if is_real_file(&messages) { messages } else { manifest_path };
                 let title = identity.and_then(|item| item.title.clone());
                 let cwd = identity.and_then(|item| item.cwd.clone());
-                let (fingerprint, fingerprint_error) = match source_fingerprint_controlled(&path, cancelled) {
-                    Ok(value) => (format!("{PARSER_VERSION}|{value}|{}", identity_stamp(title.as_deref(), cwd.as_deref())), None),
-                    Err(error) => (String::new(), Some(error)),
-                };
-                result.push(HistorySource {
-                    native_title: title,
+                let stamp = source_fingerprint_controlled(&path, cancelled);
+                ready.push(ReadySession {
+                    id: manifest.id,
                     path,
-                    native_id: Some(manifest.id),
-                    fingerprint,
-                    fingerprint_error,
+                    title,
+                    cwd,
+                    parent: identity.and_then(|item| item.parent.clone()),
+                    include: identity.is_none_or(|item| item.include),
+                    linkable: identity.is_none_or(|item| item.linkable),
+                    stamp,
                 });
             }
             Err(error) => result.push(HistorySource {
@@ -140,11 +144,69 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
                 fingerprint_error: Some(error),
             }),
         }
+    }
+    let mut children_of: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, item) in ready.iter().enumerate() {
+        if item.linkable {
+            if let Some(parent) = item.parent.clone() {
+                children_of.entry(parent).or_default().push(index);
+            }
+        }
+    }
+    for item in &ready {
+        if !item.include {
+            continue;
+        }
+        let mut child_stamps = Vec::new();
+        if let Some(indexes) = children_of.get(&item.id) {
+            for index in indexes {
+                let child = &ready[*index];
+                let material = match &child.stamp {
+                    Ok(value) => value.clone(),
+                    Err(error) => format!("error:{error}"),
+                };
+                child_stamps.push(format!(
+                    "{}|{}|{material}",
+                    child.id,
+                    child.title.as_deref().unwrap_or("")
+                ));
+            }
+        }
+        child_stamps.sort();
+        let child_stamp = format!("{:x}", Sha256::digest(child_stamps.join("\n").as_bytes()));
+        let (fingerprint, fingerprint_error) = match &item.stamp {
+            Ok(value) => (
+                format!(
+                    "{PARSER_VERSION}|{value}|{}|{child_stamp}",
+                    identity_stamp(item.title.as_deref(), item.cwd.as_deref())
+                ),
+                None,
+            ),
+            Err(error) => (String::new(), Some(error.clone())),
+        };
+        result.push(HistorySource {
+            native_title: item.title.clone(),
+            path: item.path.clone(),
+            native_id: Some(item.id.clone()),
+            fingerprint,
+            fingerprint_error,
+        });
         if result.len() > MAX_SOURCES {
             return Err("MiniMax Code 会话源超过 5000 个，本次未删除旧索引".into());
         }
     }
     Ok(result)
+}
+
+struct ReadySession {
+    id: String,
+    path: PathBuf,
+    title: Option<String>,
+    cwd: Option<String>,
+    parent: Option<String>,
+    include: bool,
+    linkable: bool,
+    stamp: Result<String, String>,
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -188,6 +250,9 @@ pub fn parse_controlled(
             consume_row(&mut session, index, &row);
         })?;
         session.partial |= partial;
+    }
+    if let Some(parent_id) = session.native_id.clone() {
+        attach_direct_children(&mut session, directory, &parent_id, cancelled)?;
     }
     session.finish(source)
 }
@@ -481,14 +546,142 @@ fn read_identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Hash
         if !valid_session_id(&id) {
             continue;
         }
+        let parent = parent.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        });
+        let linkable = include_session(kind.as_deref(), visibility.as_deref(), archived, None);
         found.insert(
             id,
             Identity {
                 title: clean_title(title),
                 cwd: safe_workspace(workspace).or_else(|| safe_workspace(project)),
-                include: include_session(kind.as_deref(), visibility.as_deref(), archived, parent.as_deref()),
+                include: linkable && parent.is_none(),
+                parent,
+                linkable,
             },
         );
+    }
+    Ok(found)
+}
+
+fn attach_direct_children(
+    session: &mut ParsedSession,
+    directory: &Path,
+    parent_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let Some(database) = runtime_database(directory) else {
+        return Ok(());
+    };
+    let known = identities(&database, cancelled)?;
+    let mut children: Vec<(String, Identity)> = known
+        .iter()
+        .filter(|(_, item)| item.linkable && item.parent.as_deref() == Some(parent_id))
+        .map(|(id, item)| (id.clone(), item.clone()))
+        .collect();
+    children.sort_by(|left, right| left.0.cmp(&right.0));
+    if children.is_empty() {
+        return Ok(());
+    }
+    let locations = match sessions_root(directory) {
+        Some(root) => index_manifests(&root, cancelled)?,
+        None => HashMap::new(),
+    };
+    for (id, identity) in children {
+        let name = identity.title.clone();
+        let Some(child_dir) = locations.get(&id) else {
+            session.children.push(unreadable_child(&id, name));
+            continue;
+        };
+        let messages = child_dir.join("messages.jsonl");
+        if !is_real_file(&messages) {
+            session.children.push(unreadable_child(&id, name));
+            continue;
+        }
+        match read_body(&id, &messages, cancelled) {
+            Ok(mut child) => {
+                if child.partial {
+                    session.partial = true;
+                }
+                for event in &mut child.usage {
+                    event.id = format!("child:{id}:{}", event.id);
+                    event.attributions = vec![UsageAttribution {
+                        kind: AgentKind::Subagent,
+                        name: name.clone(),
+                        session_key: Some(id.clone()),
+                    }];
+                }
+                session.usage.append(&mut child.usage);
+                session.children.push(ChildSession {
+                    key: id,
+                    name,
+                    messages: child.messages,
+                    readable: true,
+                    children: Vec::new(),
+                });
+            }
+            Err(_) => {
+                session.partial = true;
+                session.children.push(unreadable_child(&id, name));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn unreadable_child(id: &str, name: Option<String>) -> ChildSession {
+    ChildSession {
+        key: id.to_owned(),
+        name,
+        messages: Vec::new(),
+        readable: false,
+        children: Vec::new(),
+    }
+}
+
+fn read_body(id: &str, path: &Path, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+    let mut session = ParsedSession::new();
+    session.native_id = Some(id.to_owned());
+    let source = HistorySource {
+        native_title: None,
+        path: path.to_path_buf(),
+        native_id: Some(id.to_owned()),
+        fingerprint: String::new(),
+        fingerprint_error: None,
+    };
+    let partial = read_jsonl_filtered(&source, cancelled, |_| false, |index, row| {
+        consume_row(&mut session, index, &row);
+    })?;
+    session.partial |= partial;
+    Ok(session)
+}
+
+fn sessions_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        if current.file_name().and_then(|name| name.to_str()) == Some("sessions")
+            && current.parent().and_then(|parent| parent.file_name()).and_then(|name| name.to_str()) == Some("v2")
+        {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+fn index_manifests(sessions: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, PathBuf>, String> {
+    let mut directories = Vec::new();
+    collect_sessions(sessions, cancelled, &mut directories)?;
+    let mut found = HashMap::new();
+    for directory in directories {
+        check_cancelled(cancelled)?;
+        let manifest = directory.join("manifest.json");
+        if !is_real_file(&manifest) {
+            continue;
+        }
+        if let Ok(Some(manifest)) = read_manifest(&manifest) {
+            found.insert(manifest.id, directory);
+        }
     }
     Ok(found)
 }
@@ -826,7 +1019,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
         assert_eq!(listed[0].native_title.as_deref(), Some("清单标题"));
-        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v2|"));
+        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v3|"));
         let parsed = parse(&listed[0]).unwrap();
 
         assert_eq!(fs::read(&messages_path).unwrap(), before_messages);
@@ -967,6 +1160,102 @@ mod tests {
         fs::write(remote.join("messages.jsonl"), b"{}\n").unwrap();
         write_runtime(home, &rows);
         assert!(sources(home).unwrap().is_empty());
+    }
+
+    #[test]
+    fn readable_identity_attaches_direct_child_without_a_second_usage() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
+        let parent = day.join("01-00-00-000-session_parent");
+        let child = day.join("02-00-00-000-session_child");
+        let grandchild = day.join("03-00-00-000-session_grand");
+        let child_id = "mvs_11111111111111111111111111111111";
+        let grand_id = "mvs_22222222222222222222222222222222";
+        for (directory, id) in [(&parent, SESSION), (&child, child_id), (&grandchild, grand_id)] {
+            fs::create_dir_all(directory).unwrap();
+            write_manifest(directory, id, LOCAL_SOURCE);
+        }
+        let parent_usage = json!({"input": 10, "output": 2, "cacheRead": 1, "cacheWrite": 0, "totalTokens": 13});
+        let child_usage = json!({"input": 4, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 5});
+        let grand_usage = json!({"input": 9, "output": 9, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 18});
+        fs::write(parent.join("messages.jsonl"), format!("{}\n{}\n", user_line("", "父会话请求"), assistant_line(Some(parent_usage)))).unwrap();
+        fs::write(child.join("messages.jsonl"), format!("{}\n", line_with("child-assistant", "assistant", "子目录正文不进父消息", Some(child_usage)))).unwrap();
+        fs::write(grandchild.join("messages.jsonl"), format!("{}\n", line_with("grand-assistant", "assistant", "孙目录不挂到根", Some(grand_usage)))).unwrap();
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+            (grand_id, Some("孙标题"), None, "conversation", "visible", 0, Some(child_id)),
+        ]);
+        let before_child = fs::read(child.join("messages.jsonl")).unwrap();
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
+        let parsed = parse(&listed[0]).unwrap();
+        assert_eq!(fs::read(child.join("messages.jsonl")).unwrap(), before_child);
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话请求"));
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录") && !message.text.contains("孙目录")));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].key, child_id);
+        assert_eq!(parsed.children[0].name.as_deref(), Some("子标题"));
+        assert!(parsed.children[0].readable);
+        assert!(parsed.children[0].children.is_empty());
+        assert!(parsed.children[0].messages.iter().any(|message| message.text.contains("子目录正文")));
+        assert_eq!(parsed.usage.len(), 2, "{:?}", parsed.usage.iter().map(|event| &event.id).collect::<Vec<_>>());
+        assert!(parsed.usage.iter().all(|event| event.request_count == Some(1)));
+        let parent_event = parsed.usage.iter().find(|event| event.input == Some(10)).unwrap();
+        assert!(parent_event.attributions.is_empty());
+        let child_event = parsed.usage.iter().find(|event| event.input == Some(4)).unwrap();
+        assert_eq!(child_event.attributions.len(), 1);
+        assert_eq!(child_event.attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(child_event.attributions[0].name.as_deref(), Some("子标题"));
+        assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(child_id));
+        assert!(!child_event.id.starts_with("assistant"));
+        let first = listed[0].fingerprint.clone();
+        fs::write(child.join("messages.jsonl"), format!("{}\n", line_with("child-assistant", "assistant", "子目录正文已修改", Some(json!({"input": 4, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 5}))))).unwrap();
+        let again = sources(home).unwrap();
+        assert_ne!(again[0].fingerprint, first);
+    }
+
+    fn line_with(id: &str, role: &str, text: &str, usage: Option<Value>) -> String {
+        let mut message = json!({
+            "role": role,
+            "timestamp": 1_791_680_462_000_i64,
+            "content": [{ "type": "text", "text": text }]
+        });
+        if let Some(usage) = usage {
+            message["usage"] = usage;
+        }
+        serde_json::to_string(&json!({"message_id": id, "message": message})).unwrap()
+    }
+
+    #[test]
+    fn unreadable_identity_does_not_invent_a_parent_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
+        let parent = day.join("01-00-00-000-session_parent");
+        let child = day.join("02-00-00-000-session_child");
+        let child_id = "mvs_11111111111111111111111111111111";
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        write_manifest(&parent, SESSION, LOCAL_SOURCE);
+        write_manifest(&child, child_id, LOCAL_SOURCE);
+        fs::write(parent.join("messages.jsonl"), format!("{}\n", user_line("", "父目录自己的正文"))).unwrap();
+        fs::write(child.join("messages.jsonl"), format!("{}\n", user_line("", "子目录仍是独立会话"))).unwrap();
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 2);
+        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        let parsed = parse(parent_source).unwrap();
+        assert!(parsed.children.is_empty());
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        let database = home.join(".minimax").join("v2").join("sqlite").join("runtime-state.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        fs::write(&database, b"not a sqlite database").unwrap();
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
+        assert!(parse(parent_source).unwrap().children.is_empty());
     }
 
     #[test]

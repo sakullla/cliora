@@ -414,6 +414,12 @@ impl CliAdapter for MiniMaxCode {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "身份库可读时 parent_session_id 直接子目录挂到父会话；身份库不可读时不编造父链接",
+        })
+    }
     fn node_required_when_missing(&self) -> bool {
         false
     }
@@ -754,6 +760,14 @@ mod tests {
         assert!(MiniMaxCode.history_supported());
         assert!(MiniMaxCode.descriptor().history.reason.contains("不显示 0"));
         assert_eq!(MiniMaxCode.descriptor().history.state, "available");
+        let association = MiniMaxCode.history_association().expect("association");
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.trim().is_empty());
+        assert_ne!(association.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        assert_eq!(
+            crate::adapters::history_association_facet(&MiniMaxCode).unwrap().state,
+            "available"
+        );
     }
 
     #[test]
