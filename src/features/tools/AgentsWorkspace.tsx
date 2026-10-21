@@ -204,11 +204,11 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
             </button>
           </li>)}</ul>}
           {supported && entries.length > 0 && <p className={styles.listNote}>{t('tools.agents.listNote')}</p>}
+          {!creating && !opened && restoreNode}
           <details className={styles.compat}><summary>{t('tools.agents.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>
         </div>}
-    placeholder={!creating && !opened && (entries.length > 0 || last) ? <div className={styles.placeholder}>
-      {entries.length > 0 && <p>{t('tools.agents.description')}</p>}
-      {restoreNode}
+    placeholder={!creating && !opened && entries.length > 0 ? <div className={styles.placeholder}>
+      <p>{t('tools.agents.description')}</p>
     </div> : null}
     document={creating ? <article className={styles.detail} aria-label={t('tools.agents.createTitle')}>
       <div className={styles.titleBar}><h3>{t('tools.agents.createTitle')}</h3></div>
