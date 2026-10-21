@@ -482,3 +482,87 @@ fn parse_v1(
     check_cancelled(cancelled)?;
     session.finish(source)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_unlinked(session: &ParsedSession) {
+        assert!(session.children.is_empty(), "不得新增子会话");
+        assert!(
+            session.usage.iter().all(|event| event.attributions.is_empty()),
+            "不得新增归属跳转"
+        );
+    }
+
+    fn write_db(home: &Path, sql: &str) {
+        let path = database(home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(sql).unwrap();
+    }
+
+    #[test]
+    fn declares_no_parent_child_association() {
+        use crate::adapters::{CliAdapter, HISTORY_ASSOCIATION_UNAVAILABLE_REASON, PublishedDescriptor};
+
+        let facet = super::super::OpenCode
+            .history_association()
+            .expect("opencode declares association");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = PublishedDescriptor::from_adapter(&super::super::OpenCode);
+        assert_eq!(published.descriptor.history.state, "available");
+        assert_eq!(
+            published.association.as_ref().map(|item| (item.state, item.reason)),
+            Some(("unavailable", HISTORY_ASSOCIATION_UNAVAILABLE_REASON))
+        );
+    }
+
+    #[test]
+    fn unread_fields_do_not_create_parent_child_links() {
+        let home = tempfile::tempdir().unwrap();
+        write_db(
+            home.path(),
+            "CREATE TABLE session (id TEXT, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER, version TEXT, model TEXT, parent_id TEXT, query_source TEXT);
+            CREATE TABLE message (id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+            CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+            INSERT INTO session VALUES ('ses_v1_unread','OpenCode v1','/fixture/project',1790668800000,1790668860000,'1.18.33',NULL,'ses_parent','subagent');
+            INSERT INTO message VALUES ('msg_user','ses_v1_unread','{\"role\":\"user\",\"querySource\":\"main_turn\",\"parentId\":\"ses_parent\"}',1790668800000);
+            INSERT INTO message VALUES ('msg_assistant','ses_v1_unread','{\"role\":\"assistant\",\"modelID\":\"gpt-5\",\"querySource\":\"subagent\",\"parentId\":\"ses_parent\",\"parent_id\":\"ses_parent\",\"agentId\":\"explore\",\"mode\":\"subagent\",\"delegationDepth\":1,\"agentPreset\":\"standard\",\"source\":\"agent\",\"tokens\":{\"input\":12,\"output\":8,\"reasoning\":4,\"cache\":{\"read\":3,\"write\":1}}}',1790668801000);
+            INSERT INTO part VALUES ('part_user','msg_user','ses_v1_unread','{\"type\":\"text\",\"text\":\"Hello\",\"querySource\":\"subagent\"}',1790668800000);
+            INSERT INTO part VALUES ('part_assistant','msg_assistant','ses_v1_unread','{\"type\":\"text\",\"text\":\"Welcome\",\"parentId\":\"ses_parent\"}',1790668801000);",
+        );
+        let indexed = sources(home.path()).unwrap();
+        assert_eq!(indexed.len(), 1, "{indexed:?}");
+        let session = parse(&indexed[0]).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some("ses_v1_unread"));
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.usage.len(), 1);
+        assert_eq!(session.usage[0].input, Some(12));
+        assert_eq!(session.usage[0].output, Some(12));
+        assert_ne!(session.native_id.as_deref(), Some("ses_parent"));
+        assert_unlinked(&session);
+
+        let home = tempfile::tempdir().unwrap();
+        write_db(
+            home.path(),
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, model TEXT, time_created INTEGER, time_updated INTEGER, parent_id TEXT, query_source TEXT);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT, time_created INTEGER, time_updated INTEGER);
+            INSERT INTO session_v2 VALUES ('ses_v2_unread','C:/verify/project','V2 session','2.0.29','{\"id\":\"my-model\",\"providerID\":\"mock\"}',1792026275706,1792026341382,'ses_parent','subagent');
+            INSERT INTO session_message VALUES ('msg_v2_u1','ses_v2_unread','user',5,'{\"time\":{\"created\":1792026275826},\"text\":\"say hi\",\"querySource\":\"main_turn\",\"parentId\":\"ses_parent\"}',1792026275826,1792026275826);
+            INSERT INTO session_message VALUES ('msg_v2_a1','ses_v2_unread','assistant',6,'{\"time\":{\"created\":1792026275849},\"model\":{\"id\":\"my-model\",\"providerID\":\"mock\"},\"querySource\":\"subagent\",\"parentId\":\"ses_parent\",\"agentId\":\"explore\",\"mode\":\"subagent\",\"delegationDepth\":1,\"agentPreset\":\"standard\",\"source\":\"agent\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}],\"tokens\":{\"input\":32,\"output\":12,\"reasoning\":5,\"cache\":{\"read\":10,\"write\":0}}}',1792026275849,1792026275887);",
+        );
+        let indexed = sources(home.path()).unwrap();
+        assert_eq!(indexed.len(), 1, "{indexed:?}");
+        let session = parse(&indexed[0]).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some("ses_v2_unread"));
+        assert_eq!(session.title, "V2 session");
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.usage.len(), 1);
+        assert_eq!(session.usage[0].input, Some(32));
+        assert_eq!(session.usage[0].output, Some(17));
+        assert_ne!(session.native_id.as_deref(), Some("ses_parent"));
+        assert_unlinked(&session);
+    }
+}
