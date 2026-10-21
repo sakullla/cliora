@@ -315,6 +315,8 @@ export default {
     readOnly: 'Read-only',
     reading: 'Reading memory text',
     modified: 'Updated {{time}}',
+    toolbar: 'Memory toolbar',
+    pathLayer: 'Path and properties',
     properties: 'Properties · {{count}}',
     openLinked: 'Open linked memory “{{name}}”',
     missingLinked: 'Linked memory “{{name}}” was not found',

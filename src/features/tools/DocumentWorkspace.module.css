@@ -1,0 +1,75 @@
+/* The page fills the content area under the toolbar; columns scroll inside it. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: document;
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.notices { display: grid; flex: none; gap: 8px; min-width: 0; }
+
+.split {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(270px, 350px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+}
+.split:has(> .documentPane:empty) { grid-template-columns: minmax(0, 1fr); }
+
+.listPane,
+.documentPane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.listPane > *,
+.documentPane > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.documentPane > .back { flex: none; }
+
+.documentBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.documentBody > * { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+
+.back {
+  display: none;
+  align-self: flex-start;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+}
+.back:hover:not(:disabled) { background: var(--surface-3); box-shadow: none; }
+
+@container document (max-width: 760px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .page[data-view="document"] .listPane { display: none; }
+  .page[data-view="list"] .documentPane { display: none; }
+  .back { display: inline-flex; }
+  .page[data-view="document"] :global([data-document-hide]) { display: none; }
+}

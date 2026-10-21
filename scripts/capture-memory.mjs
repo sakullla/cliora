@@ -104,12 +104,12 @@ function installMock(seed) {
 
 const scenarios = [
   { name: 'qoder-partial-read', tool: 'Qoder CN', seed: { unreadable: 'architecture' } },
-  { name: 'qoder-native-default', tool: 'Qoder CN', run: async page => { await page.getByRole('button', { name: /preferences.md/ }).click(); } },
+  { name: 'qoder-native-default', tool: 'Qoder CN', run: async page => { await page.getByRole('button', { name: /用户偏好/ }).click(); } },
   { name: 'qoder-empty', tool: 'Qoder CN', seed: { emptyQoder: true } },
   { name: 'qoder-create', tool: 'Qoder CN', seed: { emptyQoder: true }, run: async page => { await page.getByRole('button', { name: '新建记忆' }).first().click(); await page.getByRole('textbox', { name: '文件名' }).fill('project-notes'); } },
   { name: 'claude-overview', tool: 'Claude Code' },
   { name: 'claude-read', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Release ritual/ }).click(); } },
-  { name: 'claude-properties', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Linux build server/ }).click(); await page.getByRole('button', { name: /^属性/ }).click(); } },
+  { name: 'claude-properties', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Linux build server/ }).click(); await page.getByRole('button', { name: /路径与属性/ }).click(); } },
   { name: 'claude-edit', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /User profile/ }).first().click(); await page.getByRole('button', { name: '编辑', exact: true }).click(); await page.getByRole('textbox', { name: '记忆正文' }).click(); await page.keyboard.press('End'); await page.keyboard.type(' 已编辑'); } },
   { name: 'claude-create', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: '新建记忆' }).first().click(); await page.getByRole('textbox', { name: '文件名' }).fill('coding-style'); } },
   { name: 'claude-filter', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: '反馈', exact: true }).click(); } },
