@@ -153,43 +153,53 @@ async function captureSkillViews(page,capture){
  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
  await page.getByRole('tab',{name:'Skill',exact:true}).click();
  const list=page.getByRole('region',{name:'Skill'});
- const dialog=page.getByRole('dialog',{name:'当前 Skill'});
+ const article=()=>page.getByRole('article');
  await list.getByRole('button',{name:/code-review/}).waitFor();
  await expect(list.getByRole('button',{name:/code-review/})).toContainText('已安装');
  await expect(list.getByRole('button',{name:/crud-page/})).toContainText('本机目录');
  await expect(list.getByRole('button',{name:/lark-apps/})).toContainText('本机目录');
  await expect(list.getByText('暂不可读取')).toHaveCount(0);
  await capture('skills');
+ async function discardIfAsked(){
+  const confirmation=page.getByRole('dialog',{name:'放弃未保存修改？'});
+  if(await confirmation.count()&&await confirmation.isVisible())await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
+ }
  async function openSkill(name,sample){
+  const save=page.getByRole('button',{name:'保存',exact:true});
+  const dirty=await save.count()&&await save.isEnabled();
   await list.getByRole('button',{name:new RegExp(name)}).click();
-  const editor=dialog.getByRole('textbox',{name:'SKILL.md'});
+  if(dirty)await discardIfAsked();
+  const editor=page.getByRole('textbox',{name:'SKILL.md'});
   await editor.waitFor();
   await expect(editor).toContainText(sample);
   return editor;
  }
  async function closeSkill(){
-  await dialog.getByRole('button',{name:'关闭',exact:true}).click();
-  const confirmation=page.getByRole('dialog',{name:'放弃未保存修改？'});
-  if(await confirmation.isVisible())await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
-  await dialog.waitFor({state:'hidden'});
+  const back=page.getByRole('button',{name:'返回列表',exact:true});
+  if(!(await back.count())||!(await back.isVisible()))return;
+  const save=page.getByRole('button',{name:'保存',exact:true});
+  const dirty=await save.count()&&await save.isEnabled();
+  await back.click();
+  if(dirty)await discardIfAsked();
+  await expect(back).toBeHidden();
  }
  const loose=await openSkill('crud-page','# page');
- await expect(dialog).toContainText('目录名就是这份 Skill');
- await expect(dialog.getByRole('heading',{name:'crud-page',exact:true})).toBeVisible();
- await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
- await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
+ await expect(article()).toContainText('目录名就是这份 Skill');
+ await expect(article().getByRole('heading',{name:'crud-page',exact:true})).toBeVisible();
+ await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
+ await expect(article().getByRole('button',{name:'保存',exact:true})).toBeDisabled();
  await loose.click();
  await page.keyboard.type('编辑过');
- await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeEnabled();
+ await expect(article().getByRole('button',{name:'保存',exact:true})).toBeEnabled();
  await capture('skill-editor');
  await closeSkill();
  await openSkill('lark-apps','# just markdown');
- await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
+ await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
  await closeSkill();
  await openSkill('code-review','# 代码审查');
- await expect(dialog.getByRole('checkbox',{name:'启用 Skill'})).toBeVisible();
- await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toHaveCount(0);
- await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeVisible();
+ await expect(article().getByRole('checkbox',{name:'启用 Skill'})).toBeVisible();
+ await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toHaveCount(0);
+ await expect(article().getByRole('button',{name:'保存',exact:true})).toBeVisible();
  await capture('skill-editor-managed');
  await closeSkill();
 }
