@@ -22,18 +22,21 @@
 //! `local_runtime_sessions.title` and `workspace_dir` (else
 //! `project_workspace_dir`) in `v2/sqlite/runtime-state.sqlite`, opened
 //! read-only. Only those identity columns are selected. Archived, hidden,
-//! and non-conversation rows stay out of the list. A direct child
-//! (`parent_session_id`) is left out of the list only when that identity
-//! database can be read, and its transcript is then attached to the parent.
-//! Usage from that child is counted on the parent once. An unreadable
-//! identity database does not invent a parent link, so the directory stays
-//! its own session. Grandchildren are not attached to the root. `auth/`,
-//! `llm-call.json`, and the runtime token table are not opened.
+//! and non-conversation rows stay out of the list. A non-empty
+//! `parent_session_id` leaves that directory out of the list only when the
+//! identity database can be read. Its transcript is attached to that direct
+//! parent, and a further direct child is attached under its own parent.
+//! Usage from each attached transcript is counted once on the root session.
+//! A missing identity file does not invent a parent link, so the directory
+//! stays its own session. If the file exists but cannot be read, discovery
+//! and parsing return an error instead of storing an unlinked session.
+//! A parent id cycle is not followed. `auth/`, `llm-call.json`, and the
+//! runtime token table are not opened.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
@@ -48,7 +51,7 @@ use crate::history::{
     AgentKind, ChildSession, HistorySource, ParsedSession, UsageAttribution, UsageEvent, MAX_SOURCES,
 };
 
-const PARSER_VERSION: &str = "minimax-code-session-v3";
+const PARSER_VERSION: &str = "minimax-code-session-v4";
 const LAYOUT: &str = "v2-final-dated-session";
 const LOCAL_SOURCE: &str = "local-runtime";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -66,7 +69,7 @@ struct Manifest {
     updated_at: Option<i64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Identity {
     title: Option<String>,
     cwd: Option<String>,
@@ -104,10 +107,10 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
     let mut directories = Vec::new();
     collect_sessions(&sessions, cancelled, &mut directories)?;
     directories.sort();
-    let identities = runtime_database(&sessions)
-        .map(|path| identities(&path, cancelled))
-        .transpose()?
-        .unwrap_or_default();
+    let identities = match runtime_database(&sessions) {
+        Some(path) => identities(&path, cancelled).map_err(identity_error)?,
+        None => Arc::new(HashMap::new()),
+    };
     let mut ready = Vec::new();
     let mut result = Vec::new();
     for directory in directories {
@@ -130,9 +133,7 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
                     path,
                     title,
                     cwd,
-                    parent: identity.and_then(|item| item.parent.clone()),
                     include: identity.is_none_or(|item| item.include),
-                    linkable: identity.is_none_or(|item| item.linkable),
                     stamp,
                 });
             }
@@ -145,11 +146,17 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
             }),
         }
     }
-    let mut children_of: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, item) in ready.iter().enumerate() {
+    let mut ready_by_id: HashMap<&str, &ReadySession> = HashMap::new();
+    for item in &ready {
+        ready_by_id.insert(item.id.as_str(), item);
+    }
+    // Identity links, not only directories that exist today. A missing
+    // intermediate directory still contributes its descendant stamp.
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    for (id, item) in identities.iter() {
         if item.linkable {
-            if let Some(parent) = item.parent.clone() {
-                children_of.entry(parent).or_default().push(index);
+            if let Some(parent) = &item.parent {
+                children_of.entry(parent.clone()).or_default().push(id.clone());
             }
         }
     }
@@ -158,20 +165,15 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
             continue;
         }
         let mut child_stamps = Vec::new();
-        if let Some(indexes) = children_of.get(&item.id) {
-            for index in indexes {
-                let child = &ready[*index];
-                let material = match &child.stamp {
-                    Ok(value) => value.clone(),
-                    Err(error) => format!("error:{error}"),
-                };
-                child_stamps.push(format!(
-                    "{}|{}|{material}",
-                    child.id,
-                    child.title.as_deref().unwrap_or("")
-                ));
-            }
-        }
+        let mut visiting = HashSet::new();
+        descendant_stamps(
+            &item.id,
+            identities.as_ref(),
+            &ready_by_id,
+            &children_of,
+            &mut visiting,
+            &mut child_stamps,
+        );
         child_stamps.sort();
         let child_stamp = format!("{:x}", Sha256::digest(child_stamps.join("\n").as_bytes()));
         let (fingerprint, fingerprint_error) = match &item.stamp {
@@ -203,10 +205,39 @@ struct ReadySession {
     path: PathBuf,
     title: Option<String>,
     cwd: Option<String>,
-    parent: Option<String>,
     include: bool,
-    linkable: bool,
     stamp: Result<String, String>,
+}
+
+fn descendant_stamps(
+    id: &str,
+    identities: &HashMap<String, Identity>,
+    ready_by_id: &HashMap<&str, &ReadySession>,
+    children_of: &HashMap<String, Vec<String>>,
+    visiting: &mut HashSet<String>,
+    stamps: &mut Vec<String>,
+) {
+    if !visiting.insert(id.to_owned()) {
+        return;
+    }
+    if let Some(child_ids) = children_of.get(id) {
+        for child_id in child_ids {
+            if visiting.contains(child_id) {
+                continue;
+            }
+            let title = identities.get(child_id).and_then(|item| item.title.as_deref()).unwrap_or("");
+            let material = match ready_by_id.get(child_id.as_str()) {
+                Some(child) => match &child.stamp {
+                    Ok(value) => value.clone(),
+                    Err(error) => format!("error:{error}"),
+                },
+                None => "missing".to_owned(),
+            };
+            stamps.push(format!("{child_id}|{title}|{material}"));
+            descendant_stamps(child_id, identities, ready_by_id, children_of, visiting, stamps);
+        }
+    }
+    visiting.remove(id);
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -232,10 +263,10 @@ pub fn parse_controlled(
     {
         return Err("会话 ID 与清单不一致".into());
     }
-    let identities = runtime_database(directory)
-        .map(|path| identities(&path, cancelled))
-        .transpose()?
-        .unwrap_or_default();
+    let identities = match runtime_database(directory) {
+        Some(path) => pinned_identities(&path, cancelled).map_err(identity_error)?,
+        None => Arc::new(HashMap::new()),
+    };
     let identity = identities.get(&manifest.id);
     let mut session = ParsedSession::new();
     session.native_id = Some(manifest.id);
@@ -252,7 +283,7 @@ pub fn parse_controlled(
         session.partial |= partial;
     }
     if let Some(parent_id) = session.native_id.clone() {
-        attach_direct_children(&mut session, directory, &parent_id, cancelled)?;
+        attach_direct_children(&mut session, directory, &parent_id, identities.as_ref(), cancelled)?;
     }
     session.finish(source)
 }
@@ -496,16 +527,72 @@ fn session_directory(path: &Path) -> Option<&Path> {
     name.contains("-session_").then_some(directory)
 }
 
+struct IdentityStore {
+    cache: RevisionCache<Arc<HashMap<String, Identity>>>,
+    pinned: Mutex<HashMap<PathBuf, Arc<HashMap<String, Identity>>>>,
+}
+
+fn identity_store() -> &'static IdentityStore {
+    static STORE: LazyLock<IdentityStore> = LazyLock::new(|| IdentityStore {
+        cache: RevisionCache::new(),
+        pinned: Mutex::new(HashMap::new()),
+    });
+    &STORE
+}
+
+fn identity_error(error: String) -> String {
+    if error.contains("取消") {
+        error
+    } else {
+        format!("MiniMax Code 身份库无法读取：{error}")
+    }
+}
+
+fn clear_identity_pin(database: &Path) {
+    identity_store()
+        .pinned
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(database);
+}
+
 fn identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<HashMap<String, Identity>>, String> {
     // Discovery primes this shared cache before the concurrent session parsers.
     // Arc avoids copying every identity for each transcript. The shared cache
     // checks both DB and WAL revisions and never retains failed reads.
-    static CACHE: LazyLock<RevisionCache<Arc<HashMap<String, Identity>>>> = LazyLock::new(RevisionCache::new);
-    let result = CACHE.read(database, cancelled, || read_identities(database, cancelled).map(Arc::new));
+    // A successful read is pinned so later parsers in this scan reuse it.
+    // A failed read drops the pin instead of becoming an empty snapshot.
+    let result = identity_store().cache.read(database, cancelled, || {
+        read_identities(database, cancelled).map(Arc::new)
+    });
+    if cancelled() || result.is_err() {
+        clear_identity_pin(database);
+    }
     check_cancelled(cancelled)?;
-    // Identity is optional: preserve transcript access when SQLite is busy or
-    // unavailable, and retry the metadata on the next read.
-    Ok(result.unwrap_or_default())
+    let value = result?;
+    identity_store()
+        .pinned
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(database.to_owned(), value.clone());
+    Ok(value)
+}
+
+fn pinned_identities(
+    database: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Arc<HashMap<String, Identity>>, String> {
+    if let Some(snapshot) = identity_store()
+        .pinned
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(database)
+        .cloned()
+    {
+        check_cancelled(cancelled)?;
+        return Ok(snapshot);
+    }
+    identities(database, cancelled)
 }
 
 fn read_identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, Identity>, String> {
@@ -565,45 +652,72 @@ fn read_identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Hash
     Ok(found)
 }
 
+struct AttachState<'a> {
+    known: &'a HashMap<String, Identity>,
+    locations: &'a HashMap<String, PathBuf>,
+    usage: &'a mut Vec<UsageEvent>,
+    partial: &'a mut bool,
+    visiting: HashSet<String>,
+    cancelled: &'a dyn Fn() -> bool,
+}
+
 fn attach_direct_children(
     session: &mut ParsedSession,
     directory: &Path,
     parent_id: &str,
+    known: &HashMap<String, Identity>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
-    let Some(database) = runtime_database(directory) else {
-        return Ok(());
-    };
-    let known = identities(&database, cancelled)?;
-    let mut children: Vec<(String, Identity)> = known
-        .iter()
-        .filter(|(_, item)| item.linkable && item.parent.as_deref() == Some(parent_id))
-        .map(|(id, item)| (id.clone(), item.clone()))
-        .collect();
-    children.sort_by(|left, right| left.0.cmp(&right.0));
-    if children.is_empty() {
+    if direct_children_of(known, parent_id, &HashSet::new()).is_empty() {
         return Ok(());
     }
     let locations = match sessions_root(directory) {
         Some(root) => index_manifests(&root, cancelled)?,
         None => HashMap::new(),
     };
-    for (id, identity) in children {
+    let mut state = AttachState {
+        known,
+        locations: &locations,
+        usage: &mut session.usage,
+        partial: &mut session.partial,
+        visiting: HashSet::new(),
+        cancelled,
+    };
+    attach_children(&mut session.children, parent_id, &mut state)
+}
+
+fn direct_children_of(
+    known: &HashMap<String, Identity>,
+    parent_id: &str,
+    visiting: &HashSet<String>,
+) -> Vec<(String, Identity)> {
+    let mut children: Vec<(String, Identity)> = known
+        .iter()
+        .filter(|(id, item)| {
+            item.linkable
+                && item.parent.as_deref() == Some(parent_id)
+                && id.as_str() != parent_id
+                && !visiting.contains(id.as_str())
+        })
+        .map(|(id, item)| (id.clone(), item.clone()))
+        .collect();
+    children.sort_by(|left, right| left.0.cmp(&right.0));
+    children
+}
+
+fn attach_children(
+    nodes: &mut Vec<ChildSession>,
+    parent_id: &str,
+    state: &mut AttachState<'_>,
+) -> Result<(), String> {
+    if !state.visiting.insert(parent_id.to_owned()) {
+        return Ok(());
+    }
+    for (id, identity) in direct_children_of(state.known, parent_id, &state.visiting) {
+        check_cancelled(state.cancelled)?;
         let name = identity.title.clone();
-        let Some(child_dir) = locations.get(&id) else {
-            session.children.push(unreadable_child(&id, name));
-            continue;
-        };
-        let messages = child_dir.join("messages.jsonl");
-        if !is_real_file(&messages) {
-            session.children.push(unreadable_child(&id, name));
-            continue;
-        }
-        match read_body(&id, &messages, cancelled) {
-            Ok(mut child) => {
-                if child.partial {
-                    session.partial = true;
-                }
+        let mut node = match load_child_transcript(&id, state)? {
+            Some(mut child) => {
                 for event in &mut child.usage {
                     event.id = format!("child:{id}:{}", event.id);
                     event.attributions = vec![UsageAttribution {
@@ -612,22 +726,45 @@ fn attach_direct_children(
                         session_key: Some(id.clone()),
                     }];
                 }
-                session.usage.append(&mut child.usage);
-                session.children.push(ChildSession {
-                    key: id,
+                state.usage.append(&mut child.usage);
+                ChildSession {
+                    key: id.clone(),
                     name,
                     messages: child.messages,
                     readable: true,
                     children: Vec::new(),
-                });
+                }
             }
-            Err(_) => {
-                session.partial = true;
-                session.children.push(unreadable_child(&id, name));
+            None => unreadable_child(&id, name),
+        };
+        attach_children(&mut node.children, &id, state)?;
+        nodes.push(node);
+    }
+    state.visiting.remove(parent_id);
+    Ok(())
+}
+
+fn load_child_transcript(id: &str, state: &mut AttachState<'_>) -> Result<Option<ParsedSession>, String> {
+    let Some(child_dir) = state.locations.get(id) else {
+        return Ok(None);
+    };
+    let messages = child_dir.join("messages.jsonl");
+    if !is_real_file(&messages) {
+        return Ok(None);
+    }
+    match read_body(id, &messages, state.cancelled) {
+        Ok(child) => {
+            if child.partial {
+                *state.partial = true;
             }
+            Ok(Some(child))
+        }
+        Err(error) if error.contains("取消") => Err(error),
+        Err(_) => {
+            *state.partial = true;
+            Ok(None)
         }
     }
-    Ok(())
 }
 
 fn unreadable_child(id: &str, name: Option<String>) -> ChildSession {
@@ -845,7 +982,8 @@ mod tests {
         let database = temp.path().join(".minimax/v2/sqlite/runtime-state.sqlite");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         drop(Connection::open(&database).unwrap());
-        assert!(identities(&database, &|| false).unwrap().is_empty());
+        let error = identities(&database, &|| false).unwrap_err();
+        assert!(error.contains("local_runtime_sessions"), "{error}");
         write_runtime(temp.path(), &[(SESSION, Some("recovered"), None, "conversation", "visible", 0, None)]);
         assert_eq!(identities(&database, &|| false).unwrap()[SESSION].title.as_deref(), Some("recovered"));
     }
@@ -1019,7 +1157,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
         assert_eq!(listed[0].native_title.as_deref(), Some("清单标题"));
-        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v3|"));
+        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v4|"));
         let parsed = parse(&listed[0]).unwrap();
 
         assert_eq!(fs::read(&messages_path).unwrap(), before_messages);
@@ -1199,9 +1337,15 @@ mod tests {
         assert_eq!(parsed.children[0].key, child_id);
         assert_eq!(parsed.children[0].name.as_deref(), Some("子标题"));
         assert!(parsed.children[0].readable);
-        assert!(parsed.children[0].children.is_empty());
         assert!(parsed.children[0].messages.iter().any(|message| message.text.contains("子目录正文")));
-        assert_eq!(parsed.usage.len(), 2, "{:?}", parsed.usage.iter().map(|event| &event.id).collect::<Vec<_>>());
+        assert!(parsed.children[0].messages.iter().all(|message| !message.text.contains("孙目录")));
+        assert_eq!(parsed.children[0].children.len(), 1);
+        assert_eq!(parsed.children[0].children[0].key, grand_id);
+        assert_eq!(parsed.children[0].children[0].name.as_deref(), Some("孙标题"));
+        assert!(parsed.children[0].children[0].readable);
+        assert!(parsed.children[0].children[0].children.is_empty());
+        assert!(parsed.children[0].children[0].messages.iter().any(|message| message.text.contains("孙目录不挂到根")));
+        assert_eq!(parsed.usage.len(), 3, "{:?}", parsed.usage.iter().map(|event| &event.id).collect::<Vec<_>>());
         assert!(parsed.usage.iter().all(|event| event.request_count == Some(1)));
         let parent_event = parsed.usage.iter().find(|event| event.input == Some(10)).unwrap();
         assert!(parent_event.attributions.is_empty());
@@ -1211,10 +1355,19 @@ mod tests {
         assert_eq!(child_event.attributions[0].name.as_deref(), Some("子标题"));
         assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(child_id));
         assert!(!child_event.id.starts_with("assistant"));
+        let grand_event = parsed.usage.iter().find(|event| event.input == Some(9)).unwrap();
+        assert_eq!(grand_event.attributions.len(), 1);
+        assert_eq!(grand_event.attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(grand_event.attributions[0].name.as_deref(), Some("孙标题"));
+        assert_eq!(grand_event.attributions[0].session_key.as_deref(), Some(grand_id));
+        assert_eq!(parsed.usage.iter().filter(|event| event.input == Some(9)).count(), 1);
         let first = listed[0].fingerprint.clone();
+        fs::write(grandchild.join("messages.jsonl"), format!("{}\n", line_with("grand-assistant", "assistant", "孙目录正文已修改", Some(json!({"input": 9, "output": 9, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 18}))))).unwrap();
+        let after_grand = sources(home).unwrap();
+        assert_ne!(after_grand[0].fingerprint, first);
         fs::write(child.join("messages.jsonl"), format!("{}\n", line_with("child-assistant", "assistant", "子目录正文已修改", Some(json!({"input": 4, "output": 1, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 5}))))).unwrap();
         let again = sources(home).unwrap();
-        assert_ne!(again[0].fingerprint, first);
+        assert_ne!(again[0].fingerprint, after_grand[0].fingerprint);
     }
 
     fn line_with(id: &str, role: &str, text: &str, usage: Option<Value>) -> String {
@@ -1249,13 +1402,125 @@ mod tests {
         let parsed = parse(parent_source).unwrap();
         assert!(parsed.children.is_empty());
         assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+    }
+
+    #[test]
+    fn missing_intermediate_directory_keeps_the_next_direct_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
+        let parent = day.join("01-00-00-000-session_parent");
+        let grandchild = day.join("03-00-00-000-session_grand");
+        let child_id = "mvs_11111111111111111111111111111111";
+        let grand_id = "mvs_22222222222222222222222222222222";
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&grandchild).unwrap();
+        write_manifest(&parent, SESSION, LOCAL_SOURCE);
+        write_manifest(&grandchild, grand_id, LOCAL_SOURCE);
+        let grand_usage = json!({"input": 9, "output": 9, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 18});
+        fs::write(parent.join("messages.jsonl"), format!("{}\n", user_line("", "父目录自己的正文"))).unwrap();
+        fs::write(grandchild.join("messages.jsonl"), format!("{}\n", line_with("grand-assistant", "assistant", "孙目录正文", Some(grand_usage)))).unwrap();
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+            (grand_id, Some("孙标题"), None, "conversation", "visible", 0, Some(child_id)),
+        ]);
+        let listed = sources(home).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
+        let parsed = parse(&listed[0]).unwrap();
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("孙目录")));
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].key, child_id);
+        assert!(!parsed.children[0].readable);
+        assert!(parsed.children[0].messages.is_empty());
+        assert_eq!(parsed.children[0].children.len(), 1);
+        assert_eq!(parsed.children[0].children[0].key, grand_id);
+        assert!(parsed.children[0].children[0].readable);
+        assert!(parsed.children[0].children[0].messages.iter().any(|message| message.text.contains("孙目录正文")));
+        assert_eq!(parsed.usage.iter().filter(|event| event.input == Some(9)).count(), 1);
+        let first = listed[0].fingerprint.clone();
+        fs::write(grandchild.join("messages.jsonl"), format!("{}\n", line_with("grand-assistant", "assistant", "孙目录正文已修改", Some(json!({"input": 9, "output": 9, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 18}))))).unwrap();
+        assert_ne!(sources(home).unwrap()[0].fingerprint, first);
+    }
+
+    #[test]
+    fn corrupt_identity_file_fails_instead_of_dropping_the_pinned_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
+        let parent = day.join("01-00-00-000-session_parent");
+        let child = day.join("02-00-00-000-session_child");
+        let child_id = "mvs_11111111111111111111111111111111";
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        write_manifest(&parent, SESSION, LOCAL_SOURCE);
+        write_manifest(&child, child_id, LOCAL_SOURCE);
+        fs::write(parent.join("messages.jsonl"), format!("{}\n", user_line("", "父目录自己的正文"))).unwrap();
+        fs::write(child.join("messages.jsonl"), format!("{}\n", user_line("", "子目录正文"))).unwrap();
         let database = home.join(".minimax").join("v2").join("sqlite").join("runtime-state.sqlite");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         fs::write(&database, b"not a sqlite database").unwrap();
+        let error = sources(home).unwrap_err();
+        assert!(error.contains("身份库无法读取"), "{error}");
+        let source = HistorySource {
+            native_title: None,
+            path: parent.join("messages.jsonl"),
+            native_id: Some(SESSION.into()),
+            fingerprint: String::new(),
+            fingerprint_error: None,
+        };
+        assert!(parse(&source).unwrap_err().contains("身份库无法读取"));
+        fs::remove_file(&database).unwrap();
+        write_runtime(home, &[
+            (SESSION, Some("父标题"), None, "conversation", "visible", 0, None),
+            (child_id, Some("子标题"), None, "conversation", "visible", 0, Some(SESSION)),
+        ]);
         let listed = sources(home).unwrap();
-        assert_eq!(listed.len(), 2, "{listed:?}");
-        let parent_source = listed.iter().find(|source| source.native_id.as_deref() == Some(SESSION)).unwrap();
-        assert!(parse(parent_source).unwrap().children.is_empty());
+        assert_eq!(listed.len(), 1);
+        fs::write(&database, b"not a sqlite database").unwrap();
+        let parsed = parse(&listed[0]).unwrap();
+        assert_eq!(parsed.children.len(), 1);
+        assert_eq!(parsed.children[0].key, child_id);
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子目录")));
+        let error = sources(home).unwrap_err();
+        assert!(error.contains("身份库无法读取"), "{error}");
+        assert!(parse(&listed[0]).unwrap_err().contains("身份库无法读取"));
+    }
+
+    #[test]
+    fn cyclic_parent_ids_stop_at_the_visited_session() {
+        let mut known = HashMap::new();
+        known.insert("a".into(), linked_identity(Some("b")));
+        known.insert("b".into(), linked_identity(Some("a")));
+        let locations = HashMap::new();
+        let mut usage = Vec::new();
+        let mut partial = false;
+        let mut nodes = Vec::new();
+        let mut state = AttachState {
+            known: &known,
+            locations: &locations,
+            usage: &mut usage,
+            partial: &mut partial,
+            visiting: HashSet::new(),
+            cancelled: &|| false,
+        };
+        attach_children(&mut nodes, "a", &mut state).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].key, "b");
+        assert!(nodes[0].children.is_empty());
+        assert!(!nodes[0].readable);
+        assert!(usage.is_empty());
+    }
+
+    fn linked_identity(parent: Option<&str>) -> Identity {
+        Identity {
+            title: Some("名称".into()),
+            cwd: None,
+            include: parent.is_none(),
+            parent: parent.map(str::to_owned),
+            linkable: true,
+        }
     }
 
     #[test]

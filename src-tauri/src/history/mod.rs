@@ -466,7 +466,19 @@ pub fn discover_jsonl(
 }
 
 pub fn discover_jsonl_controlled(root: &Path, accept: impl Fn(&Path) -> bool, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl_with_control(root, accept, |path| source_fingerprint_controlled(path, cancelled), cancelled)
+    discover_jsonl_controlled_in(root, accept, cancelled, |_| true)
+}
+
+/// `descend` returns false for directories that are not session containers.
+/// Child-log directories stay out of this walk so a listing failure there does
+/// not fail discovery of the parent session or look like a missing session.
+pub(crate) fn discover_jsonl_controlled_in(
+    root: &Path,
+    accept: impl Fn(&Path) -> bool,
+    cancelled: &dyn Fn() -> bool,
+    descend: impl Fn(&Path) -> bool,
+) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_with_control(root, accept, |path| source_fingerprint_controlled(path, cancelled), cancelled, &descend)
 }
 
 pub(crate) fn discover_jsonl_with(
@@ -474,10 +486,16 @@ pub(crate) fn discover_jsonl_with(
     accept: impl Fn(&Path) -> bool,
     fingerprint: impl Fn(&Path) -> Result<String, String>,
 ) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl_with_control(root, accept, fingerprint, &|| false)
+    discover_jsonl_with_control(root, accept, fingerprint, &|| false, &|_| true)
 }
 
-pub(crate) fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) -> bool, fingerprint: impl Fn(&Path) -> Result<String, String>, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+pub(crate) fn discover_jsonl_with_control(
+    root: &Path,
+    accept: impl Fn(&Path) -> bool,
+    fingerprint: impl Fn(&Path) -> Result<String, String>,
+    cancelled: &dyn Fn() -> bool,
+    descend: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<HistorySource>, String> {
     check_cancelled(cancelled)?;
     if !root.exists() {
         return Ok(Vec::new());
@@ -497,7 +515,7 @@ pub(crate) fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) ->
                 continue;
             }
             let path = entry.path();
-            if file_type.is_dir() && depth < 5 {
+            if file_type.is_dir() && depth < 5 && descend(&path) {
                 pending.push((path, depth + 1));
             } else if file_type.is_file() && accept(&path) {
                 let checked = fingerprint(&path);
