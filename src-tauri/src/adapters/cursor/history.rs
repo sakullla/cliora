@@ -265,13 +265,35 @@ fn child_material_stamp(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Str
     }
 }
 
-fn subagent_files(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
+struct SubagentFiles {
+    files: Vec<PathBuf>,
+    unread_keys: Vec<String>,
+    layer_unread: bool,
+}
+
+fn subagent_files(session_dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<SubagentFiles, String> {
+    check_cancelled(cancelled)?;
     let Some(root) = child_directory(&session_dir.join("subagents"))? else {
-        return Ok(Vec::new());
+        return Ok(SubagentFiles { files: Vec::new(), unread_keys: Vec::new(), layer_unread: false });
+    };
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
     let mut files = Vec::new();
-    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
+    let mut unread_keys = Vec::new();
+    let mut layer_unread = false;
+    for entry in entries {
+        check_cancelled(cancelled)?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                layer_unread = true;
+                continue;
+            }
+        };
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
             continue;
@@ -279,14 +301,27 @@ fn subagent_files(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
         if !name.ends_with(".jsonl") {
             continue;
         }
-        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                if let Some(key) = child_key(&entry.path()) {
+                    unread_keys.push(key);
+                } else {
+                    layer_unread = true;
+                }
+                continue;
+            }
+        };
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             continue;
         }
         files.push(entry.path());
     }
     files.sort();
-    Ok(files)
+    unread_keys.sort();
+    unread_keys.dedup();
+    Ok(SubagentFiles { files, unread_keys, layer_unread })
 }
 
 fn child_key(path: &Path) -> Option<String> {
@@ -408,15 +443,21 @@ fn attach_subagents(
     let Some(directory) = transcript.parent() else {
         return Ok(());
     };
-    let files = match subagent_files(directory) {
-        Ok(files) => files,
+    let listed = match subagent_files(directory, cancelled) {
+        Ok(listed) => listed,
         Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
         Err(_) => {
             session.children.push(unreadable_child("child"));
             return Ok(());
         }
     };
-    for path in files {
+    if listed.layer_unread {
+        session.children.push(unreadable_child("child"));
+    }
+    for key in listed.unread_keys {
+        session.children.push(unreadable_child(&key));
+    }
+    for path in listed.files {
         check_cancelled(cancelled)?;
         let Some(key) = child_key(&path) else {
             continue;
@@ -1008,6 +1049,86 @@ mod tests {
         assert!(parsed.usage.is_empty());
         let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
         assert!(unread.messages.is_empty() && unread.name.is_none());
+    }
+
+    /// Denies attribute reads on one file. The parent directory can still list it,
+    /// and sibling files can still be opened.
+    struct DenyStat { path: PathBuf }
+
+    impl DenyStat {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success(), "icacls inheritance");
+                let status = std::process::Command::new("icacls")
+                    .arg(path)
+                    .arg("/deny")
+                    .arg(format!("{user}:(RA,RD,REA)"))
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "icacls deny");
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyStat {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o644));
+            }
+        }
+    }
+
+    #[test]
+    fn one_unreadable_subagent_keeps_its_sibling() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_path, source) = write_session(temp.path());
+        let subagents = source.path.parent().unwrap().join("subagents");
+        let sibling = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        fs::write(
+            subagents.join(format!("{sibling}.jsonl")),
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<user_query>兄弟正文</user_query>\"}]}}\n",
+        )
+        .unwrap();
+        let blocked_key = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let blocked = subagents.join(format!("{blocked_key}.jsonl"));
+        fs::write(
+            &blocked,
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<user_query>被拒绝</user_query>\"}]}}\n",
+        )
+        .unwrap();
+        let _deny = DenyStat::new(&blocked);
+        let parent = sources(temp.path()).unwrap().remove(0);
+        assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+        let parsed = parse(&parent).unwrap();
+        assert!(parsed.messages.iter().any(|item| item.text == "修复会话列表"));
+        assert!(parsed.messages.iter().all(|item| item.text != "兄弟正文" && item.text != "被拒绝"));
+        assert!(parsed.usage.is_empty());
+        let good = parsed.children.iter().find(|child| child.key == sibling).unwrap();
+        assert!(good.readable, "{:?}", parsed.children);
+        assert_eq!(good.messages[0].text, "兄弟正文");
+        assert!(good.name.is_none());
+        let bad = parsed.children.iter().find(|child| child.key == blocked_key).unwrap();
+        assert!(!bad.readable);
+        assert!(bad.messages.is_empty() && bad.name.is_none());
+        let original = parsed.children.iter().find(|child| child.key == "99999999-9999-9999-9999-999999999999").unwrap();
+        assert!(original.readable);
+        assert_eq!(original.messages[0].text, "subagent");
     }
 
     #[test]

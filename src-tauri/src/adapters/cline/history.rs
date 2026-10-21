@@ -293,19 +293,46 @@ fn unread_material_stamp(path: &Path) -> String {
 
 /// The index database path for a session directory:
 /// `<data>/sessions/<id>` → `<data>/db/sessions.db`.
+struct ChildMessages {
+    files: Vec<(String, PathBuf)>,
+    unread_keys: Vec<String>,
+    layer_unread: bool,
+}
+
+fn unreadable_child(key: &str) -> ChildSession {
+    ChildSession {
+        key: key.to_owned(),
+        name: None,
+        messages: Vec::new(),
+        readable: false,
+        children: Vec::new(),
+    }
+}
+
 fn child_message_files(
     session_dir: &Path,
     id: &str,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<(String, PathBuf)>, String> {
+) -> Result<ChildMessages, String> {
     check_cancelled(cancelled)?;
-    let mut stems = Vec::new();
-    for entry in fs::read_dir(session_dir).map_err(|error| error.to_string())? {
+    let entries = match fs::read_dir(session_dir) {
+        Ok(entries) => entries,
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut files = Vec::new();
+    let mut unread_keys = Vec::new();
+    let mut layer_unread = false;
+    for entry in entries {
         check_cancelled(cancelled)?;
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
-            continue;
-        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                layer_unread = true;
+                continue;
+            }
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(stem) = name.strip_suffix(".messages.json") else {
             continue;
@@ -313,10 +340,30 @@ fn child_message_files(
         if stem == id || !stem.contains("__") {
             continue;
         }
-        stems.push((stem.to_owned(), entry.path()));
+        let kind = match entry.file_type() {
+            Ok(kind) => kind,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                unread_keys.push(stem.to_owned());
+                continue;
+            }
+        };
+        if !kind.is_file() {
+            continue;
+        }
+        match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_file() => {
+                files.push((stem.to_owned(), entry.path()));
+            }
+            Ok(_) => {}
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => unread_keys.push(stem.to_owned()),
+        }
     }
-    stems.sort();
-    Ok(stems)
+    files.sort();
+    unread_keys.sort();
+    unread_keys.dedup();
+    Ok(ChildMessages { files, unread_keys, layer_unread })
 }
 
 fn database_for(session_dir: &Path) -> Option<PathBuf> {
@@ -560,22 +607,24 @@ pub fn parse_controlled(
     // Subagent/team stems: usage folds into this conversation; the transcript
     // of the internal task line stays out of the main timeline. Failing to
     // list this directory keeps the parent messages already read.
-    let stems = match child_message_files(&session_dir, &id, cancelled) {
-        Ok(stems) => stems,
+    let listed = match child_message_files(&session_dir, &id, cancelled) {
+        Ok(listed) => listed,
         Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
         Err(_) => {
             session.partial = true;
-            session.children.push(ChildSession {
-                key: "child".into(),
-                name: None,
-                messages: Vec::new(),
-                readable: false,
-                children: Vec::new(),
-            });
-            Vec::new()
+            session.children.push(unreadable_child("child"));
+            ChildMessages { files: Vec::new(), unread_keys: Vec::new(), layer_unread: false }
         }
     };
-    for (stem, path) in stems {
+    if listed.layer_unread {
+        session.partial = true;
+        session.children.push(unreadable_child("child"));
+    }
+    for key in listed.unread_keys {
+        session.partial = true;
+        session.children.push(unreadable_child(&key));
+    }
+    for (stem, path) in listed.files {
         let mut child_messages = Vec::new();
         let readable = match read_messages(
             &mut session,
@@ -1070,6 +1119,75 @@ mod tests {
         assert!(child.messages.iter().any(|message| message.text.contains("子代理")));
         assert!(session.messages.iter().all(|message| !message.text.contains("子代理")));
         assert!(session.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Subagent)));
+    }
+
+    /// Denies attribute reads on one file. The session directory can still list it,
+    /// and sibling transcripts can still be opened.
+    struct DenyStat { path: PathBuf }
+
+    impl DenyStat {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success(), "icacls inheritance");
+                let status = std::process::Command::new("icacls")
+                    .arg(path)
+                    .arg("/deny")
+                    .arg(format!("{user}:(RA,RD,REA)"))
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "icacls deny");
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyStat {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o644));
+            }
+        }
+    }
+
+    #[test]
+    fn one_unreadable_child_keeps_its_sibling() {
+        let home = fixture_home();
+        let source = source_of(home.path(), MAIN_ID);
+        let directory = source.path.parent().unwrap();
+        fs::write(
+            directory.join("planner__task_0002.messages.json"),
+            r#"[{"id":"c2","role":"assistant","text":"兄弟子日志","ts":1791000111000,"metrics":{"inputTokens":4,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0}}]"#,
+        )
+        .unwrap();
+        let blocked = directory.join("explore__task_0001.messages.json");
+        let _deny = DenyStat::new(&blocked);
+        let parent = source_of(home.path(), MAIN_ID);
+        assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+        let session = parse(&parent).unwrap();
+        assert!(session.messages.iter().any(|message| message.text.contains("构建")));
+        assert!(session.messages.iter().all(|message| !message.text.contains("兄弟子日志") && !message.text.contains("子代理")));
+        let sibling = session.children.iter().find(|child| child.key == "planner__task_0002").unwrap();
+        assert!(sibling.readable, "{:?}", session.children.iter().map(|child| (&child.key, child.readable)).collect::<Vec<_>>());
+        assert!(sibling.messages.iter().any(|message| message.text == "兄弟子日志"));
+        assert!(sibling.name.is_none());
+        let unread = session.children.iter().find(|child| child.key == "explore__task_0001").unwrap();
+        assert!(!unread.readable);
+        assert!(unread.messages.is_empty() && unread.name.is_none());
     }
 
     #[test]
