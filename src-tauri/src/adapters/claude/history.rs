@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
-    check_cancelled, contains_bytes, discover_jsonl_controlled, read_jsonl_filtered,
+    check_cancelled, contains_bytes, discover_jsonl_controlled_in, read_jsonl_filtered,
     source_fingerprint_controlled, text_content, timestamp, valid_native_id, AgentKind,
     ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
     ParsedSession, UsageAttribution, UsageEvent,
@@ -21,7 +21,7 @@ pub fn sources_controlled(
     home: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
-    let mut sources = discover_jsonl_controlled(
+    let mut sources = discover_jsonl_controlled_in(
         &crate::accounts::selection::history_root("claude_code", || home.join(".claude/projects")),
         |path| {
             path.extension().is_some_and(|value| value == "jsonl")
@@ -30,6 +30,9 @@ pub fn sources_controlled(
                     .any(|part| part.as_os_str() == "subagents")
         },
         cancelled,
+        // Child logs are not sessions. Listing them here would fail every
+        // parent when that directory cannot be read.
+        |path| path.file_name().is_none_or(|name| name != "subagents"),
     )?;
     for source in &mut sources {
         // v2 rereads sessions once so stored rows gain child bodies and attribution.
@@ -37,10 +40,11 @@ pub fn sources_controlled(
         if source.fingerprint_error.is_some() {
             continue;
         }
-        match subagent_fingerprint(&source.path, cancelled) {
-            Ok(Some(extra)) => source.fingerprint = format!("{}|{extra}", source.fingerprint),
-            Ok(None) => {}
-            Err(error) => source.fingerprint_error = Some(error),
+        // A child fingerprint or listing failure stays out of fingerprint_error
+        // so the scan still parses this parent. The extra still changes when
+        // the child material changes or becomes readable again.
+        if let Some(extra) = subagent_fingerprint(&source.path, cancelled)? {
+            source.fingerprint = format!("{}|{extra}", source.fingerprint);
         }
     }
     Ok(sources)
@@ -52,16 +56,53 @@ fn subagent_root(session_file: &Path) -> Option<PathBuf> {
     (root.is_dir() && !root.is_symlink()).then_some(root)
 }
 
-fn subagent_files(session_file: &Path) -> Result<Vec<PathBuf>, String> {
+struct ListedSubagents {
+    files: Vec<PathBuf>,
+    unlistable: Vec<PathBuf>,
+}
+
+fn list_subagents(session_file: &Path, cancelled: &dyn Fn() -> bool) -> Result<ListedSubagents, String> {
     let Some(root) = subagent_root(session_file) else {
-        return Ok(Vec::new());
+        return Ok(ListedSubagents { files: Vec::new(), unlistable: Vec::new() });
     };
     let mut files = Vec::new();
+    let mut unlistable = Vec::new();
     let mut pending = vec![(root, 0usize)];
     while let Some((directory, depth)) = pending.pop() {
-        for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let kind = entry.file_type().map_err(|error| error.to_string())?;
+        check_cancelled(cancelled)?;
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if scan_cancelled(&error.to_string()) {
+                    return Err(error.to_string());
+                }
+                unlistable.push(directory);
+                continue;
+            }
+        };
+        for entry in entries {
+            check_cancelled(cancelled)?;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    if scan_cancelled(&error.to_string()) {
+                        return Err(error.to_string());
+                    }
+                    if !unlistable.iter().any(|item| item == &directory) {
+                        unlistable.push(directory.clone());
+                    }
+                    continue;
+                }
+            };
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => {
+                    if !unlistable.iter().any(|item| item == &directory) {
+                        unlistable.push(directory.clone());
+                    }
+                    continue;
+                }
+            };
             if kind.is_symlink() {
                 continue;
             }
@@ -74,22 +115,65 @@ fn subagent_files(session_file: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     files.sort();
-    Ok(files)
+    unlistable.sort();
+    Ok(ListedSubagents { files, unlistable })
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+fn child_material_stamp(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    // Attribute metadata can succeed while a sharing lock still blocks the
+    // body. The unread prefix keeps the parent fingerprint different until
+    // the body can be opened again.
+    let stamp = match source_fingerprint_controlled(path, cancelled) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(unread_material_stamp(path)),
+    };
+    if fs::File::open(path).is_ok() {
+        Ok(stamp)
+    } else if cancelled() {
+        Err("扫描已取消，原索引已保留".into())
+    } else {
+        Ok(format!("unread:{stamp}"))
+    }
 }
 
 fn subagent_fingerprint(
     session_file: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<String>, String> {
-    let files = subagent_files(session_file)?;
-    if files.is_empty() {
+    let listed = list_subagents(session_file, cancelled)?;
+    if listed.files.is_empty() && listed.unlistable.is_empty() {
         return Ok(None);
     }
     let mut digest = Sha256::new();
-    for path in files {
+    for path in &listed.unlistable {
+        check_cancelled(cancelled)?;
+        digest.update(b"unread-dir");
+        digest.update(path.to_string_lossy().as_bytes());
+        digest.update(unread_material_stamp(path).as_bytes());
+    }
+    for path in &listed.files {
         check_cancelled(cancelled)?;
         digest.update(path.to_string_lossy().as_bytes());
-        digest.update(source_fingerprint_controlled(&path, cancelled)?.as_bytes());
+        digest.update(child_material_stamp(path, cancelled)?.as_bytes());
     }
     Ok(Some(format!("{:x}", digest.finalize())))
 }
@@ -160,10 +244,9 @@ pub fn parse_controlled(
     })?;
     session.partial |= partial;
     let mut used_keys = HashSet::new();
-    match subagent_files(&source.path) {
-        Ok(files) => {
-            let root = subagent_root(&source.path);
-            for path in files {
+    let listed = list_subagents(&source.path, cancelled)?;
+    let root = subagent_root(&source.path);
+    for path in listed.files {
                 let path_key = root
                     .as_ref()
                     .map(|root| relative_key(root, &path))
@@ -227,7 +310,10 @@ pub fn parse_controlled(
                             children: Vec::new(),
                         });
                     }
-                    Err(_) => {
+                    Err(error) => {
+                        if cancelled() || scan_cancelled(&error) {
+                            return Err(error);
+                        }
                         session.partial = true;
                         let key = claim_child_key(&mut used_keys, None, path_key);
                         session.children.push(ChildSession {
@@ -239,9 +325,17 @@ pub fn parse_controlled(
                         });
                     }
                 }
-            }
-        }
-        Err(_) => session.partial = true,
+    }
+    for _path in listed.unlistable {
+        session.partial = true;
+        let key = claim_child_key(&mut used_keys, None, "child".into());
+        session.children.push(ChildSession {
+            key,
+            name: None,
+            messages: Vec::new(),
+            readable: false,
+            children: Vec::new(),
+        });
     }
     session.usage = events
         .into_iter()
@@ -558,5 +652,144 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
             file
         }
+    }
+
+    fn deny_list(path: &Path) -> DenyList {
+        DenyList::new(path)
+    }
+
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success());
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(OI)(CI)(RX)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn refresh(db: &crate::database::Database, home: &Path, tool: &str) -> Vec<crate::history::HistoryDetail> {
+        let registry = crate::adapters::Registry::builtins();
+        let reports = crate::history::refresh_controlled(db, &registry, home, &[tool.to_owned()], &|| false).unwrap();
+        let report = reports.iter().find(|item| item.tool_id == tool).expect("scan report");
+        assert!(!report.incomplete, "{}", report.detail);
+        assert_eq!(report.failed_count, 0, "{}", report.detail);
+        crate::history::list(db, &crate::history::HistoryFilter { tool_id: Some(tool.to_owned()), ..crate::history::HistoryFilter::default() })
+            .unwrap()
+            .into_iter()
+            .map(|session| {
+                assert!(!session.stale, "{}", session.title);
+                crate::history::detail(db, &session.id).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unlistable_child_directory_keeps_every_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".claude/projects/demo");
+        let id = "22222222-2222-4222-8222-222222222222";
+        let other = "44444444-4444-4444-8444-444444444444";
+        let wires = projects.join(id).join("subagents");
+        fs::create_dir_all(&wires).unwrap();
+        fs::write(projects.join(format!("{id}.jsonl")), format!(
+            r#"{{"type":"user","uuid":"u1","sessionId":"{id}","timestamp":"2026-09-29T08:00:00Z","message":{{"role":"user","content":"父会话正文"}}}}
+{{"type":"assistant","uuid":"a1","requestId":"req-main","sessionId":"{id}","timestamp":"2026-09-29T08:00:01Z","message":{{"id":"msg-main","model":"claude-opus","content":"父回复","usage":{{"input_tokens":5,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}
+"#
+        )).unwrap();
+        fs::write(wires.join("agent-hidden.jsonl"), "{\"type\":\"user\",\"message\":{\"content\":\"子日志正文\"}}\n").unwrap();
+        fs::write(projects.join(format!("{other}.jsonl")), format!(
+            r#"{{"type":"user","uuid":"u2","sessionId":"{other}","timestamp":"2026-09-29T08:00:00Z","message":{{"role":"user","content":"另一父会话"}}}}"#
+        )).unwrap();
+        let _deny = deny_list(&wires);
+        let found = sources_controlled(temp.path(), &|| false).unwrap();
+        assert_eq!(found.len(), 2, "子目录列举失败不能让本次发现整体失败");
+        assert!(found.iter().all(|item| item.fingerprint_error.is_none() && !item.fingerprint.is_empty()));
+        let parent = found.iter().find(|item| item.path.ends_with(format!("{id}.jsonl"))).unwrap();
+        let parsed = parse(parent).unwrap();
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话正文"));
+        assert!(parsed.messages.iter().all(|message| message.text != "子日志正文"));
+        assert!(parsed.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main)));
+        let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty());
+        assert!(unread.name.is_none());
+    }
+
+    #[test]
+    fn locked_child_is_indexed_on_the_parent_and_reread_when_it_unlocks() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".claude/projects/demo");
+        let id = "22222222-2222-4222-8222-222222222222";
+        let child_id = "33333333-3333-4333-8333-333333333333";
+        let wires = projects.join(id).join("subagents");
+        fs::create_dir_all(&wires).unwrap();
+        fs::write(projects.join(format!("{id}.jsonl")), format!(
+            r#"{{"type":"user","uuid":"u1","sessionId":"{id}","timestamp":"2026-09-29T08:00:00Z","message":{{"role":"user","content":"父会话正文"}}}}
+{{"type":"assistant","uuid":"a1","requestId":"req-shared","sessionId":"{id}","timestamp":"2026-09-29T08:00:01Z","message":{{"id":"msg-shared","model":"claude-opus","content":"父回复","usage":{{"input_tokens":5,"output_tokens":4,"cache_read_input_tokens":1,"cache_creation_input_tokens":0}}}}}}
+"#
+        )).unwrap();
+        let locked = wires.join("agent-locked.jsonl");
+        fs::write(&locked, format!(
+            r#"{{"type":"user","uuid":"c-user","sessionId":"{child_id}","agentName":"审查","timestamp":"2026-09-29T08:00:02Z","message":{{"role":"user","content":"子日志正文"}}}}
+{{"type":"assistant","uuid":"c1","requestId":"req-shared","sessionId":"{child_id}","agentName":"审查","timestamp":"2026-09-29T08:00:03Z","message":{{"id":"msg-shared","model":"claude-sonnet","content":"子日志回复","usage":{{"input_tokens":9,"output_tokens":8,"cache_read_input_tokens":2,"cache_creation_input_tokens":0}}}}}}
+{{"type":"assistant","uuid":"c2","requestId":"req-only","sessionId":"{child_id}","timestamp":"2026-09-29T08:00:04Z","message":{{"id":"msg-only","model":"claude-sonnet","content":"仅子日志","usage":{{"input_tokens":3,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}
+"#
+        )).unwrap();
+        let db = crate::database::Database::open(&temp.path().join("index.db")).unwrap();
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let found = sources_controlled(temp.path(), &|| false).unwrap();
+            let parent = found.iter().find(|item| item.path.ends_with(format!("{id}.jsonl"))).unwrap();
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            assert!(!parent.fingerprint.is_empty());
+            let details = refresh(&db, temp.path(), "claude_code");
+            let detail = details.iter().find(|item| item.session.native_id.as_deref() == Some(id)).unwrap();
+            assert!(detail.messages.iter().any(|message| message.text == "父会话正文"));
+            assert!(detail.messages.iter().all(|message| !message.text.contains("子日志")));
+            assert!(detail.usage.iter().any(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Main && item.session_key.is_none())));
+            assert!(detail.usage.iter().all(|event| event.id != "msg-only:req-only"));
+            let unread = detail.children.iter().find(|child| !child.readable).unwrap();
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint.clone()
+        };
+        let found = sources_controlled(temp.path(), &|| false).unwrap();
+        let parent = found.iter().find(|item| item.path.ends_with(format!("{id}.jsonl"))).unwrap();
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let details = refresh(&db, temp.path(), "claude_code");
+        let detail = details.iter().find(|item| item.session.native_id.as_deref() == Some(id)).unwrap();
+        assert!(detail.messages.iter().all(|message| !message.text.contains("子日志")));
+        assert_eq!(detail.usage.len(), 2, "同一请求不新增用量");
+        let shared = detail.usage.iter().find(|event| event.id == "msg-shared:req-shared").unwrap();
+        assert!(shared.attributions.iter().any(|item| item.kind == AgentKind::Main));
+        assert!(shared.attributions.iter().any(|item| item.kind == AgentKind::Subagent && item.name.as_deref() == Some("审查")));
+        let child = detail.children.iter().find(|child| child.key == child_id).unwrap();
+        assert!(child.readable);
+        assert!(child.messages.iter().any(|message| message.text == "子日志正文"));
     }
 }
