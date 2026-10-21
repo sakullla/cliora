@@ -156,39 +156,119 @@ fn parse_with(
 }
 
 fn transcript_fingerprint(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    // Only the parent transcript's own fingerprint failure skips the scan.
+    // A subagents listing or child stamp failure stays in the parent stamp.
     let parent = source_fingerprint_controlled(path, cancelled)?;
     let mut rows = Vec::new();
     if let Some(directory) = path.parent() {
-        let subagents = directory.join("subagents");
-        if is_real_dir(&subagents) {
-            for entry in fs::read_dir(&subagents).map_err(|error| error.to_string())? {
-                check_cancelled(cancelled)?;
-                let entry = entry.map_err(|error| error.to_string())?;
-                let name = entry.file_name();
-                let Some(name) = name.to_str() else {
-                    continue;
-                };
-                if !name.ends_with(".jsonl") {
-                    continue;
-                }
-                let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    continue;
-                }
-                let stamp = source_fingerprint_controlled(&entry.path(), cancelled)?;
-                rows.push(format!("{name}:{stamp}"));
-            }
-        }
+        rows.extend(child_fingerprint_parts(&directory.join("subagents"), cancelled)?);
     }
     rows.sort();
     Ok(format!("{PARSER_VERSION}|{parent}|{}", rows.join("|")))
 }
 
-fn subagent_files(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let root = session_dir.join("subagents");
-    if !is_real_dir(&root) {
-        return Ok(Vec::new());
+fn child_fingerprint_parts(subagents: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<String>, String> {
+    let subagents = match child_directory(subagents) {
+        Ok(Some(path)) => path,
+        Ok(None) => return Ok(Vec::new()),
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(vec![format!("children-unread:{}", unread_material_stamp(subagents))]),
+    };
+    let entries = match fs::read_dir(&subagents) {
+        Ok(entries) => entries,
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+        Err(_) => return Ok(vec![format!("children-unread:{}", unread_material_stamp(&subagents))]),
+    };
+    let mut rows = Vec::new();
+    let mut unread_dir = false;
+    for entry in entries {
+        check_cancelled(cancelled)?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                unread_dir = true;
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.ends_with(".jsonl") {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) if cancelled() || scan_cancelled(&error.to_string()) => return Err(error.to_string()),
+            Err(_) => {
+                rows.push(format!("{name}:{}", unread_material_stamp(&entry.path())));
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        rows.push(format!("{name}:{}", child_material_stamp(&entry.path(), cancelled)?));
     }
+    if unread_dir {
+        rows.push(format!("children-unread:{}", unread_material_stamp(&subagents)));
+    }
+    Ok(rows)
+}
+
+/// `Ok(None)` is a missing or non-directory child folder. Stat failures are
+/// listing failures so the parent stays indexed with an unread child.
+fn child_directory(path: &Path) -> Result<Option<PathBuf>, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if scan_cancelled(&error.to_string()) => Err(error.to_string()),
+        Err(error) => Err(error.to_string()),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => Ok(None),
+        Ok(_) => Ok(Some(path.to_path_buf())),
+    }
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+fn child_material_stamp(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    // Attribute metadata can succeed while a sharing lock still blocks the
+    // body. The unread prefix keeps the parent fingerprint different until
+    // the body can be opened again.
+    let stamp = match source_fingerprint_controlled(path, cancelled) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(unread_material_stamp(path)),
+    };
+    if fs::File::open(path).is_ok() {
+        Ok(stamp)
+    } else if cancelled() {
+        Err("扫描已取消，原索引已保留".into())
+    } else {
+        Ok(format!("unread:{stamp}"))
+    }
+}
+
+fn subagent_files(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let Some(root) = child_directory(&session_dir.join("subagents"))? else {
+        return Ok(Vec::new());
+    };
     let mut files = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -271,7 +351,7 @@ fn fixed_transcript_text(row: &Value) -> Result<Option<(&str, String)>, ()> {
     Ok(Some((role, message_text(object.get("message").unwrap()))))
 }
 
-fn read_child_body(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistoryMessage>, ()> {
+fn read_child_body(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistoryMessage>, String> {
     let source = HistorySource {
         native_title: None,
         path: path.to_path_buf(),
@@ -313,9 +393,9 @@ fn read_child_body(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<Hist
             timestamp_source: if time.is_some() { source } else { MessageTimeSource::Unknown },
             kind: HistoryMessageKind::Conversation,
         });
-    });
-    if partial.map_err(|_| ())? || rejected || !saw_row {
-        return Err(());
+    })?;
+    if partial || rejected || !saw_row {
+        return Err("Cursor 子日志不可读".into());
     }
     Ok(messages)
 }
@@ -328,14 +408,23 @@ fn attach_subagents(
     let Some(directory) = transcript.parent() else {
         return Ok(());
     };
-    for path in subagent_files(directory)? {
+    let files = match subagent_files(directory) {
+        Ok(files) => files,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => {
+            session.children.push(unreadable_child("child"));
+            return Ok(());
+        }
+    };
+    for path in files {
         check_cancelled(cancelled)?;
         let Some(key) = child_key(&path) else {
             continue;
         };
         let (readable, messages) = match read_child_body(&path, cancelled) {
             Ok(messages) => (true, messages),
-            Err(()) => (false, Vec::new()),
+            Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+            Err(_) => (false, Vec::new()),
         };
         session.children.push(ChildSession {
             key,
@@ -346,6 +435,16 @@ fn attach_subagents(
         });
     }
     Ok(())
+}
+
+fn unreadable_child(key: &str) -> ChildSession {
+    ChildSession {
+        key: key.to_owned(),
+        name: None,
+        messages: Vec::new(),
+        readable: false,
+        children: Vec::new(),
+    }
 }
 
 fn is_real_dir(path: &Path) -> bool {
@@ -827,5 +926,114 @@ mod tests {
             project_slug(Path::new(r"C:\Users\example\IdeaProjects\sample-proxy-test-suite-speed")),
             "c-Users-example-IdeaProjects-sample-proxy-test-suite-speed"
         );
+    }
+
+    fn lock_exclusive(path: &Path) -> fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            return fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = fs::File::open(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            file
+        }
+    }
+
+    struct DenyList { path: PathBuf }
+
+    impl DenyList {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success());
+                let status = std::process::Command::new("icacls").arg(path).arg("/deny").arg(format!("{user}:(OI)(CI)(RX)")).status().unwrap();
+                assert!(status.success());
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyList {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn other_transcript(home: &Path) {
+        let id = "22222222-2222-2222-2222-222222222222";
+        let directory = home.join(".cursor/projects/c-fixture-demo/agent-transcripts").join(id);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("{id}.jsonl")),
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<user_query>另一父会话</user_query>\"}]}}\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unlistable_subagents_keep_every_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_path, source) = write_session(temp.path());
+        other_transcript(temp.path());
+        let subagents = source.path.parent().unwrap().join("subagents");
+        let _deny = DenyList::new(&subagents);
+        let found = sources(temp.path()).unwrap();
+        assert_eq!(found.len(), 2, "子目录列举失败不能让本次发现整体失败");
+        assert!(found.iter().all(|item| item.fingerprint_error.is_none() && item.fingerprint.starts_with("cursor-agent-transcript-v3|")));
+        let parent = found.iter().find(|item| item.native_id.as_deref() == Some(SESSION_ID)).unwrap();
+        assert!(parent.fingerprint.contains("children-unread") || parent.fingerprint.contains("unread:"));
+        let parsed = parse(parent).unwrap();
+        assert!(parsed.messages.iter().any(|item| item.text == "修复会话列表"));
+        assert!(parsed.messages.iter().all(|item| item.text != "subagent"));
+        assert!(parsed.usage.is_empty());
+        let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+        assert!(unread.messages.is_empty() && unread.name.is_none());
+    }
+
+    #[test]
+    fn locked_subagent_stays_on_the_parent_until_it_can_be_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_path, source) = write_session(temp.path());
+        let locked = source.path.parent().unwrap().join("subagents/99999999-9999-9999-9999-999999999999.jsonl");
+        let blocked = {
+            let _lock = lock_exclusive(&locked);
+            let parent = sources(temp.path()).unwrap().remove(0);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            assert!(parent.fingerprint.contains("unread:"), "{}", parent.fingerprint);
+            let parsed = parse(&parent).unwrap();
+            assert!(parsed.messages.iter().any(|item| item.text == "修复会话列表"));
+            assert!(parsed.messages.iter().all(|item| item.text != "subagent"));
+            assert!(parsed.usage.is_empty());
+            let unread = parsed.children.iter().find(|child| !child.readable).unwrap();
+            assert!(unread.messages.is_empty() && unread.name.is_none());
+            parent.fingerprint
+        };
+        let parent = sources(temp.path()).unwrap().remove(0);
+        assert_ne!(parent.fingerprint, blocked, "子文件恢复可读后父指纹必须变化");
+        let parsed = parse(&parent).unwrap();
+        let child = parsed.children.iter().find(|child| child.key == "99999999-9999-9999-9999-999999999999").unwrap();
+        assert!(child.readable);
+        assert_eq!(child.messages[0].text, "subagent");
+        assert!(parsed.messages.iter().all(|item| item.text != "subagent"));
     }
 }
