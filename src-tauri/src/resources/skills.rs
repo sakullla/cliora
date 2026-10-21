@@ -1213,9 +1213,10 @@ struct PluginSkillDirectory {
     unreadable: bool,
 }
 
-/// Installed plugin skills for this scope. A CLI without a plugin port, or a
-/// scope that does not manage plugins, contributes nothing and is not an error.
-/// Inventory failures stay errors so the skill table is not treated as complete.
+/// Installed plugin skills for this scope. A CLI without a plugin port, a
+/// scope that does not manage plugins, or a machine with no CLI install
+/// contributes nothing and is not an error. Inventory failures of an installed
+/// CLI stay errors so the skill table is not treated as complete.
 fn plugin_skill_directories(
     db: &Database,
     registry: &Registry,
@@ -1230,7 +1231,7 @@ fn plugin_skill_directories(
     if scope == Scope::Project && !adapter.capability().project {
         return Ok(Vec::new());
     }
-    let snapshot = super::plugins::scan_resources(
+    let snapshot = match super::plugins::scan_resources(
         db,
         home,
         &super::plugins::PluginTarget {
@@ -1239,7 +1240,13 @@ fn plugin_skill_directories(
             project_path: project_path.map(str::to_owned),
             context_id: None,
         },
-    )?;
+    ) {
+        Ok(snapshot) => snapshot,
+        // No binary means there is no plugin inventory to merge. A failed list
+        // from an installed CLI still fails this scan.
+        Err(error) if error == "未找到 CLI 安装" => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut found = Vec::new();
     let mut seen = Vec::new();
     for plugin in snapshot.entries {
