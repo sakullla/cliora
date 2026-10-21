@@ -346,6 +346,14 @@ impl CliAdapter for CommandCode {
     fn history_supported(&self) -> bool {
         true
     }
+    // parentId is a message thread pointer, not a child session. delegationDepth,
+    // agentPreset and source=agent are not links either.
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "unavailable",
+            reason: crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Session format v3 and the --session contract verified on 1.73.4;
         // allow ordinary movement inside 1.x.
@@ -698,6 +706,13 @@ mod tests {
         assert_eq!(descriptor.resume.state, "available");
         assert_eq!(descriptor.resources.state, "available");
         assert_eq!(descriptor.history.state, "available");
+        let facet = CommandCode.history_association().expect("关联由适配器声明");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&CommandCode);
+        let published = published.association.expect("有使用记录就发布关联");
+        assert_eq!(published.state, "unavailable");
+        assert_eq!(published.reason, facet.reason);
         assert_eq!(descriptor.launch_form, LaunchForm::Terminal);
         assert!(descriptor.yolo_available);
         assert!(descriptor.login.is_none());

@@ -298,3 +298,40 @@ pub fn parse_controlled(
     session.partial |= partial;
     session.finish(source)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unverified_link_fields_do_not_create_parent_child_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".codex").join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-association.jsonl");
+        let lines = [
+            json!({"timestamp":"2026-09-29T08:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/fixture","parentId":"parent-session","delegationDepth":2,"agentPreset":"reviewer","source":"agent"}}),
+            json!({"timestamp":"2026-09-29T08:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"父会话仍可读"}],"parentId":"m0","source":"agent","delegationDepth":2,"agentPreset":"reviewer"}}),
+            json!({"timestamp":"2026-09-29T08:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"用量仍在这一条"}],"parentId":"m1","source":"agent"}}),
+            json!({"timestamp":"2026-09-29T08:00:04Z","type":"token_usage_record","payload":{"response_id":"resp-assoc","parentId":"parent-session","delegationDepth":2,"agentPreset":"reviewer","source":"agent","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":5}}}),
+            json!({"timestamp":"2026-09-29T08:00:05Z","type":"agent","source":"agent","parentId":"child-log","delegationDepth":2,"agentPreset":"reviewer","payload":{"text":"不应成为子会话"}}),
+        ];
+        let text = lines.iter().map(|row| row.to_string()).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(&path, text).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1, "未核对字段不新增会话源");
+        assert!(found[0].fingerprint.starts_with("codex-context-v2|"));
+        let parsed = parse(&found[0]).unwrap();
+        assert_eq!(parsed.native_id.as_deref(), Some("11111111-1111-4111-8111-111111111111"));
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话仍可读"));
+        assert!(parsed.messages.iter().any(|message| message.text == "用量仍在这一条"));
+        assert!(parsed.messages.iter().all(|message| message.text != "不应成为子会话"));
+        assert_eq!(parsed.usage.len(), 1);
+        assert_eq!(parsed.usage[0].input, Some(100));
+        assert_eq!(parsed.usage[0].cache_read, Some(40));
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
+        assert!(!parsed.partial);
+    }
+}

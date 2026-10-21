@@ -611,3 +611,66 @@ pub fn parse_controlled(
     check_cancelled(cancelled)?;
     session.finish(source)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unverified_link_fields_do_not_create_parent_child_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let session = home.path().join(".grok/sessions/demo/44444444-4444-4444-8444-444444444444");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(
+            session.join("summary.json"),
+            serde_json::to_string(&json!({
+                "info": {"id":"44444444-4444-4444-8444-444444444444","cwd":"/fixture","parentId":"parent-session","delegationDepth":2,"agentPreset":"reviewer","source":"agent"},
+                "generated_title": "仍是原会话",
+                "created_at": "2026-09-29T08:00:00Z",
+                "updated_at": "2026-09-29T08:01:00Z",
+                "current_model_id": "grok-4",
+                "parentId": "parent-session",
+                "delegationDepth": 2,
+                "agentPreset": "reviewer",
+                "source": "agent"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let chat = [
+            json!({"type":"user","content":"父会话仍可读","parentId":"p","delegationDepth":2,"agentPreset":"reviewer","source":"agent"}),
+            json!({"type":"assistant","content":"用量仍在这一条","source":"agent","parentId":"p","delegationDepth":2,"agentPreset":"reviewer"}),
+            json!({"type":"agent","content":"不应成为子会话","source":"agent","parentId":"child","delegationDepth":2,"agentPreset":"reviewer"}),
+        ];
+        let text = chat.iter().map(|row| row.to_string()).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(session.join("chat_history.jsonl"), text).unwrap();
+        std::fs::write(
+            session.join("usage.json"),
+            serde_json::to_string(&json!({
+                "session": {"inputTokens": 40, "outputTokens": 10, "cachedReadTokens": 0, "cacheCreationTokens": 0, "modelCalls": 1},
+                "parentId": "parent-session",
+                "delegationDepth": 2,
+                "agentPreset": "reviewer",
+                "source": "agent"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1, "未核对字段不新增会话源");
+        assert!(found[0].fingerprint.starts_with("grok-accuracy-v2|"));
+        let parsed = parse(&found[0]).unwrap();
+        assert_eq!(parsed.native_id.as_deref(), Some("44444444-4444-4444-8444-444444444444"));
+        assert_eq!(parsed.title, "仍是原会话");
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话仍可读"));
+        assert!(parsed.messages.iter().any(|message| message.text == "用量仍在这一条"));
+        assert!(parsed.messages.iter().all(|message| message.text != "不应成为子会话"));
+        assert_eq!(parsed.usage.len(), 1);
+        assert_eq!(parsed.usage[0].input, Some(40));
+        assert_eq!(parsed.usage[0].output, Some(10));
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
+        assert!(!parsed.partial);
+    }
+}

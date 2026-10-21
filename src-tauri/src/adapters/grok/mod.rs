@@ -429,6 +429,14 @@ impl CliAdapter for Grok {
     fn history_supported(&self) -> bool {
         true
     }
+    // Checked sessions have no parent/child evidence. parentId, delegationDepth,
+    // agentPreset and source=agent are not links.
+    fn history_association(&self) -> Option<crate::adapters::Facet> {
+        Some(crate::adapters::Facet {
+            state: "unavailable",
+            reason: crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         version.starts_with("1.")
     }
@@ -502,5 +510,17 @@ mod tests {
         assert_eq!(observed[0].root, expected);
         assert!(observed[0].detail.contains("只读"));
         assert!(Grok.skill_observations(Scope::Project, home, Some(Path::new("/work"))).is_empty());
+    }
+
+    #[test]
+    fn history_association_is_unavailable() {
+        let facet = Grok.history_association().expect("关联由适配器声明");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&Grok);
+        let published = published.association.expect("有使用记录就发布关联");
+        assert_eq!(published.state, "unavailable");
+        assert_eq!(published.reason, facet.reason);
+        assert_eq!(Grok.descriptor().history.state, "available");
     }
 }

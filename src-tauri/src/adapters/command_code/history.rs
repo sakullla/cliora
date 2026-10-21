@@ -290,6 +290,8 @@ mod tests {
         );
         assert_eq!(totals, (20_294, 1_619, 90_018, 6_144));
         assert!(!parsed.partial);
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
     }
 
     #[test]
@@ -342,6 +344,48 @@ mod tests {
         let parsed = parse(&source).unwrap();
         assert_eq!(parsed.usage.len(), 1, "重复行 id 折叠为一次计费调用");
         assert_eq!(parsed.usage[0].input, Some(100));
+    }
+
+    #[test]
+    fn unverified_link_fields_do_not_create_parent_child_sessions() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".commandcode/projects/demo");
+        std::fs::create_dir_all(&projects).unwrap();
+        let parent_id = "11111111-2222-4333-8444-555555555551";
+        let other_id = "11111111-2222-4333-8444-555555555552";
+        let row = |id: &str, parent: &str, text: &str| {
+            format!(
+                concat!(
+                    r#"{{"type":"session","version":3,"id":"{id}","timestamp":"2026-10-05T08:00:00.000Z","cwd":"/tmp/demo","parentId":"{parent}","delegationDepth":2,"agentPreset":"reviewer","source":"agent"}}"#,
+                    "\n",
+                    r#"{{"type":"message","id":"m-{id}","parentId":"{parent}","timestamp":"2026-10-05T08:00:01.000Z","source":"agent","delegationDepth":2,"agentPreset":"reviewer","message":{{"role":"assistant","content":[{{"type":"text","text":"{text}"}}],"meta":{{"source":"agent"}}}},"usage":{{"inputTokens":100,"outputTokens":10,"cacheReadTokens":0,"cacheWriteTokens":0,"costUsd":0.0001}},"model":"deepseek/deepseek-v4.1-flash"}}"#,
+                    "\n",
+                ),
+                id = id,
+                parent = parent,
+                text = text,
+            )
+        };
+        std::fs::write(projects.join(format!("{parent_id}.jsonl")), row(parent_id, "null", "父会话正文")).unwrap();
+        std::fs::write(projects.join(format!("{other_id}.jsonl")), row(other_id, parent_id, "只在另一份日志")).unwrap();
+        let found = sources(temp.path()).unwrap();
+        assert_eq!(found.len(), 2, "parentId 不改变顶层索引");
+        assert!(found.iter().all(|source| source.fingerprint.starts_with("command-code-session-v2|")));
+        let mut texts = Vec::new();
+        for source in &found {
+            let parsed = parse(source).unwrap();
+            assert!(parsed.children.is_empty(), "{}", source.path.display());
+            assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
+            assert_eq!(parsed.usage.len(), 1);
+            assert_eq!(parsed.usage[0].input, Some(100));
+            texts.extend(parsed.messages.into_iter().map(|message| message.text));
+        }
+        assert!(texts.iter().any(|text| text == "父会话正文"));
+        assert!(texts.iter().any(|text| text == "只在另一份日志"));
+        let parent = found.iter().find(|source| source.native_id.as_deref() == Some(parent_id)).unwrap();
+        let parent = parse(parent).unwrap();
+        assert!(parent.messages.iter().all(|message| message.text != "只在另一份日志"));
+        assert_eq!(parent.native_id.as_deref(), Some(parent_id));
     }
 
     #[test]

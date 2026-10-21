@@ -411,6 +411,34 @@ mod tests {
         assert_eq!(parsed.usage[1].output, Some(48));
         assert_eq!(parsed.usage[1].cache_read, Some(64));
         assert!(parsed.usage.iter().all(|event| !event.input_includes_cache));
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
+    }
+
+    #[test]
+    fn unverified_link_fields_do_not_create_parent_child_sessions() {
+        let jsonl = "\
+{\"type\":\"session\",\"version\":4,\"id\":\"session-00000000-0000-4000-8000-000000000009\",\"createdAt\":1791077550400,\"cwd\":\"C:\\\\work\\\\demo\",\"parentId\":\"session-parent\",\"delegationDepth\":3,\"agentPreset\":\"researcher\",\"source\":\"agent\"}
+{\"type\":\"user/message\",\"seq\":1,\"time\":1791077550483,\"parentId\":\"m0\",\"delegationDepth\":3,\"agentPreset\":\"researcher\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"父会话仍可读\"}],\"source\":{\"kind\":\"agent\"},\"role\":\"user\",\"id\":\"11111111-1111-4111-8111-111111111111\"}}
+{\"type\":\"assistant/message\",\"seq\":2,\"time\":1791077551380,\"data\":{\"turn\":1,\"step\":1,\"parentId\":\"m1\",\"delegationDepth\":3,\"agentPreset\":\"researcher\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"用量仍在这一条\"}],\"source\":{\"kind\":\"model\"},\"id\":\"55555555-5555-4555-8555-555555555555\"},\"usage\":{\"inputTokens\":12,\"outputTokens\":3,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}
+";
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join(".dsh").join("sessions").join("demo");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(sessions.join("session.v4.jsonl.zstd"), encode_session(jsonl)).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].fingerprint.starts_with("deepseek-session-v2|"));
+        let parsed = parse(&found[0]).unwrap();
+        assert_eq!(parsed.native_id.as_deref(), Some("session-00000000-0000-4000-8000-000000000009"));
+        assert_eq!(parsed.messages.len(), 2);
+        assert!(parsed.messages.iter().any(|message| message.text == "父会话仍可读"));
+        assert_eq!(parsed.usage.len(), 1);
+        assert_eq!(parsed.usage[0].input, Some(12));
+        assert_eq!(parsed.usage[0].output, Some(3));
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| event.attributions.is_empty()));
+        assert!(!parsed.partial);
     }
 
     #[test]

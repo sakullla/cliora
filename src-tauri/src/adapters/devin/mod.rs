@@ -349,6 +349,14 @@ impl CliAdapter for Devin {
     fn history_supported(&self) -> bool {
         true
     }
+    // source=agent is an assistant step, not a child session. parentId,
+    // delegationDepth and agentPreset are not links either.
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "unavailable",
+            reason: crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Transcript/CLI evidence covers 3000.x; allow ordinary movement inside
         // the 3000 major line only.
@@ -652,6 +660,14 @@ mod tests {
     #[test]
     fn delivered_dimensions_stay_within_the_verified_surface() {
         assert!(Devin.history_supported());
+        let facet = Devin.history_association().expect("关联由适配器声明");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&Devin);
+        let published = published.association.expect("有使用记录就发布关联");
+        assert_eq!(published.state, "unavailable");
+        assert_eq!(published.reason, facet.reason);
+        assert_eq!(Devin.descriptor().history.state, "available");
         assert!(Devin.supports_mcp());
         // No managed credential port, no accounts port, no configuration port.
         // Agents stay undelivered; skills use the documented brand directories.

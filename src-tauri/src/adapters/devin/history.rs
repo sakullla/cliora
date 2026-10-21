@@ -504,6 +504,36 @@ mod tests {
         assert_eq!(root["final_metrics"]["total_completion_tokens"], 236);
         assert_eq!(root["final_metrics"]["total_cached_tokens"], 2700);
         assert!(!session.partial);
+        assert!(session.children.is_empty());
+        assert!(session.usage.iter().all(|event| event.attributions.is_empty()));
+    }
+
+    #[test]
+    fn unverified_link_fields_do_not_create_parent_child_sessions() {
+        let mut root: Value = serde_json::from_str(TRANSCRIPT_FIXTURE).unwrap();
+        root["session_id"] = Value::String("linked-example".into());
+        root["parentId"] = Value::String("serene-example".into());
+        root["delegationDepth"] = serde_json::json!(2);
+        root["agentPreset"] = Value::String("reviewer".into());
+        root["agent"]["parentId"] = Value::String("parent-agent".into());
+        let home = tempfile::tempdir().unwrap();
+        let dir = write_transcripts(home.path());
+        std::fs::write(dir.join("linked-example.json"), serde_json::to_string(&root).unwrap()).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert!(found.iter().any(|source| source.native_id.as_deref() == Some("serene-example")));
+        let linked = found
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some("linked-example"))
+            .unwrap();
+        assert!(linked.fingerprint.starts_with("devin-transcript-v4|"));
+        let session = parse(linked).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some("linked-example"));
+        assert!(session.messages.iter().any(|message| message.role == "assistant" && message.text.contains("构建脚本")));
+        assert_eq!(session.usage.len(), 2);
+        assert!(session.children.is_empty());
+        assert!(session.usage.iter().all(|event| event.attributions.is_empty()));
+        assert!(session.messages.iter().all(|message| message.text != "reviewer"));
+        assert!(!session.partial);
     }
 
     #[test]
