@@ -295,6 +295,12 @@ impl CliAdapter for Cursor {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "可从父会话打开与父 transcript 同形状的 subagents JSONL 正文；这些文件不产生用量",
+        })
+    }
     fn node_required_when_missing(&self) -> bool {
         false
     }
@@ -444,6 +450,9 @@ mod tests {
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("npm"));
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("agent "));
         assert!(Cursor.history_supported());
+        let association = Cursor.history_association().unwrap();
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.is_empty());
         assert!(Cursor.history_sources(Path::new("/home/example")).unwrap().is_empty());
         let descriptor = registry.get("cursor").unwrap().descriptor();
         assert_eq!(descriptor.history.state, "available");

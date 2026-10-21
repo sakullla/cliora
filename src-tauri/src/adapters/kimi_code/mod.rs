@@ -497,6 +497,12 @@ impl CliAdapter for KimiCode {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "可从父会话打开 agents 下非 main 的 wire.jsonl 正文；没有原生请求 id 的用量按该路径分开归属",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Both the original 0.x CLI and the locally verified 2.1.1 use -S.
         semver::Version::parse(version.trim().trim_start_matches('v'))
@@ -828,6 +834,9 @@ mod tests {
             vec!["-S", "session_abc", "--yolo"]
         );
         let descriptor = KimiCode.descriptor();
+        let association = KimiCode.history_association().unwrap();
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.is_empty());
         assert!(descriptor.yolo_available);
         assert_eq!(descriptor.launch_form, LaunchForm::Terminal);
         assert!(!descriptor.management.accounts);

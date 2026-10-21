@@ -42,8 +42,9 @@ use serde_json::Value;
 
 use crate::history::usage;
 use crate::history::{
-    check_cancelled, text_content, timestamp, valid_native_id, HistorySource, ParsedSession,
-    UsageEvent, MAX_SOURCES,
+    check_cancelled, text_content, timestamp, valid_native_id, AgentKind, ChildSession,
+    HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource, ParsedSession,
+    UsageAttribution, UsageEvent, MAX_SOURCES,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -186,7 +187,7 @@ fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Str
         }
         count += 1;
     }
-    Ok(format!("cline-session-v2|{count}|{}", hex(&combined)))
+    Ok(format!("cline-session-v3|{count}|{}", hex(&combined)))
 }
 
 /// The index database path for a session directory:
@@ -205,14 +206,48 @@ fn message_id(session: &str, stem: &str, fallback_index: usize, explicit: Option
         .unwrap_or_else(|| format!("{session}#{stem}#{fallback_index}"))
 }
 
-/// One messages array file → transcript entries (main line only) and billed
-/// usage events (main line and subagent stems).
+fn push_child_message(
+    messages: &mut Vec<HistoryMessage>,
+    id: String,
+    role: &str,
+    text: String,
+    time: Option<i64>,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    messages.push(HistoryMessage {
+        id,
+        role: role.to_owned(),
+        text,
+        timestamp: time,
+        timestamp_source: if time.is_some() {
+            MessageTimeSource::Native
+        } else {
+            MessageTimeSource::Unknown
+        },
+        kind: HistoryMessageKind::Conversation,
+    });
+}
+
+/// Verified message rows have no agent display name. The stem is only the path key.
+fn path_attribution(main_line: bool, stem: &str) -> Vec<UsageAttribution> {
+    vec![UsageAttribution {
+        kind: if main_line { AgentKind::Main } else { AgentKind::Subagent },
+        name: None,
+        session_key: if main_line { None } else { Some(stem.to_owned()) },
+    }]
+}
+
+/// One messages array file → transcript entries (main line or one child) and
+/// billed usage events. Subagent stems do not join the parent transcript.
 fn read_messages(
     session: &mut ParsedSession,
     path: &Path,
     stem: &str,
     main_line: bool,
     model: &Option<String>,
+    mut child_messages: Option<&mut Vec<HistoryMessage>>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     check_cancelled(cancelled)?;
@@ -232,7 +267,7 @@ fn read_messages(
             .unwrap_or("")
             .to_owned();
         let time = message.get("ts").and_then(timestamp);
-        if main_line && (role == "user" || role == "assistant") {
+        if role == "user" || role == "assistant" {
             let body = match &message {
                 Value::Object(fields) => fields
                     .get("text")
@@ -246,17 +281,17 @@ fn read_messages(
                 text_content(&body)
             };
             if !body.trim().is_empty() {
-                session.add_message(
-                    message_id(
-                        &id,
-                        stem,
-                        index,
-                        message.get("id").and_then(Value::as_str),
-                    ),
-                    &role,
-                    body,
-                    time,
+                let message_key = message_id(
+                    &id,
+                    stem,
+                    index,
+                    message.get("id").and_then(Value::as_str),
                 );
+                if main_line {
+                    session.add_message(message_key, &role, body, time);
+                } else if let Some(bucket) = child_messages.as_mut() {
+                    push_child_message(bucket, message_key, &role, body, time);
+                }
             }
         }
         let Some(metrics) = message.get("metrics") else {
@@ -289,7 +324,9 @@ fn read_messages(
             cache_read: Some(counts.read),
             cache_write: Some(counts.write),
             // Verified source semantics: input excludes cache read/write.
-            input_includes_cache: false, attributions: Vec::new(),
+            // Rows have no native request id, so each metrics object stays one event.
+            input_includes_cache: false,
+            attributions: path_attribution(main_line, stem),
         });
     }
     Ok(())
@@ -388,7 +425,7 @@ pub fn parse_controlled(
     let messages = session_dir.join(format!("{id}.messages.json"));
     let manifest_model = session.model.clone();
     if messages.is_file() {
-        read_messages(&mut session, &messages, &id, true, &manifest_model, cancelled)
+        read_messages(&mut session, &messages, &id, true, &manifest_model, None, cancelled)
             .map_err(|error| format!("Cline 主消息文件无法解析：{error}"))?;
     } else {
         session.partial = true;
@@ -413,9 +450,28 @@ pub fn parse_controlled(
     }
     stems.sort();
     for (stem, path) in stems {
-        if read_messages(&mut session, &path, &stem, false, &manifest_model, cancelled).is_err() {
+        let mut child_messages = Vec::new();
+        let readable = read_messages(
+            &mut session,
+            &path,
+            &stem,
+            false,
+            &manifest_model,
+            Some(&mut child_messages),
+            cancelled,
+        )
+        .is_ok();
+        if !readable {
             session.partial = true;
+            child_messages.clear();
         }
+        session.children.push(ChildSession {
+            key: stem,
+            name: None,
+            messages: child_messages,
+            readable,
+            children: Vec::new(),
+        });
     }
     check_cancelled(cancelled)?;
     // Aggregate fallback: a session whose message files carry no per-message
@@ -453,6 +509,7 @@ pub fn parse_controlled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::AgentKind;
     use rusqlite::params;
 
     const SESSION_DIR_FIXTURE: &str = "tests/fixtures/history/cline-3.0-session";
@@ -579,7 +636,7 @@ mod tests {
         );
         assert!(stale.fingerprint.is_empty());
         let main = source_of(home.path(), MAIN_ID);
-        assert!(main.fingerprint.starts_with("cline-session-v2|"));
+        assert!(main.fingerprint.starts_with("cline-session-v3|"));
         assert!(main.path.ends_with(format!("{MAIN_ID}.json")));
         // A length change in the messages file must change the fingerprint.
         let before = main.fingerprint.clone();
@@ -642,6 +699,22 @@ mod tests {
             .messages
             .iter()
             .any(|message| message.text.contains("子代理")));
+        assert!(session.usage[..2].iter().all(|event| {
+            event.attributions.len() == 1
+                && event.attributions[0].kind == AgentKind::Main
+                && event.attributions[0].name.is_none()
+                && event.attributions[0].session_key.is_none()
+        }));
+        assert_eq!(session.children.len(), 1);
+        let child = &session.children[0];
+        assert_eq!(child.key, "explore__task_0001");
+        assert!(child.name.is_none(), "文件名里的代理 id 不是显示名");
+        assert!(child.readable && child.children.is_empty());
+        assert!(child.messages.iter().any(|message| message.text.contains("子代理")));
+        assert_eq!(sub.attributions.len(), 1);
+        assert_eq!(sub.attributions[0].kind, AgentKind::Subagent);
+        assert!(sub.attributions[0].name.is_none());
+        assert_eq!(sub.attributions[0].session_key.as_deref(), Some(child.key.as_str()));
         // Audit baseline: per-message sums equal the metadata_json aggregate.
         let totals: (u64, u64, u64, u64) = session.usage.iter().fold(
             (0, 0, 0, 0),
@@ -667,6 +740,7 @@ mod tests {
         let event = &session.usage[0];
         assert_eq!(event.id, format!("cline-aggregate-{AGGREGATE_ONLY_ID}"));
         assert_eq!(event.request_count, None, "聚合事件不虚构请求次数");
+        assert!(event.attributions.is_empty(), "聚合行没有已核对的代理路径");
         assert_eq!(event.input, Some(80));
         assert_eq!(event.output, Some(20));
         assert_eq!(event.cache_read, Some(0));
@@ -674,6 +748,63 @@ mod tests {
         assert!(!event.input_includes_cache);
         // Title falls back to the manifest prompt when the row has none.
         assert_eq!(session.title, "快速核对一个依赖版本");
+    }
+
+    #[test]
+    fn subagent_events_stay_separate_and_a_bad_file_stays_unreadable() {
+        let home = fixture_home();
+        let source = source_of(home.path(), MAIN_ID);
+        let directory = source.path.parent().unwrap();
+        let path = directory.join("explore__task_0001.messages.json");
+        let mut rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        rows.push(serde_json::json!({
+            "id": "msg_sub_0002",
+            "ts": 1791000110000i64,
+            "role": "assistant",
+            "text": "子代理第二条，仍不进主对话。",
+            "metrics": {
+                "inputTokens": 9,
+                "outputTokens": 1,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+            }
+        }));
+        fs::write(&path, serde_json::to_string(&rows).unwrap()).unwrap();
+        fs::write(directory.join("planner__task_0002.messages.json"), "not-json").unwrap();
+        let session = parse(&source_of(home.path(), MAIN_ID)).unwrap();
+        assert!(session.messages.iter().all(|message| !message.text.contains("子代理")));
+        assert_eq!(session.native_id.as_deref(), Some(MAIN_ID));
+        let sub: Vec<_> = session
+            .usage
+            .iter()
+            .filter(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Subagent))
+            .collect();
+        assert_eq!(sub.len(), 2, "{:?}", session.usage);
+        assert_ne!(sub[0].id, sub[1].id);
+        assert_eq!(
+            sub[0].attributions[0].session_key.as_deref(),
+            Some("explore__task_0001")
+        );
+        assert_eq!(sub[1].attributions[0].session_key.as_deref(), Some("explore__task_0001"));
+        assert!(sub.iter().all(|event| event.attributions[0].name.is_none()));
+        assert_eq!(session.children.len(), 2);
+        let open = session
+            .children
+            .iter()
+            .find(|child| child.key == "explore__task_0001")
+            .unwrap();
+        assert!(open.readable);
+        assert_eq!(open.messages.len(), 2);
+        assert!(open.name.is_none());
+        let closed = session
+            .children
+            .iter()
+            .find(|child| child.key == "planner__task_0002")
+            .unwrap();
+        assert!(!closed.readable);
+        assert!(closed.messages.is_empty());
+        assert!(closed.name.is_none());
+        assert!(session.partial);
     }
 
     #[test]
