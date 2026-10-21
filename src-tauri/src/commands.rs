@@ -2857,12 +2857,7 @@ fn adapter_catalog(database: &Database) -> Result<AdapterCatalog, ApiError> {
     Ok(AdapterCatalog {
         registered: registry
             .iter()
-            .map(|adapter| PublishedDescriptor {
-                resume_latest_available: adapter
-                    .resume_latest_args(adapters::LaunchMode::Normal)
-                    .is_ok(),
-                descriptor: adapter.descriptor(),
-            })
+            .map(PublishedDescriptor::from_adapter)
             .collect(),
         managed_ids: preferences
             .managed_tools

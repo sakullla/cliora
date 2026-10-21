@@ -707,12 +707,7 @@ mod tests {
         assert_eq!(latest, vec!["--continue".to_string()]);
         assert!(!latest.iter().any(|arg| arg == "--session"));
         assert!(CliAdapter::resume_latest_args(&MiniMaxCode, LaunchMode::Yolo).is_err());
-        let published = crate::adapters::PublishedDescriptor {
-            resume_latest_available: MiniMaxCode
-                .resume_latest_args(LaunchMode::Normal)
-                .is_ok(),
-            descriptor: MiniMaxCode.descriptor(),
-        };
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&MiniMaxCode);
         assert!(published.resume_latest_available);
         assert!(!published.descriptor.yolo_available);
         let planned = crate::native::registered::plan_launch(
