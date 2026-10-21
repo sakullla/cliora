@@ -315,6 +315,8 @@ export default {
     readOnly: '只读',
     reading: '正在读取记忆正文',
     modified: '更新于 {{time}}',
+    toolbar: '记忆工具栏',
+    pathLayer: '路径与属性',
     properties: '属性 · {{count}}',
     openLinked: '打开关联记忆「{{name}}」',
     missingLinked: '没有找到关联记忆「{{name}}」',

@@ -288,9 +288,9 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
   await expect(reader(page).getByRole('heading', { name: 'Release ritual' })).toBeVisible();
   await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('同步版本文件');
   await expect(reader(page).getByRole('heading', { name: '发布流程' })).toBeVisible();
-  await expect(reader(page).getByText('版本发布步骤').first()).toBeVisible();
-  await expect(reader(page)).toContainText('a-note.md');
+  await expect(reader(page).getByText('a-note.md')).toHaveCount(0);
   await reader(page).getByRole('button', { name: /属性/ }).click();
+  await expect(reader(page).getByText('a-note.md')).toBeVisible();
   await expect(reader(page).locator('dt').filter({ hasText: 'description' })).toBeVisible();
   await expect(reader(page).locator('dd').filter({ hasText: '版本发布步骤' })).toBeVisible();
 
@@ -460,7 +460,9 @@ test('per-store switches stay readable when off and switch writes carry the stor
   await install(page, { mode: 'master-off' });
   await openMemory(page);
   await expect(page.getByText('未使用', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('switch', { name: '全局 · 记忆总开关' })).toHaveAttribute('aria-checked', 'false');
+  const toolbar = page.getByRole('group', { name: '记忆工具栏' });
+  await expect(toolbar.getByRole('switch', { name: '全局 · 记忆总开关' })).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByRole('navigation', { name: '记忆列表' }).getByRole('switch')).toHaveCount(0);
   await expect(page.getByRole('switch', { name: '项目 · 栖点 A · 记忆总开关' })).toHaveAttribute('aria-checked', 'false');
   await entryButton(page, 'a-note').click();
   await expect(reader(page)).toContainText('from-a');
@@ -481,8 +483,9 @@ test('a CLI-wide switch appears once and list rows keep folder names secondary t
   await install(page, { mode: 'master-off' });
   await openMemory(page, 'Epsilon');
   await expect(page.getByRole('switch')).toHaveCount(1);
-  await expect(page.getByText('自动记忆')).toBeVisible();
+  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByText('自动记忆')).toBeVisible();
   await expect(page.getByText('已关闭', { exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByText('记忆当前未使用')).toBeVisible();
   const list = page.getByRole('navigation', { name: '记忆列表' });
   await expect(list.getByRole('button')).toHaveCount(2);
   const one = entryButton(page, 'one-note');
@@ -494,8 +497,10 @@ test('a CLI-wide switch appears once and list rows keep folder names secondary t
   await one.click();
   await expect(reader(page).getByRole('heading', { name: 'One note' })).toBeVisible();
   await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-one');
-  await expect(reader(page)).toContainText('C:\\Work\\one');
-  await expect(reader(page)).toContainText('one-note.md');
+  await expect(reader(page).getByText('C:\\Work\\one')).toHaveCount(0);
+  await reader(page).getByRole('button', { name: /属性/ }).click();
+  await expect(reader(page).getByText('C:\\Work\\one')).toBeVisible();
+  await expect(reader(page).getByText('one-note.md')).toBeVisible();
   await page.getByRole('button', { name: '筛选来源' }).click();
   await expect(page.getByRole('option', { name: /^one/ })).toContainText('C:\\Work\\one');
   await page.getByRole('button', { name: '筛选来源' }).click();
@@ -693,6 +698,7 @@ test('scope switches remain reachable with no stores and preserve native-default
     };
   });
   await openMemory(page);
+  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByRole('combobox', { name: '所有项目记忆' })).toBeVisible();
   await expect(page.getByText('跟随原生默认，当前生效状态未知')).toHaveCount(2);
   await expect(page.getByText('未使用', { exact: true })).toHaveCount(0);
   await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
@@ -843,4 +849,157 @@ test('native filename capability permits Unicode and internal dots without chang
     await page.getByRole('textbox', { name: '文件名' }).fill(unsafe);
     await expect(page.getByRole('button', { name: '保存记忆' })).toBeDisabled();
   }
+});
+
+test('a long memory keeps the body in view while the list and toolbar stay put', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await install(page);
+  await page.addInitScript(() => {
+    const clips: string[] = [];
+    (window as unknown as { __clips: string[] }).__clips = clips;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { clips.push(value); } } });
+  });
+  await openWorkspace(page);
+  await page.evaluate(() => {
+    const texts = (window as unknown as { __memory: { texts: Record<string, string> } }).__memory.texts;
+    const body = Array.from({ length: 36 }, (_, index) => `第 ${index + 1} 段。记忆正文需要长过阅读区，滚动后后续段落进入视野，列表和工具栏留在原位。`).join('\n\n');
+    texts['a-note'] = `---\nname: Long note\ndescription: "摘要只留在列表"\ntype: project\n---\n\n${body}\n\n段落末尾标记\n`;
+  });
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  const list = page.getByRole('navigation', { name: '记忆列表' });
+  const article = reader(page);
+  const bodyRegion = article.getByRole('region', { name: '记忆正文' });
+  await expect(entryButton(page, 'a-note')).toContainText('摘要只留在列表');
+  await entryButton(page, 'a-note').click();
+  await expect(article.getByRole('heading', { name: 'Long note' })).toBeVisible();
+  await expect(bodyRegion.locator('p').filter({ hasText: '第 1 段' })).toBeVisible();
+  await expect(bodyRegion).not.toContainText('摘要只留在列表');
+  await expect(article.getByText('a-note.md')).toHaveCount(0);
+  const placed = await page.evaluate(() => {
+    const listNode = document.querySelector('[aria-label="记忆列表"]') as HTMLElement;
+    const articleNode = document.querySelector('article') as HTMLElement;
+    const header = articleNode.querySelector('h3')!.parentElement!.getBoundingClientRect();
+    const region = articleNode.querySelector('[aria-label="记忆正文"]')!.getBoundingClientRect();
+    const listBox = listNode.getBoundingClientRect();
+    const articleBox = articleNode.getBoundingClientRect();
+    const toolbar = document.querySelector('[aria-label="记忆工具栏"]') as HTMLElement;
+    const content = document.querySelector('.content') as HTMLElement;
+    return {
+      sideBySide: listBox.right <= articleBox.left + 2 && articleBox.top < listBox.bottom && listBox.top < articleBox.bottom,
+      bodyTaller: region.height > header.height,
+      scrollTop: content.scrollTop,
+      toolbarTop: toolbar.getBoundingClientRect().top,
+      listTop: listBox.top,
+      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    };
+  });
+  expect(placed.sideBySide).toBe(true);
+  expect(placed.bodyTaller).toBe(true);
+  expect(placed.scrollTop).toBe(0);
+  expect(placed.overflow).toBe(false);
+  const shownInBody = (label: string) => bodyRegion.getByText(label).evaluate(node => {
+    const region = node.closest('[role="region"]')!.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    return Math.min(box.bottom, region.bottom) - Math.max(box.top, region.top);
+  });
+  expect(await shownInBody('段落末尾标记')).toBeLessThanOrEqual(0);
+  await bodyRegion.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect(await shownInBody('段落末尾标记')).toBeGreaterThan(12);
+  const after = await page.evaluate(() => {
+    const listNode = document.querySelector('[aria-label="记忆列表"]') as HTMLElement;
+    const toolbar = document.querySelector('[aria-label="记忆工具栏"]') as HTMLElement;
+    const content = document.querySelector('.content') as HTMLElement;
+    return {
+      scrollTop: content.scrollTop,
+      fits: content.scrollHeight <= content.clientHeight + 1,
+      toolbarTop: toolbar.getBoundingClientRect().top,
+      listTop: listNode.getBoundingClientRect().top,
+    };
+  });
+  expect(after.scrollTop).toBe(0);
+  expect(after.fits).toBe(true);
+  expect(Math.abs(after.toolbarTop - placed.toolbarTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.listTop - placed.listTop)).toBeLessThanOrEqual(1);
+
+  await article.getByRole('button', { name: /属性/ }).click();
+  await expect(article.getByText('a-note.md')).toBeVisible();
+  await expect(article.getByRole('button', { name: '复制文件路径' })).toBeVisible();
+  await article.getByRole('button', { name: '复制文件路径' }).click();
+  await expect(page.getByText('已复制文件路径')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __clips: string[] }).__clips)).toContain(`${alphaAStore}/a-note.md`);
+  const opened = await article.evaluate(node => {
+    const header = node.querySelector('h3')!.parentElement!.getBoundingClientRect().height;
+    const panel = node.querySelector('[data-memory-path]')!.getBoundingClientRect().height;
+    const regionNode = node.querySelector('[aria-label="记忆正文"]') as HTMLElement;
+    regionNode.scrollTop = 0;
+    const region = regionNode.getBoundingClientRect();
+    const prose = [...regionNode.querySelectorAll('p')].reduce((sum, item) => {
+      const box = item.getBoundingClientRect();
+      return sum + Math.max(0, Math.min(box.bottom, region.bottom) - Math.max(box.top, region.top));
+    }, 0);
+    return { header, panel, body: region.height, prose };
+  });
+  expect(opened.body).toBeGreaterThan(opened.header);
+  expect(opened.body).toBeGreaterThan(opened.panel);
+  expect(opened.prose).toBeGreaterThan(48);
+  await article.getByRole('button', { name: /属性/ }).click();
+
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(article.locator('.code-editor')).toBeVisible();
+  const editing = await article.evaluate(node => {
+    const header = node.querySelector('h3')!.parentElement!.getBoundingClientRect().height;
+    const editor = node.querySelector('.code-editor')!.getBoundingClientRect();
+    const save = [...node.querySelectorAll('button')].find(button => button.textContent?.includes('保存记忆'))!.getBoundingClientRect();
+    const articleBox = node.getBoundingClientRect();
+    return { header, editor: editor.height, saveVisible: save.top >= editor.bottom - 12 && save.bottom <= articleBox.bottom + 1 };
+  });
+  expect(editing.editor).toBeGreaterThan(editing.header);
+  expect(editing.saveVisible).toBe(true);
+  const saved = `---\nname: Long note\ndescription: "摘要只留在列表"\ntype: project\n---\n\n${Array.from({ length: 24 }, (_, index) => `保存后的第 ${index + 1} 段。`).join('\n\n')}\n\n已保存的正文`;
+  await editor(page).fill(saved);
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect(bodyRegion).toContainText('已保存的正文');
+  await expect(editor(page)).toHaveCount(0);
+
+  await page.setViewportSize({ width: 640, height: 900 });
+  await expect(list).toBeHidden();
+  await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: '搜索记忆' })).toBeHidden();
+  await expect(article.getByRole('heading', { name: 'Long note' })).toBeVisible();
+  expect(await shownInBody('已保存的正文')).toBeLessThanOrEqual(0);
+  await bodyRegion.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect(await shownInBody('已保存的正文')).toBeGreaterThan(12);
+  const narrow = await article.evaluate(node => {
+    const heading = node.querySelector('h3')!.getBoundingClientRect();
+    const region = node.querySelector('[aria-label="记忆正文"]')!.getBoundingClientRect();
+    return {
+      headingSeen: heading.top >= 0 && heading.bottom <= window.innerHeight && heading.width > 24,
+      bodyMain: region.height > heading.height * 2,
+      pageScroll: (document.querySelector('.content') as HTMLElement).scrollTop,
+    };
+  });
+  expect(narrow.headingSeen).toBe(true);
+  expect(narrow.bodyMain).toBe(true);
+  expect(narrow.pageScroll).toBe(0);
+  await article.getByRole('button', { name: /属性/ }).click();
+  await expect(article.getByText('a-note.md')).toBeVisible();
+  const squeezed = await article.evaluate(node => {
+    const region = node.querySelector('[aria-label="记忆正文"]')!.getBoundingClientRect().height;
+    const panel = node.querySelector('[data-memory-path]')!.getBoundingClientRect().height;
+    return { region, panel };
+  });
+  expect(squeezed.region).toBeGreaterThan(squeezed.panel);
+  expect(squeezed.region).toBeGreaterThan(120);
+  const overflows = () => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+  expect(await overflows()).toBe(false);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+  expect(await overflows()).toBe(false);
+  await page.setViewportSize({ width: 1360, height: 900 });
+  expect(await overflows()).toBe(false);
+  await page.setViewportSize({ width: 640, height: 900 });
+  await page.getByRole('button', { name: '返回列表' }).click();
+  await expect(list).toBeVisible();
+  await expect(article).toBeHidden();
+  await expect(page.getByRole('searchbox', { name: '搜索记忆' })).toBeVisible();
 });
