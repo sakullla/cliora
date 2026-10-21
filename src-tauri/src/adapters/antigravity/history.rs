@@ -11,8 +11,9 @@
 //!   rows (`id`, `title`, `workspace`, `status`, `parent_conversation_id`);
 //!   a direct `parent_conversation_id` is attached to that parent and is not
 //!   an independent session. The child is readable only when both its
-//!   transcript and usage database exist; if either is missing the parent
-//!   remains and that child is unreadable. Deeper descendants are not merged.
+//!   transcript and usage database exist and can be read; if either is
+//!   missing or unreadable the parent remains and that child is unreadable.
+//!   Deeper descendants are not merged.
 //! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` —
 //!   one JSON object per line: `{step_index, source, type, status,
 //!   created_at, content, thinking?}` with `type` ∈ `USER_INPUT` /
@@ -109,16 +110,15 @@ pub fn sources_controlled(
         let workspace = &row.workspace;
         let status = &row.status;
         // Discovery reads only revisions, never every transcript/protobuf blob.
-        // Direct-child revisions are part of the parent fingerprint. Parsing
-        // still reports absent or malformed native data as partial or unreadable.
+        // Only this conversation's own transcript and usage database can set
+        // fingerprint_error. A direct child's stamp or open failure stays in
+        // the parent stamp so the scan still parses the parent.
         let checked = (|| -> Result<String, String> {
             let transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, id), cancelled)?;
             let usage = usage_stamp(&root, id, cancelled)?;
             let mut children = Vec::new();
             for (child_id, child_title) in children_of.get(id).into_iter().flatten() {
-                let child_transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, child_id), cancelled)?;
-                let child_usage = usage_stamp(&root, child_id, cancelled)?;
-                children.push(format!("{child_id}|{child_title:?}|{child_transcript}|{child_usage}"));
+                children.push(child_revision(child_id, child_title, &root, cancelled)?);
             }
             children.sort();
             Ok(format!(
@@ -155,6 +155,105 @@ fn usage_stamp(root: &Path, id: &str, cancelled: &dyn Fn() -> bool) -> Result<St
         crate::history::source_cache::database_stamp(&database, cancelled)
     } else {
         Ok("missing".into())
+    }
+}
+
+fn child_revision(
+    child_id: &str,
+    child_title: &Option<String>,
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let transcript = child_file_stamp(&transcript_path(root, child_id), cancelled)?;
+    let usage = child_usage_stamp(root, child_id, cancelled)?;
+    Ok(format!("{child_id}|{child_title:?}|{transcript}|{usage}"))
+}
+
+fn scan_cancelled(error: &str) -> bool {
+    error.contains("扫描已取消")
+}
+
+fn unread_material_stamp(path: &Path) -> String {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return format!("unread:{}", path.display());
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("unread:{}:{modified}:{}", metadata.len(), path.display())
+}
+
+/// Keeps a child stamp failure out of the parent `fingerprint_error`.
+/// `missing` stays `missing`. Cancellation is not turned into an unread stamp.
+fn isolate_child_stamp(
+    path: &Path,
+    stamp: Result<String, String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, String> {
+    let stamp = match stamp {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+        Err(_) => return Ok(unread_material_stamp(path)),
+    };
+    if stamp == "missing" {
+        return Ok(stamp);
+    }
+    // Attribute metadata can succeed while a sharing lock still blocks the
+    // body. The unread prefix keeps the parent fingerprint different until
+    // the body can be opened again.
+    match std::fs::File::open(path) {
+        Ok(_) => Ok(stamp),
+        Err(_) if cancelled() => Err("扫描已取消，原索引已保留".into()),
+        Err(_) => Ok(format!("unread:{stamp}")),
+    }
+}
+
+fn child_file_stamp(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    isolate_child_stamp(path, crate::history::source_cache::optional_stamp(path, cancelled), cancelled)
+}
+
+fn child_usage_stamp(root: &Path, id: &str, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
+    let database = conversation_db(root, id);
+    match std::fs::symlink_metadata(&database) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("missing".into()),
+        Err(error) if cancelled() || scan_cancelled(&error.to_string()) => Err(error.to_string()),
+        Err(_) => Ok(unread_material_stamp(&database)),
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(unread_material_stamp(&database)),
+        Ok(metadata) if !metadata.is_file() => Ok("missing".into()),
+        Ok(_) => isolate_child_stamp(
+            &database,
+            crate::history::source_cache::database_stamp(&database, cancelled),
+            cancelled,
+        ),
+    }
+}
+
+/// Child material counts only as a real file. A link or a stat failure is not
+/// readable, so parsing does not follow it or invent a body.
+fn regular_child_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+/// The usage database and its WAL must both be real files. A missing WAL is
+/// normal; a link or a stat failure is the same unread usage material as a
+/// failed database stamp, so the child body is not opened.
+fn child_usage_readable(database: &Path) -> bool {
+    if !regular_child_file(database) {
+        return false;
+    }
+    let mut wal = database.as_os_str().to_os_string();
+    wal.push("-wal");
+    match std::fs::symlink_metadata(Path::new(&wal)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
+        Err(_) => false,
     }
 }
 
@@ -402,8 +501,8 @@ fn attach_direct_children(
         });
         let transcript = transcript_path(root, &id);
         let usage_db = conversation_db(root, &id);
-        let transcript_ok = transcript.is_file();
-        let usage_ok = usage_db.is_file();
+        let transcript_ok = regular_child_file(&transcript);
+        let usage_ok = child_usage_readable(&usage_db);
         let mut readable = transcript_ok && usage_ok;
         let mut messages = Vec::new();
         if readable {
@@ -974,5 +1073,229 @@ mod tests {
             parse_generation(&truncated[..truncated.len() - 3]),
             Err(Mismatch)
         );
+    }
+
+    fn write_child_usage(root: &std::path::Path, id: &str, response_id: &str, input: u64) {
+        let database = conversation_db(root, id);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let usage = Connection::open(&database).unwrap();
+        usage.execute_batch("CREATE TABLE gen_metadata (key TEXT, data BLOB);").unwrap();
+        let row = json!({
+            "response_id": response_id,
+            "generation_uuid": format!("cascade:{response_id}"),
+            "input_tokens": input, "output_tokens": 4,
+            "thinking_output_tokens": 1, "response_output_tokens": 3,
+            "cache_write_tokens": 0, "cache_read_tokens": 0,
+            "model_id": "gemini-3-pro-preview", "timestamp": 1791000040000u64
+        });
+        usage.execute(
+            "INSERT INTO gen_metadata (key, data) VALUES (?1, ?2)",
+            params![format!("cascade:{response_id}"), encode_well_formed_generation(&row)],
+        ).unwrap();
+    }
+
+    fn write_transcript(root: &std::path::Path, id: &str, content: &str) {
+        let transcript = transcript_path(root, id);
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            format!("{{\"type\":\"AGENT_RESPONSE\",\"content\":\"{content}\"}}\n"),
+        ).unwrap();
+    }
+
+    /// Denies traverse on a directory. Listing its parent can still succeed,
+    /// while a file inside fails attribute reads. Denying the file itself does
+    /// not fail attribute reads on this Windows.
+    struct DenyStat { path: PathBuf }
+
+    impl DenyStat {
+        fn new(path: &std::path::Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success(), "icacls inheritance");
+                let status = std::process::Command::new("icacls")
+                    .arg(path)
+                    .arg("/deny")
+                    .arg(format!("{user}:(RX)"))
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "icacls deny");
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyStat {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    fn symlink_file(target: &std::path::Path, link: &std::path::Path) {
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(target, link).unwrap();
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[test]
+    fn missing_child_material_stays_missing_without_a_fingerprint_error() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert!(found[0].fingerprint.contains("missing"), "{}", found[0].fingerprint);
+        assert!(!found[0].fingerprint.contains("unread:"), "{}", found[0].fingerprint);
+        assert!(sources_controlled(home.path(), &|| true).unwrap_err().contains("扫描已取消"));
+        let error = child_file_stamp(
+            &transcript_path(&super::super::data_root(home.path()), CHILD_ID),
+            &|| true,
+        )
+        .unwrap_err();
+        assert!(error.contains("扫描已取消"), "{error}");
+    }
+
+    #[test]
+    fn parent_transcript_stat_failure_is_still_a_fingerprint_error() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let transcript = transcript_path(&super::super::data_root(home.path()), ROOT_ID);
+        let _deny = DenyStat::new(transcript.parent().unwrap());
+        let stat_error = std::fs::symlink_metadata(&transcript).expect_err("测试必须让父 transcript 的属性读取失败");
+        assert_ne!(stat_error.kind(), std::io::ErrorKind::NotFound, "{stat_error}");
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].fingerprint_error.is_some(), "父会话自身材料失败必须写入 fingerprint_error：{found:?}");
+        assert!(found[0].fingerprint.is_empty());
+    }
+
+    #[test]
+    fn unreadable_child_transcript_keeps_the_parent_and_known_attribution() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let root = super::super::data_root(home.path());
+        write_child_usage(&root, CHILD_ID, "resp_child_agy_fixture", 11);
+        let sibling = "conv_sibling_20261005_aabbccddeeff001122334455667788";
+        let index = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        index.execute(
+            "INSERT INTO conversation_summaries (id, title, workspace, status, parent_conversation_id)
+             VALUES (?1, 'task: 兄弟子会话', ?2, 'active', ?3)",
+            params![sibling, r"C:\Users\example\agy-demo", ROOT_ID],
+        ).unwrap();
+        drop(index);
+        write_transcript(&root, sibling, "兄弟子会话正文");
+        write_child_usage(&root, sibling, "resp_sibling_agy_fixture", 7);
+        let blocked = transcript_path(&root, CHILD_ID);
+        let blocked_fingerprint = {
+            let _deny = DenyStat::new(blocked.parent().unwrap());
+            let stat_error = std::fs::symlink_metadata(&blocked).expect_err("测试必须让子 transcript 的属性读取失败");
+            assert_ne!(stat_error.kind(), std::io::ErrorKind::NotFound, "{stat_error}");
+            let found = sources(home.path()).unwrap();
+            assert_eq!(found.len(), 1);
+            assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+            assert!(found[0].fingerprint.contains("unread:"), "{}", found[0].fingerprint);
+            let session = parse(&found[0]).unwrap();
+            assert_eq!(session.native_id.as_deref(), Some(ROOT_ID));
+            assert_eq!(session.messages.len(), 3);
+            assert!(session.messages.iter().all(|message| {
+                !message.text.contains("子会话时间线") && !message.text.contains("兄弟子会话正文")
+            }));
+            let denied = session.children.iter().find(|child| child.key == CHILD_ID).unwrap();
+            assert!(!denied.readable);
+            assert!(denied.messages.is_empty());
+            assert_eq!(denied.name.as_deref(), Some("task: 检查重复资源"));
+            let child_event = session.usage.iter().find(|event| event.id == "resp_child_agy_fixture").unwrap();
+            assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(CHILD_ID));
+            let sibling_node = session.children.iter().find(|child| child.key == sibling).unwrap();
+            assert!(sibling_node.readable, "{:?}", session.children);
+            assert_eq!(sibling_node.messages[0].text, "兄弟子会话正文");
+            assert!(session.usage.iter().any(|event| event.id == "resp_sibling_agy_fixture"));
+            found[0].fingerprint.clone()
+        };
+        let found = sources(home.path()).unwrap();
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert_ne!(found[0].fingerprint, blocked_fingerprint, "子文件恢复可读后父指纹必须变化");
+        let session = parse(&found[0]).unwrap();
+        let denied = session.children.iter().find(|child| child.key == CHILD_ID).unwrap();
+        assert!(denied.readable);
+        assert!(denied.messages[0].text.contains("子会话时间线"));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+    }
+
+    #[test]
+    fn unreadable_child_usage_stamp_keeps_the_parent() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let root = super::super::data_root(home.path());
+        write_child_usage(&root, CHILD_ID, "resp_child_agy_fixture", 11);
+        let database = conversation_db(&root, CHILD_ID);
+        let mut wal_name = database.as_os_str().to_os_string();
+        wal_name.push("-wal");
+        let wal = PathBuf::from(wal_name);
+        let wal_real = wal.parent().unwrap().join(format!("{}.real", wal.file_name().unwrap().to_string_lossy()));
+        std::fs::write(&wal_real, b"wal").unwrap();
+        symlink_file(&wal_real, &wal);
+        let found = sources(home.path()).unwrap();
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert!(found[0].fingerprint.contains("unread:"), "{}", found[0].fingerprint);
+        let session = parse(&found[0]).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some(ROOT_ID));
+        assert_eq!(session.messages.len(), 3);
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        assert_eq!(session.children.len(), 1);
+        assert!(!session.children[0].readable);
+        assert!(session.children[0].messages.is_empty());
+        assert_eq!(session.children[0].name.as_deref(), Some("task: 检查重复资源"));
+        assert!(session.usage.iter().all(|event| event.id != "resp_child_agy_fixture"));
+    }
+
+    #[test]
+    fn symlinked_child_material_stays_unread_without_following_the_link() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let root = super::super::data_root(home.path());
+        write_child_usage(&root, CHILD_ID, "resp_child_agy_fixture", 11);
+        let transcript = transcript_path(&root, CHILD_ID);
+        let transcript_real = transcript.with_extension("jsonl.real");
+        std::fs::rename(&transcript, &transcript_real).unwrap();
+        std::fs::write(&transcript_real, "{\"type\":\"AGENT_RESPONSE\",\"content\":\"符号链接正文不应进入父会话\"}\n").unwrap();
+        symlink_file(&transcript_real, &transcript);
+        let database = conversation_db(&root, CHILD_ID);
+        let database_real = database.with_extension("db.real");
+        std::fs::rename(&database, &database_real).unwrap();
+        symlink_file(&database_real, &database);
+        let found = sources(home.path()).unwrap();
+        assert!(found[0].fingerprint_error.is_none(), "{:?}", found[0].fingerprint_error);
+        assert!(found[0].fingerprint.contains("unread:"), "{}", found[0].fingerprint);
+        let session = parse(&found[0]).unwrap();
+        assert_eq!(session.messages.len(), 3);
+        assert!(session.messages.iter().all(|message| !message.text.contains("符号链接")));
+        assert_eq!(session.children.len(), 1);
+        assert!(!session.children[0].readable);
+        assert!(session.children[0].messages.is_empty());
+        assert_eq!(session.children[0].name.as_deref(), Some("task: 检查重复资源"));
+        assert!(session.usage.iter().all(|event| event.id != "resp_child_agy_fixture"));
+        let parent_transcript = transcript_path(&root, ROOT_ID);
+        let parent_real = parent_transcript.with_extension("jsonl.real");
+        std::fs::rename(&parent_transcript, &parent_real).unwrap();
+        symlink_file(&parent_real, &parent_transcript);
+        let parent = sources(home.path()).unwrap();
+        assert!(parent[0].fingerprint_error.is_some(), "父会话自身符号链接必须写入 fingerprint_error：{parent:?}");
     }
 }
