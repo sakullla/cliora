@@ -10,10 +10,12 @@
 //! * `conversation_summaries.db` — SQLite index with `conversation_summaries`
 //!   rows (`id`, `title`, `workspace`, `status`, `parent_conversation_id`);
 //!   a direct `parent_conversation_id` is attached to that parent and is not
-//!   an independent session. The child is readable only when both its
-//!   transcript and usage database exist and can be read; if either is
-//!   missing or unreadable the parent remains and that child is unreadable.
-//!   Deeper descendants are not merged.
+//!   an independent session. The child transcript is readable on its own.
+//!   A missing, unreadable, or failed usage database omits that child's
+//!   usage and leaves an already read transcript in place. A missing,
+//!   symlinked, or unreadable transcript keeps the node unreadable with an
+//!   empty body. The parent remains either way. Deeper descendants are not
+//!   merged.
 //! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` —
 //!   one JSON object per line: `{step_index, source, type, status,
 //!   created_at, content, thinking?}` with `type` ∈ `USER_INPUT` /
@@ -34,8 +36,10 @@
 //! verified per row and treated as drift when it disagrees); duplicates are
 //! dropped by `response_id`. Strict degradation per the [RE] policy: any
 //! structural mismatch (missing stats/response_id, unexpected wire type,
-//! truncated blob, malformed transcript line, missing conversation database)
-//! skips that row and marks the session partial — fields are never guessed.
+//! truncated blob, malformed transcript line, missing own conversation
+//! database) skips that row and marks the session partial. A direct child's
+//! missing usage database omits only that child's events. Fields are never
+//! guessed.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -241,9 +245,9 @@ fn regular_child_file(path: &Path) -> bool {
         .is_some_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
 }
 
-/// The usage database and its WAL must both be real files. A missing WAL is
-/// normal; a link or a stat failure is the same unread usage material as a
-/// failed database stamp, so the child body is not opened.
+/// The usage database and its WAL must both be real files before usage rows
+/// are read. A missing WAL is normal. A link, a non-file, or a stat failure
+/// omits that child's usage; it does not decide whether the transcript opens.
 fn child_usage_readable(database: &Path) -> bool {
     if !regular_child_file(database) {
         return false;
@@ -254,6 +258,20 @@ fn child_usage_readable(database: &Path) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
         Err(_) => false,
+    }
+}
+
+/// Usage material is present but cannot be read: a link, a stat failure, or a
+/// real database whose WAL is not an ordinary file. A missing database is not
+/// this case; there is then no child usage to attach.
+fn child_usage_unreadable(database: &Path) -> bool {
+    if child_usage_readable(database) {
+        return false;
+    }
+    match std::fs::symlink_metadata(database) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(metadata) if !metadata.file_type().is_symlink() && !metadata.is_file() => false,
+        _ => true,
     }
 }
 
@@ -366,7 +384,7 @@ pub fn parse_controlled(
         session.partial = true;
     } else {
         // A root usage database that cannot be opened is still a parse failure.
-        // Child databases degrade the child node instead of dropping the parent.
+        // A child database omits that child's usage and keeps its transcript.
         append_usage(&mut session, &usage_db, &mut seen, None, cancelled)?;
     }
     attach_direct_children(&mut session, &connection, &root, &id, &mut seen, cancelled)?;
@@ -501,33 +519,34 @@ fn attach_direct_children(
         });
         let transcript = transcript_path(root, &id);
         let usage_db = conversation_db(root, &id);
-        let transcript_ok = regular_child_file(&transcript);
-        let usage_ok = child_usage_readable(&usage_db);
-        let mut readable = transcript_ok && usage_ok;
+        // Readability is the transcript alone. Usage never clears a body that
+        // was already read, and a missing usage database adds no events.
+        let mut readable = false;
         let mut messages = Vec::new();
-        if readable {
+        if regular_child_file(&transcript) {
             match read_transcript(&id, &transcript, cancelled) {
                 Ok(body) => {
                     session.partial |= body.partial;
                     messages = body.messages;
+                    readable = true;
                 }
-                Err(_) => {
-                    readable = false;
-                    session.partial = true;
-                }
+                Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+                Err(_) => session.partial = true,
             }
         }
-        if usage_ok {
+        if child_usage_readable(&usage_db) {
             let attribution = UsageAttribution {
                 kind: AgentKind::Subagent,
                 name: name.clone(),
                 session_key: Some(id.clone()),
             };
-            if append_usage(session, &usage_db, seen, Some(attribution), cancelled).is_err() {
-                readable = false;
-                messages.clear();
-                session.partial = true;
+            match append_usage(session, &usage_db, seen, Some(attribution), cancelled) {
+                Ok(()) => {}
+                Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+                Err(_) => session.partial = true,
             }
+        } else if child_usage_unreadable(&usage_db) {
+            session.partial = true;
         }
         session.children.push(ChildSession {
             key: id,
@@ -920,13 +939,15 @@ mod tests {
         // absent.
         assert_eq!(second.model.as_deref(), Some("Gemini 3 Pro"));
         assert!(session.usage.iter().all(|event| event.request_count == Some(1)));
-        // The fixture child has a transcript and no usage database, so the
-        // node is unreadable and its text stays out of the parent timeline.
+        // The fixture child has a transcript and no usage database. The body
+        // stays on the child node; it does not enter the parent timeline, and
+        // the missing database adds no usage row.
         assert_eq!(session.children.len(), 1);
         assert_eq!(session.children[0].key, CHILD_ID);
         assert_eq!(session.children[0].name.as_deref(), Some("task: 检查重复资源"));
-        assert!(!session.children[0].readable);
-        assert!(session.children[0].messages.is_empty());
+        assert!(session.children[0].readable);
+        assert_eq!(session.children[0].messages.len(), 1);
+        assert!(session.children[0].messages[0].text.contains("子会话时间线"));
         assert!(session.children[0].children.is_empty());
         assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
         assert!(session.usage.iter().all(|event| event.attributions.is_empty()));
@@ -1039,15 +1060,29 @@ mod tests {
     }
 
     #[test]
-    fn missing_child_usage_database_keeps_parent_and_hides_child_body() {
+    fn missing_or_unreadable_child_usage_keeps_the_transcript() {
         let home = tempfile::tempdir().unwrap();
         write_fixture(home.path());
         let found = sources(home.path()).unwrap();
         let session = parse(&found[0]).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some(ROOT_ID));
         assert_eq!(session.messages.len(), 3);
         assert!(!session.usage.iter().any(|event| event.id.contains("child")));
-        assert!(!session.children[0].readable);
-        assert!(session.children[0].messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        assert!(session.children[0].readable);
+        assert!(session.children[0].messages[0].text.contains("子会话时间线"));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+
+        let root = super::super::data_root(home.path());
+        let database = conversation_db(&root, CHILD_ID);
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        std::fs::write(&database, b"not a database").unwrap();
+        let broken = parse(&found[0]).unwrap();
+        assert!(broken.partial);
+        assert!(broken.children[0].readable);
+        assert!(broken.children[0].messages[0].text.contains("子会话时间线"));
+        assert!(broken.children[0].messages.iter().all(|message| !message.text.is_empty()));
+        assert!(broken.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        assert!(!broken.usage.iter().any(|event| event.id.contains("child")));
     }
 
     #[test]
@@ -1259,8 +1294,9 @@ mod tests {
         assert_eq!(session.messages.len(), 3);
         assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
         assert_eq!(session.children.len(), 1);
-        assert!(!session.children[0].readable);
-        assert!(session.children[0].messages.is_empty());
+        assert!(session.partial);
+        assert!(session.children[0].readable);
+        assert!(session.children[0].messages[0].text.contains("子会话时间线"));
         assert_eq!(session.children[0].name.as_deref(), Some("task: 检查重复资源"));
         assert!(session.usage.iter().all(|event| event.id != "resp_child_agy_fixture"));
     }
