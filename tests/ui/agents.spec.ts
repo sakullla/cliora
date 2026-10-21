@@ -210,6 +210,45 @@ test('editing keeps the list beside the document and a narrow page can return', 
   await expect(article).toBeHidden();
 });
 
+test('narrow list can restore after the last agent in scope is deleted', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 900 });
+  await setup(page);
+  await page.evaluate(() => {
+    const state = (window as any).agentsHarness;
+    state.entries = state.entries.filter((item: { id: string }) => item.id === 'fixture');
+  });
+  await page.getByRole('button', { name: '重新扫描' }).click();
+  await expect(page.getByRole('listitem')).toHaveCount(1);
+  await row(page, 'reviewer').getByRole('button').click();
+  await page.getByRole('article', { name: 'reviewer' }).getByRole('button', { name: '删除', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await expect(page.locator('.empty-state')).toBeVisible();
+  const restore = page.getByRole('button', { name: '恢复上次操作' });
+  await expect(restore).toHaveCount(1);
+  await expect(restore).toBeVisible();
+  await expect(restore).toBeEnabled();
+  await expect(page.locator('[data-document-shell]')).toHaveAttribute('data-view', 'list');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await expect(page.getByRole('button', { name: '恢复上次操作' })).toHaveCount(1);
+  await expect(restore).toBeVisible();
+  await restore.click();
+  await page.getByRole('dialog').getByRole('button', { name: '恢复', exact: true }).click();
+  const last = await page.evaluate(() => {
+    const calls = (window as any).agentsHarness.calls.filter((call: any) => call.command === 'operate_native_agent');
+    return calls.at(-1).args.request;
+  });
+  expect(last.action).toBe('restore');
+  expect(last.id).toBe('/fixture/agents/reviewer.md');
+  expect(last.transactionId).toBe('tx-1');
+  expect(last.baseline).toBe('fixture-baseline');
+  expect(last.target.contextId).toBe('ctx-fixture');
+  expect(last.name).toBe('reviewer');
+  expect(last.content).toContain('custom: preserved');
+  await expect(page.getByRole('button', { name: '恢复上次操作' })).toHaveCount(0);
+});
+
 test('restore stays in the document and repeats the last operation payload', async ({ page }) => {
   await setup(page);
   await row(page, 'reviewer').getByRole('button').click();
