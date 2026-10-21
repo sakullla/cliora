@@ -537,6 +537,14 @@ impl CliAdapter for Codex {
     fn history_supported(&self) -> bool {
         true
     }
+    // Checked rollouts have no parent/child evidence. parentId, delegationDepth,
+    // agentPreset and source=agent are not links.
+    fn history_association(&self) -> Option<crate::adapters::Facet> {
+        Some(crate::adapters::Facet {
+            state: "unavailable",
+            reason: crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         version.starts_with("0.")
     }
@@ -597,5 +605,17 @@ mod tests {
         assert_eq!(project_rows.len(), 1);
         assert_eq!(project_rows[0].root, project.join(".agents/skills/.system"));
         assert!(Codex.skill_observations(Scope::Project, home, None).is_empty());
+    }
+
+    #[test]
+    fn history_association_is_unavailable() {
+        let facet = Codex.history_association().expect("关联由适配器声明");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&Codex);
+        let published = published.association.expect("有使用记录就发布关联");
+        assert_eq!(published.state, "unavailable");
+        assert_eq!(published.reason, facet.reason);
+        assert_eq!(Codex.descriptor().history.state, "available");
     }
 }

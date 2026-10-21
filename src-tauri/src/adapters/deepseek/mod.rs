@@ -234,6 +234,14 @@ impl CliAdapter for DeepSeek {
     fn history_supported(&self) -> bool {
         true
     }
+    // delegationDepth and agentPreset describe the harness preset, not a child
+    // session. parentId and source=agent are not links either.
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "unavailable",
+            reason: crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON,
+        })
+    }
     fn history_resume_version_supported(&self, _version: &str) -> bool {
         // No verified resume contract exists for the desktop form at all.
         false
@@ -542,6 +550,13 @@ mod tests {
         assert!(DeepSeek.supports_mcp());
         assert!(DeepSeek.supports_skills());
         assert!(DeepSeek.history_supported());
+        let facet = DeepSeek.history_association().expect("关联由适配器声明");
+        assert_eq!(facet.state, "unavailable");
+        assert_eq!(facet.reason, crate::adapters::HISTORY_ASSOCIATION_UNAVAILABLE_REASON);
+        let published = crate::adapters::PublishedDescriptor::from_adapter(&DeepSeek);
+        let published = published.association.expect("有使用记录就发布关联");
+        assert_eq!(published.state, "unavailable");
+        assert_eq!(published.reason, facet.reason);
         let descriptor = DeepSeek.descriptor();
         assert_eq!(descriptor.id, "deepseek");
         assert_eq!(descriptor.launch_form, LaunchForm::Desktop);
