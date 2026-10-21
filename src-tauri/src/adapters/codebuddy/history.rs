@@ -156,7 +156,7 @@ fn record_usage(
             output: Some(counts.output),
             cache_read: Some(counts.read),
             cache_write: Some(counts.write),
-            input_includes_cache: true,
+            input_includes_cache: true, attributions: Vec::new(),
         });
     }
 }

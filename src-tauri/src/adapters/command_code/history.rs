@@ -189,7 +189,7 @@ pub fn parse_controlled(
                             cache_read: Some(counts.read),
                             cache_write: Some(counts.write),
                             // Verified semantics: stored input excludes cache.
-                            input_includes_cache: false,
+                            input_includes_cache: false, attributions: Vec::new(),
                         });
                     }
                 }

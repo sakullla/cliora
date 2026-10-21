@@ -638,7 +638,7 @@ fn same_length_and_restored_mtime_still_refreshes_changed_content() {
 /// `counts` is (input, output, cache read, cache write).
 fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Option<u64>, Option<u64>), includes_cache: bool) -> UsageEvent {
     let (input, output, read, write) = counts;
-    UsageEvent { native_usage: None, request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
+    UsageEvent { native_usage: None, request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache, attributions: Vec::new() }
 }
 
 /// Stores a synthetic session through the same path a scan uses.
@@ -665,7 +665,7 @@ fn native_units_roundtrip_filter_group_deduplicate_and_export_without_token_pric
     let unit_event = |id: &str, at, value, original, billable| UsageEvent {
         native_usage: Some(NativeUsage { unit: "work_units".into(), value, original_value: original, billable }),
         id: id.into(), model: Some("synthetic-priced-model".into()), timestamp: Some(at), request_count: Some(1),
-        input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false,
+        input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
     };
     let first = unit_event("request-a", FIXTURE_DAY, 1.25, Some(2.5), Some(false));
     let id = store_events(&db, "future_native_units", "native-session", Some("synthetic-priced-model"), vec![first.clone(),
@@ -1943,5 +1943,232 @@ fn grok_equal_snapshots_keep_known_model_calls_and_dates_in_either_order() {
     assert!(!parsed.partial);
     assert_eq!(parsed.usage.iter().filter_map(|event| event.request_count).sum::<u64>(), 13);
     assert!(parsed.usage.iter().all(|event| event.timestamp == Some(FIXTURE_DAY+DAY)));
+}
+
+struct HistoryContractSecrets;
+
+impl crate::credentials::CredentialStore for HistoryContractSecrets {
+    fn put(&self, _id: &str, _secret: &str) -> Result<(), String> { Ok(()) }
+    fn get(&self, _id: &str) -> Result<String, String> { Err("missing".into()) }
+    fn delete(&self, _id: &str) -> Result<(), String> { Ok(()) }
+}
+
+fn transcript(id: &str, role: &str, text: &str) -> HistoryMessage {
+    HistoryMessage {
+        id: id.into(),
+        role: role.into(),
+        text: text.into(),
+        timestamp: Some(FIXTURE_DAY),
+        timestamp_source: MessageTimeSource::Native,
+        kind: HistoryMessageKind::Conversation,
+    }
+}
+
+#[test]
+fn parent_detail_keeps_attribution_and_child_bodies_out_of_list_search_report_and_export() {
+    use crate::adapters::qoder_cn::QODER_CN;
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    fs::create_dir_all(&project).unwrap();
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let native = "parent-native-1";
+    let source = HistorySource {
+        native_title: None,
+        path: temp.path().join("parent-log.jsonl"),
+        native_id: Some(native.into()),
+        fingerprint: "fixture".into(),
+        fingerprint_error: None,
+    };
+    let mut parsed = ParsedSession::new();
+    parsed.native_id = Some(native.into());
+    parsed.title = "父会话标题".into();
+    parsed.cwd = Some(project.display().to_string());
+    parsed.model = Some("parent-model".into());
+    parsed.updated_at = Some(FIXTURE_DAY);
+    parsed.messages.push(transcript("parent-msg", "user", "父会话正文可见"));
+    parsed.usage.push(UsageEvent {
+        native_usage: None,
+        request_count: Some(1),
+        id: "shared-call".into(),
+        model: Some("parent-model".into()),
+        timestamp: Some(FIXTURE_DAY),
+        input: Some(3),
+        output: Some(1),
+        cache_read: None,
+        cache_write: None,
+        input_includes_cache: false,
+        attributions: vec![
+            UsageAttribution { kind: AgentKind::Main, name: None, session_key: None },
+            UsageAttribution { kind: AgentKind::Subagent, name: Some("reviewer".into()), session_key: Some("child-review".into()) },
+        ],
+    });
+    parsed.children = vec![
+        ChildSession {
+            key: "child-review".into(),
+            name: Some("reviewer".into()),
+            readable: true,
+            messages: vec![transcript("child-msg", "assistant", "CHILD_ONLY_SENTINEL")],
+            children: vec![ChildSession {
+                key: "grandchild-node".into(),
+                name: None,
+                readable: true,
+                messages: vec![transcript("grand-msg", "assistant", "GRANDCHILD_ONLY_SENTINEL")],
+                children: Vec::new(),
+            }],
+        },
+        ChildSession {
+            key: "child-missing".into(),
+            name: Some("   ".into()),
+            readable: false,
+            messages: vec![transcript("missing-msg", "assistant", "UNREADABLE_BODY_SENTINEL")],
+            children: Vec::new(),
+        },
+    ];
+    db.with_connection(|conn| store_session(conn, "qoder_cn", &source, &parsed, &HashMap::new())).unwrap();
+    let id = stable_id("qoder_cn", &source.key());
+    let saved = detail(&db, &id).unwrap();
+    assert_eq!(saved.session.native_id.as_deref(), Some(native));
+    assert_eq!(saved.session.message_count, 1);
+    assert_eq!(saved.messages.len(), 1);
+    assert_eq!(saved.messages[0].text, "父会话正文可见");
+    assert!(saved.messages.iter().all(|message| !message.text.contains("SENTINEL")));
+    assert_eq!(saved.usage.len(), 1);
+    assert_eq!(saved.usage[0].attributions.len(), 2);
+    assert_eq!(saved.usage[0].attributions[0].kind, AgentKind::Main);
+    assert!(saved.usage[0].attributions[0].session_key.is_none());
+    assert_eq!(saved.usage[0].attributions[1].kind, AgentKind::Subagent);
+    assert_eq!(saved.usage[0].attributions[1].name.as_deref(), Some("reviewer"));
+    assert_eq!(saved.usage[0].attributions[1].session_key.as_deref(), Some("child-review"));
+    assert_eq!(saved.children.len(), 2);
+    assert_eq!(saved.children[0].name.as_deref(), Some("reviewer"));
+    assert_eq!(saved.children[0].messages[0].text, "CHILD_ONLY_SENTINEL");
+    assert_eq!(saved.children[0].children[0].key, "grandchild-node");
+    assert!(saved.children[0].children[0].name.is_none());
+    assert_eq!(saved.children[0].children[0].messages[0].text, "GRANDCHILD_ONLY_SENTINEL");
+    assert!(!saved.children[1].readable);
+    assert!(saved.children[1].messages.is_empty());
+    assert!(saved.children[1].name.is_none());
+    assert_ne!(saved.children[1].name.as_deref(), Some(saved.children[1].key.as_str()));
+    let (sessions, usage_rows, messages_json, children_json): (i64, i64, String, String) = db.with_connection(|conn| {
+        let sessions = conn.query_row("SELECT COUNT(*) FROM history_sessions", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+        let usage_rows = conn.query_row("SELECT COUNT(*) FROM history_usage", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+        let messages_json = conn.query_row("SELECT messages_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
+        let children_json = conn.query_row("SELECT children_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
+        Ok((sessions, usage_rows, messages_json, children_json))
+    }).unwrap();
+    assert_eq!((sessions, usage_rows), (1, 1));
+    assert!(!messages_json.contains("SENTINEL"));
+    assert!(children_json.contains("CHILD_ONLY_SENTINEL"));
+    assert!(children_json.contains("GRANDCHILD_ONLY_SENTINEL"));
+    assert!(!children_json.contains("UNREADABLE_BODY_SENTINEL"));
+    let listed = list(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, id);
+    assert_eq!(listed[0].title, "父会话标题");
+    for needle in ["CHILD_ONLY_SENTINEL", "GRANDCHILD_ONLY_SENTINEL", "UNREADABLE_BODY_SENTINEL", "reviewer"] {
+        assert!(list(&db, &HistoryFilter { search: Some(needle.into()), ..Default::default() }).unwrap().is_empty(), "{needle}");
+        let report = usage_report(&db, &HistoryFilter { search: Some(needle.into()), ..Default::default() }).unwrap();
+        assert_eq!((report.totals.sessions, report.totals.usage_records, report.totals.requests), (0, 0, 0), "{needle}");
+    }
+    assert_eq!(list(&db, &HistoryFilter { search: Some("父会话正文可见".into()), ..Default::default() }).unwrap().len(), 1);
+    set_favorite(&db, &id, true).unwrap();
+    let favorites = list(&db, &HistoryFilter { favorite_only: true, ..Default::default() }).unwrap();
+    assert_eq!(favorites.len(), 1);
+    assert_eq!(favorites[0].id, id);
+    assert!(list(&db, &HistoryFilter { favorite_only: true, search: Some("CHILD_ONLY_SENTINEL".into()), ..Default::default() }).unwrap().is_empty());
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!((report.totals.sessions, report.totals.usage_records, report.totals.requests), (1, 1, 1));
+    assert_eq!(report.top_sessions.len(), 1);
+    assert_eq!(report.top_sessions[0].id, id);
+    assert_eq!(report.top_sessions[0].title, "父会话标题");
+    assert!(detail(&db, "child-review").is_err());
+    let terminal = temp.path().join("fixture-terminal");
+    fs::write(&terminal, "").unwrap();
+    crate::launch::set_custom_terminal(&db, terminal.display().to_string(), vec!["{script}".into()]).unwrap();
+    let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap().with_fixture_installation("qoder_cn", "1.2.0");
+    let command = copy_resume_command(&db, &registry, temp.path(), &id, LaunchMode::Normal).unwrap();
+    assert!(command.contains(native), "{command}");
+    assert!(!command.contains("child-review"), "{command}");
+    assert!(!command.contains("grandchild-node"), "{command}");
+    let json_path = temp.path().join("parent.json");
+    export(&db, &id, "json", &json_path).unwrap();
+    let json_text = fs::read_to_string(&json_path).unwrap();
+    let json: Value = serde_json::from_str(&json_text).unwrap();
+    assert!(json.get("children").is_none());
+    assert!(!json_text.contains("SENTINEL"));
+    assert_eq!(json["usage"][0]["attributions"][0]["kind"], "main");
+    assert_eq!(json["usage"][0]["attributions"][1]["kind"], "subagent");
+    assert_eq!(json["usage"][0]["attributions"][1]["name"], "reviewer");
+    assert_eq!(json["usage"][0]["attributions"][1]["sessionKey"], "child-review");
+    assert_eq!(json["session"]["nativeId"], native);
+    let md_path = temp.path().join("parent.md");
+    export(&db, &id, "markdown", &md_path).unwrap();
+    let md = fs::read_to_string(&md_path).unwrap();
+    assert!(md.contains("归属：主代理"));
+    assert!(md.contains("归属：子代理：reviewer"));
+    assert!(md.contains("父会话正文可见"));
+    assert!(md.contains(native));
+    assert!(!md.contains("SENTINEL"));
+    assert!(!md.contains("child-review"));
+    let snapshot = crate::portable::collect_snapshot(&db, &HistoryContractSecrets, &registry).unwrap();
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    assert!(!encoded.contains("SENTINEL"));
+    assert!(!encoded.contains("reviewer"));
+    assert!(!encoded.contains("child-review"));
+    for entity in &snapshot.entities {
+        assert!(matches!(entity.kind(), "preferences" | "profile" | "common" | "project" | "library" | "mcp" | "skill" | "account" | "binding"), "{}", entity.kind());
+    }
+    let (history_outbox, triggers): (i64, i64) = db.with_connection(|conn| {
+        let history_outbox = conn.query_row("SELECT COUNT(*) FROM sync_outbox WHERE entity_key LIKE 'history%' OR object_json LIKE '%SENTINEL%'", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+        let triggers = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('history_sessions','history_usage')", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+        Ok((history_outbox, triggers))
+    }).unwrap();
+    assert_eq!((history_outbox, triggers), (0, 0));
+    let mut duplicated = parsed.clone();
+    duplicated.children.push(duplicated.children[0].clone());
+    let duplicate = db.with_connection(|conn| store_session(conn, "qoder_cn", &source, &duplicated, &HashMap::new())).unwrap_err();
+    assert!(duplicate.contains("子会话内部键重复"), "{duplicate}");
+    let mut blank = parsed.clone();
+    blank.children[0].key = " ".into();
+    let invalid = db.with_connection(|conn| store_session(conn, "qoder_cn", &source, &blank, &HashMap::new())).unwrap_err();
+    assert!(invalid.contains("子会话内部键无效"), "{invalid}");
+    assert_eq!(detail(&db, &id).unwrap().children.len(), 2);
+}
+
+#[test]
+fn legacy_rows_without_association_fields_are_unknown_and_have_no_jump() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("legacy.db");
+    let db = Database::open(&path).unwrap();
+    let id = store_events(&db, "codex", "legacy-parent", Some("gpt-5"), vec![event("legacy-request", Some("gpt-5"), FIXTURE_DAY, (4, 1, None, None), false)]);
+    db.with_connection(|conn| {
+        let usage: String = conn.query_row("SELECT usage_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
+        assert!(!usage.contains("attributions"), "{usage}");
+        conn.execute_batch("ALTER TABLE history_sessions DROP COLUMN children_json; PRAGMA user_version = 23;").map_err(|error| error.to_string())?;
+        Ok(())
+    }).unwrap();
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    let saved = detail(&db, &id).unwrap();
+    assert!(saved.children.is_empty());
+    assert_eq!(saved.usage[0].attributions, vec![UsageAttribution { kind: AgentKind::Unknown, name: None, session_key: None }]);
+    let (usage_rows, children_json): (i64, String) = db.with_connection(|conn| {
+        let usage_rows = conn.query_row("SELECT COUNT(*) FROM history_usage WHERE session_id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
+        let children_json = conn.query_row("SELECT children_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
+        Ok((usage_rows, children_json))
+    }).unwrap();
+    assert_eq!(usage_rows, 1);
+    assert_eq!(children_json, "[]");
+    assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 1);
+    let json_path = temp.path().join("legacy.json");
+    export(&db, &id, "json", &json_path).unwrap();
+    let json: Value = serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+    assert!(json.get("children").is_none());
+    assert_eq!(json["usage"][0]["attributions"][0]["kind"], "unknown");
+    assert!(json["usage"][0]["attributions"][0].get("sessionKey").is_none());
+    assert!(json["usage"][0]["attributions"][0].get("name").is_none());
+    let md_path = temp.path().join("legacy.md");
+    export(&db, &id, "markdown", &md_path).unwrap();
+    assert!(fs::read_to_string(md_path).unwrap().contains("归属：未知"));
 }
 

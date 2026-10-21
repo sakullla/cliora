@@ -228,7 +228,7 @@ fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, step: &Va
         output: Some(completion),
         cache_read: Some(cached),
         cache_write: Some(cache_write),
-        input_includes_cache: true,
+        input_includes_cache: true, attributions: Vec::new(),
     });
 }
 

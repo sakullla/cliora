@@ -282,7 +282,7 @@ pub fn parse_controlled(
                         cache_write: Some(event.cache_write),
                         // Verified [RE] semantics: field 2 counts only the
                         // uncached share; cache read/write are separate fields.
-                        input_includes_cache: false,
+                        input_includes_cache: false, attributions: Vec::new(),
                     });
                 }
                 Err(Mismatch) => session.partial = true,

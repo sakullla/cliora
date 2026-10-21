@@ -289,7 +289,7 @@ fn read_messages(
             cache_read: Some(counts.read),
             cache_write: Some(counts.write),
             // Verified source semantics: input excludes cache read/write.
-            input_includes_cache: false,
+            input_includes_cache: false, attributions: Vec::new(),
         });
     }
     Ok(())
@@ -441,7 +441,7 @@ pub fn parse_controlled(
                         output: Some(counts.output),
                         cache_read: Some(counts.read),
                         cache_write: Some(counts.write),
-                        input_includes_cache: false,
+                        input_includes_cache: false, attributions: Vec::new(),
                     });
                 }
             }

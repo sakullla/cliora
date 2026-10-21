@@ -280,7 +280,7 @@ fn push_usage(
             output: Some(counts.output),
             cache_read: Some(counts.read),
             cache_write: Some(counts.write),
-            input_includes_cache: false,
+            input_includes_cache: false, attributions: Vec::new(),
         });
     }
     true
@@ -376,7 +376,7 @@ fn reconcile(
         cache_read: Some(expected[1] - actual[1]),
         cache_write: Some(expected[2] - actual[2]),
         output: Some(expected[3] - actual[3]),
-        input_includes_cache: false,
+        input_includes_cache: false, attributions: Vec::new(),
     });
 }
 

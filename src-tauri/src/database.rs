@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 23 {
+        if version > 24 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -468,6 +468,20 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 23;")?;
             tx.commit()?;
         }
+        if version < 24 {
+            let tx = connection.transaction()?;
+            // Child bodies stay out of messages_json. Old rows get an empty list and are not backfilled.
+            let columns = {
+                let mut statement = tx.prepare("PRAGMA table_info(history_sessions)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if !columns.iter().any(|column| column == "children_json") {
+                tx.execute_batch("ALTER TABLE history_sessions ADD COLUMN children_json TEXT NOT NULL DEFAULT '[]';")?;
+            }
+            tx.execute_batch("PRAGMA user_version = 24;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -700,7 +714,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 23);
+            assert_eq!(version, 24);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

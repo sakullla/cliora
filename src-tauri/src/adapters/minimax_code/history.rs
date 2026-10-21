@@ -304,7 +304,7 @@ fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, message: 
         output: Some(output),
         cache_read: Some(read),
         cache_write: Some(write),
-        input_includes_cache: false,
+        input_includes_cache: false, attributions: Vec::new(),
     });
 }
 

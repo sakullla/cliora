@@ -239,7 +239,7 @@ pub fn parse_controlled(
                     output: Some(counts.output),
                     cache_read: Some(counts.read),
                     cache_write: Some(counts.write),
-                    input_includes_cache: true,
+                    input_includes_cache: true, attributions: Vec::new(),
                 });
             }
             // `token_count` repeats the record above; it is only the source of truth
@@ -289,7 +289,7 @@ pub fn parse_controlled(
                     output: Some(delta.output),
                     cache_read: Some(delta.read),
                     cache_write: Some(delta.write),
-                    input_includes_cache: true,
+                    input_includes_cache: true, attributions: Vec::new(),
                 });
             }
             _ => {}

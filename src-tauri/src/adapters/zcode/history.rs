@@ -323,7 +323,7 @@ fn parse_internal(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Resul
                 cache_write: Some(counts.write),
                 // computed_total_tokens = input_tokens + output_tokens, so the
                 // cached share is inside input_tokens.
-                input_includes_cache: true,
+                input_includes_cache: true, attributions: Vec::new(),
             });
         }
     }
@@ -603,7 +603,7 @@ fn parse_rollout(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
             output: Some(event.counts.output),
             cache_read: Some(event.counts.read),
             cache_write: Some(event.counts.write),
-            input_includes_cache: true,
+            input_includes_cache: true, attributions: Vec::new(),
         })
         .collect();
     session.finish(source)
