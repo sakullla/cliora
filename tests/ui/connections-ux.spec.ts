@@ -84,7 +84,8 @@ test('MCP and Skill tabs share one heading and one add action in the head and em
   // The empty state embeds an entry with the same action as the head button.
   await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(2);
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Skill', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Skill', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Skill', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(2);
 });
 
