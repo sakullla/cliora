@@ -258,8 +258,16 @@ fn agent_wires(session: &Path, cancelled: &dyn Fn() -> bool) -> Result<AgentList
                 Ok(false) => {}
                 Err(error) => return Err(error),
             }
-        } else if wire.is_file() && !wire.is_symlink() {
-            wires.push(wire);
+        } else {
+            // NotFound and non-files are absent. Any other stat error keeps
+            // agents/{id}/wire.jsonl so the unread stamp and empty child survive.
+            match regular_file(&wire, cancelled) {
+                Ok(true) => wires.push(wire),
+                Ok(false) => {}
+                Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
+                Err(_) if agent.file_name().to_str().is_some() => wires.push(wire),
+                Err(_) => unlistable = true,
+            }
         }
     }
     wires.sort();
@@ -917,5 +925,110 @@ mod tests {
         assert!(child.readable);
         assert_eq!(child.messages[0].text, "子代理检索输入");
         assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
+    }
+
+    /// Denies traverse on one agent directory. Listing `agents` still returns
+    /// that directory, while `wire.jsonl` metadata fails with access denied.
+    /// Denying the file itself does not fail attribute reads on this Windows.
+    struct DenyStat { path: PathBuf }
+
+    impl DenyStat {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                let user = std::env::var("USERNAME").expect("USERNAME");
+                let status = std::process::Command::new("icacls").arg(path).arg("/inheritance:r").status().unwrap();
+                assert!(status.success(), "icacls inheritance");
+                let status = std::process::Command::new("icacls")
+                    .arg(path)
+                    .arg("/deny")
+                    .arg(format!("{user}:(RX)"))
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "icacls deny");
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+            }
+            Self { path: path.to_path_buf() }
+        }
+    }
+
+    impl Drop for DenyStat {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/reset").status();
+                let _ = std::process::Command::new("icacls").arg(&self.path).arg("/inheritance:e").status();
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o644));
+            }
+        }
+    }
+
+    #[test]
+    fn child_wire_stat_failure_keeps_the_named_unread_node() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = session_tree(temp.path());
+        std::fs::create_dir_all(session.join("agents/researcher")).unwrap();
+        std::fs::create_dir_all(session.join("agents/scribe")).unwrap();
+        std::fs::create_dir_all(session.join("agents/absent")).unwrap();
+        std::fs::create_dir_all(session.join("agents/not-a-file/wire.jsonl")).unwrap();
+        let blocked = session.join("agents/researcher/wire.jsonl");
+        std::fs::write(
+            &blocked,
+            concat!(
+                "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"被拒绝的子正文\"}]},\"time\":\"2026-08-02T03:23:00.000Z\"}\n",
+                "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:00.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":99,\"output\":1,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            session.join("agents/scribe/wire.jsonl"),
+            concat!(
+                "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"兄弟子正文\"}]},\"time\":\"2026-08-02T03:23:10.000Z\"}\n",
+                "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:10.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":3,\"output\":1,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+            ),
+        )
+        .unwrap();
+        let blocked_fingerprint = {
+            let _deny = DenyStat::new(&session.join("agents/researcher"));
+            let stat_error = fs::symlink_metadata(&blocked).expect_err("测试必须让 wire.jsonl 的属性读取失败");
+            assert_ne!(stat_error.kind(), std::io::ErrorKind::NotFound, "{stat_error}");
+            let parent = sources(temp.path()).unwrap().remove(0);
+            assert!(parent.fingerprint_error.is_none(), "{:?}", parent.fingerprint_error);
+            assert!(
+                parent.fingerprint.contains("agents") && parent.fingerprint.contains("unread:"),
+                "{}",
+                parent.fingerprint
+            );
+            let parsed = parse(&parent).unwrap();
+            assert!(parsed.messages.iter().any(|message| message.text.contains("示例项目")));
+            assert!(parsed.messages.iter().all(|message| {
+                !message.text.contains("被拒绝") && !message.text.contains("兄弟")
+            }));
+            assert_eq!(parsed.usage.len(), 3, "属性失败的子日志不新增用量：{:?}", parsed.usage);
+            let denied = parsed.children.iter().find(|child| child.key == "agents/researcher").unwrap();
+            assert!(!denied.readable);
+            assert!(denied.messages.is_empty() && denied.name.is_none() && denied.children.is_empty());
+            let sibling = parsed.children.iter().find(|child| child.key == "agents/scribe").unwrap();
+            assert!(sibling.readable);
+            assert_eq!(sibling.messages[0].text, "兄弟子正文");
+            assert!(parsed.children.iter().all(|child| child.key != "agents/absent" && child.key != "agents/not-a-file"));
+            parent.fingerprint
+        };
+        let parent = sources(temp.path()).unwrap().remove(0);
+        assert_ne!(parent.fingerprint, blocked_fingerprint, "属性恢复后父指纹必须变化");
+        let parsed = parse(&parent).unwrap();
+        let denied = parsed.children.iter().find(|child| child.key == "agents/researcher").unwrap();
+        assert!(denied.readable);
+        assert_eq!(denied.messages[0].text, "被拒绝的子正文");
+        assert_eq!(parsed.usage.len(), 4, "没有原生请求 id 的子日志用量保持分开");
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("被拒绝") && !message.text.contains("兄弟")));
     }
 }
