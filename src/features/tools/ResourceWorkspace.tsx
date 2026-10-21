@@ -458,7 +458,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const entryOrigin = skillOrigin(item);
     const loadedWithPlugin = entryOrigin === 'plugin' && item.pluginEnabled === true && item.state !== 'unreadable';
     const current = external?.path === item.path || (!external && !!item.packageId && item.packageId === selectedId);
-    const summary = item.detail.trim();
+    // Scans and fixtures can omit detail. A missing or blank value is not a summary.
+    const summary = typeof item.detail === 'string' ? item.detail.trim() : '';
     return <button type="button" key={item.path} className={styles.item} aria-current={current || undefined} title={displayPath(item.path)} onClick={() => void openNative(item)}>
       <span className={styles.itemTitle}><strong>{item.name}</strong></span>
       {summary && <span className={styles.itemSummary}>{summary}</span>}
