@@ -6,7 +6,9 @@
 //! carry no conversation. User text is the `<user_query>` body. A leading
 //! `<timestamp>` is the user message time; later replies in that turn reuse it.
 //! The file has no model and no token counters, so those stay unknown and are
-//! not stored as zero. Nested `subagents` files are not separate sessions.
+//! not stored as zero. Nested `subagents/*.jsonl` files are not separate
+//! sessions. A file is a child body only when every row matches this parent
+//! shape; any other shape is an unreadable child and adds no usage.
 //!
 //! The project directory is recorded only when a `workspace.json` folder URI
 //! slugs to that project directory. The login database is not opened.
@@ -20,10 +22,11 @@ use serde_json::Value;
 
 use crate::history::{
     check_cancelled, read_jsonl_filtered, source_fingerprint_controlled, text_content,
-    valid_native_id, HistorySource, MessageTimeSource, ParsedSession, EMPTY_SESSION, MAX_SOURCES,
+    valid_native_id, ChildSession, HistoryMessage, HistoryMessageKind, HistorySource,
+    MessageTimeSource, ParsedSession, EMPTY_SESSION, MAX_SOURCES,
 };
 
-const PARSER_VERSION: &str = "cursor-agent-transcript-v2";
+const PARSER_VERSION: &str = "cursor-agent-transcript-v3";
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
@@ -73,8 +76,8 @@ pub fn sources_controlled(
             if file_meta.file_type().is_symlink() || !file_meta.is_file() {
                 continue;
             }
-            let (fingerprint, fingerprint_error) = match source_fingerprint_controlled(&path, cancelled) {
-                Ok(value) => (format!("{PARSER_VERSION}|{value}"), None),
+            let (fingerprint, fingerprint_error) = match transcript_fingerprint(&path, cancelled) {
+                Ok(value) => (value, None),
                 Err(error) => (String::new(), Some(error)),
             };
             result.push(HistorySource {
@@ -141,6 +144,7 @@ fn parse_with(
         }
     })?;
     session.partial |= partial;
+    attach_subagents(&mut session, &source.path, cancelled)?;
     if session.messages.is_empty() {
         return Err(if session.partial {
             "未识别到可展示的会话记录".into()
@@ -149,6 +153,199 @@ fn parse_with(
         });
     }
     session.finish(source)
+}
+
+fn transcript_fingerprint(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    let parent = source_fingerprint_controlled(path, cancelled)?;
+    let mut rows = Vec::new();
+    if let Some(directory) = path.parent() {
+        let subagents = directory.join("subagents");
+        if is_real_dir(&subagents) {
+            for entry in fs::read_dir(&subagents).map_err(|error| error.to_string())? {
+                check_cancelled(cancelled)?;
+                let entry = entry.map_err(|error| error.to_string())?;
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if !name.ends_with(".jsonl") {
+                    continue;
+                }
+                let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    continue;
+                }
+                let stamp = source_fingerprint_controlled(&entry.path(), cancelled)?;
+                rows.push(format!("{name}:{stamp}"));
+            }
+        }
+    }
+    rows.sort();
+    Ok(format!("{PARSER_VERSION}|{parent}|{}", rows.join("|")))
+}
+
+fn subagent_files(session_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = session_dir.join("subagents");
+    if !is_real_dir(&root) {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !name.ends_with(".jsonl") {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        files.push(entry.path());
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn child_key(path: &Path) -> Option<String> {
+    let key = path.file_stem()?.to_str()?.trim().to_owned();
+    if key.is_empty() || key.len() > 512 || key.chars().any(|ch| ch.is_control()) {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+/// Parent rows are `{role, message:{content:[{type,text|name,input}]}}` or
+/// `{type:"turn_ended", status?}`. Any other key or part is not this shape.
+fn fixed_transcript_text(row: &Value) -> Result<Option<(&str, String)>, ()> {
+    let object = row.as_object().ok_or(())?;
+    if object.contains_key("type") {
+        if object.get("type").and_then(Value::as_str) != Some("turn_ended") {
+            return Err(());
+        }
+        if object.keys().any(|key| key != "type" && key != "status") {
+            return Err(());
+        }
+        if object.get("status").is_some_and(|status| !status.is_string()) {
+            return Err(());
+        }
+        return Ok(None);
+    }
+    let role = object.get("role").and_then(Value::as_str).ok_or(())?;
+    if role != "user" && role != "assistant" {
+        return Err(());
+    }
+    if object.len() != 2 || !object.contains_key("message") {
+        return Err(());
+    }
+    let message = object.get("message").and_then(Value::as_object).ok_or(())?;
+    if message.len() != 1 {
+        return Err(());
+    }
+    let content = message.get("content").and_then(Value::as_array).ok_or(())?;
+    for part in content {
+        let part = part.as_object().ok_or(())?;
+        match part.get("type").and_then(Value::as_str).ok_or(())? {
+            "text" => {
+                if part.keys().any(|key| key != "type" && key != "text") {
+                    return Err(());
+                }
+                if part.get("text").is_some_and(|text| !text.is_string()) {
+                    return Err(());
+                }
+            }
+            "tool_use" => {
+                if part.keys().any(|key| key != "type" && key != "name" && key != "input") {
+                    return Err(());
+                }
+                if part.get("name").is_some_and(|name| !name.is_string()) {
+                    return Err(());
+                }
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(Some((role, message_text(object.get("message").unwrap()))))
+}
+
+fn read_child_body(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistoryMessage>, ()> {
+    let source = HistorySource {
+        native_title: None,
+        path: path.to_path_buf(),
+        native_id: None,
+        fingerprint: String::new(),
+        fingerprint_error: None,
+    };
+    let mut messages = Vec::new();
+    let mut turn = None;
+    let mut rejected = false;
+    let mut saw_row = false;
+    let partial = read_jsonl_filtered(&source, cancelled, |_| false, |index, row| {
+        if rejected {
+            return;
+        }
+        saw_row = true;
+        let Ok(parsed) = fixed_transcript_text(&row) else {
+            rejected = true;
+            return;
+        };
+        let Some((role, raw)) = parsed else {
+            return;
+        };
+        let (text, time, source) = if role == "user" {
+            let time = message_timestamp(&raw);
+            turn = time;
+            (user_query(&raw).unwrap_or_default(), time, MessageTimeSource::Native)
+        } else {
+            (raw, turn, MessageTimeSource::Turn)
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        messages.push(HistoryMessage {
+            id: format!("line-{index}"),
+            role: role.to_owned(),
+            text,
+            timestamp: time,
+            timestamp_source: if time.is_some() { source } else { MessageTimeSource::Unknown },
+            kind: HistoryMessageKind::Conversation,
+        });
+    });
+    if partial.map_err(|_| ())? || rejected || !saw_row {
+        return Err(());
+    }
+    Ok(messages)
+}
+
+fn attach_subagents(
+    session: &mut ParsedSession,
+    transcript: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let Some(directory) = transcript.parent() else {
+        return Ok(());
+    };
+    for path in subagent_files(directory)? {
+        check_cancelled(cancelled)?;
+        let Some(key) = child_key(&path) else {
+            continue;
+        };
+        let (readable, messages) = match read_child_body(&path, cancelled) {
+            Ok(messages) => (true, messages),
+            Err(()) => (false, Vec::new()),
+        };
+        session.children.push(ChildSession {
+            key,
+            name: None,
+            messages,
+            readable,
+            children: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 fn is_real_dir(path: &Path) -> bool {
@@ -425,7 +622,7 @@ mod tests {
         let (path, source) = write_session(temp.path());
         let before = fs::read(&path).unwrap();
         assert_eq!(source.native_id.as_deref(), Some(SESSION_ID));
-        assert!(source.fingerprint.starts_with("cursor-agent-transcript-v2|"));
+        assert!(source.fingerprint.starts_with("cursor-agent-transcript-v3|"));
         let parsed = parse_with(&source, &[], &|| false).unwrap();
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(parsed.title, "修复会话列表");
@@ -454,6 +651,66 @@ mod tests {
             ]
         );
         assert_eq!(sources(temp.path()).unwrap().len(), 1);
+        assert!(parsed.usage.is_empty());
+        assert_eq!(parsed.children.len(), 1);
+        let child = &parsed.children[0];
+        assert_eq!(child.key, "99999999-9999-9999-9999-999999999999");
+        assert!(child.name.is_none());
+        assert!(child.readable && child.children.is_empty());
+        assert_eq!(child.messages.len(), 1);
+        assert_eq!(child.messages[0].role, "user");
+        assert_eq!(child.messages[0].text, "subagent");
+        assert!(parsed.messages.iter().all(|item| item.text != "subagent"));
+    }
+
+    #[test]
+    fn subagent_outside_the_parent_shape_is_unreadable_and_adds_no_usage() {
+        let temp = tempfile::tempdir().unwrap();
+        let (_path, source) = write_session(temp.path());
+        let subagents = source.path.parent().unwrap().join("subagents");
+        fs::write(
+            subagents.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"),
+            concat!(
+                "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<user_query>嵌套正文</user_query>\"}]}}\n",
+                "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"同形状应答\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"path\":\"a.rs\"}}]}}\n",
+                "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            subagents.join("bad-shape.jsonl"),
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"不该计用量\"}]},\"usage\":{\"input\":9}}\n",
+        )
+        .unwrap();
+        fs::write(subagents.join("notes.txt"), "subagent").unwrap();
+        let before = source.fingerprint.clone();
+        fs::write(
+            subagents.join("99999999-9999-9999-9999-999999999999.jsonl"),
+            b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"changed\"}]}}\n",
+        )
+        .unwrap();
+        let source = sources(temp.path()).unwrap().into_iter().next().unwrap();
+        assert_ne!(before, source.fingerprint);
+        assert_eq!(sources(temp.path()).unwrap().len(), 1);
+        let parsed = parse(&source).unwrap();
+        assert!(parsed.usage.is_empty());
+        assert!(parsed.messages.iter().any(|item| item.text == "修复会话列表"));
+        assert!(parsed.messages.iter().all(|item| item.text != "嵌套正文" && item.text != "不该计用量"));
+        let nested = parsed
+            .children
+            .iter()
+            .find(|child| child.key == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+            .unwrap();
+        assert!(nested.readable && nested.name.is_none());
+        assert_eq!(
+            nested.messages.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(),
+            vec!["嵌套正文", "同形状应答"]
+        );
+        let bad = parsed.children.iter().find(|child| child.key == "bad-shape").unwrap();
+        assert!(!bad.readable);
+        assert!(bad.messages.is_empty());
+        assert!(bad.name.is_none());
+        assert!(parsed.children.iter().all(|child| child.key != "notes"));
     }
 
     #[test]

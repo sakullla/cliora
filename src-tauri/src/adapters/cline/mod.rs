@@ -294,6 +294,12 @@ impl CliAdapter for Cline {
     fn history_supported(&self) -> bool {
         true
     }
+    fn history_association(&self) -> Option<Facet> {
+        Some(Facet {
+            state: "available",
+            reason: "可从父会话打开子代理 messages 正文；没有原生请求 id 的用量按该文件路径分开归属",
+        })
+    }
     fn history_resume_version_supported(&self, version: &str) -> bool {
         // Schema evidence covers 3.0.x; allow ordinary movement inside 3.
         version.trim().trim_start_matches('v').starts_with("3.")
@@ -582,6 +588,9 @@ mod tests {
     #[test]
     fn delivered_dimensions_declare_only_verified_ports() {
         assert!(Cline.history_supported());
+        let association = Cline.history_association().unwrap();
+        assert_eq!(association.state, "available");
+        assert!(!association.reason.is_empty());
         assert!(Cline.supports_mcp());
         assert!(Cline.supports_skills());
         assert!(Cline.configuration().is_none());

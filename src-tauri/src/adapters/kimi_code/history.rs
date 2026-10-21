@@ -16,8 +16,9 @@ use super::config_dir;
 use crate::history::usage;
 use crate::history::{
     check_cancelled, read_jsonl_filtered, source_fingerprint, source_fingerprint_controlled,
-    text_content, timestamp, valid_native_id, HistorySource, ParsedSession, UsageEvent,
-    MAX_SOURCES,
+    text_content, timestamp, valid_native_id, AgentKind, ChildSession, HistoryMessage,
+    HistoryMessageKind, HistorySource, MessageTimeSource, ParsedSession, UsageAttribution,
+    UsageEvent, MAX_SOURCES,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -73,7 +74,7 @@ fn sources_with(
             let checked = parts
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
-                .map(|parts| format!("kimi-session-v3|{}", parts.join("|")));
+                .map(|parts| format!("kimi-session-v4|{}", parts.join("|")));
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -134,6 +135,39 @@ struct AssistantTurn {
     text: String,
 }
 
+/// Verified wires have no agent display name. The directory name stays a path key only.
+fn push_child_message(
+    messages: &mut Vec<HistoryMessage>,
+    id: String,
+    role: &str,
+    text: String,
+    time: Option<i64>,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    messages.push(HistoryMessage {
+        id,
+        role: role.to_owned(),
+        text,
+        timestamp: time,
+        timestamp_source: if time.is_some() {
+            MessageTimeSource::Native
+        } else {
+            MessageTimeSource::Unknown
+        },
+        kind: HistoryMessageKind::Conversation,
+    });
+}
+
+fn agent_attribution(main: bool, child_key: Option<&str>) -> Vec<UsageAttribution> {
+    vec![UsageAttribution {
+        kind: if main { AgentKind::Main } else { AgentKind::Subagent },
+        name: None,
+        session_key: child_key.map(str::to_owned),
+    }]
+}
+
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
     parse_controlled(source, &|| false)
 }
@@ -166,8 +200,15 @@ pub fn parse_controlled(
     session.updated_at = state.get("updatedAt").and_then(timestamp);
     for wire in agent_wires(&source.path, cancelled)? {
         check_cancelled(cancelled)?;
-        let is_main = wire.parent().and_then(Path::file_name).and_then(|name| name.to_str())
-            == Some("main");
+        let agent_dir = wire
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        let is_main = agent_dir == Some("main");
+        // Non-main wires are direct children. parentAgentId is not a verified link.
+        let child_key = agent_dir
+            .filter(|_| !is_main)
+            .map(|name| format!("agents/{name}"));
         let wire_source = HistorySource { native_title: None,
             path: wire,
             native_id: None,
@@ -175,6 +216,7 @@ pub fn parse_controlled(
             fingerprint_error: None,
         };
         let mut assistant_turns: Vec<AssistantTurn> = Vec::new();
+        let mut child_messages: Vec<HistoryMessage> = Vec::new();
         let mut usage_index = 0usize;
         let read = read_jsonl_filtered(&wire_source, cancelled, |prefix| {
             // Skip the known repeated request/context snapshots before JSON
@@ -189,23 +231,24 @@ pub fn parse_controlled(
                     session.model = row.get("modelAlias").or_else(|| row.get("model"))
                         .and_then(Value::as_str).map(str::to_owned);
                 }
-                // The user conversation lives in the main agent stream.
-                Some("context.append_message") if is_main => {
+                // Parent transcript is the main agent stream. Other streams stay on the child.
+                Some("context.append_message") => {
                     let message = row.get("message").unwrap_or(&Value::Null);
                     if message.get("role").and_then(Value::as_str) == Some("user") {
                         let text = message
                             .get("content")
                             .map(text_content)
                             .unwrap_or_default();
-                        session.add_message(
-                            format!("line-{line}"),
-                            "user",
-                            text,
-                            row.get("time").and_then(timestamp),
-                        );
+                        let id = format!("line-{line}");
+                        let time = row.get("time").and_then(timestamp);
+                        if is_main {
+                            session.add_message(id, "user", text, time);
+                        } else if child_key.is_some() {
+                            push_child_message(&mut child_messages, id, "user", text, time);
+                        }
                     }
                 }
-                Some("context.append_loop_event") if is_main => {
+                Some("context.append_loop_event") => {
                     let event = row.get("event").unwrap_or(&Value::Null);
                     if event.get("type").and_then(Value::as_str) == Some("content.part")
                         && event
@@ -239,9 +282,8 @@ pub fn parse_controlled(
                         }
                     }
                 }
-                // Usage records appear in every agent stream; subagent calls
-                // belong to the session total. inputOther excludes the cache
-                // buckets, so the event is recorded with a split breakdown.
+                // No native request id: each usage.record stays its own event.
+                // inputOther excludes the cache buckets.
                 Some("usage.record") => {
                     let counts = usage::from_optional(
                         usage::field(row.get("usage").unwrap_or(&Value::Null), "inputOther"),
@@ -274,24 +316,54 @@ pub fn parse_controlled(
                         output: Some(counts.output),
                         cache_read: Some(counts.read),
                         cache_write: Some(counts.write),
-                        input_includes_cache: false, attributions: Vec::new(),
+                        input_includes_cache: false,
+                        attributions: agent_attribution(is_main, child_key.as_deref()),
                     });
                     usage_index += 1;
                 }
                 _ => {}
             }
         });
-        match read {
-            Ok(partial) => session.partial |= partial,
-            Err(_) => session.partial = true,
-        }
-        for (index, turn) in assistant_turns.into_iter().enumerate() {
-            session.add_message(
-                format!("{}:assistant-{index}", wire_source.key()),
-                "assistant",
-                turn.text,
-                turn.time,
-            );
+        let readable = match read {
+            Ok(partial) => {
+                session.partial |= partial;
+                true
+            }
+            Err(_) => {
+                session.partial = true;
+                false
+            }
+        };
+        if is_main {
+            for (index, turn) in assistant_turns.into_iter().enumerate() {
+                session.add_message(
+                    format!("{}:assistant-{index}", wire_source.key()),
+                    "assistant",
+                    turn.text,
+                    turn.time,
+                );
+            }
+        } else if let Some(key) = child_key {
+            if readable {
+                for (index, turn) in assistant_turns.into_iter().enumerate() {
+                    push_child_message(
+                        &mut child_messages,
+                        format!("{}:assistant-{index}", wire_source.key()),
+                        "assistant",
+                        turn.text,
+                        turn.time,
+                    );
+                }
+            } else {
+                child_messages.clear();
+            }
+            session.children.push(ChildSession {
+                key,
+                name: None,
+                messages: child_messages,
+                readable,
+                children: Vec::new(),
+            });
         }
     }
     check_cancelled(cancelled)?;
@@ -301,6 +373,7 @@ pub fn parse_controlled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::AgentKind;
 
     const WIRE_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/history/kimi-code-0.31.1-wire.jsonl");
@@ -377,6 +450,13 @@ mod tests {
         assert!(first.timestamp.is_some());
         let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
         assert_eq!(total, 13976 + 1104);
+        assert!(parsed.children.is_empty());
+        assert!(parsed.usage.iter().all(|event| {
+            event.attributions.len() == 1
+                && event.attributions[0].kind == AgentKind::Main
+                && event.attributions[0].name.is_none()
+                && event.attributions[0].session_key.is_none()
+        }));
     }
 
     #[test]
@@ -386,14 +466,19 @@ mod tests {
         std::fs::create_dir_all(session.join("agents/researcher")).unwrap();
         std::fs::write(
             session.join("agents/researcher/wire.jsonl"),
-            "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:00.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":42,\"output\":7,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+            concat!(
+                "{\"type\":\"context.append_message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"子代理检索输入\"}]},\"time\":\"2026-08-02T03:23:00.000Z\"}\n",
+                "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"turnId\":\"0\",\"part\":{\"type\":\"text\",\"text\":\"子代理检索结论\"}},\"time\":\"2026-08-02T03:23:30.000Z\"}\n",
+                "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:00.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":42,\"output\":7,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+                "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:05.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":8,\"output\":1,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+            ),
         )
         .unwrap();
         let source = sources(temp.path()).unwrap().remove(0);
         let parsed = parse(&source).unwrap();
-        // The main fixture wire contributes two usage events; the subagent
-        // stream's record must survive alongside them instead of overwriting.
-        assert_eq!(parsed.usage.len(), 3, "{:?}", parsed.usage);
+        // The main fixture wire contributes two usage events. Each subagent
+        // record stays beside them; nothing merges on a missing request id.
+        assert_eq!(parsed.usage.len(), 4, "{:?}", parsed.usage);
         let mut ids: Vec<&str> = parsed
             .usage
             .iter()
@@ -403,7 +488,28 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), parsed.usage.len(), "多 agent 流 usage 事件 id 不得冲突");
         let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
-        assert_eq!(total, 13976 + 1104 + 42, "子代理 token 应计入会话总量");
+        assert_eq!(total, 13976 + 1104 + 42 + 8, "子代理 token 应计入会话总量");
+        assert!(parsed.messages.iter().all(|message| !message.text.contains("子代理")));
+        assert_eq!(parsed.children.len(), 1);
+        let child = &parsed.children[0];
+        assert_eq!(child.key, "agents/researcher");
+        assert!(child.name.is_none(), "目录名不是已核对的显示名");
+        assert!(child.readable);
+        assert!(child.children.is_empty());
+        let child_text: Vec<&str> = child.messages.iter().map(|message| message.text.as_str()).collect();
+        assert_eq!(child_text, vec!["子代理检索输入", "子代理检索结论"]);
+        let sub: Vec<_> = parsed
+            .usage
+            .iter()
+            .filter(|event| event.attributions.iter().any(|item| item.kind == AgentKind::Subagent))
+            .collect();
+        assert_eq!(sub.len(), 2);
+        assert!(sub.iter().all(|event| {
+            event.attributions.len() == 1
+                && event.attributions[0].name.is_none()
+                && event.attributions[0].session_key.as_deref() == Some("agents/researcher")
+        }));
+        assert_ne!(sub[0].id, sub[1].id);
     }
 
     #[test]
@@ -430,7 +536,7 @@ mod tests {
         )
         .unwrap();
         let source = sources(temp.path()).unwrap().remove(0);
-        assert!(source.fingerprint.starts_with("kimi-session-v3|"));
+        assert!(source.fingerprint.starts_with("kimi-session-v4|"));
         let parsed = parse(&source).unwrap();
         assert_eq!(parsed.cwd.as_deref(), Some("C:/Legacy/project"));
     }
