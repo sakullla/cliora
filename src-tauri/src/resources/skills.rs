@@ -1231,6 +1231,9 @@ fn plugin_skill_directories(
     if scope == Scope::Project && !adapter.capability().project {
         return Ok(Vec::new());
     }
+    // The skill scan already entered the applied account. Plugin inventory has
+    // to use that same context; an empty id is the unbound account, and the
+    // check then reports a switch that the user did not make.
     let snapshot = match super::plugins::scan_resources(
         db,
         home,
@@ -1238,7 +1241,7 @@ fn plugin_skill_directories(
             tool_id: tool.to_owned(),
             scope,
             project_path: project_path.map(str::to_owned),
-            context_id: None,
+            context_id: crate::accounts::selection::current(tool).map(|ctx| ctx.id),
         },
     ) {
         Ok(snapshot) => snapshot,
