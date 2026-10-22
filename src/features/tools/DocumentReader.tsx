@@ -115,14 +115,14 @@ export function readModel(text: string, format: CodeFormat): ReadModel | null {
 /**
  * Rendered view of a Markdown or TOML document. Returns null when the format
  * has no reading view, so callers can show the source instead.
- * Double-clicking the text asks the caller to switch to editing.
+ * Reading stays selectable; editing is the explicit control in the header.
  */
-export function DocumentReader({ text, format, label, onEditRequest }: { text: string; format: CodeFormat; label: string; onEditRequest?: () => void }) {
+export function DocumentReader({ text, format, label }: { text: string; format: CodeFormat; label: string }) {
   const { t } = useTranslation();
   const model = useMemo(() => readModel(text, format), [text, format]);
   if (!model) return null;
   const empty = !model.description && !model.fields.length && !model.sections.length && !model.body.trim();
-  return <div className={styles.body} role="region" aria-label={label} tabIndex={0} title={onEditRequest ? t('common.document.editHint') : undefined} onDoubleClick={event => { if (!onEditRequest || (event.target as HTMLElement).closest('button')) return; event.preventDefault(); window.getSelection()?.removeAllRanges(); onEditRequest(); }}>
+  return <div className={styles.body} role="region" aria-label={label} tabIndex={0}>
     <div className={styles.readColumn}>
       {model.description && <p className={styles.lead}>{model.description}</p>}
       {model.fields.length > 0 && <dl className={styles.fieldCard} aria-label={t('common.document.properties')}>{model.fields.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}

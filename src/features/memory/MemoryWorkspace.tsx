@@ -766,7 +766,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       {propertiesPanel}
       {editing
         ? <div className={doc.editor}><CodeEditor key={current.key} label={t('common.memory.textLabel')} format="markdown" value={draft} onChange={setDraft} readOnly={busy} documentId={current.key} /></div>
-        : <div className={doc.body} role="region" aria-label={t('common.memory.textLabel')} tabIndex={0} title={can('edit') ? t('common.document.editHint') : undefined} onDoubleClick={event => { if (!can('edit') || busy || (event.target as HTMLElement).closest('button')) return; event.preventDefault(); window.getSelection()?.removeAllRanges(); void startEdit(); }}>
+        : <div className={doc.body} role="region" aria-label={t('common.memory.textLabel')} tabIndex={0}>
           {currentParsed
             ? currentParsed.displayBody.trim()
               ? <div className={doc.readColumn}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MarkdownView text={currentParsed.displayBody} resolve={target => !!linkedRow(target, current.store)} onOpen={target => { const row = linkedRow(target, current.store); if (row) void select(row); }} /></Suspense></div>

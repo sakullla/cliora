@@ -213,7 +213,7 @@ export function ModeSwitch({ mode, editable, disabled, onChange }: { mode: Docum
   const { t } = useTranslation();
   return <div className={styles.segmented} role="group" aria-label={t('common.document.modeLabel')}>
     <button type="button" aria-pressed={mode === 'read'} disabled={disabled} onClick={() => { if (mode !== 'read') onChange('read'); }}><Icon name="eye" size={14} />{t('common.document.read')}</button>
-    <button type="button" aria-pressed={mode === 'edit'} disabled={disabled} title={editable ? t('common.document.editHint') : undefined} onClick={() => { if (mode !== 'edit') onChange('edit'); }}><Icon name={editable ? 'pencil' : 'terminal'} size={14} />{editable ? t('common.document.edit') : t('common.document.source')}</button>
+    <button type="button" aria-pressed={mode === 'edit'} disabled={disabled} onClick={() => { if (mode !== 'edit') onChange('edit'); }}><Icon name={editable ? 'pencil' : 'terminal'} size={14} />{editable ? t('common.document.edit') : t('common.document.source')}</button>
   </div>;
 }
 

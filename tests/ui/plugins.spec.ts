@@ -105,7 +105,8 @@ test('native plugin lifecycle retains context, policy, ownership and load distin
   await expect(managed.getByRole('button', { name: '禁用' })).toBeDisabled(); await expect(managed.getByRole('button', { name: '卸载' })).toBeDisabled();
   await page.getByLabel('插件来源', { exact: true }).fill('second@market'); await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
   await page.getByRole('checkbox').check(); await page.getByRole('button', { name: '安装插件' }).click(); await expect(page.getByText('second@market', { exact: true })).toBeVisible();
-  await page.getByRole('checkbox').check(); await card.getByRole('button', { name: '更新' }).click();
+  await card.getByRole('button', { name: '更新' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
   await page.screenshot({ path: 'test-results/native-plugins.png', fullPage: true });
   await card.getByRole('button', { name: '卸载' }).click(); await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click(); await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
   const actions = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'operate_native_plugin').map((c: any) => c.args.request.action));

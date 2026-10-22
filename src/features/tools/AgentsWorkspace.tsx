@@ -263,7 +263,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       {opened.builtin
         ? <div className={doc.body}><div className={doc.readColumn}><p className={doc.lead}>{opened.description}</p>{opened.detail && <p className={doc.lead}>{opened.detail}</p>}</div></div>
         : mode === 'read' && readable
-          ? <DocumentReader text={content} format={opened.format} label={t('tools.agents.previewRegion')} onEditRequest={opened.readOnly || busy ? undefined : () => setMode('edit')} />
+          ? <DocumentReader text={content} format={opened.format} label={t('tools.agents.previewRegion')} />
           : <div className={doc.editor} data-readonly={opened.readOnly || mode === 'read' || undefined}><CodeEditor label={t('tools.agents.editorLabel')} format={opened.format} value={content} onChange={setContent} readOnly={busy || mode === 'read' || opened.readOnly} documentId={opened.id} /></div>}
       {restoreNode}
       {!opened.readOnly && !opened.builtin && (mode === 'edit' || dirty) && foot(() => void operate('save', opened), busy || !content.trim() || !dirty)}

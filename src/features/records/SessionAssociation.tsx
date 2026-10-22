@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import type { AssociationFacet } from '../../types/native';
-import type { ChildSession, UsageAttribution, UsageEvent } from '../../types/history';
+import type { ChildSession } from '../../types/history';
 import i18n from '../../i18n';
 import styles from './SessionAssociation.module.css';
 
@@ -10,6 +9,57 @@ const associationLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
 export function childTitle(name: string | null | undefined, unnamed: string) {
   const trimmed = name?.trim();
   return trimmed ? trimmed : unnamed;
+}
+
+function clip(text: string) {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 180 ? `${flat.slice(0, 180)}…` : flat;
+}
+
+/** Earliest native timestamp, so a delegation sits on the parent timeline. */
+export function childMoment(child: ChildSession) {
+  let earliest: number | null = null;
+  for (const message of child.messages) {
+    if (message.timestamp === null) continue;
+    if (earliest === null || message.timestamp < earliest) earliest = message.timestamp;
+  }
+  return earliest;
+}
+
+/** First user turn. Context rows are not the task the parent handed off. */
+export function childAsk(child: ChildSession) {
+  const message = child.messages.find((item) => item.role === 'user' && item.kind !== 'project_context' && item.kind !== 'environment_context');
+  return clip(message?.text ?? '');
+}
+
+/** Last assistant turn: what the sub-agent returned. */
+export function childReply(child: ChildSession) {
+  let reply = '';
+  for (const message of child.messages) {
+    if (message.role === 'assistant' && message.text.trim()) reply = message.text;
+  }
+  return clip(reply);
+}
+
+/** One direct child on the chat timeline. Unreadable transcripts stay closed. */
+export function ChildCard({ child, onOpen }: { child: ChildSession; onOpen: (key: string) => void }) {
+  const { t } = useTranslation();
+  const title = childTitle(child.name, t('records.association.unnamed'));
+  const ask = child.readable ? childAsk(child) : '';
+  const reply = child.readable ? childReply(child) : '';
+  const when = childMoment(child);
+  return <article className={styles.card} aria-label={t('records.association.card', { name: title })}>
+    <header>
+      <strong>{title}</strong>
+      <span>{t('records.association.children')}</span>
+      <time>{when === null ? t('records.format.timeUnknown') : new Date(when).toLocaleTimeString(associationLocale(), { hour: '2-digit', minute: '2-digit' })}</time>
+    </header>
+    {ask && <p className={styles.ask}>{ask}</p>}
+    {reply && <p className={styles.reply}><span>{t('records.association.reply')}</span>{reply}</p>}
+    {child.readable
+      ? <button type="button" onClick={() => onOpen(child.key)}>{t('records.association.open', { name: title })}</button>
+      : <p className={styles.closed}>{t('records.association.unreadable')}</p>}
+  </article>;
 }
 
 /** Direct-child path. Returns null when a key is missing so the caller can leave the child view. */
@@ -23,68 +73,4 @@ export function childTrail(children: readonly ChildSession[] | undefined, path: 
     level = next.children ?? [];
   }
   return trail;
-}
-
-function attributionText(item: UsageAttribution, main: string, subagent: string, unknown: string) {
-  const kind = item.kind === 'main' ? main : item.kind === 'subagent' ? subagent : unknown;
-  const name = item.name?.trim();
-  return name ? `${kind} · ${name}` : kind;
-}
-
-export function SessionAssociation({ association, usage, children, onOpen }: {
-  association: AssociationFacet | null | undefined;
-  usage: UsageEvent[];
-  children: readonly ChildSession[];
-  onOpen: (key: string) => void;
-}) {
-  const { t } = useTranslation();
-  const available = association?.state === 'available';
-  const unavailable = association?.state === 'unavailable';
-  const links = available ? children : [];
-  const showLinks = links.length > 0;
-  const showUsage = usage.length > 0;
-  if (!unavailable && !showLinks && !showUsage) return null;
-  const readable = new Map<string, ChildSession>();
-  for (const item of links) {
-    if (item.readable && item.key && !readable.has(item.key)) readable.set(item.key, item);
-  }
-  const unnamed = t('records.association.unnamed');
-  return <section className={styles.association} aria-label={t('records.association.label')}>
-    {unavailable && <p className={styles.notice} role="status">{association?.reason?.trim() || t('records.association.unavailable')}</p>}
-    {showLinks && <div>
-      <h3>{t('records.association.children')}</h3>
-      <ul className={styles.children} aria-label={t('records.association.children')}>
-        {links.map((item, index) => {
-          const title = childTitle(item.name, unnamed);
-          return <li key={`${item.key}:${index}`}>
-            {item.readable
-              ? <button type="button" onClick={() => onOpen(item.key)}>{title}</button>
-              : <span className={styles.unreadable}>{title}<small>{t('records.association.unreadable')}</small></span>}
-          </li>;
-        })}
-      </ul>
-    </div>}
-    {showUsage && <div>
-      <h3>{t('records.association.usage')}</h3>
-      <ul className={styles.usage} aria-label={t('records.association.usage')}>
-        {usage.map((event) => {
-          const marks = event.attributions?.length ? event.attributions : [null];
-          return <li key={event.id}>
-            <span>{event.model ?? t('records.page.modelUnknown')}</span>
-            <time>{event.timestamp === null ? t('records.format.timeUnknown') : new Date(event.timestamp).toLocaleString(associationLocale())}</time>
-            <div className={styles.marks}>
-              {marks.map((item, index) => {
-                const text = item ? attributionText(item, t('records.association.main'), t('records.association.subagent'), t('records.association.unknown')) : t('records.association.unknown');
-                const target = item?.sessionKey ? readable.get(item.sessionKey) : undefined;
-                return <span key={`${event.id}:${index}`}>
-                  <span>{text}</span>
-                  {target && <button type="button" onClick={() => onOpen(target.key)}>{t('records.association.open', { name: childTitle(target.name, unnamed) })}</button>}
-                </span>;
-              })}
-            </div>
-          </li>;
-        })}
-      </ul>
-    </div>}
-  </section>;
 }

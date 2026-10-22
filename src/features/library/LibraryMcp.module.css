@@ -71,8 +71,7 @@
 .badge { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; }
 .badge[data-accent] { background: var(--info-soft); color: var(--info); }
 .metaChip { position: relative; z-index: 1; display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 0 7px; border-radius: 99px; background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 18px; box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
-.command { display: block; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
-.command > i { margin-right: 6px; color: var(--accent); font-style: normal; font-weight: var(--fw-semibold); }
+.command { display: block; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; user-select: text; }
 
 .rowTargets { position: relative; z-index: 1; grid-area: targets; display: grid; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 /* Scope lines live in the shared marks stylesheet. Constrain them here so the

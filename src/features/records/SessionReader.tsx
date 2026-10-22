@@ -1,9 +1,10 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { HistoryDetail, HistoryMessage } from '../../types/history';
+import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/history';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
+import { ChildCard, childMoment } from './SessionAssociation';
 import { useDisclosure } from './useDisclosure';
 import i18n from '../../i18n';
 import styles from './SessionReader.module.css';
@@ -70,7 +71,30 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
   </article>;
 });
 
-export function SessionReader({ detail, toolName }: { detail: HistoryDetail; toolName: string }) {
+type TimelineRow = { kind: 'message'; item: HistoryMessage } | { kind: 'child'; child: ChildSession };
+
+/** Direct children land at their first message, then the parent's own turns continue. */
+function timelineRows(messages: HistoryMessage[], children: readonly ChildSession[]): TimelineRow[] {
+  const pending = children.map((child) => ({ child, at: childMoment(child) }))
+    .sort((left, right) => (left.at ?? Number.POSITIVE_INFINITY) - (right.at ?? Number.POSITIVE_INFINITY));
+  const rows: TimelineRow[] = [];
+  for (const item of messages) {
+    const stamp = item.timestamp;
+    while (pending.length && pending[0].at !== null && stamp !== null && pending[0].at <= stamp) {
+      rows.push({ kind: 'child', child: pending.shift()!.child });
+    }
+    rows.push({ kind: 'message', item });
+  }
+  for (const left of pending) rows.push({ kind: 'child', child: left.child });
+  return rows;
+}
+
+export function SessionReader({ detail, toolName, children = [], onOpenChild }: {
+  detail: HistoryDetail;
+  toolName: string;
+  children?: readonly ChildSession[];
+  onOpenChild?: (key: string) => void;
+}) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [findOpen, setFindOpen] = useState(false);
@@ -85,8 +109,9 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
   useEffect(() => {
     void import('./MessageMarkdown').catch(() => {});
   }, []);
-  const visible = useMemo(() => detail.messages.map((item) => ({ item })).filter(({ item }) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
-  const matches = useMemo(() => search ? visible.filter(({ item }) => item.text.toLowerCase().includes(search.toLowerCase())) : [], [visible, search]);
+  const visible = useMemo(() => detail.messages.filter((item) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
+  const rows = useMemo(() => timelineRows(visible, onlyQuestions ? [] : children), [visible, children, onlyQuestions]);
+  const matches = useMemo(() => search ? visible.filter((item) => item.text.toLowerCase().includes(search.toLowerCase())).map((item) => ({ item })) : [], [visible, search]);
   const selected = matches.length ? current % matches.length : 0;
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
@@ -110,7 +135,7 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
     revealMatch(matches[next].item.id);
   }
   function jumpLatest() {
-    const latest = visible[visible.length - 1]?.item;
+    const latest = visible[visible.length - 1];
     if (!latest) return;
     setRendered((old) => new Set([...old, latest.id]));
     requestAnimationFrame(() => {
@@ -140,15 +165,22 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
           if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }
         }} />
-        {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={14} /></button></>}
+        {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" className={styles.findClear} aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={16} /></button></>}
       </div>}
       {search && <small className={styles.findHint}>{t('records.reader.findHint')}</small>}
     </div>
     <div className={styles.messages}>
-      {visible.map(({ item }, visibleIndex) => {
-        const previous = visible[visibleIndex - 1]?.item;
-        const date = item.timestamp === null ? t('records.reader.dateUnknown') : new Date(item.timestamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
-        const changedDay = !previous || (previous.timestamp === null ? 'unknown' : new Date(previous.timestamp).toDateString()) !== (item.timestamp === null ? 'unknown' : new Date(item.timestamp).toDateString());
+      {rows.map((row, index) => {
+        const stampOf = (entry: TimelineRow) => entry.kind === 'message' ? entry.item.timestamp : childMoment(entry.child);
+        const stamp = stampOf(row);
+        const previous = index === 0 ? undefined : rows[index - 1];
+        const previousStamp = previous ? stampOf(previous) : undefined;
+        const date = stamp === null ? t('records.reader.dateUnknown') : new Date(stamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
+        const changedDay = previousStamp === undefined || (previousStamp === null ? 'unknown' : new Date(previousStamp).toDateString()) !== (stamp === null ? 'unknown' : new Date(stamp).toDateString());
+        if (row.kind === 'child') {
+          return <div key={`child:${row.child.key}:${index}`}>{changedDay && <div className={styles.dayDivider}>{date}</div>}{onOpenChild && <ChildCard child={row.child} onOpen={onOpenChild} />}</div>;
+        }
+        const item = row.item;
         return <div key={item.id}>{changedDay && <div className={styles.dayDivider}>{date}</div>}<Message item={item} toolId={detail.session.toolId} toolName={toolName} raw={raw} query={search} current={matches[selected]?.item.id === item.id} renderMarkdown={rendered.has(item.id)} /></div>;
       })}
       {!visible.length && <div className={styles.empty}><Icon name="records" size={24} /><h3>{onlyQuestions ? t('records.reader.emptyQuestions') : t('records.reader.emptyTitle')}</h3><p>{onlyQuestions ? t('records.reader.emptyQuestionsHint') : t('records.reader.emptyHint')}</p>{onlyQuestions && <button type="button" onClick={() => setOnlyQuestions(false)}>{t('records.reader.viewAll')}</button>}</div>}

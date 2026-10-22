@@ -9,7 +9,7 @@ use std::path::Path;
 
 impl PluginAdapter for Codex {
     fn capability(&self) -> PluginCapability {
-        let (version,sources,actions,project,detail) = ("0.160.0", "已配置市场中的 plugin@marketplace", vec!["install", "enable", "disable", "uninstall"], false, "原生安装/移除及已核验 plugins.<id>.enabled 配置；此版没有独立插件更新命令。重启会话后加载。");
+        let (version,sources,actions,project,detail) = ("0.160.0", "已配置市场中的 plugin@marketplace", vec!["install", "update", "enable", "disable", "uninstall"], false, "原生安装/移除及已核验 plugins.<id>.enabled 配置。Codex 没有单独的 plugin update 子命令，更新会再次执行 plugin add，从已配置市场安装当前版本。重启会话后加载。");
         PluginCapability {
             version,
             sources,
@@ -27,7 +27,7 @@ impl PluginAdapter for Codex {
         let args: Vec<&str> = vec![
             "plugin",
             match action {
-                "install" => "add",
+                "install" | "update" => "add",
                 "uninstall" => "remove",
                 _ => return Err("此操作使用配置事务".into()),
             },
@@ -82,5 +82,20 @@ impl PluginAdapter for Codex {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Codex;
+    use crate::adapters::plugins::PluginAdapter;
+
+    #[test]
+    fn update_reinstalls_from_the_configured_marketplace() {
+        assert!(Codex.capability().actions.contains(&"update"));
+        assert_eq!(
+            Codex.command_args("update", "demo@market", false).unwrap(),
+            ["plugin", "add", "demo@market", "--json"]
+        );
     }
 }

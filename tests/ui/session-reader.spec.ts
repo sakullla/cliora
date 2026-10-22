@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
     const control = { failDetail: false, copied: [] as string[], filters: [] as Array<Record<string, unknown>> };
     const messages = [
       { id: 'm1', role: 'user', text: '请检查缓存策略', timestamp: 1790668800000 },
-      { id: 'm2', role: 'assistant', text: '## 检查结果\n\n**缓存**可以复用。\n\n```typescript\nconst cached = true;\n```\n\n| 项目 | 状态 |\n| --- | --- |\n| 缓存 | 正常 |\n\n![外部图片](https://example.test/private.png)\n\n<script>window.__unsafe = true</script>', timestamp: 1790668801000 },
+      { id: 'm2', role: 'assistant', text: '## 检查结果\n\n**缓存**可以复用。[说明](https://example.test/cache)\n\n```typescript\nconst cached = true;\n```\n\n| 项目 | 状态 |\n| --- | --- |\n| 缓存 | 正常 |\n\n![外部图片](https://example.test/private.png)\n\n<script>window.__unsafe = true</script>', timestamp: 1790668801000 },
       { id: 'm3', role: 'user', text: '请补充回归测试', timestamp: 1790668802000 },
       { id: 'm4', role: 'assistant', text: '缓存回归测试通过。\n' + '长消息中的内容需要保留。'.repeat(200) + '\nEND_OF_MESSAGE', timestamp: 1790668803000 },
     ];
@@ -54,12 +54,17 @@ test.beforeEach(async ({ page }) => {
 test('reader renders Markdown, copies code, expands full messages and preserves raw text', async ({ page }) => {
   const reader = page.getByLabel('会话正文');
   await expect(reader.getByRole('heading', { name: '检查结果' })).toBeVisible();
+  const link = reader.getByRole('link', { name: '说明' });
+  await expect(link).toHaveAttribute('href', 'https://example.test/cache');
+  await expect.poll(() => link.evaluate((node) => getComputedStyle(node).userSelect)).toBe('text');
+  await link.click();
+  expect(await page.evaluate(() => (window as typeof window & { __reader: { copied: string[] } }).__reader.copied)).toEqual(['https://example.test/cache']);
   await expect(reader.getByRole('table')).toBeVisible();
   await expect(reader.locator('img[src^="http"]')).toHaveCount(0);
   await expect(reader.getByText('图片：外部图片')).toBeVisible();
   expect(await page.evaluate(() => (window as typeof window & { __unsafe?: boolean }).__unsafe)).toBeUndefined();
   await reader.getByRole('button', { name: '复制代码', exact: true }).click();
-  expect(await page.evaluate(() => (window as typeof window & { __reader: { copied: string[] } }).__reader.copied)).toEqual(['const cached = true;\n']);
+  expect(await page.evaluate(() => (window as typeof window & { __reader: { copied: string[] } }).__reader.copied.at(-1))).toBe('const cached = true;\n');
   await reader.getByRole('button', { name: /^展开全文/ }).click();
   await expect(reader.getByText(/END_OF_MESSAGE/)).toBeVisible();
   await reader.getByText('阅读', { exact: true }).click();
@@ -73,6 +78,10 @@ test('find navigates matching messages, questions filter preserves context and l
   await expect(reader.getByRole('textbox', { name: '查找本会话' })).toBeHidden();
   await reader.getByRole('button', { name: '查找本会话' }).click();
   await reader.getByRole('textbox', { name: '查找本会话' }).fill('缓存');
+  const clearFind = reader.getByRole('button', { name: '清空会话内查找' });
+  const findBox = await clearFind.boundingBox();
+  expect(findBox!.width).toBeGreaterThanOrEqual(32);
+  expect(findBox!.height).toBeGreaterThanOrEqual(32);
   await expect(reader.getByRole('status')).toHaveText('1 / 3 条');
   await expect(reader.locator('[data-current-match]')).toHaveAttribute('data-message-id', 'm1');
   await page.keyboard.press('Enter');
@@ -90,6 +99,10 @@ test('find navigates matching messages, questions filter preserves context and l
   await reader.getByRole('checkbox', { name: '只看提问' }).click();
   await reader.getByRole('button', { name: '最新', exact: true }).click();
   await expect(reader.locator('article').last()).toBeInViewport();
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('缓存');
+  const searchBox = await page.getByRole('button', { name: '清空搜索' }).boundingBox();
+  expect(searchBox!.width).toBeGreaterThanOrEqual(32);
+  expect(searchBox!.height).toBeGreaterThanOrEqual(32);
 });
 
 test('sorting follows keyboard order and failed detail can be retried', async ({ page }) => {
@@ -194,22 +207,23 @@ test('child session reader shows only that level and hides favorite, resume and 
   await page.getByRole('button', { name: /检查缓存策略/ }).click();
   const reader = page.getByLabel('会话正文');
   await expect(reader).toContainText('请检查缓存策略');
-  await expect(reader).not.toContainText('CHILD_ONLY_SENTINEL');
+  await expect(reader.getByRole('article', { name: '子会话 Reviewer' })).toContainText('CHILD_ONLY_SENTINEL');
   await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
   await expect(reader).not.toContainText('child-review');
-  await page.getByRole('region', { name: '主子关联' }).getByRole('button', { name: '打开 Reviewer' }).click();
+  await reader.getByRole('button', { name: '打开 Reviewer' }).click();
   await expect(reader).toContainText('CHILD_ONLY_SENTINEL');
   await expect(reader).not.toContainText('请检查缓存策略');
-  await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
+  await expect(reader.getByRole('article', { name: '子会话 Nested' })).toContainText('GRAND_ONLY_SENTINEL');
   await expect(page.getByRole('button', { name: '收藏会话' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '导出 Markdown' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '导出 JSON' })).toHaveCount(0);
   await expect(page.getByText('会话选项', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Nested', exact: true }).click();
+  await page.getByRole('button', { name: '打开 Nested', exact: true }).click();
   await expect(reader).toContainText('GRAND_ONLY_SENTINEL');
   await expect(reader).not.toContainText('CHILD_ONLY_SENTINEL');
   await page.getByRole('button', { name: '返回上一级' }).click();
   await expect(reader).toContainText('CHILD_ONLY_SENTINEL');
-  await expect(reader).not.toContainText('GRAND_ONLY_SENTINEL');
+  await expect(reader).not.toContainText('请检查缓存策略');
+  await expect(reader.getByRole('article', { name: '子会话 Nested' })).toContainText('GRAND_ONLY_SENTINEL');
 });

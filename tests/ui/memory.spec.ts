@@ -310,8 +310,8 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
 
   // `[[name]]` links open the linked entry; unknown targets stay inert.
   await entryButton(page, 'b-note').click();
-  await expect(reader(page).getByRole('button', { name: 'gone-note' })).toBeDisabled();
-  await reader(page).getByRole('button', { name: 'release-ritual' }).click();
+  await expect(reader(page).getByRole('link', { name: 'gone-note' })).toHaveAttribute('aria-disabled', 'true');
+  await reader(page).getByRole('link', { name: 'release-ritual' }).click();
   await expect(reader(page).getByRole('heading', { name: 'Release ritual' })).toBeVisible();
 });
 
