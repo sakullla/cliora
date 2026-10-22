@@ -993,3 +993,34 @@ test('a library prompt opens in the workbench with its initial text', async ({ p
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
   await expect(page.getByText('已请求外部终端启动会话')).toHaveCount(0);
 });
+
+test('a desktop library launch failure stays in the dialog', async ({ page }) => {
+  await page.addInitScript(() => {
+    const prompt = { id: 'prompt-1', kind: 'prompt', title: '打开编辑器', body: '请打开仓库', category: '', projectId: null, version: 1, updatedAt: 1 };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['cursor'], theme: 'light' }, tools: [{ id: 'cursor', name: 'Cursor' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'cursor', name: 'Cursor', launchForm: 'desktop', yoloAvailable: false, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['cursor'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_mcp_placements' || command === 'list_library_items' && args.kind !== 'prompt') return [];
+          if (command === 'list_library_items') return [prompt];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'launch_cli') throw new Error('桌面没有打开');
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '启动会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '用这条提示词启动' });
+  await dialog.getByRole('button', { name: '在外部终端启动' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('桌面没有打开');
+  await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
+});

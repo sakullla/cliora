@@ -353,7 +353,9 @@ export default function App() {
       const opened = workbenchSessionId(result);
       if (opened) { openWorkbenchSession(opened); return; }
     } catch (value) {
-      if (await failedInWorkbench(false)) {
+      const toolId = paletteSessions.find((item) => item.id === id)?.toolId;
+      const desktop = (catalog?.registered ?? []).find((item) => item.id === toolId)?.launchForm === 'desktop';
+      if (await failedInWorkbench(desktop)) {
         openWorkbenchFailure({ detail: formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')), retry: { kind: 'resume', id, mode: 'normal' } });
         return;
       }
