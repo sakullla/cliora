@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn native_skill_scan_keeps_the_applied_account_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let root = home.join("claude-account");
+    fs::create_dir_all(root.join("skills")).unwrap();
+    let context = crate::accounts::NativeContext {
+        id: "applied-account".into(),
+        tool_id: "claude_code".into(),
+        root: root.clone(),
+        config_root: root.clone(),
+        auth_files: vec![],
+        history_roots: vec![root.join("projects")],
+        resource_root: root.clone(),
+        environment: Default::default(),
+        remove_environment: vec![],
+        cli_args: vec![],
+    };
+    let _guard = crate::accounts::selection::enter(Some(context));
+    let entries = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert!(entries.is_empty());
+}
+
+#[test]
 fn native_inventory_reads_documents_without_packaging_attachments() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
