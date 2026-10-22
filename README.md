@@ -97,6 +97,8 @@ The desktop shell now mounts the tool workspace, project launcher, records, migr
 
 ## History and memory loading
 
+Parent/child session cards share a transcript summary cached by immutable message snapshot; returning through nested sessions reuses that summary, while refreshed transcripts compute it again. Timeline merging uses a cursor instead of repeatedly removing array heads. Memory wiki links use an index of entry ids and frontmatter names, retaining same-store preference and source-order fallback; refreshed, renamed or deleted entries rebuild the index.
+
 Usage records display the saved index before starting automatic native discovery. The usage dashboard reuses a completed report for up to 60 seconds when its filters and data revision match. Scans, favorites, project associations and saved prices invalidate that reuse.
 
 Memory aggregates may include optional `previewText` on each entry: the complete UTF-8 body already read to calculate its content fingerprint. The shared service limits these previews to 1 MiB per entry and 4 MiB across all stores in one response. Entries outside that budget use the existing bounded `read_memories` queue; bodies are never truncated. The frontend accepts aggregates without previews, and explicit open/save operations retain fresh native reads and conflict checks. Adapter authors can implement `history_exclusion_paths` to enumerate protected session paths without fingerprinting transcripts or loading display-title catalogs, as Codex and Claude do.

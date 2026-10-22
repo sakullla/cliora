@@ -17,6 +17,7 @@ import { modLabel, withMod } from '../../lib/shortcut';
 import { displayPath } from '../../lib/paths';
 import type { MemoryAggregate, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
 import { createTemplate, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
+import { memoryLinks } from './memoryLinks';
 import styles from './MemoryWorkspace.module.css';
 
 // Shared across remounts so switching tools cannot exceed two native batches.
@@ -239,6 +240,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     const parsed = doc?.parsed ?? null;
     return { entry, key, store, parsed, pending: !(key in docs), modified: relativeTime(parsed?.modified ?? null, i18n.language) };
   }), [aggregate, docs, i18n.language]);
+  const linkedRow = useMemo(() => memoryLinks(rows), [rows]);
 
   const types = useMemo(() => {
     const found = new Set(rows.map(row => row.parsed?.type).filter((value): value is string => !!value));
@@ -596,17 +598,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   function clearFilters() { setQuery(''); setSource('all'); setKind('all'); }
-
-  /** `[[target]]` resolves to an entry by id or frontmatter name, preferring the same store. */
-  function linkedRow(target: string, store: string): Row | null {
-    const normal = (value: string) => value.trim().toLowerCase().replace(/\.md$/, '').replace(/[_\s]+/g, '-');
-    const wanted = normal(target);
-    const matches = rows.filter(row => {
-      const name = row.parsed?.properties.find(item => item.key.toLowerCase() === 'name')?.value ?? '';
-      return normal(row.entry.id) === wanted || (!!name && normal(name) === wanted);
-    });
-    return matches.find(row => row.store === store) ?? matches[0] ?? null;
-  }
 
   // ---------- Render ----------
   const typeLabel = (value: string) => knownTypes.includes(value) ? t(`common.memory.type.${value}`) : value;

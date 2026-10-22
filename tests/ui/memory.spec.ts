@@ -315,6 +315,37 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
   await expect(reader(page).getByRole('heading', { name: 'Release ritual' })).toBeVisible();
 });
 
+test('memory links prefer their own store and refresh renamed or removed associations', async ({ page }) => {
+  await install(page);
+  await openWorkspace(page);
+  await page.evaluate(() => {
+    const state = (window as unknown as { __memory: { texts: Record<string, string> } }).__memory;
+    state.texts['global-note'] = '---\nname: Shared name\n---\nGLOBAL_TARGET';
+    state.texts['a-note'] = '---\nname: Shared name\n---\nLOCAL_TARGET\n\n[[SHARED_NAME.md|same store]]';
+    state.texts['b-note'] = '[[shared name|fallback]] and [[global-note|by id]]';
+  });
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await entryButton(page, 'a-note').click();
+  await reader(page).getByRole('link', { name: 'same store' }).click();
+  await expect(reader(page)).toContainText('LOCAL_TARGET');
+  await entryButton(page, 'b-note').click();
+  await reader(page).getByRole('link', { name: 'fallback' }).click();
+  await expect(reader(page)).toContainText('GLOBAL_TARGET');
+
+  await page.evaluate(() => {
+    const state = (window as unknown as { __memory: { texts: Record<string, string>; fingerprints: Record<string, string>; deleted: string[] } }).__memory;
+    state.texts['global-note'] = '---\nname: Renamed\n---\nUPDATED_TARGET';
+    state.fingerprints['global-note'] = 'changed';
+    state.deleted.push('a-note');
+  });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(reader(page)).toContainText('UPDATED_TARGET');
+  await entryButton(page, 'b-note').click();
+  await expect(reader(page).getByRole('link', { name: 'fallback' })).toHaveAttribute('aria-disabled', 'true');
+  await reader(page).getByRole('link', { name: 'by id' }).click();
+  await expect(reader(page)).toContainText('UPDATED_TARGET');
+});
+
 test('a failed source is noted inline and does not block the other stores', async ({ page }) => {
   await install(page);
   await openMemory(page);
