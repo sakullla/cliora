@@ -537,7 +537,12 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             last_model = Some(index);
             index
         };
-        let token_counts: Vec<Option<i64>> = (5..=8).map(|column| row.get(column)).collect::<Result<_, _>>().map_err(|error| error.to_string())?;
+        let token_counts: [Option<i64>; 4] = [
+            row.get(5).map_err(|error| error.to_string())?,
+            row.get(6).map_err(|error| error.to_string())?,
+            row.get(7).map_err(|error| error.to_string())?,
+            row.get(8).map_err(|error| error.to_string())?,
+        ];
         let tokens_known = token_counts.iter().any(Option::is_some);
         let input = count(token_counts[0]);
         let output = count(token_counts[1]);
@@ -553,8 +558,8 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             input
         };
         let mut call = Call {
-            native_usage: row.get::<_, Option<String>>(11).map_err(|error| error.to_string())?
-                .map(|value| serde_json::from_str::<super::NativeUsage>(&value)).transpose().map_err(|error| error.to_string())?
+            native_usage: row.get_ref(11).map_err(|error| error.to_string())?.as_str_or_null().map_err(|error| error.to_string())?
+                .map(serde_json::from_str::<super::NativeUsage>).transpose().map_err(|error| error.to_string())?
                 .filter(super::NativeUsage::valid),
             tokens_known,
             request_count: row.get::<_, Option<i64>>(10).map_err(|error| error.to_string())?.map(|value| value.max(0) as u64),

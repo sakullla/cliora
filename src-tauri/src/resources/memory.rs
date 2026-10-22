@@ -26,6 +26,7 @@ use crate::native::transaction::{self, FileMutation, TextPatch};
 use crate::projects;
 
 const MAX_BYTES: usize = 1024 * 1024;
+const PREVIEW_BYTES: usize = 4 * MAX_BYTES;
 const SWITCH_FILE: &str = ".cliora-memory-switch";
 const ITEMS_FILE: &str = ".cliora-memory-items.json";
 const NOT_IN_USE: &str = "记忆当前未使用";
@@ -84,6 +85,10 @@ pub struct MemoryEntry {
     pub fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_error: Option<String>,
+    /// Complete UTF-8 body already read for the fingerprint, within the
+    /// aggregate's shared byte budget. Never a truncated editing baseline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -155,6 +160,8 @@ pub struct MemoryStoreEntry {
     pub detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_text: Option<String>,
 }
 
 /// A store whose listing failed; the remaining stores are still returned.
@@ -221,6 +228,7 @@ pub fn list_all_memories(
     // Every store of one CLI shares the same exclusion set. Discovering it
     // again per store rewalks session transcripts before the list can return.
     let _exclusion_reuse = ExclusionReuse::enter();
+    let mut preview_budget = PREVIEW_BYTES;
     for store in port.existing_stores(home) {
         let target = MemoryTarget {
             tool_id: tool_id.to_owned(),
@@ -232,7 +240,7 @@ pub fn list_all_memories(
         match prepare_with_store(db, registry, home, &target, Some(store.clone())).and_then(
             |prepared| {
                 require(&prepared, MemoryOperation::List)?;
-                finish_list(&prepared)
+                finish_list_with_previews(&prepared, &mut preview_budget)
             },
         ) {
             Ok(list) => {
@@ -250,6 +258,7 @@ pub fn list_all_memories(
                     enabled: entry.enabled,
                     fingerprint: entry.fingerprint,
                     read_error: entry.read_error,
+                    preview_text: entry.preview_text,
                     source_label: store.label.clone(),
                     target: target.clone(),
                     in_use: list.in_use,
@@ -659,8 +668,16 @@ pub fn set_memory_enabled(
 }
 
 fn finish_list(prepared: &Prepared) -> Result<MemoryList, String> {
+    finish_list_with_previews(prepared, &mut 0)
+}
+
+fn finish_list_with_previews(prepared: &Prepared, preview_budget: &mut usize) -> Result<MemoryList, String> {
     let (in_use, detail) = usage(prepared)?;
-    let entries = list_entries(prepared)?;
+    let entries = if prepared.management.operations.contains(&MemoryOperation::Open) {
+        list_entries(prepared, preview_budget)?
+    } else {
+        list_entries(prepared, &mut 0)?
+    };
     Ok(MemoryList {
         in_use,
         detail,
@@ -1136,10 +1153,17 @@ fn valid_entry_id(prepared: &Prepared, value: &str) -> bool {
     })
 }
 
-fn entry_fingerprint(path: &Path) -> (String, Option<String>) {
+fn entry_fingerprint(path: &Path, preview_budget: &mut usize) -> (String, Option<String>, Option<String>) {
     match read_entry_bytes(path) {
-        Ok(bytes) => (transaction::fingerprint(&bytes), None),
-        Err(error) => (String::new(), Some(error)),
+        Ok(bytes) => {
+            let fingerprint = transaction::fingerprint(&bytes);
+            let preview = if *preview_budget > 0 && bytes.len() <= MAX_BYTES && bytes.len() <= *preview_budget {
+                String::from_utf8(bytes).ok()
+            } else { None };
+            if let Some(text) = &preview { *preview_budget -= text.len(); }
+            (fingerprint, None, preview)
+        }
+        Err(error) => (String::new(), Some(error), None),
     }
 }
 
@@ -1175,7 +1199,7 @@ fn overlaps(path: &Path, excluded: &Path) -> bool {
     path == excluded || path.starts_with(excluded) || excluded.starts_with(path)
 }
 
-fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
+fn list_entries(prepared: &Prepared, preview_budget: &mut usize) -> Result<Vec<MemoryEntry>, String> {
     if let Some(layout) = prepared.layout {
         let mut entries = Vec::new();
         for entry in layout
@@ -1191,13 +1215,14 @@ fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
             if checked != entry.path {
                 return Err("记忆路径与条目标识不匹配".into());
             }
-            let (fingerprint, read_error) = entry_fingerprint(&checked);
+            let (fingerprint, read_error, preview_text) = entry_fingerprint(&checked, preview_budget);
             entries.push(MemoryEntry {
                 id: entry.id,
                 path: entry.path.display().to_string(),
                 enabled: true,
                 fingerprint,
                 read_error,
+                preview_text,
             });
         }
         entries.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1229,13 +1254,14 @@ fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
         if !valid_segment(id) || overlaps_path(&item.path(), &prepared.excluded) {
             continue;
         }
-        let (fingerprint, read_error) = entry_fingerprint(&item.path());
+        let (fingerprint, read_error, preview_text) = entry_fingerprint(&item.path(), preview_budget);
         entries.push(MemoryEntry {
             id: id.to_owned(),
             path: item.path().display().to_string(),
             enabled: entry_enabled(&map, id),
             fingerprint,
             read_error,
+            preview_text,
         });
     }
     entries.sort_by(|left, right| left.id.cmp(&right.id));

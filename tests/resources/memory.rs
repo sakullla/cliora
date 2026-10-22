@@ -2226,6 +2226,16 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
         counts().1
     );
     reset();
+    let start = std::time::Instant::now();
+    let previews = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    assert!(previews.entries.iter().all(|entry| {
+        let text = entry.preview_text.as_ref().unwrap();
+        entry.fingerprint == transaction::fingerprint(text.as_bytes())
+    }));
+    assert_eq!(counts(), (1, 1000));
+    assert_eq!(history_sources(), 1);
+    println!("MEMORY_PERF previews ipc=1 enumerations={} bodies={} elapsed_ms={}", counts().0, counts().1, start.elapsed().as_millis());
+    reset();
     let warm = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
     assert!(warm
         .entries
@@ -2303,6 +2313,44 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
             .error
             .is_some()
     );
+}
+
+#[test]
+fn aggregate_previews_are_complete_utf8_and_share_a_byte_budget_across_stores() {
+    static CLI: MemoryCli = MemoryCli {
+        id: "fixture_memory_previews", location: "preview", read_only: false,
+        binds_account: false, global: true, project: false,
+        stores: &[("a", Scope::Global, "preview/a"), ("b", Scope::Global, "preview/b")],
+    };
+    let h = harness();
+    let registry = Registry::with_adapters(vec![&CLI]).unwrap();
+    for store in ["a", "b"] {
+        let path = h.home.join("preview").join(store);
+        fs::create_dir_all(&path).unwrap();
+        for index in 0..3 {
+            fs::write(path.join(format!("entry-{index}.md")), "x".repeat(MAX_BYTES)).unwrap();
+        }
+        fs::write(path.join("oversized.md"), "x".repeat(MAX_BYTES + 1)).unwrap();
+        fs::write(path.join("invalid.md"), [0xff, 0xfe]).unwrap();
+    }
+    let aggregate = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    assert_eq!(aggregate.entries.len(), 10);
+    let previews: Vec<_> = aggregate.entries.iter().filter_map(|entry| entry.preview_text.as_ref()).collect();
+    assert_eq!(previews.len(), 4);
+    assert_eq!(previews.iter().map(|text| text.len()).sum::<usize>(), PREVIEW_BYTES);
+    for entry in &aggregate.entries {
+        if let Some(text) = &entry.preview_text {
+            assert_eq!(text.len(), MAX_BYTES);
+            assert_eq!(entry.fingerprint, transaction::fingerprint(text.as_bytes()));
+        }
+        if entry.id == "invalid" || entry.id == "oversized" {
+            assert!(entry.preview_text.is_none());
+            assert!(!entry.fingerprint.is_empty());
+        }
+    }
+    let oversized = aggregate.entries.iter().find(|entry| entry.id == "oversized").unwrap();
+    let document = read_memory(&h.db, &registry, &h.home, &oversized.target, &oversized.id).unwrap();
+    assert_eq!(document.text.len(), MAX_BYTES + 1);
 }
 
 #[test]

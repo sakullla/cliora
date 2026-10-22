@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
-    discover_jsonl_controlled, raw_string_after, read_jsonl_filtered, text_content, timestamp,
+    discover_jsonl_with_control, raw_string_after, read_jsonl_filtered, text_content, timestamp,
     valid_native_id, HistoryMessageKind, HistorySource, ParsedSession, UsageEvent,
 };
 
@@ -19,12 +19,24 @@ pub fn sources_controlled(
     home: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
+    discover_sources(home, cancelled, true)
+}
+
+/// Memory exclusions need paths, without log fingerprints or the title catalog.
+pub fn exclusion_paths(home: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+    Ok(discover_sources(home, &|| false, false)?.into_iter().map(|source| source.path).collect())
+}
+
+fn discover_sources(home: &Path, cancelled: &dyn Fn() -> bool, metadata: bool) -> Result<Vec<HistorySource>, String> {
+    let fingerprint = |path: &Path| if metadata {
+        crate::history::source_fingerprint_controlled(path, cancelled)
+    } else { Ok(String::new()) };
     let root = crate::accounts::selection::config_root("codex", || {
         if dirs::home_dir().as_deref() == Some(home) {
             std::env::var_os("CODEX_HOME").map(Into::into).unwrap_or_else(|| home.join(".codex"))
         } else { home.join(".codex") }
     });
-    let mut sources = discover_jsonl_controlled(
+    let mut sources = discover_jsonl_with_control(
         &crate::accounts::selection::history_root("codex", || {
             // Keep the established source path spelling so existing stable IDs
             // and favorites survive the title-catalog upgrade on Windows.
@@ -38,17 +50,22 @@ pub fn sources_controlled(
                     .and_then(|value| value.to_str())
                     .is_some_and(|value| value.starts_with("rollout-"))
         },
+        fingerprint,
         cancelled,
+        &|_| true,
     )?;
     if let Some(context) = crate::accounts::selection::current("codex") {
         for root in context.history_roots.iter().skip(1) {
-            sources.extend(discover_jsonl_controlled(
+            sources.extend(discover_jsonl_with_control(
                 root,
                 |path| path.extension().is_some_and(|ext| ext == "jsonl"),
+                fingerprint,
                 cancelled,
+                &|_| true,
             )?);
         }
     }
+    if !metadata { return Ok(sources); }
     // Adapter-local parser version: existing indexes are rebuilt once, even if
     // the original rollout has not changed. Other CLIs keep their own cache.
     let titles = native_titles(&root, cancelled)?;
@@ -303,6 +320,24 @@ pub fn parse_controlled(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn memory_exclusions_match_rollouts_without_loading_metadata_or_titles() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions/2026/10");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-exclusion.jsonl");
+        std::fs::write(&path, "fixture").unwrap();
+        std::fs::write(root.join("other.jsonl"), "not a rollout").unwrap();
+        let listed = discover_sources(home.path(), &|| false, false).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].fingerprint.is_empty());
+        assert!(listed[0].native_title.is_none());
+        let excluded = exclusion_paths(home.path()).unwrap();
+        let sources = sources(home.path()).unwrap();
+        assert_eq!(excluded, sources.into_iter().map(|source| source.path).collect::<Vec<_>>());
+        assert_eq!(excluded[0].canonicalize().unwrap(), path.canonicalize().unwrap());
+    }
 
     #[test]
     fn unverified_link_fields_do_not_create_parent_child_sessions() {

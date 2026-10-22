@@ -234,6 +234,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const request = useRef(0);
   const loaded = useRef(false);
   const reportFilter = useRef('');
+  const completedReport = useRef<{ key: string; at: number } | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -253,13 +254,17 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
+    const queryKey = JSON.stringify([filter, scanVersion, retry]);
+    const completed = completedReport.current;
+    if (completed?.key === queryKey && Date.now() - completed.at < 60_000) return;
+    completedReport.current = null;
     const sequence = ++request.current;
     const filterKey = JSON.stringify(filter);
     setLoading(true); setReadError(false);
     if (filterKey !== reportFilter.current) setReport(null);
     const timer = window.setTimeout(() => {
       native.getUsageReport(filter)
-        .then((value) => { if (sequence === request.current) { setReport(value); reportFilter.current = filterKey; loaded.current = true; } })
+        .then((value) => { if (sequence === request.current) { setReport(value); reportFilter.current = filterKey; loaded.current = true; completedReport.current = { key: queryKey, at: Date.now() }; } })
         .catch(() => { if (sequence === request.current) { setReport(null); setReadError(true); } })
         .finally(() => { if (sequence === request.current) setLoading(false); });
     }, loaded.current ? 120 : 0);
@@ -307,6 +312,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
         cacheReadPerMillion: Number(priceDraft.read), cacheWritePerMillion: Number(priceDraft.write),
         source: priceDraft.source.trim() || t('records.usage.sourceManual'), updatedAt: 0 });
       onPricesChange([...prices.filter((item) => item.toolId !== price.toolId || item.model !== price.model), price]);
+      completedReport.current = null;
       setPriceOpen(false); notify.status(t('records.usage.priceSaved'), true);
       const sequence = ++request.current;
       try { const value = await native.getUsageReport(filter); if (sequence === request.current) setReport(value); }

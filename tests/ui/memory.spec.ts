@@ -565,9 +565,9 @@ type BatchProbe = {
   revision: number; changed: number; hold: boolean; releases: (() => void)[];
   failId: string | null; saved: Record<string, string>;
 };
-async function installBatchProbe(page: Page, count = 1000) {
+async function installBatchProbe(page: Page, count = 1000, previews = 0) {
   await install(page);
-  await page.addInitScript(({ count }) => {
+  await page.addInitScript(({ count, previews }) => {
     const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
     const original = internals.invoke;
     const probe: BatchProbe = { calls: 0, bodies: 0, focusedReads: 0, active: 0, peak: 0, lists: 0, revision: 0, changed: 0, hold: false, releases: [], failId: null, saved: {} };
@@ -579,7 +579,7 @@ async function installBatchProbe(page: Page, count = 1000) {
     internals.invoke = async (command, args = {}) => {
       if (command === 'list_all_memories' && args.toolId === 'alpha') {
         probe.lists++;
-        const entries = Array.from({ length: count }, (_, index) => ({ id: `entry-${index}`, path: `C:/perf/${Math.floor(index / 100)}/entry-${index}.md`, enabled: true, fingerprint: fingerprint(`entry-${index}`), sourceLabel: `Store ${Math.floor(index / 100)}`, target: target(Math.floor(index / 100)), inUse: true, detail: '' }));
+        const entries = Array.from({ length: count }, (_, index) => ({ id: `entry-${index}`, path: `C:/perf/${Math.floor(index / 100)}/entry-${index}.md`, enabled: true, fingerprint: fingerprint(`entry-${index}`), sourceLabel: `Store ${Math.floor(index / 100)}`, target: target(Math.floor(index / 100)), inUse: true, detail: '', previewText: index < previews ? document(`entry-${index}`, `C:/perf/${Math.floor(index / 100)}`).text : undefined }));
         const stores = Array.from({ length: Math.ceil(count / 100) }, (_, index) => ({ label: `Store ${index}`, directory: `C:/perf/${index}`, target: target(index), inUse: true, detail: '', entryCount: entries.filter(entry => entry.target.storeDirectory === target(index).storeDirectory).length }));
         return { toolId: 'alpha', entries, stores, failedSources: [], switchShared: false };
       }
@@ -601,11 +601,35 @@ async function installBatchProbe(page: Page, count = 1000) {
       }
       return original(command, args);
     };
-  }, { count });
+  }, { count, previews });
 }
 const batchState = (page: Page) => page.evaluate(() => {
   const value = (window as unknown as { __batch: BatchProbe }).__batch;
   return { calls: value.calls, bodies: value.bodies, focusedReads: value.focusedReads, active: value.active, peak: value.peak, lists: value.lists };
+});
+
+test('1000 memory previews avoid background reads and refresh the open body', async ({ page }) => {
+  await installBatchProbe(page, 1000, 1000);
+  const start = Date.now();
+  await openMemory(page);
+  await expect(entryButton(page, 'entry-999')).toContainText('Memo 999');
+  expect(await batchState(page)).toMatchObject({ calls: 0, bodies: 0, lists: 1 });
+  console.log('MEMORY_UI_PERF previews', { ...await batchState(page), elapsedMs: Date.now() - start });
+  await entryButton(page, 'entry-0').click();
+  await expect(reader(page)).toContainText('fp-entry-0');
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 3; p.revision = 2; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(reader(page)).toContainText('changed-2');
+  await page.getByRole('searchbox', { name: '搜索记忆' }).fill('changed-2');
+  await expect(page.getByText('3 / 1000 条')).toBeVisible();
+  expect(await batchState(page)).toMatchObject({ calls: 0, bodies: 0, focusedReads: 1, lists: 2 });
+});
+
+test('entries beyond the preview budget still load through bounded batches', async ({ page }) => {
+  await installBatchProbe(page, 100, 60);
+  await openMemory(page);
+  await expect(entryButton(page, 'entry-99')).toContainText('Memo 99');
+  expect(await batchState(page)).toMatchObject({ calls: 2, bodies: 40, peak: 2, lists: 1 });
 });
 
 test('1000 memories use bounded batches, reuse fingerprints, and refresh an open body', async ({ page }) => {

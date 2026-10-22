@@ -31,6 +31,69 @@ function todayReport() {
   };
 }
 
+test('records show the index before scanning and reuse a fresh usage report until refresh', async ({ page }) => {
+  await page.addInitScript((report) => {
+    const state = { scans: 0, reports: 0, listReady: false, releaseList: () => {}, releaseScan: () => {}, offset: 0 };
+    const session = { id: 'indexed', toolId: 'codex', nativeId: null, title: 'Indexed session', cwd: 'C:/fixture', model: null, projectId: null as string | null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 0, usageCount: 0 };
+    (window as unknown as { __loadProbe: typeof state }).__loadProbe = state;
+    const now = Date.now.bind(Date);
+    Date.now = () => now() + state.offset;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects') return [{ id: 'project-a', name: 'Fixture', path: 'C:/fixture', available: true, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+        if (command === 'list_history_prices') return [];
+        if (command === 'list_history_sessions') {
+          if (!state.listReady) await new Promise<void>(resolve => { state.releaseList = () => { state.listReady = true; resolve(); }; });
+          return [{ ...session }];
+        }
+        if (command === 'get_history_session') return { session: { ...session }, messages: [], usage: [], resumeReason: 'fixture' };
+        if (command === 'set_history_favorite') { session.favorite = args.favorite; return null; }
+        if (command === 'set_history_project') { session.projectId = args.projectId; return null; }
+        if (command === 'refresh_history') { state.scans++; await new Promise<void>(resolve => { state.releaseScan = resolve; }); return []; }
+        if (command === 'get_usage_report') { state.reports++; return report; }
+        if (command === 'get_history_scan_progress') return { running: true, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, emptyReport());
+  const probe = () => page.evaluate(() => {
+    const state = (window as unknown as { __loadProbe: { scans: number; reports: number } }).__loadProbe;
+    return { scans: state.scans, reports: state.reports };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await expect(page.getByRole('heading', { name: '正在加载会话…' })).toBeVisible();
+  expect(await probe()).toEqual({ scans: 0, reports: 0 });
+  await page.evaluate(() => (window as unknown as { __loadProbe: { releaseList: () => void } }).__loadProbe.releaseList());
+  await expect.poll(async () => (await probe()).scans).toBe(1);
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  await expect.poll(async () => (await probe()).reports).toBe(1);
+  await expect(page.getByRole('button', { name: '设置估算价格', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: /^会话/ }).click();
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  expect((await probe()).reports).toBe(1);
+  await page.evaluate(() => (window as unknown as { __loadProbe: { releaseScan: () => void } }).__loadProbe.releaseScan());
+  await expect.poll(async () => (await probe()).reports).toBe(2);
+  await page.getByRole('tab', { name: /^会话/ }).click();
+  await page.evaluate(() => { (window as unknown as { __loadProbe: { offset: number } }).__loadProbe.offset = 61_000; });
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  await expect.poll(async () => (await probe()).reports).toBe(3);
+  await page.getByRole('tab', { name: /^会话/ }).click();
+  await page.getByRole('button', { name: '收藏会话', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消收藏', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  await expect.poll(async () => (await probe()).reports).toBe(4);
+  await page.getByRole('tab', { name: /^会话/ }).click();
+  await page.getByText('会话选项', { exact: true }).click();
+  await page.getByRole('combobox', { name: '关联会话项目' }).selectOption('project-a');
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  await expect.poll(async () => (await probe()).reports).toBe(5);
+});
+
 test('records only lists managed CLIs and scopes session reads to them', async ({ page }) => {
   await page.addInitScript((report) => {
     const filters: Array<Record<string, unknown>> = [];

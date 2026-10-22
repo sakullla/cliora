@@ -128,6 +128,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       const key = `${storeKey(entry.target)}:${entry.id}`;
       const cached = docsRef.current[key];
       if (!entry.readError && cached?.fingerprint === entry.fingerprint) next[key] = cached;
+      else if (!entry.readError && entry.previewText !== undefined) next[key] = documentCache(entry.id, entry.previewText, entry.fingerprint);
       else pending.push(entry);
     }
     publishDocs(next);
