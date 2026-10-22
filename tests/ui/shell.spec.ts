@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-const pageNames = ['快速开始', '工具与连接', '资料库', '使用记录', '设置'] as const;
+const pageNames = ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置'] as const;
 
 async function expectNoHorizontalScroll(page: Page) {
   await expect.poll(async () => page.evaluate(() => {
@@ -71,7 +71,7 @@ async function installDesktop(page: Page, projects: unknown[] = []) {
   }, projects);
 }
 
-test('five full pages are navigable and browser mode never implies native data', async ({ page }) => {
+test('full pages are navigable and browser mode never implies native data', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('status')).toContainText('浏览器预览');
   // The skip link is the first Tab stop: invisible for mouse users, visible under keyboard
@@ -97,7 +97,7 @@ test('five full pages are navigable and browser mode never implies native data',
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' })).toBeFocused();
   await expect(page.locator('.brandmark')).toBeVisible();
   await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
-  for (const name of ['快速开始', '工具与连接', '资料库', '使用记录', '设置']) {
+  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
   }
@@ -370,7 +370,7 @@ test('home switches the active configuration from the tool row', async ({ page }
   expect(calls[0]).toMatchObject({ toolId: 'codex', profileId: 'work', scope: 'global', allowTakeover: false });
 });
 
-test('browser preview keeps five pages reachable at 640 and does not scroll sideways', async ({ page }) => {
+test('browser preview keeps every page reachable at 640 and does not scroll sideways', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 768 });
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: '页面' });
@@ -663,4 +663,97 @@ test('command palette library entry jumps to the library page and opens the item
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel('标题')).toHaveValue('面板规则2');
   await expect(editor.getByRole('button', { name: '复制全文' })).toBeVisible();
+});
+
+test('workbench separates two sessions, marks a self-exit, and returns to management pages', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions = [
+      { id: 's1', toolId: 'codex', projectId: 'p1', directory: 'C:/alpha', mode: 'normal', running: true, exitCode: null },
+      { id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/beta-work', mode: 'yolo', running: true, exitCode: null },
+    ];
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    const writes: Array<{ sessionId: string; dataBase64: string }> = [];
+    const closed: string[] = [];
+    Object.assign(window, {
+      isTauri: true, __writes: writes, __closed: closed, __events: bridge,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __emit: (event: string, payload: { sessionId?: string; exitCode?: number | null }) => {
+        if (event === 'cliora:session-exit') {
+          const item = sessions.find((entry) => entry.id === payload.sessionId);
+          if (item) { item.running = false; item.exitCode = payload.exitCode ?? null; }
+        }
+        const id = bridge.listens[event];
+        bridge.handlers[id]?.({ payload });
+      },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'codex', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa(args.sessionId === 's2' ? 'claude-ready' : 'codex-ready');
+          if (command === 'write_workbench_session') { writes.push({ sessionId: args.sessionId, dataBase64: args.dataBase64 }); return null; }
+          if (command === 'resize_workbench_session') return null;
+          if (command === 'close_workbench_session') { closed.push(args.sessionId); const index = sessions.findIndex((item) => item.id === args.sessionId); if (index >= 0) sessions.splice(index, 1); return null; }
+          if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: args.theme }, tools: [] };
+          if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [] }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+          if (command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_rule_placements' || command === 'list_portable_items' || command === 'list_native_mcp' || command === 'scan_native_skills') return [];
+          if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+          if (command === 'get_usage_report') return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', previous: null, timeline: [], totals: { requests: 0, usageRecords: 0, unknownRequestRecords: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 }, byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
+          if (command === 'get_webdav_status') return { configured: false, enabled: false, endpoint: null, lastSuccess: null, lastError: null, retryAfter: null, uploaded: 0, downloaded: 0, pendingChanges: 0, conflicts: [] };
+          if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  const codex = page.getByRole('tab', { name: /Codex/ });
+  const claude = page.getByRole('tab', { name: /Claude Code/ });
+  await expect(codex).toContainText('Alpha');
+  await expect(codex).toContainText('普通');
+  await expect(claude).toContainText('YOLO');
+  await expect(claude).toContainText('beta-work');
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('Codex');
+  await expect(stage).toContainText('Alpha');
+  await expect(stage).toContainText('普通');
+  await page.locator('.xterm-helper-textarea:visible').focus();
+  await page.keyboard.type('a');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string }> }).__writes.map((item) => item.sessionId))).toEqual(['s1']);
+  await claude.click();
+  await expect(stage).toContainText('Claude Code');
+  await expect(stage).toContainText('YOLO');
+  await expect(page.locator('.xterm-accessibility-tree').last()).toContainText('claude-ready');
+  await page.evaluate(() => { (window as unknown as { __writes: unknown[] }).__writes.length = 0; });
+  await page.locator('.xterm-helper-textarea:visible').focus();
+  await page.keyboard.type('z');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string }> }).__writes.map((item) => item.sessionId))).toEqual(['s2']);
+  await stage.getByRole('button', { name: '结束此会话' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __closed: string[] }).__closed)).toEqual(['s2']);
+  await expect(claude).toHaveCount(0);
+  await expect(codex).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __emit: (event: string, payload: unknown) => void }).__emit('cliora:session-exit', { sessionId: 's1', exitCode: 0 }));
+  await expect(codex).toContainText('已结束');
+  await expect(stage).toContainText('已结束');
+  const openPage = async (name: string) => {
+    const button = nav.getByRole('button', { name, exact: true });
+    const discard = page.getByRole('dialog', { name: '放弃未保存修改？' });
+    await button.click();
+    if (await discard.isVisible()) await discard.getByRole('button', { name: '放弃修改' }).click();
+    await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+  };
+  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) await openPage(name);
+  await openPage('工作台');
+  await expect(codex).toContainText('已结束');
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
 });

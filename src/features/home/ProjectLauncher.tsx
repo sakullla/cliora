@@ -16,9 +16,10 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SkeletonRows } from '../../components/Skeleton';
 import { formatFailure } from '../../lib/feedback';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import styles from './ProjectLauncher.module.css';
 
-export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null }) {
+export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -225,9 +226,12 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
 
   async function launch(toolId: string, projectId: string | null, mode: 'normal' | 'yolo', resumeId?: string, surface: 'page' | 'dialog' = 'page', resumeLatest = false) {
     begin(projectId ?? 'global');
+    const request = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(resumeLatest ? { resumeLatest: true } : {}) };
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeLatest || resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
-      const result = await native.launchCli({ toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(resumeLatest ? { resumeLatest: true } : {}) });
+      const result = await native.launchCli(request);
+      const opened = workbenchSessionId(result);
+      if (opened) { onWorkbenchSession?.(opened); await refresh(); return; }
       const launchedTool = managed.find((item) => item.id === toolId);
       const message = launchedTool?.launchForm === 'desktop'
         ? t('home.tools.launchedDesktop', { name: launchedTool.name })
@@ -237,7 +241,14 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
         setFeedback(message);
       } else showPageFeedback(message);
       await refresh();
-    } catch (value) { if (surface === 'dialog') showDialogError(value); else showPageError(value); }
+    } catch (value) {
+      const desktop = managed.find((item) => item.id === toolId)?.launchForm === 'desktop';
+      if (await failedInWorkbench(desktop)) {
+        onWorkbenchFailure?.({ detail: formatFailure(value, t('home.launcher.operationFailed'), projectNext), retry: { kind: 'launch', request } });
+        return;
+      }
+      if (surface === 'dialog') showDialogError(value); else showPageError(value);
+    }
     finally { setBusy(''); }
   }
 

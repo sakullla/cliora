@@ -16,6 +16,7 @@ import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath } from '../../lib/paths';
 import { launchFailureDetail } from '../../lib/feedback';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import i18n from '../../i18n';
 import styles from './ManagedTools.module.css';
 
@@ -96,7 +97,7 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   </div>;
 }
 
-export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void }) {
+export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
@@ -201,9 +202,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const tool = tools.find((item) => item.id === toolId);
     const toolName = tool?.name ?? toolId;
     const desktop = tool?.launchForm === 'desktop';
+    let directory: string | null = null;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
-      let directory: string | null = null;
       if (!desktop) {
         const remembered = launchDirectories.get(toolId);
         directory = pickDirectory ? null : remembered ?? null;
@@ -218,11 +219,19 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
           lastLaunchDirectory = picked;
         }
       }
-      await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory });
+      const request = { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory };
+      const result = await native.launchCli(request);
+      const opened = workbenchSessionId(result);
+      if (opened) { onWorkbenchSession?.(opened); setStates((old) => ({ ...old, [toolId]: settle(previous, null) })); return; }
       const notice = lineNotice('ok', desktop ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
       setStates((old) => ({ ...old, [toolId]: settle(previous, notice) }));
       clearNoticeLater(toolId, notice);
     } catch (error) {
+      if (await failedInWorkbench(desktop)) {
+        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null } } });
+        setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
+        return;
+      }
       setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('error', t('home.tools.launchFailed', { name: toolName }), message(error))) }));
     } finally {
       acting.current.delete(toolId);

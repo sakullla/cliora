@@ -24,9 +24,11 @@ const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((mo
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
+import { SessionWorkbench, failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from './features/sessions/SessionWorkbench';
+import sessionStyles from './features/sessions/SessionWorkbench.module.css';
 import { applyStoredLanguage, readStoredLanguage } from './i18n';
 import { native, nativeAvailable } from './lib/native';
-import { launchFailureDetail } from './lib/feedback';
+import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { navigateChoices } from './lib/choiceNavigation';
@@ -37,7 +39,7 @@ import type { Project, TrayRepairTarget } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 
-type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
+type Page = 'home' | 'sessions' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
@@ -46,6 +48,7 @@ type Spotlight =
 
 const pages: { id: Page; glyph: IconName }[] = [
   { id: 'home', glyph: 'home' },
+  { id: 'sessions', glyph: 'terminal' },
   { id: 'connections', glyph: 'connections' },
   { id: 'library', glyph: 'library' },
   { id: 'records', glyph: 'records' },
@@ -94,6 +97,9 @@ export default function App() {
   const [paletteLibrary, setPaletteLibrary] = useState<LibraryItem[]>([]);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
+  const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
+  const [workbenchFailure, setWorkbenchFailure] = useState<WorkbenchFailure | null>(null);
+  const [workbenchToken, setWorkbenchToken] = useState(0);
   const activePage = useRef<Page>(page);
   activePage.current = page;
   const workspaceDirty = useRef(false);
@@ -328,9 +334,29 @@ export default function App() {
   }
 
   // Same command and confirmation flow as the Records list, with Records' default mode.
+  function openWorkbenchSession(sessionId: string) {
+    setWorkbenchFailure(null);
+    setWorkbenchFocus(sessionId);
+    setWorkbenchToken((value) => value + 1);
+    void go('sessions');
+  }
+
+  function openWorkbenchFailure(failure: WorkbenchFailure) {
+    setWorkbenchFailure(failure);
+    setWorkbenchToken((value) => value + 1);
+    void go('sessions');
+  }
+
   async function resumePaletteSession(id: string) {
-    try { await native.resumeHistorySession(id, 'normal'); }
-    catch (value) {
+    try {
+      const result = await native.resumeHistorySession(id, 'normal');
+      const opened = workbenchSessionId(result);
+      if (opened) { openWorkbenchSession(opened); return; }
+    } catch (value) {
+      if (await failedInWorkbench(false)) {
+        openWorkbenchFailure({ detail: formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')), retry: { kind: 'resume', id, mode: 'normal' } });
+        return;
+      }
       const detail = launchFailureDetail(value);
       setError(detail ? { code: 'terminal_command_too_long', message: detail, action: '', data_directory: null } : value as ApiError);
     }
@@ -479,10 +505,10 @@ export default function App() {
         <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
       </div>
     </aside>
-    <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
+    <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />
+      <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections' || page === 'sessions'} />
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<button className="button primary" type="button" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}
@@ -496,15 +522,16 @@ export default function App() {
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
             <div className="section-heading"><h2>{t('home.managed.title')}<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></button></div>
-            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
+            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
           </section>
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
         </div>}
-        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} /></Suspense>}</div>
-        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
+        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
+        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <SessionWorkbench active={page === 'sessions'} tools={visibleDescriptors} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} />}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}

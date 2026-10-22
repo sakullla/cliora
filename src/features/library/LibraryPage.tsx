@@ -18,6 +18,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import { useToasts } from '../../lib/toast';
 import { ToastScope } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
@@ -78,7 +79,7 @@ type LibrarySection = LibraryKind | 'mcp' | 'skill';
 /** Locate request emitted by the command palette; consumed once per token. */
 export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
 
-export function LibraryPage({ managedTools = [], active = true, spotlight = null }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null }) {
+export function LibraryPage({ managedTools = [], active = true, spotlight = null, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
@@ -277,11 +278,21 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
   async function startSession() {
     if (!launchItem || !launchTool || launchBusy) return;
     setLaunchBusy(true); setLaunchError('');
+    const request = { toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal' as const, initialPrompt: launchText };
     try {
-      await native.launchCli({ toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal', initialPrompt: launchText });
+      const result = await native.launchCli(request);
+      const opened = workbenchSessionId(result);
       setLaunchItem(null);
+      if (opened) { onWorkbenchSession?.(opened); return; }
       showNotice(t('library.page.sessionStarted'));
-    } catch (value) { setLaunchError(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext'))); }
+    } catch (value) {
+      if (await failedInWorkbench(false)) {
+        setLaunchItem(null);
+        onWorkbenchFailure?.({ detail: formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext')), retry: { kind: 'launch', request } });
+        return;
+      }
+      setLaunchError(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext')));
+    }
     finally { setLaunchBusy(false); }
   }
   async function remove() {

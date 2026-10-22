@@ -11,6 +11,7 @@ import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject 
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import type { UsageQuery } from '../../types/usage';
 import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
@@ -121,7 +122,7 @@ function ToolSwitcher({ tools, selected, onSelect }: { tools: AdapterDescriptor[
   </div>;
 }
 
-export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0 }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number }) {
+export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0, onWorkbenchSession, onWorkbenchFailure }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const [tool, setTool] = useState(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
   const descriptor = managedTools.find(item => item.id === tool) ?? managedTools[0];
@@ -227,18 +228,26 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function launch() {
     if (!nativeAvailable || launching) return;
     const desktop = descriptor?.launchForm === 'desktop';
+    let directory: string | null = null;
     setLaunching(true);
     try {
       const settings = await native.getLaunchSettings();
-      let directory: string | null = null;
       if (!desktop) {
         const picked = await open({ directory: true, multiple: false, title: t('tools.workspace.launchPickTitle', { name: descriptor?.name ?? toolId }) });
         if (typeof picked !== 'string') return;
         directory = picked;
       }
-      await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory });
+      const request = { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory };
+      const result = await native.launchCli(request);
+      const opened = workbenchSessionId(result);
+      if (opened) { onWorkbenchSession?.(opened); return; }
       setNotice(desktop ? t('tools.workspace.launchedDesktop', { name: descriptor?.name ?? toolId }) : t('tools.workspace.launched', { name: descriptor?.name ?? toolId }));
     } catch (failure) {
+      if (await failedInWorkbench(desktop)) {
+        const settings = await native.getLaunchSettings().catch(() => null);
+        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory } } });
+        return;
+      }
       setError(errorText(failure));
     } finally {
       setLaunching(false);
