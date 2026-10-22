@@ -297,6 +297,10 @@ export default {
     compatVersion: 'Verified against version {{version}} · {{detail}}',
   },
   agents: {
+    toolbar: 'Agent toolbar',
+    enableAria: 'Enabled',
+    previewRegion: 'Agent definition preview',
+    selectHint: 'Choose an agent definition',
     confirmAbandon: 'Discard the unsaved agent definition?',
     abandonTitle: 'Unsaved definition',
     abandonConfirm: 'Discard changes',
@@ -515,6 +519,7 @@ export default {
     addToLibrary: 'Add to library',
     editorNote: 'Edit SKILL.md in this directory. The directory name is the skill, and the description may be empty.',
     editorLabel: 'SKILL.md',
+    previewRegion: 'SKILL.md preview',
     loading: 'Reading SKILL.md…',
     save: 'Save',
     saved: 'Saved SKILL.md.',

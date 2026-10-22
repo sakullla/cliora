@@ -7,7 +7,7 @@ import { FilterSelect } from '../../components/FilterSelect';
 import { CodeEditor } from '../../components/CodeEditor';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
-import { DocumentWorkspace } from '../tools/DocumentWorkspace';
+import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, Toggle, documentStyles as doc } from '../tools/DocumentWorkspace';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
@@ -32,7 +32,7 @@ async function readBatch(requests: MemoryReadRequest[], current: () => boolean) 
   finally { release(); }
 }
 
-const MemoryMarkdown = lazy(() => import('./MemoryMarkdown'));
+const MarkdownView = lazy(() => import('../../components/MarkdownView'));
 
 type Failure = { message: string; retry: (() => Promise<void>) | null };
 type Doc = { text: string; fingerprint: string; parsed: ParsedMemory; search: string };
@@ -65,7 +65,7 @@ function samePath(left: string, right: string): boolean {
 }
 
 function Switch({ checked, label, disabled, onChange }: { checked: boolean; label: string; disabled?: boolean; onChange: (value: boolean) => void }) {
-  return <button type="button" role="switch" className={styles.switch} aria-checked={checked} aria-label={label} title={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
+  return <button type="button" role="switch" className={doc.switch} aria-checked={checked} aria-label={label} title={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
 
 export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedProjectPath, projects = [], onDirtyChange }: {
@@ -260,10 +260,12 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
   const current = rows.find(row => row.key === selected) ?? null;
   const currentStore = current ? stores.find(store => store.key === current.store) ?? null : null;
-  const currentDoc = current ? (opened?.key === current.key ? { text: opened.text, fingerprint: opened.fingerprint } : docs[current.key] ?? null) : null;
+  // An open entry reads its draft, so switching to reading previews unsaved edits.
+  const currentDoc = current ? (opened?.key === current.key ? { text: can('edit') ? draft : opened.text, fingerprint: opened.fingerprint } : docs[current.key] ?? null) : null;
   const currentParsed = useMemo(() => current && currentDoc ? parseMemory(current.entry.id, currentDoc.text) : current?.parsed ?? null, [current?.entry.id, currentDoc?.text, current?.parsed]);
   const editing = mode === 'edit' && !!opened && opened.key === selected && can('edit');
-  const dirty = (editing && draft !== opened!.text) || (!!compose && (compose.id.trim() !== '' || compose.text !== compose.template));
+  const draftDirty = !!opened && opened.key === selected && can('edit') && draft !== opened.text;
+  const dirty = draftDirty || (!!compose && (compose.id.trim() !== '' || compose.text !== compose.template));
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => {
     if (!opened || dirty || busy) return;
@@ -346,7 +348,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
   async function startEdit() {
     if (!current || busy) return;
-    if (opened?.key === current.key) { setDraft(opened.text); setMode('edit'); return; }
+    if (opened?.key === current.key) { setMode('edit'); return; }
     await openRow(current, 'edit');
   }
 
@@ -626,17 +628,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const anyOff = stores.some(store => !store.inUse);
   const offWithoutSwitch = anyOff && !can('master_switch');
 
-  const actions = <div className={styles.headActions}>
-    {aggregate && master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
-      <span className={styles.autoDot} aria-hidden="true" />
-      <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></span>
-      <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />
-    </span>}
-    {aggregate && limitation && !master && <span className={styles.readOnlyPill} title={limitation}><Icon name="lock" size={13} />{t('common.memory.readOnly')}</span>}
-    <button type="button" className={styles.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()}><Icon name="refresh" size={15} /></button>
-    {can('create') && <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : undefined} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button>}
-  </div>;
-
   const offDetail = ((detail: string) => detail && detail !== t('common.memory.notInUse') ? detail : t('common.memory.notInUseHint'))((master ? master.detail : stores.find(store => !store.inUse)?.detail) ?? '');
   const storeSwitchRow = (store: Store) => {
     const sample = rows.find(row => row.store === store.key);
@@ -652,14 +643,14 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     const title = row.parsed?.title ?? row.entry.id;
     const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
     const scope = scopeOf(row.entry, stores.find(item => item.key === row.store) ?? null);
-    return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} data-entry-id={row.entry.id} disabled={busy} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
-      <span className={styles.itemTitle}><strong title={title}>{title}</strong></span>
+    return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} data-entry-id={row.entry.id} disabled={busy} aria-current={selected === row.key || undefined} className={doc.row} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
+      <span className={doc.rowTitle}><strong title={title}>{title}</strong></span>
       {docErrors[row.key]
-        ? <span className={styles.itemSummary} title={docErrors[row.key]}>{t('common.memory.entryReadFailed')}</span>
+        ? <span className={doc.rowSummary} title={docErrors[row.key]}>{t('common.memory.entryReadFailed')}</span>
         : summary
-          ? <span className={styles.itemSummary}>{summary}</span>
-          : row.pending && <span className={styles.itemSummaryPending} aria-hidden="true" />}
-      <span className={styles.itemMeta}>
+          ? <span className={doc.rowSummary}>{summary}</span>
+          : row.pending && <span className={doc.rowSummaryPending} aria-hidden="true" />}
+      <span className={doc.rowMeta}>
         {row.parsed?.type && <span className={styles.typeBadge} data-type={row.parsed.type}>{typeLabel(row.parsed.type)}</span>}
         <span className={styles.scopeBadge} data-scope={row.entry.target.scope} title={scope.title}>{scope.text}</span>
         {!row.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}
@@ -668,28 +659,50 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </button>;
   };
 
+  const footer = aggregate && (master || switchGroups.length > 0 || storeSwitches.length > 0 || offWithoutSwitch) ? <>
+    {master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
+      <span className={styles.autoDot} aria-hidden="true" />
+      <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></span>
+      <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />
+    </span>}
+    {switchGroups.map(group => <div key={group.id} className={styles.scopeSwitch}>
+      <strong>{t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')}</strong>
+      <span>{group.enabled === null ? t('common.memory.nativeDefault') : group.enabled ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span>
+      {can('master_switch') && <select aria-label={t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')} value={group.enabled === null ? 'default' : group.enabled ? 'on' : 'off'} disabled={busy} onChange={event => void setGroupEnabled(group.id, event.target.value === 'on')}>
+        {group.enabled === null && <option value="default" disabled>{t('common.memory.nativeDefaultShort')}</option>}
+        <option value="on">{t('common.memory.autoOnShort')}</option><option value="off">{t('common.memory.autoOffShort')}</option>
+      </select>}
+    </div>)}
+    {storeSwitches.map(storeSwitchRow)}
+    {(master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status" title={offDetail}><Icon name="eyeOff" size={14} />{t('common.memory.notInUse')}</p>}
+  </> : undefined;
+
+  const propertiesPanel = current && propertiesOpen && <div className={doc.info} data-memory-path="">
+    <p className={doc.pathLine}><span className={doc.mono}>{displayPath(current.entry.path)}</span><button type="button" className={doc.ghostButton} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={13} />{t('common.memory.copyPath')}</button></p>
+    {currentStore?.path && currentStore.path !== displayPath(current.entry.path) && <p>{currentStore.path}</p>}
+    {currentParsed?.modified && <p className={styles.metaText} title={relativeTime(currentParsed.modified, i18n.language)?.absolute}><Icon name="clock" size={13} />{t('common.memory.modified', { time: relativeTime(currentParsed.modified, i18n.language)?.text ?? currentParsed.modified })}</p>}
+    {currentParsed && currentParsed.properties.length > 0 && <dl className={doc.properties}>{currentParsed.properties.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}
+  </div>;
+  const currentScope = current ? scopeOf(current.entry, currentStore) : null;
+  const currentModified = currentParsed?.modified ? relativeTime(currentParsed.modified, i18n.language) : null;
+
   return <DocumentWorkspace label={t('tools.workspace.view.memory')} toolbarLabel={aggregate ? t('common.memory.toolbar') : undefined} onKeyDown={onEditorKey} backLabel={t('common.memory.back')} onBack={() => { void closeDocument(); }}
-    toolbar={aggregate ? <>
-      {total > 0 && <span className={styles.filters} data-document-hide>
-        <SearchField type="search" className={styles.search} label={t('common.memory.searchLabel')} placeholder={t('common.memory.searchPlaceholder')} value={query} onChange={setQuery} />
-        {listedStores.length > 1 && <FilterSelect className={styles.sourceSelect} label={t('common.memory.sourceFilter')} value={source} options={sourceOptions} triggerDetail={false} onChange={setSource} />}
-        {types.length > 0 && <div className={styles.chips} role="group" aria-label={t('common.memory.typeFilter')}>
-          {['all', ...types].map(value => <button key={value} type="button" aria-pressed={kind === value} data-type={value} onClick={() => setKind(value)}>{value === 'all' ? t('common.memory.typeAll') : typeLabel(value)}</button>)}
-        </div>}
-        <span className={styles.count}>{filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length })}</span>
-      </span>}
-      {switchGroups.length > 0 && switchGroups.map(group => <div key={group.id} className={styles.scopeSwitch}>
-        <strong>{t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')}</strong>
-        <span>{group.enabled === null ? t('common.memory.nativeDefault') : group.enabled ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span>
-        {can('master_switch') && <select aria-label={t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')} value={group.enabled === null ? 'default' : group.enabled ? 'on' : 'off'} disabled={busy} onChange={event => void setGroupEnabled(group.id, event.target.value === 'on')}>
-          {group.enabled === null && <option value="default" disabled>{t('common.memory.nativeDefaultShort')}</option>}
-          <option value="on">{t('common.memory.autoOnShort')}</option><option value="off">{t('common.memory.autoOffShort')}</option>
-        </select>}
-      </div>)}
-      {storeSwitches.map(storeSwitchRow)}
-      {(master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status" title={offDetail}><Icon name="eyeOff" size={14} />{t('common.memory.notInUse')}</p>}
-      {actions}
+    heading={aggregate ? t('tools.workspace.view.memory') : undefined}
+    count={aggregate && total > 0 ? filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length }) : undefined}
+    actions={aggregate ? <>
+      {limitation && !master && <span className={doc.chip} title={limitation}><Icon name="lock" size={11} />{t('common.memory.readOnly')}</span>}
+      <button type="button" className={doc.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()}><Icon name="refresh" size={15} /></button>
+      {can('create') && <button type="button" className={doc.accentButton} aria-label={t('common.memory.create')} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : t('common.memory.create')} onClick={() => void startCompose()}><Icon name="plus" size={16} /></button>}
     </> : undefined}
+    search={aggregate && total > 0 ? <SearchField type="search" label={t('common.memory.searchLabel')} placeholder={t('common.memory.searchPlaceholder')} value={query} onChange={setQuery} /> : undefined}
+    filters={aggregate && total > 0 && (listedStores.length > 1 || types.length > 0) ? <>
+      {listedStores.length > 1 && <FilterSelect className={styles.sourceSelect} label={t('common.memory.sourceFilter')} value={source} options={sourceOptions} triggerDetail={false} onChange={setSource} />}
+      {types.length > 0 && <div className={styles.chips} role="group" aria-label={t('common.memory.typeFilter')}>
+        {['all', ...types].map(value => <button key={value} type="button" aria-pressed={kind === value} data-type={value} onClick={() => setKind(value)}>{value === 'all' ? t('common.memory.typeAll') : typeLabel(value)}</button>)}
+      </div>}
+    </> : undefined}
+    listFooter={footer}
+    listFooterLabel={t('common.memory.switches')}
     notices={<>
       {missingDraft && <StatusBanner tone="warning">{t('common.memory.missingDraft')}</StatusBanner>}
       {Object.keys(docErrors).length > 0 && <StatusBanner tone="warning" action={<button type="button" className="button" disabled={busy || refreshing} onClick={() => void reload()}>{t('common.memory.retryBodies')}</button>}>{t('common.memory.partialBodies', { count: Object.keys(docErrors).length })} {Object.values(docErrors)[0]}</StatusBanner>}
@@ -703,76 +716,69 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       : aggregate && total === 0
         ? <EmptyState icon="sparkle" title={t('common.memory.emptyTitle')} detail={aggregate.failedSources.length ? t('common.memory.emptyFailed') : t('common.memory.emptyAll')} action={can('create') && destinations.length > 0 ? <button type="button" className="button primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button> : undefined} />
         : aggregate && filtering && visible.length === 0
-          ? <div className={styles.noMatch}><Icon name="search" size={18} /><p>{needle ? t('common.memory.noMatch', { query: query.trim() }) : t('common.memory.noMatchFilter')}</p><button type="button" className="button" onClick={clearFilters}>{t('common.memory.clearFilters')}</button></div>
-          : aggregate ? <nav ref={listRef} className={styles.list} aria-label={t('common.memory.listLabel')} onKeyDown={onListKey}>{ordered.map(entryButton)}</nav> : null}
-    placeholder={aggregate && total > 0 && !current && !compose ? <div className={styles.placeholder}>
-      <span className={styles.placeholderIcon} aria-hidden="true"><Icon name="sparkle" size={22} /></span>
+          ? <div className={doc.noMatch}><Icon name="search" size={18} /><p>{needle ? t('common.memory.noMatch', { query: query.trim() }) : t('common.memory.noMatchFilter')}</p><button type="button" className="button" onClick={clearFilters}>{t('common.memory.clearFilters')}</button></div>
+          : aggregate ? <nav ref={listRef} className={doc.rows} aria-label={t('common.memory.listLabel')} onKeyDown={onListKey}>{ordered.map(entryButton)}</nav> : null}
+    placeholder={aggregate && total > 0 && !current && !compose ? <div className={doc.placeholder}>
+      <span className={doc.placeholderIcon} aria-hidden="true"><Icon name="sparkle" size={22} /></span>
       <strong>{t('common.memory.selectHint')}</strong>
       <p>{t('common.memory.selectDetail')}</p>
-      <span className={styles.keys}><kbd>↑</kbd><kbd>↓</kbd>{t('common.memory.keysHint')}</span>
+      <span className={doc.keys}><kbd>↑</kbd><kbd>↓</kbd>{t('common.memory.keysHint')}</span>
     </div> : null}
-    document={compose ? <form className={styles.detail} aria-label={t('common.memory.createTitle')} onSubmit={event => { event.preventDefault(); void createMemory(false); }}>
-      <div className={styles.titleBar}><h3>{compose.id.trim() ? parseMemory(compose.id.trim(), compose.text).title : t('common.memory.untitled')}</h3></div>
-      <div className={styles.composeFields}>
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>{t('common.memory.destination')}</span>
+    document={compose ? <form className={doc.doc} aria-label={t('common.memory.createTitle')} onSubmit={event => { event.preventDefault(); void createMemory(false); }}>
+      <DocumentHeader title={compose.id.trim() ? parseMemory(compose.id.trim(), compose.text).title : t('common.memory.untitled')} meta={composeDestination ? t('common.memory.writeLocation', { target: composeDestination.detail ?? composeDestination.label }) : undefined} />
+      <div className={doc.form}>
+        <div className={doc.field}>
+          <span>{t('common.memory.destination')}</span>
           <FilterSelect label={t('common.memory.destination')} triggerDetail={false} value={compose.destination} options={destinations.map(item => ({ value: item.value, label: item.label, detail: item.detail, note: item.note }))} onChange={value => setCompose(previous => previous ? { ...previous, destination: value } : previous)} forceSearch={destinations.length > 6} onPickFolder={memory.scope.project ? () => void chooseFolder() : undefined} pickFolderLabel={t('common.memory.pickFolder')} />
-          {composeDestination && <small className={styles.fieldHint}>{t('common.memory.writeLocation', { target: composeDestination.detail ?? composeDestination.label })}</small>}
         </div>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>{t('common.memory.idLabel')}</span>
+        <label className={doc.field}>
+          <span>{t('common.memory.idLabel')}</span>
           <span className={styles.idInput} data-invalid={!!composeIdError || undefined}><input aria-label={t('common.memory.idLabel')} aria-invalid={!!composeIdError} value={compose.id} placeholder={t('common.memory.idPlaceholder')} spellCheck={false} autoFocus onChange={event => { const value = event.target.value; setCompose(previous => previous ? { ...previous, id: value } : previous); }} /><span aria-hidden="true">.md</span></span>
-          <small className={styles.fieldHint} data-tone={composeIdError ? 'error' : undefined}>{composeIdError || t(aggregate?.nativeFileNames ? 'common.memory.nativeIdHint' : 'common.memory.idHint')}</small>
+          <small className={doc.hint} data-tone={composeIdError ? 'error' : undefined}>{composeIdError || t(aggregate?.nativeFileNames ? 'common.memory.nativeIdHint' : 'common.memory.idHint')}</small>
         </label>
       </div>
-      <div className={styles.editorArea}>
+      <div className={doc.editor}>
         <CodeEditor label={t('common.memory.textLabel')} format="markdown" value={compose.text} onChange={value => setCompose(previous => previous ? { ...previous, text: value } : previous)} placeholder={t('common.memory.textPlaceholder')} />
       </div>
-      <div className={styles.detailFoot}>
-        <span className={styles.footNote}>{t('common.memory.saveShortcut', { mod: modLabel })}</span>
+      <DocumentFoot dirty={false} note={t('common.memory.saveShortcut', { mod: modLabel })}>
         <button type="button" className="button" disabled={busy} onClick={() => void cancelCompose()}>{t('common.memory.cancel')}</button>
-        <button type="submit" className={`button primary ${styles.primary}`} disabled={busy || !composeDestination || !compose.id.trim() || !!composeIdError}>{t('common.memory.save')}</button>
-      </div>
-    </form> : current ? <article className={styles.detail} aria-label={currentParsed?.title ?? current.entry.id} aria-busy={reading || undefined}>
-      <div className={styles.titleBar}>
-        <h3>{currentParsed?.title ?? current.entry.id}</h3>
-        <div className={styles.titleTools}>
-          {can('edit')
-            ? <div className={styles.segmented} role="group" aria-label={t('common.memory.viewMode')}>
-              <button type="button" aria-pressed={!editing} disabled={busy} onClick={() => { if (editing) void stopEdit(); }}><Icon name="eye" size={14} />{t('common.memory.read')}</button>
-              <button type="button" aria-pressed={editing} disabled={busy || (reading && !editing)} onClick={() => { if (!editing) void startEdit(); }}><Icon name="pencil" size={14} />{t('common.memory.edit')}</button>
-            </div>
-            : <span className={styles.readOnlyPill}><Icon name="lock" size={12} />{t('common.memory.readOnly')}</span>}
-          {can('item_enable') && <span className={styles.inlineSwitch}><span aria-hidden="true">{t('common.memory.enabledLabel')}</span><Switch checked={current.entry.enabled} label={t('common.memory.enable', { id: current.entry.id })} disabled={busy} onChange={value => void setEnabled(value, current.entry.target, current.entry.id)} /></span>}
+        <button type="submit" className="button primary" disabled={busy || !composeDestination || !compose.id.trim() || !!composeIdError}>{t('common.memory.save')}</button>
+      </DocumentFoot>
+    </form> : current ? <article className={doc.doc} aria-label={currentParsed?.title ?? current.entry.id} aria-busy={reading || undefined}>
+      <DocumentHeader
+        title={currentParsed?.title ?? current.entry.id}
+        badges={<>
+          {currentParsed?.type && <span className={styles.typeBadge} data-type={currentParsed.type}>{typeLabel(currentParsed.type)}</span>}
           {!current.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}
-          <button type="button" className={styles.metaButton} aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(value => !value)}><Icon name="info" size={13} />{t('common.memory.pathLayer')}</button>
-          {can('delete') && <button type="button" className={`${styles.ghostIcon} ${styles.danger}`} aria-label={t('common.memory.delete', { id: current.entry.id })} title={t('common.memory.delete', { id: current.entry.id })} disabled={busy} onClick={() => void confirmRemove(current)}><Icon name="trash" size={15} /></button>}
-        </div>
-      </div>
-      {propertiesOpen && <div className={styles.pathPanel} data-memory-path="">
-        <p className={styles.pathLine}><span className={styles.mono}>{displayPath(current.entry.path)}</span><button type="button" className={styles.metaButton} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={13} />{t('common.memory.copyPath')}</button></p>
-        {currentStore?.path && currentStore.path !== displayPath(current.entry.path) && <p className={styles.pathSource}>{currentStore.path}</p>}
-        {currentParsed?.modified && <p className={styles.metaText} title={relativeTime(currentParsed.modified, i18n.language)?.absolute}><Icon name="clock" size={13} />{t('common.memory.modified', { time: relativeTime(currentParsed.modified, i18n.language)?.text ?? currentParsed.modified })}</p>}
-        {currentParsed && currentParsed.properties.length > 0 && <dl className={styles.properties}>{currentParsed.properties.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}
-      </div>}
+          {!can('edit') && <span className={doc.chip}><Icon name="lock" size={11} />{t('common.memory.readOnly')}</span>}
+        </>}
+        tools={<>
+          {can('edit') && <ModeSwitch mode={editing ? 'edit' : 'read'} editable disabled={busy || (reading && !editing)} onChange={next => { if (next === 'edit') void startEdit(); else setMode('read'); }} />}
+          {can('item_enable') && <Toggle checked={current.entry.enabled} label={t('common.memory.enable', { id: current.entry.id })} text={t('common.memory.enabledLabel')} disabled={busy} onChange={value => void setEnabled(value, current.entry.target, current.entry.id)} />}
+          <button type="button" className={doc.iconButton} aria-expanded={propertiesOpen} aria-label={t('common.memory.pathLayer')} title={t('common.memory.pathLayer')} onClick={() => setPropertiesOpen(value => !value)}><Icon name="info" size={15} /></button>
+          {can('delete') && <button type="button" className={doc.iconButton} data-tone="danger" aria-label={t('common.memory.delete', { id: current.entry.id })} title={t('common.memory.delete', { id: current.entry.id })} disabled={busy} onClick={() => void confirmRemove(current)}><Icon name="trash" size={15} /></button>}
+        </>}
+        meta={currentScope || currentModified ? <>
+          {currentScope && <span className={styles.metaText} title={currentScope.title}><Icon name={current.entry.target.scope === 'global' ? 'globe' : 'folder'} size={12} />{currentScope.text}</span>}
+          {currentModified && <span className={styles.metaText} title={currentModified.absolute}><Icon name="clock" size={12} />{t('common.memory.modified', { time: currentModified.text })}</span>}
+        </> : undefined}
+      />
+      {propertiesPanel}
       {editing
-        ? <>
-          <div className={styles.editorArea}><CodeEditor key={current.key} label={t('common.memory.textLabel')} format="markdown" value={draft} onChange={setDraft} readOnly={busy} documentId={current.key} /></div>
-          <div className={styles.detailFoot}>
-            <span className={styles.footNote} data-dirty={dirty || undefined}>{dirty ? t('common.memory.unsaved') : t('common.memory.saveShortcut', { mod: modLabel })}</span>
-            <button type="button" className="button" disabled={busy} onClick={() => void stopEdit()}>{dirty ? t('common.memory.discard') : t('common.memory.done')}</button>
-            <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !dirty} onClick={() => void saveOpened(false)}>{t('common.memory.save')}</button>
-          </div>
-        </>
-        : <div className={styles.readBody} role="region" aria-label={t('common.memory.textLabel')}>
+        ? <div className={doc.editor}><CodeEditor key={current.key} label={t('common.memory.textLabel')} format="markdown" value={draft} onChange={setDraft} readOnly={busy} documentId={current.key} /></div>
+        : <div className={doc.body} role="region" aria-label={t('common.memory.textLabel')} tabIndex={0} title={can('edit') ? t('common.document.editHint') : undefined} onDoubleClick={event => { if (!can('edit') || busy || (event.target as HTMLElement).closest('button')) return; event.preventDefault(); window.getSelection()?.removeAllRanges(); void startEdit(); }}>
           {currentParsed
             ? currentParsed.displayBody.trim()
-              ? <div className={styles.prose}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MemoryMarkdown text={currentParsed.displayBody} resolve={target => !!linkedRow(target, current.store)} onOpen={target => { const row = linkedRow(target, current.store); if (row) void select(row); }} /></Suspense></div>
-              : <p className={styles.emptyBody}>{t('common.memory.emptyBody')}</p>
+              ? <div className={doc.readColumn}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MarkdownView text={currentParsed.displayBody} resolve={target => !!linkedRow(target, current.store)} onOpen={target => { const row = linkedRow(target, current.store); if (row) void select(row); }} /></Suspense></div>
+              : <p className={doc.empty}>{t('common.memory.emptyBody')}</p>
             : reading || current.pending
-              ? <div className={styles.bodyPending} role="status" aria-label={t('common.memory.reading')}><span /><span /><span /></div>
-              : <p className={styles.emptyBody}>{t('common.memory.readFailed')}</p>}
+              ? <div className={doc.pending} role="status" aria-label={t('common.memory.reading')}><span /><span /><span /></div>
+              : <p className={doc.empty}>{t('common.memory.readFailed')}</p>}
         </div>}
+      {can('edit') && (editing || dirty) && <DocumentFoot dirty={dirty} note={t('common.memory.saveShortcut', { mod: modLabel })}>
+        <button type="button" className="button" disabled={busy} onClick={() => void stopEdit()}>{dirty ? t('common.memory.discard') : t('common.memory.done')}</button>
+        <button type="button" className="button primary" disabled={busy || !dirty} onClick={() => void saveOpened(false)}>{t('common.memory.save')}</button>
+      </DocumentFoot>}
     </article> : null}
   />;
 }

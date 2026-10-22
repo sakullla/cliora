@@ -46,14 +46,14 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 
 - `--theme all|light|dark` chooses the theme. The default is `all`.
 - `--size all|1360,900,640` chooses widths. The default is `all`.
-- `--skills` captures the Skill list and the SKILL.md editor.
+- `--skills` captures the Skill list, the SKILL.md reading view, and the SKILL.md editor.
 - `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
 - `--mcp` captures the tool MCP tab and its editor, plus the library MCP list, editor, and CLI target panel.
 - `--list` prints feature scenario names. `--only 'kimi-*'` limits those scenarios. It does not filter `--skills`.
 - `CLIORA_CAPTURE_OUT` sets the output directory. The default is `docs/verification/ui`.
 - `CLIORA_PREVIEW_URL` sets the preview. The default is `http://127.0.0.1:14736`.
 
-The Skill fixture treats the directory name as the skill. `crud-page` has a mismatched frontmatter name and an empty description. `lark-apps` is markdown without frontmatter. Both stay on the list as 本机目录 and open an editor. `code-review` is a managed package and opens the same editor with 启用 Skill. 放进资料库 is only on an external directory. The editor capture types into SKILL.md and expects 保存 to become enabled. A name or description mismatch is not 暂不可读取.
+The Skill fixture treats the directory name as the skill. `crud-page` has a mismatched frontmatter name and an empty description. `lark-apps` is markdown without frontmatter. Both stay on the list as 本机目录; they open in reading mode and switch to the editor with 编辑. `code-review` is a managed package and opens the same editor with 启用 Skill. 放进资料库 is only on an external directory. The editor capture types into SKILL.md and expects 保存 to become enabled. A name or description mismatch is not 暂不可读取.
 
 `scripts/capture-sync.mjs` captures only 迁移与同步: WebDAV unconnected, healthy, needs-attention, failing and paused states, the connect/export/import dialogs, an open conflict, and the sync progress and result dialogs. It takes the same `--theme`/`--size` options and writes to `docs/verification/ui-sync` unless `CLIORA_CAPTURE_OUT` is set.
 

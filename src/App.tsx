@@ -482,7 +482,7 @@ export default function App() {
     <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records'} />
+      <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<button className="button primary" type="button" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}

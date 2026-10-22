@@ -1,15 +1,14 @@
-.workspace { display: grid; gap: 20px; min-width: 0; color: var(--text); }
+.workspace { display: grid; gap: 16px; min-width: 0; color: var(--text); }
 .chrome {
   position: sticky;
   top: 0;
   z-index: 4;
   display: grid;
-  gap: 14px;
-  margin: -10px 0 0;
-  padding: 10px 0 12px;
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter: blur(14px) saturate(1.04);
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  gap: 10px;
+  margin: -8px 0 0;
+  padding: 8px 0 0;
+  background: transparent;
+  backdrop-filter: blur(18px) saturate(1.05);
 }
 
 /* ---------- Shared button variants ---------- */
@@ -65,8 +64,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 38px;
-  padding: 0 14px 0 10px;
+  min-height: 34px;
+  padding: 0 13px 0 9px;
   border: 0;
   border-radius: var(--radius);
   background: transparent;
@@ -98,25 +97,28 @@
 }
 
 /* ---------- Task tabs + scope ---------- */
-.taskBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; }
-.views { display: inline-flex; flex: 0 1 auto; gap: 3px; min-width: 0; max-width: 100%; overflow-x: auto; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface-2) 82%, transparent); }
+.taskBar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 6px 20px; border-bottom: 1px solid var(--line); }
+.views { display: inline-flex; flex: 0 1 auto; gap: 2px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.views::-webkit-scrollbar { display: none; }
 .views button {
   position: relative;
-  padding: 6px 13px;
+  min-height: 38px;
+  padding: 0 13px;
   border: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: none;
   color: var(--text-2);
   font-size: var(--fs-control);
   font-weight: var(--fw-medium);
   white-space: nowrap;
-  transition: color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+  transition: color var(--fast) var(--ease), background-color var(--fast) var(--ease);
 }
-.views button::after { display: none; }
-.views button:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 72%, transparent); }
-.views .selected { color: var(--text); font-weight: var(--fw-semibold); background: var(--surface); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
+.views button::after { content: ''; position: absolute; right: 10px; bottom: -1px; left: 10px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); transform: scaleX(0); transition: transform var(--medium) var(--ease); }
+.views button:hover { color: var(--text); background: color-mix(in srgb, var(--surface-3) 55%, transparent); }
+.views .selected { color: var(--text); font-weight: var(--fw-semibold); }
+.views .selected::after { transform: scaleX(1); }
 
-.scopeBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.scopeBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; padding-bottom: 6px; }
 .scopeBar label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: nowrap; }
 .scopeBar select { min-height: var(--control-h-sm); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .scopeBar > select { width: 200px; max-width: 100%; }

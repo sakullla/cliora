@@ -297,6 +297,10 @@ export default {
     compatVersion: '参考核验版本 {{version}} · {{detail}}',
   },
   agents: {
+    toolbar: 'Agent 工具栏',
+    enableAria: '启用',
+    previewRegion: 'Agent 定义预览',
+    selectHint: '选择一个 Agent 定义',
     confirmAbandon: '放弃尚未保存的 agent 定义？',
     abandonTitle: '未保存的定义',
     abandonConfirm: '放弃修改',
@@ -515,6 +519,7 @@ export default {
     addToLibrary: '放进资料库',
     editorNote: '直接编辑这个目录里的 SKILL.md。目录名就是这份 Skill，description 可以留空。',
     editorLabel: 'SKILL.md',
+    previewRegion: 'SKILL.md 预览',
     loading: '正在读取 SKILL.md…',
     save: '保存',
     saved: '已保存 SKILL.md。',

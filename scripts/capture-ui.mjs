@@ -164,11 +164,14 @@ async function captureSkillViews(page,capture){
   const confirmation=page.getByRole('dialog',{name:'放弃未保存修改？'});
   if(await confirmation.count()&&await confirmation.isVisible())await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
  }
- async function openSkill(name,sample){
+ async function openSkill(name,sample,reading){
   const save=page.getByRole('button',{name:'保存',exact:true});
   const dirty=await save.count()&&await save.isEnabled();
   await list.getByRole('button',{name:new RegExp(name)}).click();
   if(dirty)await discardIfAsked();
+  await page.getByRole('region',{name:'SKILL.md 预览'}).waitFor();
+  if(reading)await capture(reading);
+  await article().getByRole('button',{name:'编辑',exact:true}).click();
   const editor=page.getByRole('textbox',{name:'SKILL.md'});
   await editor.waitFor();
   await expect(editor).toContainText(sample);
@@ -189,6 +192,7 @@ async function captureSkillViews(page,capture){
  await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
  await expect(article().getByRole('button',{name:'保存',exact:true})).toBeDisabled();
  await loose.click();
+ await page.keyboard.press('End');
  await page.keyboard.type('编辑过');
  await expect(article().getByRole('button',{name:'保存',exact:true})).toBeEnabled();
  await capture('skill-editor');
@@ -196,8 +200,8 @@ async function captureSkillViews(page,capture){
  await openSkill('lark-apps','# just markdown');
  await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
  await closeSkill();
- await openSkill('code-review','# 代码审查');
- await expect(article().getByRole('checkbox',{name:'启用 Skill'})).toBeVisible();
+ await openSkill('code-review','# 代码审查','skill-reading');
+ await expect(article().getByRole('switch',{name:'启用 Skill'})).toBeVisible();
  await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toHaveCount(0);
  await expect(article().getByRole('button',{name:'保存',exact:true})).toBeVisible();
  await capture('skill-editor-managed');
@@ -450,7 +454,7 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'Claude Code',exact:true}).click();
  await page.getByRole('tab',{name:'插件',exact:true}).click();await page.getByText('Code Review',{exact:true}).waitFor();await capture('native-plugins');await page.getByLabel('插件来源',{exact:true}).fill('code-review@official');await page.getByRole('checkbox').check();await capture('plugin-install');
  await page.getByLabel('搜索插件').fill('missing-plugin');await capture('plugin-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('插件状态筛选').selectOption('readonly');await capture('plugin-readonly-filter');await page.getByLabel('插件状态筛选').selectOption('all');
- await page.getByRole('tab',{name:'Agents',exact:true}).click();await page.getByText('reviewer',{exact:true}).waitFor();await capture('native-agents');await page.getByRole('listitem').filter({has:page.getByText('reviewer',{exact:true})}).getByRole('button',{name:'编辑',exact:true}).click();await page.getByRole('textbox',{name:'原生 Agent 定义',exact:true}).waitFor();await capture('agent-editor');await page.getByRole('button',{name:'关闭编辑',exact:true}).click();
+ await page.getByRole('tab',{name:'Agents',exact:true}).click();await page.getByText('reviewer',{exact:true}).waitFor();await capture('native-agents');await page.getByRole('listitem').filter({has:page.getByText('reviewer',{exact:true})}).getByRole('button').click();await page.getByRole('region',{name:'Agent 定义预览'}).waitFor();await capture('agent-reading');await page.getByRole('article',{name:'reviewer'}).getByRole('button',{name:'编辑',exact:true}).click();await page.getByRole('textbox',{name:'原生 Agent 定义',exact:true}).waitFor();await capture('agent-editor');await page.getByRole('button',{name:'完成',exact:true}).click();
  await page.getByLabel('搜索 Agent 定义').fill('missing-agent');await capture('agent-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('Agent 状态筛选').selectOption('readonly');await capture('agent-readonly-filter');await page.getByLabel('Agent 状态筛选').selectOption('all');
  await page.getByRole('tab',{name:'Grok',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'账号',exact:true}).count())throw new Error('Unsupported Grok accounts tab is visible');await capture('grok-capabilities');
  await page.getByRole('tab',{name:'Pi',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'Agents',exact:true}).count())throw new Error('Unsupported Pi agents tab is visible');await capture('pi-capabilities');
