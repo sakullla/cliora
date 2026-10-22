@@ -762,3 +762,55 @@ test('session detail shows a child on the chat timeline and opens one level at a
   await expect(reader).not.toContainText('归属未知');
   await expect(reader.getByRole('button', { name: /打开/ })).toHaveCount(0);
 });
+
+test('resuming into the workbench opens that session and an external resume does not', async ({ page }) => {
+  await page.addInitScript(() => {
+    const session = { id: 'record-a', toolId: 'codex', nativeId: '1111', title: 'Review change', cwd: 'C:\\project', model: 'gpt', projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
+    const live: Array<Record<string, unknown>> = [];
+    const control = { external: false };
+    Object.assign(window, {
+      isTauri: true, __resumeMode: control,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects') return [];
+          if (command === 'refresh_history') return [];
+          if (command === 'list_history_prices') return [];
+          if (command === 'list_history_sessions') return [session];
+          if (command === 'get_history_session') return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1 }], usage: [], resumeReason: null };
+          if (command === 'copy_history_resume_command') return 'codex resume 1111';
+          if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'resume_history_session') {
+            if (control.external) return { toolId: 'codex', projectId: null, mode: args.mode, terminal: 'power_shell', status: 'terminal_requested', sessionId: null };
+            const id = 'live-1';
+            if (!live.length) live.push({ id, toolId: 'codex', projectId: null, directory: 'C:/project', mode: args.mode, running: true, exitCode: null });
+            return { toolId: 'codex', projectId: null, mode: args.mode, terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
+          if (command === 'list_workbench_sessions') return live.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('resumed');
+          if (command === 'resize_workbench_session') return null;
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('button', { name: '在外部终端继续' }).click();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('project');
+  await expect(page.getByText('已请求外部终端恢复会话')).toHaveCount(0);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.evaluate(() => { (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = true; });
+  await page.getByRole('button', { name: '在外部终端继续' }).click();
+  await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
+  await expect(page.getByText('已请求外部终端恢复会话。')).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+});

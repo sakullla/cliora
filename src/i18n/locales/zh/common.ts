@@ -227,6 +227,7 @@ export default {
   },
   nav: {
     home: '快速开始',
+    sessions: '工作台',
     connections: '工具与连接',
     library: '资料库',
     records: '使用记录',
@@ -245,6 +246,7 @@ export default {
   },
   pages: {
     home: { title: '快速开始', subtitle: '选择工具与项目，一键在外部终端启动。' },
+    sessions: { title: '工作台', subtitle: '在当前窗口里操作 CLI。只有选中的会话接收输入。' },
     connections: { title: '工具与连接', subtitle: '管理当前工具的配置与连接。' },
     library: { title: '资料库', subtitle: '统一保存提示词、规则、MCP 与 Skill。' },
     records: { title: '使用记录', subtitle: '查看本机会话与用量。' },

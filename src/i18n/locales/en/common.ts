@@ -227,6 +227,7 @@ export default {
   },
   nav: {
     home: 'Quick start',
+    sessions: 'Workbench',
     connections: 'Tools & connections',
     library: 'Library',
     records: 'Usage records',
@@ -245,6 +246,7 @@ export default {
   },
   pages: {
     home: { title: 'Quick start', subtitle: 'Pick a tool and a project, then launch in an external terminal.' },
+    sessions: { title: 'Workbench', subtitle: 'Work with the CLI in this window. Only the selected session receives input.' },
     connections: { title: 'Tools & connections', subtitle: 'Manage configuration and connections for the current tool.' },
     library: { title: 'Library', subtitle: 'Keep prompts, rules, MCP, and skills in one place.' },
     records: { title: 'Usage records', subtitle: 'View local sessions and usage.' },

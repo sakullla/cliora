@@ -876,3 +876,120 @@ test('any existing tool, profile, or project keeps the onboarding checklist hidd
   await seedVariant({ profiles: [{ id: 'daily', name: '日常' }] });
   await seedVariant({ projects: [{ id: 'demo', name: 'Demo', path: 'C:/demo', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }] });
 });
+
+test('workbench launch opens the page, external and desktop launches do not, and failure can be retried there', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions: Array<Record<string, unknown>> = [];
+    const launches: unknown[] = [];
+    const control = { mode: 'workbench' as 'workbench' | 'external' | 'desktop' | 'fail' };
+    const project = { id: 'p1', name: '示例项目', path: 'C:/work', available: true, preferredTool: 'codex', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} };
+    const facet = { state: 'available', reason: '' };
+    const workspace = () => ({ probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [] }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null });
+    Object.assign(window, {
+      isTauri: true, __launches: launches, __bench: control,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'cursor'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'cursor', name: 'Cursor' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: 'terminal', yoloAvailable: false, interfaceFormats: [], nativeConfig: facet, launch: facet, resume: facet, resources: facet, history: facet }, { id: 'cursor', name: 'Cursor', launchForm: 'desktop', yoloAvailable: false, interfaceFormats: [], nativeConfig: facet, launch: facet, resume: facet, resources: facet, history: facet }], managedIds: ['codex', 'cursor'], preservedUnknown: [] };
+          if (command === 'list_projects') return [project];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }, { id: 'windows_terminal', label: 'Windows Terminal', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'get_registered_tool_workspace') return workspace();
+          if (command === 'launch_cli') {
+            launches.push(args.request);
+            if (control.mode === 'fail') throw { message: '目录不可用' };
+            if (control.mode === 'external') return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode, terminal: 'windows_terminal', status: 'terminal_requested', sessionId: null };
+            if (control.mode === 'desktop') return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode, terminal: 'desktop', status: 'desktop_requested', sessionId: null };
+            const id = `s${sessions.length + 1}`;
+            sessions.push({ id, toolId: args.request.toolId, projectId: args.request.projectId, directory: 'C:/work', mode: args.request.mode, running: true, exitCode: null });
+            return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode, terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'resize_workbench_session' || command === 'write_workbench_session') return null;
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return [];
+        },
+      },
+    });
+  });
+  const setMode = (mode: string) => page.evaluate((value) => { (window as unknown as { __bench: { mode: string } }).__bench.mode = value; }, mode);
+  await page.goto('/');
+  const projects = page.getByRole('region', { name: '项目与启动' });
+  await projects.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('Codex');
+  await expect(stage).toContainText('示例项目');
+  await expect(stage).toContainText('普通');
+  await expect(page.getByText('已向外部终端')).toHaveCount(0);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await setMode('external');
+  await projects.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(projects.getByRole('status')).toContainText('已向外部终端发送启动请求');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await setMode('desktop');
+  const cursor = page.locator('[data-tool-row]', { hasText: 'Cursor' });
+  await cursor.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(cursor.getByRole('status')).toContainText('已请求启动桌面应用');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await setMode('fail');
+  await projects.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  const alert = page.getByRole('region', { name: '当前会话' }).getByRole('alert');
+  await expect(alert).toContainText('目录不可用');
+  await expect(alert).toContainText('不会改用外部终端');
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+  await setMode('workbench');
+  await alert.getByRole('button', { name: '重试' }).click();
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(2);
+  await expect(alert).toHaveCount(0);
+});
+
+test('a library prompt opens in the workbench with its initial text', async ({ page }) => {
+  await page.addInitScript(() => {
+    const prompt = { id: 'prompt-1', kind: 'prompt', title: '审查改动', body: '请先阅读 diff', category: '', projectId: null, version: 1, updatedAt: 1 };
+    const launches: Array<Record<string, unknown>> = [];
+    const sessions: Array<Record<string, unknown>> = [];
+    Object.assign(window, {
+      isTauri: true, __promptLaunches: launches,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: 'terminal', yoloAvailable: false, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_mcp_placements') return [];
+          if (command === 'list_library_items') return args.kind === 'prompt' ? [prompt] : [];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'launch_cli') {
+            launches.push(args.request);
+            sessions.push({ id: 'prompt-session', toolId: args.request.toolId, projectId: args.request.projectId, directory: 'C:/work', mode: args.request.mode, running: true, exitCode: null });
+            return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode, terminal: 'workbench', status: 'session_started', sessionId: 'prompt-session' };
+          }
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('prompt-ready');
+          if (command === 'resize_workbench_session') return null;
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('button', { name: '启动会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '用这条提示词启动' });
+  await dialog.getByRole('button', { name: '在外部终端启动' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __promptLaunches: Array<{ initialPrompt?: string }> }).__promptLaunches.map((item) => item.initialPrompt))).toEqual(['请先阅读 diff']);
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
+  await expect(page.getByText('已请求外部终端启动会话')).toHaveCount(0);
+});

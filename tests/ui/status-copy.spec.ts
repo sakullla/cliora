@@ -441,3 +441,30 @@ test('export password can be revealed and explains what is still missing', async
   await expect(dialog.getByText('口令还需 1 位')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '导出配置包' })).toBeDisabled();
 });
+
+test('an empty workbench follows the light and dark theme and offers a next step', async ({ page }) => {
+  await install(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
+  await expect(stage.getByRole('button', { name: '去快速开始' })).toBeVisible();
+  const color = () => stage.evaluate((element) => {
+    const probe = document.createElement('span');
+    probe.style.background = 'var(--bg)';
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { actual: getComputedStyle(element).backgroundColor, expected };
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  const light = await color();
+  expect(light.actual).toBe(light.expected);
+  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  const dark = await color();
+  expect(dark.actual).toBe(dark.expected);
+  expect(dark.actual).not.toBe(light.actual);
+  await stage.getByRole('button', { name: '去快速开始' }).click();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+});

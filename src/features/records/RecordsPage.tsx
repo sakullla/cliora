@@ -16,6 +16,7 @@ import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
 import { childTitle, childTrail } from './SessionAssociation';
@@ -93,7 +94,7 @@ function rangeCaption(from: string, to: string) {
   if (from) return i18n.t('records.page.captionFrom', { date: dayLabel(from) });
   return i18n.t('records.page.captionTo', { date: dayLabel(to) });
 }
-export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean; tools: AdapterDescriptor[]; onOpenProjects: () => void }) {
+export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; tools: AdapterDescriptor[]; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
   const [search, setSearch] = useState('');
@@ -328,8 +329,19 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   async function resume() {
     if (!selected || !readyCommand) return;
     setBusy(true); toasts.clear();
-    try { await native.resumeHistorySession(selected.session.id, mode); showNotice(t('records.page.resumeRequested')); }
-    catch (value) { showError(value); }
+    try {
+      const result = await native.resumeHistorySession(selected.session.id, mode);
+      const opened = workbenchSessionId(result);
+      if (opened) { onWorkbenchSession?.(opened); return; }
+      showNotice(t('records.page.resumeRequested'));
+    }
+    catch (value) {
+      if (await failedInWorkbench(false)) {
+        onWorkbenchFailure?.({ detail: formatFailure(value, t('records.page.operationFailed'), recordNext()), retry: { kind: 'resume', id: selected.session.id, mode } });
+        return;
+      }
+      showError(value);
+    }
     finally { setBusy(false); }
   }
 

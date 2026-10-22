@@ -72,18 +72,29 @@ export function TerminalSettings() {
   }, []);
 
   function selectionKey() {
-    if (showCustom || !settings) return showCustom ? 'custom' : 'auto';
+    if (showCustom) return 'custom';
+    if (!settings || settings.selected === 'auto' || settings.selected === 'workbench') return 'workbench';
     const preset = matchedPreset(settings);
     return preset ? `preset:${preset.id}` : settings.selected;
+  }
+
+  function terminalChoices() {
+    const source = settings?.terminals?.length
+      ? settings.terminals
+      : [{ id: 'workbench' as TerminalId, label: t('settings.terminal.workbench'), available: true }];
+    const visible = source.filter((item) => item.id !== 'custom');
+    if (!visible.some((item) => item.id === 'workbench')) visible.unshift({ id: 'workbench', label: t('settings.terminal.workbench'), available: true });
+    return visible;
   }
 
   async function choose(value: string) {
     if (value === 'custom') { setShowCustom(true); return; }
     setShowCustom(false);
     setBusy(true); setError('');
+    const terminal = value === 'auto' ? 'workbench' : value;
     try {
-      if (value.startsWith('preset:')) {
-        const preset = (settings?.presets ?? []).find((item) => item.id === value.slice('preset:'.length));
+      if (terminal.startsWith('preset:')) {
+        const preset = (settings?.presets ?? []).find((item) => item.id === terminal.slice('preset:'.length));
         if (!preset) return;
         const next = await native.setCustomTerminal(preset.program, preset.args);
         setSettings(next);
@@ -91,7 +102,7 @@ export function TerminalSettings() {
         setArgsText((next.custom?.args ?? preset.args).join('\n'));
         return;
       }
-      setSettings(await native.setPreferredTerminal(value as TerminalId));
+      setSettings(await native.setPreferredTerminal(terminal as TerminalId));
     } catch (value) { setError(message(value as unknown)); }
     finally { setBusy(false); }
   }
@@ -128,7 +139,7 @@ export function TerminalSettings() {
 
   return <section className="settings-group" aria-label={t('settings.terminal.title')}>
     <div className="setting-intro"><h2>{t('settings.terminal.title')}</h2><p>{t('settings.terminal.description')}</p></div>
-    <label className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><select aria-label={t('settings.terminal.launch')} value={selectionKey()} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void choose(event.target.value)}>{(settings?.terminals ?? [{ id: 'auto' as TerminalId, label: t('settings.terminal.systemDefault'), available: false }]).filter((item) => item.id !== 'custom').map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? '' : t('settings.terminal.unavailableSuffix')}</option>)}{(settings?.presets ?? []).map((item: TerminalPreset) => <option key={item.id} value={`preset:${item.id}`}>{item.label}</option>)}<option value="custom">{t('settings.terminal.custom')}</option></select></label>
+    <label className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><select aria-label={t('settings.terminal.launch')} value={selectionKey()} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void choose(event.target.value)}>{terminalChoices().map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? '' : t('settings.terminal.unavailableSuffix')}</option>)}{(settings?.presets ?? []).map((item: TerminalPreset) => <option key={item.id} value={`preset:${item.id}`}>{item.label}</option>)}<option value="custom">{t('settings.terminal.custom')}</option></select></label>
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><button type="button" className="button" disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</button><button type="button" className="button" disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</button></span></span></div>}
     <label className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><select aria-label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('cli', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
     <label className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><select aria-label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('project', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
