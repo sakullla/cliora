@@ -143,6 +143,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
+  const [initialListSettled, setInitialListSettled] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ running: boolean; toolId: string; completedSources: number; totalSources: number } | null>(null);
   const scanRequest = useRef(0);
   const scanningRef = useRef(false);
@@ -197,7 +198,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       if (sequence === request.current && key === JSON.stringify(filterRef.current)) { setListError(true); showReadError(value); }
       return false;
     }
-    finally { if (sequence === request.current) setFilterLoading(false); }
+    finally { if (sequence === request.current) { setFilterLoading(false); setInitialListSettled(true); } }
   }, []);
 
   useEffect(() => {
@@ -211,12 +212,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   // Scans are incremental, so the index is refreshed whenever the page is shown and
   // periodically while it stays open; today's numbers then track running sessions.
   useEffect(() => {
-    if (!active || !nativeAvailable) return;
+    // Give the saved index the first disk read before discovering native logs.
+    if (!active || !nativeAvailable || !initialListSettled) return;
     const run = () => { if (Date.now() - lastScan.current > 45_000) void refresh(false, true); };
     run();
     const timer = window.setInterval(run, 120_000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, initialListSettled]);
 
   useEffect(() => {
     if (!initialized.current || !active) return;
@@ -296,6 +298,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     setFavoriteBusy(true);
     try {
       await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
+      setScanVersion(value => value + 1);
       setDetail((current) => current?.session.id === selected.session.id ? { ...current, session: { ...current.session, favorite: !selected.session.favorite } } : current);
       await load(filter);
     } catch (value) { showError(value); }
@@ -306,6 +309,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (!selected) return;
     try {
       await native.setHistoryProject(selected.session.id, next || null);
+      setScanVersion(value => value + 1);
       const updated = await native.getHistorySession(selected.session.id);
       setDetail((current) => current?.session.id === updated.session.id ? updated : current);
       await load(filter);

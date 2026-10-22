@@ -19,7 +19,7 @@ export type MemoryTarget = {
   /** Adapter-enumerated store directory; only a store the backend re-enumerates is accepted. */
   storeDirectory?: string | null;
 };
-export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string; readError?: string };
+export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string; readError?: string; previewText?: string };
 export type MemoryList = {
   inUse: boolean;
   detail: string;
@@ -56,6 +56,8 @@ export type MemoryStoreEntry = {
   inUse: boolean;
   detail: string;
   readError?: string;
+  /** Complete body reused from fingerprinting; absent when over the shared byte budget. */
+  previewText?: string;
 };
 /** One listed store, including stores that hold no entry yet. */
 export type MemoryStoreSummary = {
