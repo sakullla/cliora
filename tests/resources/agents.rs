@@ -858,6 +858,31 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
 }
 
 #[test]
+fn minimax_agent_list_does_not_wait_for_the_plugin_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let db = Database::open(&home.join("test.db")).unwrap();
+    let data = home.join(".minimax");
+    write(
+        &data.join("agents/reviewer/agent.md"),
+        "---\nname: reviewer\ndescription: Review code\n---\nReview.\n",
+    );
+    let target = PluginTarget {
+        tool_id: "minimax_code".into(),
+        scope: Scope::Global,
+        project_path: None,
+        context_id: None,
+    };
+    let snapshot = scan(&db, home, &target).unwrap();
+    let reviewer = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.name == "reviewer")
+        .unwrap();
+    assert!(!reviewer.read_only && reviewer.enabled);
+}
+
+#[test]
 fn opencode_v2_inline_agents_use_native_fields_and_model_variant_survives() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();

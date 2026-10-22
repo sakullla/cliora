@@ -448,6 +448,11 @@ fn plugin_owned(
     if target.scope == Scope::Project && !adapter.capability().project {
         return Ok(Vec::new());
     }
+    // Command-backed plugin lists can take the whole native timeout. Skip
+    // that process when the adapter never puts agent definitions in a package.
+    if !adapter.owns_agent_definitions() {
+        return Ok(Vec::new());
+    }
     // Do not lose package ownership when native discovery fails.
     Ok(plugins::scan_resources(db, home, target)?.entries)
 }
@@ -510,8 +515,15 @@ fn scan_registered(
         return snapshot_inner(home, target, &[], None);
     }
     // Reads stay available without a resolved version; the adapter then shows
-    // every native shape it can parse.
-    let version = selected_version(registry, db, home, target).ok().flatten();
+    // every native shape it can parse. A layout that does not scan versioned
+    // definition directories never reads the probe, so the page does not wait
+    // on a version command.
+    let agent = contract::get(&target.tool_id)?;
+    let version = if agent.scans_definition_directories() {
+        selected_version(registry, db, home, target).ok().flatten()
+    } else {
+        None
+    };
     let plugins = plugin_owned(db, home, target)?;
     snapshot_inner(home, target, &plugins, version.as_deref())
 }

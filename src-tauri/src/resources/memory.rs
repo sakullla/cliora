@@ -6,7 +6,8 @@
 //! and the native transaction callback does not insert library, account, or
 //! portable rows.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -217,6 +218,9 @@ pub fn list_all_memories(
         .map(|layout| layout.switch_groups(home))
         .transpose()?
         .unwrap_or_default();
+    // Every store of one CLI shares the same exclusion set. Discovering it
+    // again per store rewalks session transcripts before the list can return.
+    let _exclusion_reuse = ExclusionReuse::enter();
     for store in port.existing_stores(home) {
         let target = MemoryTarget {
             tool_id: tool_id.to_owned(),
@@ -332,6 +336,7 @@ pub fn read_memories(
     if !home.is_absolute() {
         return Err("用户目录必须是绝对路径".into());
     }
+    let _exclusion_reuse = ExclusionReuse::enter();
     let mut snapshots = BTreeMap::<String, Result<Vec<MemoryStoreRef>, String>>::new();
     for request in requests {
         if snapshots.contains_key(&request.target.tool_id) {
@@ -900,6 +905,63 @@ fn matched_store(
         .ok_or_else(|| "该记忆存储已不在磁盘上，请刷新后重试".to_owned())
 }
 
+/// One list or read batch shares session-exclusion paths. The cache lives on
+/// the calling thread and is dropped with the guard, so a later write sees
+/// the disk again.
+struct ExclusionReuse {
+    armed: bool,
+}
+
+impl ExclusionReuse {
+    fn enter() -> Self {
+        let armed = EXCLUSION_HISTORY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() {
+                false
+            } else {
+                *slot = Some(HashMap::new());
+                true
+            }
+        });
+        Self { armed }
+    }
+}
+
+impl Drop for ExclusionReuse {
+    fn drop(&mut self) {
+        if self.armed {
+            EXCLUSION_HISTORY.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+}
+
+thread_local! {
+    static EXCLUSION_HISTORY: RefCell<Option<HashMap<String, Result<Vec<PathBuf>, String>>>> =
+        const { RefCell::new(None) };
+}
+
+fn exclusion_history_paths(
+    adapter: &dyn CliAdapter,
+    home: &Path,
+    tool_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let key = format!("{tool_id}\0{}", home.display());
+    if let Some(cached) = EXCLUSION_HISTORY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|cache| cache.get(&key).cloned())
+    }) {
+        return cached;
+    }
+    let paths = adapter.history_exclusion_paths(home);
+    EXCLUSION_HISTORY.with(|slot| {
+        if let Some(cache) = slot.borrow_mut().as_mut() {
+            cache.insert(key, paths.clone());
+        }
+    });
+    paths
+}
+
 fn excluded_paths(
     adapter: &dyn CliAdapter,
     home: &Path,
@@ -962,11 +1024,8 @@ fn excluded_paths(
         }
     }
     paths.extend(
-        adapter
-            .history_sources(home)
-            .map_err(|error| format!("无法确认会话历史路径，请重试：{error}"))?
-            .into_iter()
-            .map(|source| source.path),
+        exclusion_history_paths(adapter, home, tool_id)
+            .map_err(|error| format!("无法确认会话历史路径，请重试：{error}"))?,
     );
     if let Some(plugins) = adapter.plugins() {
         let plugin_target = crate::resources::plugins::PluginTarget {

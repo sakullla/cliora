@@ -540,6 +540,12 @@ impl CliAdapter for Claude {
     ) -> Result<Vec<crate::history::HistorySource>, String> {
         history::sources(home)
     }
+    fn history_exclusion_paths(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Vec<std::path::PathBuf>, String> {
+        history::exclusion_paths(home)
+    }
     fn parse_history(
         &self,
         source: &crate::history::HistorySource,
