@@ -17,6 +17,8 @@ use crate::resources::skills;
 #[serde(rename_all = "snake_case")]
 pub enum TerminalId {
     Auto,
+    /// In-app session host. Selectable on the existing terminal control.
+    Workbench,
     WindowsTerminal,
     PowerShell,
     Cmd,
@@ -35,6 +37,7 @@ impl TerminalId {
     fn label(self) -> &'static str {
         match self {
             Self::Auto => "系统默认",
+            Self::Workbench => "工作台",
             Self::WindowsTerminal => "Windows Terminal",
             Self::PowerShell => "PowerShell",
             Self::Cmd => "CMD（命令提示符）",
@@ -49,7 +52,7 @@ impl TerminalId {
 
     fn binary(self) -> Option<&'static str> {
         match self {
-            Self::Auto => None,
+            Self::Auto | Self::Workbench => None,
             Self::WindowsTerminal => Some("wt.exe"),
             Self::PowerShell => Some("powershell.exe"),
             Self::Cmd => Some("cmd.exe"),
@@ -64,7 +67,7 @@ impl TerminalId {
 
     fn platform(self) -> bool {
         match self {
-            Self::Auto => true,
+            Self::Auto | Self::Workbench => true,
             Self::WindowsTerminal | Self::PowerShell | Self::Cmd => cfg!(windows),
             Self::MacTerminal => cfg!(target_os = "macos"),
             Self::Custom => true,
@@ -152,6 +155,7 @@ pub struct LaunchResult {
     pub mode: LaunchMode,
     pub terminal: TerminalId,
     pub status: &'static str,
+    pub session_id: Option<String>,
 }
 
 /// A managed connection key the CLI reads only from the OS environment
@@ -280,7 +284,7 @@ pub fn terminal_presets() -> Vec<TerminalPreset> {
 
 fn terminal_available(id: TerminalId) -> bool {
     match id {
-        TerminalId::Custom => true,
+        TerminalId::Workbench | TerminalId::Custom => true,
         #[cfg(windows)]
         TerminalId::Cmd => system_console_path(TerminalId::Cmd).is_ok() && system_console_path(TerminalId::PowerShell).is_ok(),
         other => other.binary().is_some_and(on_path),
@@ -303,6 +307,11 @@ fn supported_terminals() -> &'static [TerminalId] {
 
 pub fn terminal_options() -> Vec<TerminalOption> {
     let mut options = Vec::new();
+    options.push(TerminalOption {
+        id: TerminalId::Workbench,
+        label: TerminalId::Workbench.label(),
+        available: true,
+    });
     let available = supported_terminals().iter().any(|terminal| terminal_available(*terminal));
     options.push(TerminalOption {
         id: TerminalId::Auto,
@@ -349,8 +358,9 @@ fn write_setting(db: &Database, key: &str, value: &str) -> Result<(), String> {
 }
 
 pub fn terminal_preference(db: &Database) -> Result<TerminalId, String> {
+    adopt_workbench_default(db)?;
     let Some(text) = read_setting(db, "preferred_terminal")? else {
-        return Ok(TerminalId::Auto);
+        return Ok(TerminalId::Workbench);
     };
     let name: String = serde_json::from_str(&text).map_err(|_| "终端设置格式无法识别".to_string())?;
     // Older builds stored a product name. Keep that choice as a command template.
@@ -358,6 +368,19 @@ pub fn terminal_preference(db: &Database) -> Result<TerminalId, String> {
         return migrate_removed_terminal(db, "tabby");
     }
     serde_json::from_str(&text).map_err(|_| "终端设置格式无法识别".into())
+}
+
+fn adopt_workbench_default(db: &Database) -> Result<(), String> {
+    if read_setting(db, "terminal_default_epoch")?.is_some() {
+        return Ok(());
+    }
+    if let Some(text) = read_setting(db, "preferred_terminal")? {
+        if serde_json::from_str::<TerminalId>(&text).ok() == Some(TerminalId::Auto) {
+            let value = serde_json::to_string(&TerminalId::Workbench).map_err(|error| error.to_string())?;
+            write_setting(db, "preferred_terminal", &value)?;
+        }
+    }
+    write_setting(db, "terminal_default_epoch", "1")
 }
 
 fn migrate_removed_terminal(db: &Database, id: &str) -> Result<TerminalId, String> {
@@ -495,13 +518,26 @@ pub fn set_terminal(db: &Database, terminal: TerminalId) -> Result<LaunchSetting
     settings(db)
 }
 
+fn session_terminal(db: &Database) -> Result<TerminalId, String> {
+    if terminal_preference(db)? == TerminalId::Workbench {
+        Ok(TerminalId::Workbench)
+    } else {
+        selected_terminal(db)
+    }
+}
+
 fn selected_terminal(db: &Database) -> Result<TerminalId, String> {
-    let preferred = terminal_preference(db)?;
+    let mut preferred = terminal_preference(db)?;
+    if preferred == TerminalId::Workbench {
+        preferred = TerminalId::Auto;
+    }
     let options = terminal_options();
     if preferred == TerminalId::Auto {
         return options
             .into_iter()
-            .find(|option| option.id != TerminalId::Auto && option.id != TerminalId::Custom && option.available)
+            .find(|option| {
+                !matches!(option.id, TerminalId::Auto | TerminalId::Workbench | TerminalId::Custom) && option.available
+            })
             .map(|option| option.id)
             .ok_or_else(|| "未找到可用的外部终端，请安装终端后重试".into());
     }
@@ -905,7 +941,7 @@ fn plan_with_stage_at(
         },
         credential,
         terminal: match launch_form {
-            LaunchForm::Terminal => selected_terminal(db)
+            LaunchForm::Terminal => session_terminal(db)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
             LaunchForm::Desktop => TerminalId::Desktop,
         },
@@ -1167,6 +1203,7 @@ pub fn terminal_command(
             vec!["-e".into(), "sh".into(), "-lc".into(), interactive_shell_script(plan, credential)?],
         ),
         TerminalId::Desktop => return Err("桌面应用启动不经过终端".into()),
+        TerminalId::Workbench => return Err("工作台不经过外部终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand {
@@ -1263,6 +1300,7 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
         ),
         TerminalId::Xterm => ("xterm", vec!["-e".into(), "sh".into(), "-lc".into(), script.to_owned()]),
         TerminalId::Desktop => return Err("桌面应用启动不经过终端".into()),
+        TerminalId::Workbench => return Err("工作台不经过外部终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[], mac_script })
@@ -1441,6 +1479,9 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     if plan.terminal == TerminalId::Desktop {
         return spawn_desktop(&plan, credential.as_ref());
     }
+    if plan.terminal == TerminalId::Workbench {
+        return crate::session_host::start(plan, credential.as_ref());
+    }
     let terminal_id = plan.terminal;
     let terminal = terminal_command(&plan, credential.as_ref())?;
     spawn_terminal(db, terminal_id, terminal)?;
@@ -1450,6 +1491,7 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
         mode: plan.mode,
         terminal: plan.terminal,
         status: "terminal_requested",
+        session_id: None,
     })
 }
 
@@ -1497,6 +1539,7 @@ fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Re
         mode: plan.mode,
         terminal: TerminalId::Desktop,
         status: "desktop_requested",
+        session_id: None,
     })
 }
 
@@ -1760,6 +1803,7 @@ mod desktop_launch {
         let result = spawn(&db, plan).unwrap();
         assert_eq!(result.status, "desktop_requested");
         assert_eq!(result.terminal, TerminalId::Desktop);
+        assert!(result.session_id.is_none());
         assert_eq!(result.tool_id, "desktop_fixture");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !marker.exists() && std::time::Instant::now() < deadline {
@@ -1781,6 +1825,7 @@ mod desktop_launch {
         let result = spawn(&db, plan).unwrap();
         assert_eq!(result.status, "desktop_requested");
         assert_eq!(result.terminal, TerminalId::Desktop);
+        assert!(result.session_id.is_none());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !marker.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));

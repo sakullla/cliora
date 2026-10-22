@@ -2395,12 +2395,38 @@ pub async fn launch_cli(
 }
 
 #[tauri::command]
+pub fn list_workbench_sessions() -> Vec<crate::session_host::SessionSnapshot> {
+    crate::session_host::list()
+}
+
+#[tauri::command]
+pub async fn replay_workbench_session(session_id: String) -> Result<String, ApiError> {
+    blocking(move || crate::session_host::replay(&session_id).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn write_workbench_session(session_id: String, data_base64: String) -> Result<(), ApiError> {
+    blocking(move || crate::session_host::write(&session_id, &data_base64).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn resize_workbench_session(session_id: String, cols: u16, rows: u16) -> Result<(), ApiError> {
+    blocking(move || crate::session_host::resize(&session_id, cols, rows).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn close_workbench_session(session_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::session_host::close(&session_id).map_err(native_error)).await
+}
+
+#[tauri::command]
 pub fn get_tray_status(app: AppHandle) -> crate::tray::TrayStatus {
     app.state::<crate::tray::TrayState>().status()
 }
 
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
+    crate::session_host::shutdown();
     app.exit(0);
 }
 

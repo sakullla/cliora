@@ -544,21 +544,21 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
     )
     .unwrap();
     projects::set_model_override(&db, &registry, &project.id, "grok", Some("grok-4.7")).unwrap();
-    let planned = plan(
-        &db,
-        &registry,
-        temp.path(),
-        LaunchRequest {
-            tool_id: "grok".into(),
-            project_id: Some(project.id.clone()),
-            session_id: Some("session 1".into()),
-            directory: None,
-            initial_prompt: None,
-            mode: LaunchMode::Yolo,
-            resume_latest: false,
-        },
-    )
-    .unwrap();
+    let request = LaunchRequest {
+        tool_id: "grok".into(),
+        project_id: Some(project.id.clone()),
+        session_id: Some("session 1".into()),
+        directory: None,
+        initial_prompt: None,
+        mode: LaunchMode::Yolo,
+        resume_latest: false,
+    };
+    let defaulted = plan(&db, &registry, temp.path(), request.clone()).unwrap();
+    assert_eq!(defaulted.terminal, TerminalId::Workbench);
+    assert!(terminal_command(&defaulted, None).unwrap_err().contains("工作台"));
+    set_terminal(&db, TerminalId::PowerShell).unwrap();
+    let planned = plan(&db, &registry, temp.path(), request).unwrap();
+    assert_eq!(planned.terminal, TerminalId::PowerShell);
     assert_eq!(planned.directory, project_path.canonicalize().unwrap());
     assert_eq!(
         planned.cli_args,
@@ -573,7 +573,8 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
 
     db.with_connection(|conn| {
         conn.execute(
-            "INSERT INTO app_settings (key, value) VALUES ('preferred_terminal', '\"mac_terminal\"')",
+            "INSERT INTO app_settings (key, value) VALUES ('preferred_terminal', '\"mac_terminal\"')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         )
         .map_err(|error| error.to_string())?;
@@ -815,4 +816,103 @@ fn windows_child_process_environment_receives_the_resolved_credential() {
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stdout).contains("key=ksk-test-917"));
+}
+
+#[test]
+fn workbench_is_not_an_external_terminal_command() {
+    let error = terminal_command(&sample(TerminalId::Workbench), None).unwrap_err();
+    assert!(error.contains("工作台"));
+    let error = shell_terminal(TerminalId::Workbench, std::path::Path::new("."), "echo hi").unwrap_err();
+    assert!(error.contains("工作台"));
+}
+
+#[test]
+fn missing_preference_and_stored_auto_select_the_workbench() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("missing.db")).unwrap();
+    assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Workbench);
+    assert_eq!(settings(&db).unwrap().selected, TerminalId::Workbench);
+    assert!(terminal_options().iter().any(|item| item.id == TerminalId::Workbench && item.available));
+    let external = selected_terminal(&db);
+    if terminal_options().iter().any(|item| item.available && !matches!(item.id, TerminalId::Auto | TerminalId::Workbench | TerminalId::Custom)) {
+        assert_ne!(external.unwrap(), TerminalId::Workbench);
+    } else {
+        assert!(external.unwrap_err().contains("外部终端"));
+    }
+
+    let saved = tempfile::tempdir().unwrap();
+    let db = Database::open(&saved.path().join("auto.db")).unwrap();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('preferred_terminal', '\"auto\"')", [])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Workbench);
+    let stored: String = db.with_connection(|conn| {
+        conn.query_row("SELECT value FROM app_settings WHERE key = 'preferred_terminal'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert_eq!(stored, "\"workbench\"");
+    set_terminal(&db, TerminalId::Auto).unwrap();
+    assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Auto);
+}
+
+#[test]
+fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials() {
+    let _guard = crate::session_host::lock_for_tests();
+    crate::session_host::shutdown();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("sessions.db")).unwrap();
+    let (program, args) = crate::session_host::shell_executable().unwrap();
+    let plan = LaunchPlan {
+        account_version: None,
+        account_context: None,
+        tool_id: "grok".into(),
+        project_id: Some("project-1".into()),
+        mode: LaunchMode::Yolo,
+        executable: program,
+        cli_args: args,
+        directory: temp.path().to_path_buf(),
+        terminal: TerminalId::Workbench,
+        session_markers: &["CLIORA_TEST_SESSION"],
+        credential: None,
+    };
+    let started = spawn(&db, plan).unwrap();
+    assert_eq!(started.status, "session_started");
+    assert_eq!(started.terminal, TerminalId::Workbench);
+    let id = started.session_id.expect("session id");
+    let marker = "workbench-marker";
+    let input = if cfg!(windows) { format!("echo {marker}\r\n") } else { format!("printf '%s\\n' {marker}\n") };
+    crate::session_host::write(&id, &base64::engine::general_purpose::STANDARD.encode(input.as_bytes())).unwrap();
+    crate::session_host::resize(&id, 100, 32).unwrap();
+    crate::session_host::wait_for_replay(&id, marker).unwrap();
+    let listed = crate::session_host::list();
+    assert!(listed.iter().any(|session| session.id == id && session.tool_id == "grok" && session.mode == LaunchMode::Yolo));
+    assert!(!format!("{listed:?}").contains("ksk-test-917"));
+    crate::session_host::close(&id).unwrap();
+    assert!(crate::session_host::list().iter().all(|session| session.id != id));
+
+    let secret = "ksk-test-917";
+    #[cfg(windows)]
+    let (program, args) = (
+        std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        vec!["-NoProfile".into(), "-Command".into(), "Write-Output $env:CLIORA_TEST_LAUNCH_KEY".into()],
+    );
+    #[cfg(not(windows))]
+    let (program, args) = (
+        std::path::PathBuf::from("/bin/sh"),
+        vec!["-c".into(), "printf '%s\\n' \"$CLIORA_TEST_LAUNCH_KEY\"".into()],
+    );
+    let mut revealed = sample(TerminalId::Workbench);
+    revealed.executable = program;
+    revealed.cli_args = args;
+    revealed.directory = temp.path().to_path_buf();
+    let revealed = crate::session_host::start(revealed, Some(&("CLIORA_TEST_LAUNCH_KEY".into(), secret.into()))).unwrap();
+    let secret_id = revealed.session_id.expect("secret session");
+    crate::session_host::wait_for_replay(&secret_id, secret).unwrap();
+    let visible = format!("{:?}", crate::session_host::list());
+    assert!(!visible.contains(secret));
+    crate::session_host::shutdown();
+    assert!(crate::session_host::list().is_empty());
 }
