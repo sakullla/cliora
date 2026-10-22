@@ -198,8 +198,10 @@ test('project without explicit binding edits and queries using its inherited eff
   await expect(page.getByRole('button', { name: /project-server/ })).toBeVisible();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button').filter({ hasText: 'project-skill' }).click();
-  await expect(page.getByRole('checkbox', { name: '启用 Skill' })).toBeChecked();
-  await page.getByRole('checkbox', { name: '启用 Skill' }).uncheck();
+  const enabled = page.getByRole('switch', { name: '启用 Skill' });
+  await expect(enabled).toHaveAttribute('aria-checked', 'true');
+  await enabled.click();
+  await expect(enabled).toHaveAttribute('aria-checked', 'false');
   const calls = await page.evaluate(() => (window as any).oauthHarness.calls);
   const configuration = await page.evaluate(() => (window as any).configurationProtocol.calls);
   expect(configuration.find((call: any) => call.command === 'save_configuration_draft').args.draft).toMatchObject({ scope: 'project', contextId: 'ctx-a' });

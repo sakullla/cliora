@@ -888,6 +888,8 @@ for (const state of ['external', 'read_only'] as const) {
     const entry = page.getByRole('button', { name: /document-only/ });
     await expect(entry).toContainText(state === 'external' ? '本机目录' : '只读');
     await entry.click();
+    await expect(page.getByRole('region', { name: 'SKILL.md 预览' })).toContainText('Native skill document');
+    await page.getByRole('article').getByRole('button', { name: state === 'external' ? '编辑' : '源码', exact: true }).click();
     const editor = page.getByRole('textbox', { name: 'SKILL.md', exact: true });
     await expect(editor).toContainText('# Native skill document');
     await expect(editor).toHaveAttribute('contenteditable', state === 'external' ? 'true' : 'false');
@@ -1037,18 +1039,23 @@ test('Skill list shows writable, read-only, and plugin skills and limits actions
   const article = page.getByRole('article');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(article.getByText('有更新')).toBeVisible();
-  await expect(article.getByRole('checkbox', { name: '启用 Skill' })).toBeVisible();
+  await expect(article.getByRole('switch', { name: '启用 Skill' })).toBeVisible();
   await expect(article.getByRole('button', { name: '从当前工具移除' })).toBeVisible();
+  await expect(article.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
   await expect(article.getByRole('button', { name: '保存', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /local-write/ }).click();
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
   await expect(article.getByRole('button', { name: '保存', exact: true })).toBeVisible();
   await expect(article.getByRole('button', { name: '放进资料库' })).toBeVisible();
   await expect(article.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'true');
 
   await page.getByRole('button', { name: /compat-read/ }).click();
+  await expect(article.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
+  await article.getByRole('button', { name: '源码', exact: true }).click();
   await expect(article.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
-  await expect(article.getByRole('checkbox', { name: '启用 Skill' })).toHaveCount(0);
+  await expect(article.getByRole('switch', { name: '启用 Skill' })).toHaveCount(0);
   await expect(article.getByRole('button', { name: '从当前工具移除' })).toHaveCount(0);
   await expect(article.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'false');
   await article.getByRole('button', { name: '放进资料库' }).click();
@@ -1059,8 +1066,9 @@ test('Skill list shows writable, read-only, and plugin skills and limits actions
   await expect(article.getByText('Gamma Pack · 当前不会加载')).toBeVisible();
   await expect(article.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
   await expect(article.getByRole('button', { name: '放进资料库' })).toHaveCount(0);
-  await expect(article.getByRole('checkbox', { name: '启用 Skill' })).toHaveCount(0);
+  await expect(article.getByRole('switch', { name: '启用 Skill' })).toHaveCount(0);
   await expect(article.getByRole('button', { name: '从当前工具移除' })).toHaveCount(0);
+  await article.getByRole('button', { name: '源码', exact: true }).click();
   await expect(article.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'false');
 
   await quiet.click();
@@ -1069,7 +1077,7 @@ test('Skill list shows writable, read-only, and plugin skills and limits actions
   await expect(article.getByText('会随插件加载')).toHaveCount(0);
 
   await alpha.click();
-  await expect(article.getByRole('textbox', { name: 'SKILL.md', exact: true })).toContainText('/tmp/plugins/alpha/skills/alpha-skill');
+  await expect(article.getByRole('region', { name: 'SKILL.md 预览' })).toContainText('/tmp/plugins/alpha/skills/alpha-skill');
   await bad.click();
   await expect(article.getByText('SKILL.md 应为 UTF-8')).toBeVisible();
   await expect(page.getByRole('button', { name: /alpha-skill/ })).toBeVisible();
@@ -1100,7 +1108,7 @@ test('Skill scan failure replaces an existing list instead of keeping it as comp
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button', { name: /kept/ }).click();
-  await page.getByRole('checkbox', { name: '启用 Skill' }).click();
+  await page.getByRole('switch', { name: '启用 Skill' }).click();
   await expect(page.getByText('Skill 列表加载失败：插件清单无法读取')).toBeVisible();
   await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /kept/ })).toHaveCount(0);
@@ -1271,8 +1279,8 @@ test('Skill filters combine name, source, and load, and a disabled skill stays l
   await page.getByRole('button', { name: '清除条件' }).click();
 
   await list.getByRole('button', { name: /managed-one/ }).click();
-  const enabled = page.getByRole('article').getByRole('checkbox', { name: '启用 Skill' });
-  await expect(enabled).toBeChecked();
+  const enabled = page.getByRole('article').getByRole('switch', { name: '启用 Skill' });
+  await expect(enabled).toHaveAttribute('aria-checked', 'true');
   await enabled.click();
   await expect(list.getByRole('button', { name: /managed-one/ })).toBeVisible();
   await page.getByRole('button', { name: '加载状态', exact: true }).click();
@@ -1304,6 +1312,7 @@ test('Skill document sits beside the list and confirms leaving unsaved text', as
   const row = list.getByRole('button', { name: /local-write/ });
   await row.click();
   const article = page.getByRole('article', { name: 'local-write' });
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
   const editor = article.getByRole('textbox', { name: 'SKILL.md', exact: true });
   await expect(editor).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);

@@ -88,7 +88,7 @@ test('definition edit import lifecycle keeps context and package ownership', asy
   const owned = page.getByRole('article', { name: 'plugin-agent' });
   await expect(owned.getByText('请通过所属插件或组织策略管理')).toBeVisible();
   await expect(owned.getByRole('button', { name: '保存定义' })).toHaveCount(0);
-  await expect(owned.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
+  await expect(owned.getByRole('switch', { name: '启用', exact: true })).toBeDisabled();
   await expect(owned.getByRole('button', { name: '删除', exact: true })).toBeDisabled();
   await row(page, 'reviewer').getByRole('button').click();
   const card = page.getByRole('article', { name: 'reviewer' });
@@ -100,8 +100,8 @@ test('definition edit import lifecycle keeps context and package ownership', asy
   await page.screenshot({ path: 'test-results/native-agents-editor.png', fullPage: true });
   await page.getByRole('button', { name: '保存定义' }).click();
   await expect(page.getByRole('list', { name: 'Agent 定义' })).toBeVisible();
-  await card.getByRole('button', { name: '禁用', exact: true }).click(); await expect(card.getByRole('button', { name: '启用', exact: true })).toBeVisible();
-  await card.getByRole('button', { name: '启用', exact: true }).click();
+  await card.getByRole('switch', { name: '启用', exact: true }).click(); await expect(card.getByRole('switch', { name: '启用', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await card.getByRole('switch', { name: '启用', exact: true }).click(); await expect(card.getByRole('switch', { name: '启用', exact: true })).toHaveAttribute('aria-checked', 'true');
   await page.getByLabel('导入原生 agent 文件').setInputFiles({ name: 'imported.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nname: imported\ndescription: Imported\n---\nPrompt') });
   await expect(page.getByLabel('Agent 文件名')).toHaveValue('imported'); await page.getByRole('button', { name: '保存定义' }).click();
   await expect(row(page, 'imported')).toBeVisible();
@@ -135,10 +135,10 @@ test('synonym coexistence entries stay listed with the conflict reason and no wr
   const card = page.getByRole('article', { name: 'planner' });
   await expect(row(page, 'planner')).toBeVisible();
   await expect(card.getByText(/同义并存/).first()).toBeVisible();
-  await card.getByText('定义详情').click();
+  await card.getByRole('button', { name: '定义详情' }).click();
   await expect(card.getByText(/同义并存/).first()).toBeVisible();
   await expect(card.getByRole('button', { name: '保存定义' })).toHaveCount(0);
-  await expect(card.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
+  await expect(card.getByRole('switch', { name: '启用', exact: true })).toBeDisabled();
   await expect(card.getByRole('button', { name: '删除', exact: true })).toBeDisabled();
   const actions = await page.evaluate(() => (window as any).agentsHarness.calls.filter((c: any) => c.command === 'operate_native_agent').map((c: any) => c.args.request.action));
   expect(actions).toEqual([]);
@@ -158,8 +158,9 @@ test('editing keeps the list beside the document and a narrow page can return', 
   const list = page.getByRole('list', { name: 'Agent 定义' });
   const article = page.getByRole('article', { name: 'reviewer' });
   const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
-  await expect(editor).toContainText('Agent line 1');
+  await expect(article.getByRole('region', { name: 'Agent 定义预览' })).toContainText('Agent line 1');
   await article.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(editor).toContainText('Agent line 1');
   await expect(list).toBeVisible();
   const placed = await page.evaluate(() => {
     const listNode = document.querySelector('[aria-label="Agent 定义"]') as HTMLElement;
@@ -282,4 +283,52 @@ test('an unsupported CLI is marked unavailable and does not offer writes', async
   await expect(agents.getByRole('button', { name: '导入定义' })).toBeDisabled();
   await expect(agents.locator('.empty-state').getByRole('button')).toHaveCount(0);
   await expect(page.getByRole('listitem')).toHaveCount(0);
+});
+
+test('the workbench reads first, edits on double-click, resizes, focuses, and walks rows with arrow keys', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await setup(page);
+  await row(page, 'reviewer').getByRole('button').click();
+  const list = page.getByRole('list', { name: 'Agent 定义' });
+  const article = page.getByRole('article', { name: 'reviewer' });
+  const preview = article.getByRole('region', { name: 'Agent 定义预览' });
+  // Reading shows the description, the frontmatter fields, and the body; no editor yet.
+  await expect(preview).toContainText('Reviews code');
+  await expect(preview.getByRole('definition').filter({ hasText: 'preserved' })).toBeVisible();
+  await expect(preview).toContainText('Review code.');
+  await expect(page.getByRole('textbox', { name: '原生 Agent 定义', exact: true })).toHaveCount(0);
+  await preview.dblclick();
+  const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
+  await expect(editor).toBeVisible();
+  await expect(article.getByRole('button', { name: '保存定义' })).toBeDisabled();
+  // Switching back to reading keeps the draft and shows it.
+  await editor.fill('---\nname: reviewer\ndescription: Draft summary\n---\nDraft body');
+  await article.getByRole('button', { name: '阅读', exact: true }).click();
+  await expect(preview).toContainText('Draft summary');
+  await expect(article.getByText('有未保存的更改')).toBeVisible();
+  await expect(article.getByRole('button', { name: '保存定义' })).toBeEnabled();
+  await article.getByRole('button', { name: '关闭编辑' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '放弃修改' }).click();
+  await expect(preview).toContainText('Reviews code');
+
+  const before = (await list.boundingBox())!.width;
+  const separator = page.getByRole('separator', { name: /调整列表宽度/ });
+  await separator.focus();
+  for (let index = 0; index < 4; index += 1) await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await list.boundingBox())!.width).toBeGreaterThan(before + 40);
+  expect(Number(await page.evaluate(() => localStorage.getItem('cliora:document-list-width')))).toBeGreaterThan(320);
+
+  const narrow = (await article.boundingBox())!.width;
+  await article.getByRole('button', { name: '专注：隐藏列表' }).click();
+  await expect(list).toBeHidden();
+  expect((await article.boundingBox())!.width).toBeGreaterThan(narrow + 200);
+  await article.getByRole('button', { name: '显示列表' }).click();
+  await expect(list).toBeVisible();
+
+  await row(page, 'reviewer').getByRole('button').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('article', { name: 'plugin-agent' })).toBeVisible();
+  await page.keyboard.press('End');
+  await expect(page.getByRole('article', { name: 'planner' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
 });

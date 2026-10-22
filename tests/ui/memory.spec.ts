@@ -460,7 +460,7 @@ test('per-store switches stay readable when off and switch writes carry the stor
   await install(page, { mode: 'master-off' });
   await openMemory(page);
   await expect(page.getByText('未使用', { exact: true }).first()).toBeVisible();
-  const toolbar = page.getByRole('group', { name: '记忆工具栏' });
+  const toolbar = page.getByRole('group', { name: '记忆开关' });
   await expect(toolbar.getByRole('switch', { name: '全局 · 记忆总开关' })).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByRole('navigation', { name: '记忆列表' }).getByRole('switch')).toHaveCount(0);
   await expect(page.getByRole('switch', { name: '项目 · 栖点 A · 记忆总开关' })).toHaveAttribute('aria-checked', 'false');
@@ -483,9 +483,9 @@ test('a CLI-wide switch appears once and list rows keep folder names secondary t
   await install(page, { mode: 'master-off' });
   await openMemory(page, 'Epsilon');
   await expect(page.getByRole('switch')).toHaveCount(1);
-  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByText('自动记忆')).toBeVisible();
+  await expect(page.getByRole('group', { name: '记忆开关' }).getByText('自动记忆')).toBeVisible();
   await expect(page.getByText('已关闭', { exact: true })).toBeVisible();
-  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByText('记忆当前未使用')).toBeVisible();
+  await expect(page.getByRole('group', { name: '记忆开关' }).getByText('记忆当前未使用')).toBeVisible();
   const list = page.getByRole('navigation', { name: '记忆列表' });
   await expect(list.getByRole('button')).toHaveCount(2);
   const one = entryButton(page, 'one-note');
@@ -698,7 +698,7 @@ test('scope switches remain reachable with no stores and preserve native-default
     };
   });
   await openMemory(page);
-  await expect(page.getByRole('group', { name: '记忆工具栏' }).getByRole('combobox', { name: '所有项目记忆' })).toBeVisible();
+  await expect(page.getByRole('group', { name: '记忆开关' }).getByRole('combobox', { name: '所有项目记忆' })).toBeVisible();
   await expect(page.getByText('跟随原生默认，当前生效状态未知')).toHaveCount(2);
   await expect(page.getByText('未使用', { exact: true })).toHaveCount(0);
   await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
