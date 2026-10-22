@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
-    check_cancelled, contains_bytes, discover_jsonl_controlled_in, read_jsonl_filtered,
-    source_fingerprint_controlled, text_content, timestamp, valid_native_id, AgentKind,
-    ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
+    check_cancelled, contains_bytes, discover_jsonl_controlled_in, discover_jsonl_with_control,
+    read_jsonl_filtered, source_fingerprint_controlled, text_content, timestamp, valid_native_id,
+    AgentKind, ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
     ParsedSession, UsageAttribution, UsageEvent,
 };
 
@@ -17,22 +17,45 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
 }
 
+fn projects_root(home: &Path) -> PathBuf {
+    crate::accounts::selection::history_root("claude_code", || home.join(".claude/projects"))
+}
+
+fn session_transcript(path: &Path) -> bool {
+    path.extension().is_some_and(|value| value == "jsonl")
+        && !path
+            .components()
+            .any(|part| part.as_os_str() == "subagents")
+}
+
+/// Child logs are not sessions. Listing them here would fail every parent
+/// when that directory cannot be read.
+fn descend_sessions(path: &Path) -> bool {
+    path.file_name().is_none_or(|name| name != "subagents")
+}
+
+/// Paths memory must keep away from. Same files as `sources`, without opening
+/// or fingerprinting transcripts and child logs.
+pub fn exclusion_paths(home: &Path) -> Result<Vec<PathBuf>, String> {
+    let sources = discover_jsonl_with_control(
+        &projects_root(home),
+        session_transcript,
+        |_| Ok(String::new()),
+        &|| false,
+        &descend_sessions,
+    )?;
+    Ok(sources.into_iter().map(|source| source.path).collect())
+}
+
 pub fn sources_controlled(
     home: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
     let mut sources = discover_jsonl_controlled_in(
-        &crate::accounts::selection::history_root("claude_code", || home.join(".claude/projects")),
-        |path| {
-            path.extension().is_some_and(|value| value == "jsonl")
-                && !path
-                    .components()
-                    .any(|part| part.as_os_str() == "subagents")
-        },
+        &projects_root(home),
+        session_transcript,
         cancelled,
-        // Child logs are not sessions. Listing them here would fail every
-        // parent when that directory cannot be read.
-        |path| path.file_name().is_none_or(|name| name != "subagents"),
+        descend_sessions,
     )?;
     for source in &mut sources {
         // v2 rereads sessions once so stored rows gain child bodies and attribution.
@@ -577,6 +600,31 @@ mod tests {
             fingerprint: "test".into(),
             fingerprint_error: None,
         }
+    }
+
+    #[test]
+    fn exclusion_paths_match_session_files_and_skip_child_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join(".claude").join("projects").join("slug");
+        let child = project
+            .join("22222222-2222-4222-8222-222222222222")
+            .join("subagents");
+        fs::create_dir_all(&child).unwrap();
+        let parent = project.join("22222222-2222-4222-8222-222222222222.jsonl");
+        fs::write(&parent, "{\"cwd\":\"C:\\\\work\"}\n").unwrap();
+        fs::write(child.join("agent.jsonl"), "{\"cwd\":\"C:\\\\hidden\"}\n").unwrap();
+        fs::write(project.join("notes.txt"), "not a session\n").unwrap();
+        let mut excluded = exclusion_paths(&home).unwrap();
+        let mut discovered = sources(&home)
+            .unwrap()
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        excluded.sort();
+        discovered.sort();
+        assert_eq!(excluded, discovered);
+        assert_eq!(excluded, vec![parent]);
     }
 
     #[test]

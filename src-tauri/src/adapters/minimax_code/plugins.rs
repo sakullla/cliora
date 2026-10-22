@@ -21,6 +21,9 @@ impl PluginAdapter for MiniMaxCode {
             detail: "列表是 mcode 已安装的插件，可以启用、停用和移除。未安装的官方市场不在这份列表里；添加时填写 name@official 或 name@local。",
         }
     }
+    fn owns_agent_definitions(&self) -> bool {
+        false
+    }
     fn preview(&self, home: &Path, target: &PluginTarget) -> Result<Option<Vec<PluginEntry>>, String> {
         if target.scope != Scope::Global {
             return Ok(None);

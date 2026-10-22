@@ -558,6 +558,16 @@ pub trait CliAdapter: Sync {
     fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
         Ok(Vec::new())
     }
+    /// Session files memory must not overwrite. The default reuses
+    /// `history_sources`. Adapters whose source scan also fingerprints every
+    /// transcript can list the same paths without that work.
+    fn history_exclusion_paths(&self, home: &Path) -> Result<Vec<PathBuf>, String> {
+        Ok(self
+            .history_sources(home)?
+            .into_iter()
+            .map(|source| source.path)
+            .collect())
+    }
     fn parse_history(&self, _source: &HistorySource) -> Result<ParsedSession, String> {
         Err("此 CLI 尚无已验证的历史格式".into())
     }

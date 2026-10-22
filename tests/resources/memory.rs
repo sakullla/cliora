@@ -368,6 +368,9 @@ impl CliAdapter for MemoryCli {
         })
     }
     fn history_sources(&self, home: &Path) -> Result<Vec<crate::history::HistorySource>, String> {
+        if self.id == "fixture_memory_performance" {
+            HISTORY_SOURCE_COUNT.with(|count| count.set(count.get() + 1));
+        }
         Ok(vec![crate::history::HistorySource {
             native_title: None,
             path: home.join("declared").join("sessions").join("log.jsonl"),
@@ -2133,7 +2136,10 @@ fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
     assert!(stray.is_empty(), "{stray:?}");
 }
 
-thread_local! { static MEMORY_ENUM_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+thread_local! {
+    static MEMORY_ENUM_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HISTORY_SOURCE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[test]
 fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
@@ -2173,7 +2179,9 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
     let reset = || {
         MEMORY_READ_COUNT.with(|count| count.set(0));
         MEMORY_ENUM_COUNT.with(|count| count.set(0));
+        HISTORY_SOURCE_COUNT.with(|count| count.set(0));
     };
+    let history_sources = || HISTORY_SOURCE_COUNT.with(|count| count.get());
     let counts = || {
         (
             MEMORY_ENUM_COUNT.with(|count| count.get()),
@@ -2186,6 +2194,7 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
         read_memory(&h.db, &registry, &h.home, &entry.target, &entry.id).unwrap();
     }
     assert_eq!(counts(), (1001, 2000));
+    assert_eq!(history_sources(), 1001);
     println!(
         "MEMORY_PERF baseline_single_reads ipc=1001 enumerations={} bodies={}",
         counts().0,
@@ -2194,6 +2203,7 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
     reset();
     let first = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
     assert_eq!(counts(), (1, 1000));
+    assert_eq!(history_sources(), 1);
     let requests: Vec<_> = first
         .entries
         .iter()
@@ -2209,6 +2219,7 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
             .all(|item| item.document.is_some() && item.error.is_none()));
     }
     assert_eq!(counts(), (33, 2000));
+    assert_eq!(history_sources(), 33);
     println!(
         "MEMORY_PERF cold ipc=33 enumerations={} bodies={}",
         counts().0,
@@ -2222,6 +2233,7 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
         .zip(&first.entries)
         .all(|(a, b)| a.fingerprint == b.fingerprint));
     assert_eq!(counts(), (1, 1000));
+    assert_eq!(history_sources(), 1);
     println!(
         "MEMORY_PERF warm ipc=1 enumerations={} bodies={}",
         counts().0,
@@ -2245,6 +2257,7 @@ fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
     assert_eq!(requests.len(), 3);
     read_memories(&h.db, &registry, &h.home, &requests).unwrap();
     assert_eq!(counts(), (2, 1003));
+    assert_eq!(history_sources(), 2);
     println!(
         "MEMORY_PERF changed_3 ipc=2 enumerations={} bodies={}",
         counts().0,

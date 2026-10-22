@@ -47,6 +47,10 @@ pub trait PluginAdapter: Sync {
     fn snapshot_files(&self, _home: &Path, _target: &PluginTarget) -> Vec<PathBuf> { vec![] }
     /// A native ledger can be inspected without starting a CLI process.
     fn discovery_only(&self) -> bool { false }
+    /// Plugin packages can contain agent definitions. Agent scans skip the
+    /// native list when this is false, so the page does not wait on a CLI
+    /// that only reports other resource kinds.
+    fn owns_agent_definitions(&self) -> bool { true }
     fn version_policy(&self) -> super::version::VersionPolicy {
         super::version::VersionPolicy::same_major(self.capability().version)
     }
