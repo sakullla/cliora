@@ -1,43 +1,246 @@
-.card {
+.cluster {
   display: grid;
   gap: 8px;
-  margin: 4px 0 8px 42px;
-  padding: 12px 14px;
+  margin: 4px 0 10px 42px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+}
+.clusterHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.clusterTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--accent);
+  font-size: var(--fs-control);
+}
+.clusterTitle strong {
+  color: var(--text);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-semibold);
+}
+.clusterTime {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+.clusterToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-color: var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+}
+.clusterToggle:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.clusterToggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.clusterList {
+  display: grid;
+  gap: 6px;
+}
+
+.card {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 8px 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   background: var(--surface);
   box-shadow: inset 3px 0 0 var(--accent);
 }
-.card header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.card header strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
-.card header span, .card header time { flex: none; color: var(--text-3); font-size: var(--fs-caption); }
-.card header time { margin-left: auto; font-variant-numeric: tabular-nums; }
-.ask, .reply, .closed { margin: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; user-select: text; }
-.ask { color: var(--text-2); }
-.reply { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
-.reply span {
-  display: inline-block;
-  margin-right: 8px;
+.clusterList .card {
+  margin: 0;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  line-height: 18px;
+}
+.cardHead strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cardHead time {
+  flex: none;
   color: var(--text-3);
   font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+}
+.headActions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.foldBtn,
+.openBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-color: var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+}
+.foldBtn[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.openBtn {
+  border-color: color-mix(in srgb, var(--accent-line) 75%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 50%, var(--surface));
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+.foldBtn:hover:not(:disabled),
+.openBtn:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.compactPreview {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.compactPreview .reply,
+.compactPreview .ask,
+.compactPreview .askSubtle {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-control);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+}
+.compactPreview .reply {
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  -webkit-line-clamp: 2;
+}
+.compactPreview .ask {
+  color: var(--text-2);
+  -webkit-line-clamp: 2;
+}
+.compactPreview .askSubtle {
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+  -webkit-line-clamp: 1;
+}
+.compactPreview .reply span,
+.compactPreview .ask span,
+.compactPreview .askSubtle span {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
-  letter-spacing: .04em;
+  line-height: 16px;
+  vertical-align: 1px;
   -webkit-user-select: none;
   user-select: none;
 }
-.closed { color: var(--text-3); }
-.card button {
-  justify-self: start;
-  min-height: 32px;
-  padding: 0 12px;
-  border-color: var(--line);
-  background: var(--surface);
-  box-shadow: none;
-  color: var(--text);
-  font-size: var(--fs-caption);
+
+.detailBody {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
-.card button:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.block {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+}
+.replyBlock {
+  border-color: color-mix(in srgb, var(--accent-line) 55%, var(--line));
+  background: var(--surface-2);
+}
+.blockLabel {
+  color: var(--text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  letter-spacing: .03em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.detailBody .ask,
+.detailBody .reply {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-control);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.detailBody .ask {
+  color: var(--text-2);
+}
+.closed {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-control);
+  line-height: 1.5;
+}
 
 @media (max-width: 1100px) {
-  .card { margin-left: 0; }
+  .cluster,
+  .card {
+    margin-left: 0;
+  }
 }
