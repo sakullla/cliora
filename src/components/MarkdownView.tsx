@@ -2,7 +2,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useTranslation } from 'react-i18next';
 import { writeClipboard } from '../lib/clipboard';
-import { Icon } from './Icon';
+import { TextLink } from './TextLink';
 import styles from './MarkdownView.module.css';
 
 const wikiPrefix = '#wiki:';
@@ -29,10 +29,10 @@ export default function MarkdownView({ text, resolve, onOpen }: { text: string; 
       if (href?.startsWith(wikiPrefix)) {
         const target = decodeURIComponent(href.slice(wikiPrefix.length));
         const found = resolve?.(target) ?? false;
-        return <button type="button" className={styles.wikiLink} data-missing={!found || undefined} disabled={!found} title={found ? t('common.memory.openLinked', { name: target }) : t('common.memory.missingLinked', { name: target })} onClick={() => onOpen?.(target)}><Icon name="link" size={12} />{children}</button>;
+        return <TextLink href={href} className={styles.wikiLink} missing={!found} title={found ? t('common.memory.openLinked', { name: target }) : t('common.memory.missingLinked', { name: target })} onActivate={found ? () => onOpen?.(target) : undefined}>{children}</TextLink>;
       }
       if (!href) return <span>{children}</span>;
-      return <button type="button" className={styles.externalLink} title={t('records.markdown.link', { href })} onClick={() => void writeClipboard(href)}>{children}<Icon name="copy" size={11} /></button>;
+      return <TextLink href={href} className={styles.externalLink} title={t('records.markdown.link', { href })} onActivate={() => void writeClipboard(href)}>{children}</TextLink>;
     },
     pre: ({ children }) => <pre className={styles.codeBlock}>{children}</pre>,
     table: ({ children }) => <div className={styles.tableScroll}><table>{children}</table></div>,

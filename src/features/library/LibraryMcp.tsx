@@ -221,7 +221,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
               {headerCount > 0 && <span className={styles.metaChip} title={keyList}><Icon name="lock" size={11} />{t('library.resources.headerCount', { count: headerCount })}</span>}
               <span className={styles.placedNote} data-placed={places.length > 0 || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
             </div>
-            <code className={styles.command} title={summary}>{summary ? <><i aria-hidden="true">{item.transport === 'http' ? '↗' : '$'}</i>{summary}</> : (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
+            <code className={styles.command} title={summary}>{summary || (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
           </div>
           <div className={styles.rowTargets}>
             <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {

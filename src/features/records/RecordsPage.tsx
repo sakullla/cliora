@@ -18,7 +18,7 @@ import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
-import { childTitle, childTrail, SessionAssociation } from './SessionAssociation';
+import { childTitle, childTrail } from './SessionAssociation';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import { useDisclosure } from './useDisclosure';
 import { navigateChoices } from '../../lib/choiceNavigation';
@@ -486,9 +486,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>{t('records.page.relinkProject')}</button>}
         </div>}
         </div>
-        <SessionAssociation association={selectedFacet} usage={openedChild ? [] : selected.usage} children={(openedChild ? openedChild.children : selected.children) ?? []} onOpen={(key) => setChildPath((path) => [...path, key])} />
         {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
-        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected} toolName={toolName(selected.session.toolId)} />}
+        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) ?? [] : []} onOpenChild={(key) => setChildPath((path) => [...path, key])} />}
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>

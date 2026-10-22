@@ -576,7 +576,7 @@ test('known Qoder request with unknown credits and tokens stays visible as one c
   await expect(trend.getByRole('group')).toHaveCount(0);
 });
 
-test('session detail shows usage attribution and opens child sessions one level at a time', async ({ page }) => {
+test('session detail shows a child on the chat timeline and opens one level at a time', async ({ page }) => {
   await page.addInitScript((report) => {
     const usage = (id: string, attributions?: Array<Record<string, unknown>>) => ({ id, model: 'opus', timestamp: 1790668800000, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, inputIncludesCache: false, attributions });
     const records = [
@@ -647,32 +647,31 @@ test('session detail shows usage attribution and opens child sessions one level 
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   const reader = page.getByLabel('会话正文');
-  const association = page.getByRole('region', { name: '主子关联' });
   await expect(reader).toContainText('PARENT_ONLY');
-  await expect(reader).not.toContainText('CHILD_BODY');
-  await expect(association).toContainText('主代理 · Planner');
-  await expect(association).toContainText('子代理');
-  await expect(association).toContainText('子代理 · Deep');
-  await expect(association).toContainText('归属未知');
-  await expect(association).not.toContainText('child-review');
-  await expect(association).not.toContainText('grand-1');
-  await expect(association).not.toContainText('不提供主子代理关联');
-  await expect(association.getByRole('button', { name: '打开 Nested' })).toHaveCount(0);
-  await expect(association.getByText('正文不可读取')).toBeVisible();
-  await expect(association.getByRole('button', { name: '未命名子会话' })).toHaveCount(0);
+  await expect(reader.getByRole('article', { name: '子会话 Reviewer' })).toContainText('CHILD_BODY');
+  await expect(reader).not.toContainText('GRAND_BODY');
+  await expect(reader).not.toContainText('SHOULD_NOT_APPEAR');
+  await expect(reader).not.toContainText('归属未知');
+  await expect(reader).not.toContainText('用量归属');
+  await expect(reader).not.toContainText('不提供主子代理关联');
+  await expect(reader).not.toContainText('child-review');
+  await expect(reader).not.toContainText('grand-1');
+  await expect(reader.getByRole('button', { name: '打开 Nested' })).toHaveCount(0);
+  await expect(reader.getByText('正文不可读取')).toBeVisible();
+  await expect(reader.getByRole('button', { name: '打开 未命名子会话' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '收藏会话' })).toBeVisible();
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
-  await association.getByRole('button', { name: '打开 Reviewer' }).click();
+  await reader.getByRole('button', { name: '打开 Reviewer' }).click();
   await expect(reader).toContainText('CHILD_BODY');
   await expect(reader).not.toContainText('PARENT_ONLY');
-  await expect(reader).not.toContainText('GRAND_BODY');
+  await expect(reader.getByRole('article', { name: '子会话 Nested' })).toContainText('GRAND_BODY');
   await expect(reader).not.toContainText('SHOULD_NOT_APPEAR');
   await expect(page.getByRole('button', { name: '收藏会话' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '导出 Markdown' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '导出 JSON' })).toHaveCount(0);
   await expect(page.getByText('会话选项', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Nested', exact: true }).click();
+  await reader.getByRole('button', { name: '打开 Nested', exact: true }).click();
   await expect(reader).toContainText('GRAND_BODY');
   await expect(reader).not.toContainText('CHILD_BODY');
   await page.getByRole('navigation', { name: '子会话层级' }).getByRole('button', { name: 'Linked parent', exact: true }).click();
@@ -687,18 +686,16 @@ test('session detail shows usage attribution and opens child sessions one level 
   expect(await page.evaluate(() => (window as unknown as { __associationLaunches: unknown[] }).__associationLaunches)).toEqual([]);
 
   await page.getByRole('button', { name: /No association/ }).click();
-  const absent = page.getByRole('region', { name: '主子关联' });
-  await expect(absent).toContainText('不提供主子代理关联');
-  await expect(absent).toContainText('归属未知');
-  await expect(absent).not.toContainText('Hidden child');
-  await expect(absent.getByRole('heading', { name: '子会话' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /打开/ })).toHaveCount(0);
+  await expect(reader).toContainText('ABSENT_PARENT');
   await expect(reader).not.toContainText('HIDDEN_BODY');
+  await expect(reader).not.toContainText('Hidden child');
+  await expect(reader).not.toContainText('不提供主子代理关联');
+  await expect(reader).not.toContainText('归属未知');
+  await expect(page.getByRole('button', { name: /打开/ })).toHaveCount(0);
 
   await page.getByRole('button', { name: /No children/ }).click();
-  const empty = page.getByRole('region', { name: '主子关联' });
-  await expect(empty).toContainText('归属未知');
-  await expect(empty).not.toContainText('不提供主子代理关联');
-  await expect(empty.getByRole('heading', { name: '子会话' })).toHaveCount(0);
-  await expect(empty.getByRole('button')).toHaveCount(0);
+  await expect(reader).toContainText('EMPTY_PARENT');
+  await expect(reader).not.toContainText('子会话');
+  await expect(reader).not.toContainText('归属未知');
+  await expect(reader.getByRole('button', { name: /打开/ })).toHaveCount(0);
 });

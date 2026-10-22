@@ -24,15 +24,15 @@ function statusLabel(entry: PluginEntry) {
   if (entry.enabled === null) return i18n.t('tools.plugins.stateUnknown');
   return entry.enabled ? i18n.t('tools.plugins.enabled') : i18n.t('tools.plugins.disabled');
 }
-function PluginCard({ entry, baseline, actions, busy, trusted, blockProjectUpdate, operate }: {
-  entry: PluginEntry; baseline: boolean; actions: string[]; busy: boolean; trusted: boolean; blockProjectUpdate: boolean;
+function PluginCard({ entry, baseline, actions, busy, blockProjectUpdate, operate }: {
+  entry: PluginEntry; baseline: boolean; actions: string[]; busy: boolean; blockProjectUpdate: boolean;
   operate: (action: PluginAction, entry?: PluginEntry) => void;
 }) {
   const absent = entry.state === 'not_installed';
   const rowActions = (absent ? [] : ['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => actions.includes(action));
   return <li>
     <div className={styles.resourceBody}><div className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{baseline ? i18n.t('tools.plugins.readonly') : i18n.t('tools.plugins.pendingReview')}</span>}<span className={styles.resourceMeta}>{entry.version ?? i18n.t('tools.plugins.versionMissing')}</span></div><p>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</p><p>{stateLabel(entry.state)}</p></div>
-    {rowActions.length > 0 && <div className={styles.actions}>{rowActions.map(action => <button key={action} className={action === 'uninstall' ? styles.danger : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && !trusted ? i18n.t('tools.plugins.updateTrustTitle') : undefined} disabled={busy || entry.readOnly || (action === 'update' && (!trusted || blockProjectUpdate))} onClick={() => operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
+    {rowActions.length > 0 && <div className={styles.actions}>{rowActions.map(action => <button key={action} className={action === 'uninstall' ? styles.danger : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? i18n.t('tools.plugins.updateProjectTitle') : undefined} disabled={busy || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
     <details><summary>{i18n.t('tools.plugins.policySummary')}</summary><p>{policyLabel(entry.policy)}{entry.readOnly ? i18n.t('tools.plugins.readonlySuffix') : ''}</p></details>
     {entry.root && <details><summary>{i18n.t('tools.plugins.locationSummary')}</summary><p>{displayPath(entry.root)}</p></details>}
     {!!entry.resources.length && <details><summary>{i18n.t('tools.plugins.resourcesSummary')}</summary><ul>{entry.resources.map(resource => <li key={resource.path}>{resource.kind} · {displayPath(resource.path)}</li>)}</ul></details>}
@@ -90,10 +90,11 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     if (!snapshot?.baseline || busy) return;
     const id = generation.current;
     if (action === 'uninstall' && !await confirmAction(t('tools.plugins.confirmUninstall', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.uninstallTitle'), confirmLabel: actionLabel('uninstall') })) return;
+    if (action === 'update' && !await confirmAction(t('tools.plugins.confirmUpdate', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.updateTitle'), confirmLabel: actionLabel('update') })) return;
     if (id !== generation.current) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const result = await native.operateNativePlugin({ target, action, source: entry?.id ?? source.trim(), baseline: snapshot.baseline, trusted });
+      const result = await native.operateNativePlugin({ target, action, source: entry?.id ?? source.trim(), baseline: snapshot.baseline, trusted: action === 'update' || trusted });
       if (id !== generation.current) return;
       remembered.delete(cacheKey);
       if (result.snapshot) remember(cacheKey, result.snapshot);
@@ -116,8 +117,8 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
       {!installedCount && !!snapshot.baseline && <EmptyState title={t('tools.plugins.emptyTitle')} detail={snapshot.capability.actions.includes('install') ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={snapshot.capability.actions.includes('install')
         ? <button className="button primary" disabled={busy} onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
         : <button className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
-      {active.length > 0 && <ul className={styles.resourceList}>{active.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} trusted={trusted} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul>}
-      {catalog.length > 0 && <details className={styles.compatibility}><summary>{t('tools.plugins.catalogSummary', { count: catalog.length })}</summary><ul className={styles.resourceList}>{catalog.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} trusted={trusted} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul></details>}
+      {active.length > 0 && <ul className={styles.resourceList}>{active.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul>}
+      {catalog.length > 0 && <details className={styles.compatibility}><summary>{t('tools.plugins.catalogSummary', { count: catalog.length })}</summary><ul className={styles.resourceList}>{catalog.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul></details>}
       {entries.length > 0 && filtered.length === 0 && <p className={styles.empty}>{t('tools.plugins.noMatch')}<button onClick={() => { setSearch(''); setFilter('all'); }}>{t('tools.plugins.clearFilter')}</button></p>}
       <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>
     </>}

@@ -25,7 +25,6 @@ export default {
     read: 'Read',
     edit: 'Edit',
     source: 'Source',
-    editHint: 'Double-click the text to start editing',
     focus: 'Focus: hide the list',
     unfocus: 'Show the list',
     resize: 'Drag to resize the list; double-click to reset',

@@ -427,7 +427,6 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const showUpdate = !!selected && installed?.state === 'update_available' && origin !== 'plugin';
   const documentNote = subject?.state === 'unreadable' ? subject.detail
     : origin === 'plugin' && subject ? pluginNote(subject)
-    : origin === 'read_only' ? subject?.detail
     : skillDoc && canEditSkill ? t('tools.skills.editorNote')
     : '';
 
@@ -473,7 +472,10 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const loadedWithPlugin = entryOrigin === 'plugin' && item.pluginEnabled === true && item.state !== 'unreadable';
     const current = external?.path === item.path || (!external && !!item.packageId && item.packageId === selectedId);
     // Scans and fixtures can omit detail. A missing or blank value is not a summary.
-    const summary = typeof item.detail === 'string' ? item.detail.trim() : '';
+    // Read-only bundles prefix a short note onto the description; the list shows the description, same as every other skill.
+    const rawSummary = typeof item.detail === 'string' ? item.detail.trim() : '';
+    const noteSplit = entryOrigin === 'read_only' ? rawSummary.indexOf(' · ') : -1;
+    const summary = noteSplit >= 0 ? rawSummary.slice(noteSplit + 3).trim() : rawSummary;
     const tone = item.state === 'managed' || loadedWithPlugin ? 'on' : item.state === 'unreadable' || item.state === 'read_only' || (entryOrigin === 'plugin' && !loadedWithPlugin) ? 'warn' : undefined;
     return <button type="button" key={item.path} className={doc.row} aria-current={current || undefined} title={displayPath(item.path)} onClick={() => void openNative(item)}>
       <span className={doc.rowTitle}><strong>{item.name}</strong></span>
@@ -558,7 +560,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         ? <div className={doc.body} role="status" aria-label={t('tools.skills.loading')}><div className={doc.pending}><span /><span /><span /></div></div>
         : skillDoc
           ? mode === 'read'
-            ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} onEditRequest={canEditSkill ? () => setMode('edit') : undefined} />
+            ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} />
             : <div className={doc.editor} data-readonly={!canEditSkill || undefined}><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={value => setSkillDoc(current => current ? { ...current, draft: value } : current)} readOnly={busy || !canEditSkill} /></div>
           : <div className={doc.body} />}
     {canEditSkill && skillDoc && !transient && (mode === 'edit' || docDirty) && <DocumentFoot dirty={docDirty} note={t('tools.skills.editorNote')}>

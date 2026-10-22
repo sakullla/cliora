@@ -25,7 +25,6 @@ export default {
     read: '阅读',
     edit: '编辑',
     source: '源码',
-    editHint: '双击正文也可以开始编辑',
     focus: '专注：隐藏列表',
     unfocus: '显示列表',
     resize: '拖动调整列表宽度，双击还原',

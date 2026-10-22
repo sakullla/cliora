@@ -285,7 +285,7 @@ test('an unsupported CLI is marked unavailable and does not offer writes', async
   await expect(page.getByRole('listitem')).toHaveCount(0);
 });
 
-test('the workbench reads first, edits on double-click, resizes, focuses, and walks rows with arrow keys', async ({ page }) => {
+test('the workbench reads first, edits from the header, resizes, focuses, and walks rows with arrow keys', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await setup(page);
   await row(page, 'reviewer').getByRole('button').click();
@@ -298,6 +298,8 @@ test('the workbench reads first, edits on double-click, resizes, focuses, and wa
   await expect(preview).toContainText('Review code.');
   await expect(page.getByRole('textbox', { name: '原生 Agent 定义', exact: true })).toHaveCount(0);
   await preview.dblclick();
+  await expect(page.getByRole('textbox', { name: '原生 Agent 定义', exact: true })).toHaveCount(0);
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
   await expect(editor).toBeVisible();
   await expect(article.getByRole('button', { name: '保存定义' })).toBeDisabled();

@@ -46,7 +46,7 @@
   --accent-soft: #e1f2e7;
   --accent-line: #b3d6c1;
   --accent-ring: rgb(14 107 67 / 20%);
-  --selection: #d3ead9;
+  --selection: #b9d4f5;
 
   /* Status */
   --danger: #a62f2a;
@@ -137,7 +137,7 @@
   --accent-soft: #172e21;
   --accent-line: #2f5a3d;
   --accent-ring: rgb(123 227 167 / 26%);
-  --selection: #1c3826;
+  --selection: #1d3f66;
 
   --danger: #fcd6d0;
   --danger-soft: #3a2422;
@@ -184,7 +184,7 @@ h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); }
 .count-chip, time, .rowContext > span:last-of-type { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
-::selection { background: var(--selection); color: var(--text); }
+::selection { background: var(--selection); color: inherit; }
 /* Desktop chrome: navigation, buttons and tabs never pick up a text selection or a drag ghost. */
 :where(.sidebar, button, [role="tab"], [role="radio"], label, .page-head h1, .section-heading) { -webkit-user-select: none; user-select: none; }
 :where(img, a) { -webkit-user-drag: none; }
@@ -274,6 +274,7 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, selec
 :where(select) option { background: var(--surface); color: var(--text); }
 :where(input[type="search"], .search-field > input) {
   padding-left: 32px;
+  padding-right: 44px;
   background-image: var(--search-icon);
   background-repeat: no-repeat;
   background-position: 10px center;
@@ -831,26 +832,33 @@ label.setting-row:hover { background: var(--surface-2); }
 .command-foot kbd { margin-right: 3px; }
 
 .search-field { position: relative; display: flex; align-items: center; min-width: 0; }
-.search-field > input { width: 100%; min-width: 0; padding-right: 30px; }
+.search-field > input { width: 100%; min-width: 0; padding-right: 44px; }
 .search-field input[type="search"]::-webkit-search-cancel-button,
 .search-field input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
-.search-clear {
+.search-clear,
+.search-clear:hover:not(:disabled),
+.search-clear:active:not(:disabled) {
   position: absolute;
   top: 50%;
-  right: 4px;
+  right: 2px;
+  z-index: 2;
   transform: translateY(-50%);
   display: grid;
   place-items: center;
-  width: 22px;
-  min-height: 22px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 8px;
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   box-shadow: none;
+  cursor: pointer;
 }
-.search-clear:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.search-clear:hover:not(:disabled),
+.search-clear:active:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
 .guide-dialog { width: min(760px, calc(100vw - 40px)); flex-direction: column; }
 .guide-dialog-wide { width: min(880px, calc(100vw - 32px)); }

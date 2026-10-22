@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Compartment, EditorState, Transaction } from '@codemirror/state';
-import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers, placeholder as editorPlaceholder } from '@codemirror/view';
+import { EditorView, highlightActiveLine, keymap, lineNumbers, placeholder as editorPlaceholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth, selectAll } from '@codemirror/commands';
 import { HighlightStyle, StreamLanguage, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { json } from '@codemirror/lang-json';
@@ -54,7 +54,8 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
     // Tauri gives this bundled anchor a fresh style nonce for each document.
     const nonce = (document.getElementById('cliora-editor-nonce') as HTMLStyleElement | null)?.nonce ?? '';
     return EditorState.create({ doc: text, extensions: [
-      configuration.current.of(extensions()), EditorView.cspNonce.of(nonce), lineNumbers(), history(), drawSelection(),
+      // Native selection follows the pointer through wrapped lines. A drawn selection layer feels sticky.
+      configuration.current.of(extensions()), EditorView.cspNonce.of(nonce), lineNumbers(), history(),
       highlightActiveLine(), bracketMatching(), indentOnInput(), EditorState.tabSize.of(2), EditorView.lineWrapping,
       keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]), syntaxHighlighting(highlighting),
       EditorView.updateListener.of(update => {

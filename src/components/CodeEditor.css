@@ -12,8 +12,11 @@
 .code-editor:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .code-editor .cm-editor { min-height: 220px; color: var(--text); background: var(--surface-2); font: 13px/1.7 var(--font-mono); }
 .code-editor .cm-scroller { min-height: 220px; max-height: 440px; overflow: auto; line-height: 1.7; font-family: var(--font-mono); }
-.code-editor .cm-content { padding: 12px 8px; caret-color: var(--accent); }
-.code-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); }
+.code-editor .cm-content { padding: 12px 8px; caret-color: var(--accent); cursor: text; -webkit-user-select: text; user-select: text; }
+.code-editor .cm-line { cursor: text; -webkit-user-select: text; user-select: text; }
+.code-editor .cm-content ::selection,
+.code-editor .cm-line::selection { background: var(--selection); }
+.code-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); -webkit-user-select: none; user-select: none; cursor: default; }
 .code-editor .cm-lineNumbers .cm-gutterElement { padding: 0 10px 0 12px; }
 .code-editor .cm-activeLine { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .code-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--text-2); }

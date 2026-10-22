@@ -61,7 +61,7 @@
 }
 .previewLabel { grid-area: label; display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); white-space: nowrap; }
 .preview > code { grid-area: code; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
-.preview > code > i { margin-right: 7px; color: var(--accent); font-style: normal; font-weight: var(--fw-semibold); user-select: none; }
+
 .previewCopy, .previewCopy:hover:not(:disabled) { grid-area: copy; display: grid; place-items: center; width: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-3); }
 .previewCopy:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .previewCopy[data-copied], .previewCopy[data-copied]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
