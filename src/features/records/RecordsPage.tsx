@@ -241,8 +241,10 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const selectedFacet = tools.find((item) => item.id === selected?.session.toolId)?.association;
-  const openedTrail = selected && selectedFacet?.state === 'available' ? childTrail(selected.children, childPath) : null;
+  const openedTrail = useMemo(() => selected && selectedFacet?.state === 'available' ? childTrail(selected.children, childPath) : null, [selected, selectedFacet?.state, childPath]);
   const openedChild = openedTrail && childPath.length > 0 && openedTrail.length === childPath.length ? openedTrail[openedTrail.length - 1] : null;
+  const readerDetail = useMemo(() => selected && openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected, [selected, openedChild]);
+  const openChild = useCallback((key: string) => setChildPath((path) => [...path, key]), []);
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
   const resumeKey = selected ? JSON.stringify([selected.session.id, selected.session.updatedAt, selected.session.projectId,
     selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
@@ -263,8 +265,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   useEffect(() => { setChildPath([]); }, [selectedId]);
   useEffect(() => {
     if (!childPath.length || !selected) return;
-    if (selectedFacet?.state !== 'available' || !childTrail(selected.children, childPath)) setChildPath([]);
-  }, [childPath, selected, selectedFacet]);
+    if (!openedTrail) setChildPath([]);
+  }, [childPath, selected, openedTrail]);
 
   useEffect(() => {
     if (!scanning || !active) return;
@@ -491,7 +493,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         </div>}
         </div>
         {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
-        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) ?? [] : []} onOpenChild={(key) => setChildPath((path) => [...path, key])} />}
+        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : readerDetail && <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={readerDetail} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) : undefined} onOpenChild={openChild} />}
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>

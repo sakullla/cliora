@@ -4,7 +4,8 @@ import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/hi
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
-import { ChildCard, childMoment } from './SessionAssociation';
+import { ChildCard } from './SessionAssociation';
+import { timelineRows } from './sessionTimeline';
 import { useDisclosure } from './useDisclosure';
 import i18n from '../../i18n';
 import styles from './SessionReader.module.css';
@@ -13,6 +14,7 @@ const readerLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
 
 const MessageMarkdown = lazy(() => import('./MessageMarkdown'));
 const CLAMP_LENGTH = 1800;
+const noChildren: readonly ChildSession[] = [];
 
 function MarkdownPending() {
   return <div className={styles.markdownPending} aria-hidden="true"><span /><span /><span /></div>;
@@ -71,25 +73,7 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
   </article>;
 });
 
-type TimelineRow = { kind: 'message'; item: HistoryMessage } | { kind: 'child'; child: ChildSession };
-
-/** Direct children land at their first message, then the parent's own turns continue. */
-function timelineRows(messages: HistoryMessage[], children: readonly ChildSession[]): TimelineRow[] {
-  const pending = children.map((child) => ({ child, at: childMoment(child) }))
-    .sort((left, right) => (left.at ?? Number.POSITIVE_INFINITY) - (right.at ?? Number.POSITIVE_INFINITY));
-  const rows: TimelineRow[] = [];
-  for (const item of messages) {
-    const stamp = item.timestamp;
-    while (pending.length && pending[0].at !== null && stamp !== null && pending[0].at <= stamp) {
-      rows.push({ kind: 'child', child: pending.shift()!.child });
-    }
-    rows.push({ kind: 'message', item });
-  }
-  for (const left of pending) rows.push({ kind: 'child', child: left.child });
-  return rows;
-}
-
-export function SessionReader({ detail, toolName, children = [], onOpenChild }: {
+export const SessionReader = memo(function SessionReader({ detail, toolName, children = noChildren, onOpenChild }: {
   detail: HistoryDetail;
   toolName: string;
   children?: readonly ChildSession[];
@@ -171,12 +155,11 @@ export function SessionReader({ detail, toolName, children = [], onOpenChild }: 
     </div>
     <div className={styles.messages}>
       {rows.map((row, index) => {
-        const stampOf = (entry: TimelineRow) => entry.kind === 'message' ? entry.item.timestamp : childMoment(entry.child);
-        const stamp = stampOf(row);
+        const stamp = row.at;
         const previous = index === 0 ? undefined : rows[index - 1];
-        const previousStamp = previous ? stampOf(previous) : undefined;
-        const date = stamp === null ? t('records.reader.dateUnknown') : new Date(stamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
+        const previousStamp = previous?.at;
         const changedDay = previousStamp === undefined || (previousStamp === null ? 'unknown' : new Date(previousStamp).toDateString()) !== (stamp === null ? 'unknown' : new Date(stamp).toDateString());
+        const date = !changedDay ? '' : stamp === null ? t('records.reader.dateUnknown') : new Date(stamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
         if (row.kind === 'child') {
           return <div key={`child:${row.child.key}:${index}`}>{changedDay && <div className={styles.dayDivider}>{date}</div>}{onOpenChild && <ChildCard child={row.child} onOpen={onOpenChild} />}</div>;
         }
@@ -186,4 +169,4 @@ export function SessionReader({ detail, toolName, children = [], onOpenChild }: 
       {!visible.length && <div className={styles.empty}><Icon name="records" size={24} /><h3>{onlyQuestions ? t('records.reader.emptyQuestions') : t('records.reader.emptyTitle')}</h3><p>{onlyQuestions ? t('records.reader.emptyQuestionsHint') : t('records.reader.emptyHint')}</p>{onlyQuestions && <button type="button" onClick={() => setOnlyQuestions(false)}>{t('records.reader.viewAll')}</button>}</div>}
     </div>
   </div>;
-}
+});
