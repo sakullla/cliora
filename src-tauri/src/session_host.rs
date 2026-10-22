@@ -73,13 +73,26 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     }
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let pair = native_pty_system().openpty(size).map_err(|error| format!("无法创建会话终端：{error}"))?;
-    let mut command = CommandBuilder::new(&plan.executable);
+    let (program, args) = hosted_command(&plan);
+    let mut command = CommandBuilder::new(program);
     command.cwd(&plan.directory);
-    command.args(&plan.cli_args);
+    command.args(args);
     apply_environment(&mut command, &plan, credential);
-    let child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
-    let reader = pair.master.try_clone_reader().map_err(|error| format!("无法读取会话输出：{error}"))?;
-    let writer = pair.master.take_writer().map_err(|error| format!("无法写入会话：{error}"))?;
+    let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
+    let reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(format!("无法读取会话输出：{error}"));
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(format!("无法写入会话：{error}"));
+        }
+    };
     let session = Arc::new(Session {
         id: uuid::Uuid::new_v4().to_string(),
         tool_id: plan.tool_id.clone(),
@@ -94,12 +107,11 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         replay: Mutex::new(VecDeque::new()),
     });
     let id = session.id.clone();
-    sessions().insert(id.clone(), Arc::clone(&session));
-    let reader_session = Arc::clone(&session);
-    thread::Builder::new()
-        .name(format!("cliora-session-{id}"))
-        .spawn(move || read_output(reader_session, reader))
-        .map_err(|error| format!("无法接收会话输出：{error}"))?;
+    if let Err(error) = attach_reader(Arc::clone(&session), reader) {
+        end_child(&session);
+        return Err(error);
+    }
+    sessions().insert(id.clone(), session);
     Ok(LaunchResult {
         tool_id: plan.tool_id,
         project_id: plan.project_id,
@@ -108,6 +120,32 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         status: "session_started",
         session_id: Some(id),
     })
+}
+
+fn hosted_command(plan: &LaunchPlan) -> (std::path::PathBuf, Vec<String>) {
+    let script = plan.executable.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"));
+    #[cfg(windows)]
+    if script {
+        let mut args = vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), plan.executable.display().to_string()];
+        args.extend(plan.cli_args.iter().cloned());
+        return (std::path::PathBuf::from("powershell.exe"), args);
+    }
+    #[cfg(not(windows))]
+    let _ = script;
+    (plan.executable.clone(), plan.cli_args.clone())
+}
+
+fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<(), String> {
+    #[cfg(test)]
+    if REJECT_READER_THREAD.load(Ordering::SeqCst) {
+        return Err("无法接收会话输出：测试拒绝创建读取线程".into());
+    }
+    let name = format!("cliora-session-{}", session.id);
+    thread::Builder::new()
+        .name(name)
+        .spawn(move || read_output(session, reader))
+        .map_err(|error| format!("无法接收会话输出：{error}"))?;
+    Ok(())
 }
 
 pub fn list() -> Vec<SessionSnapshot> {
@@ -314,6 +352,14 @@ pub(crate) fn shell_executable() -> Result<(std::path::PathBuf, Vec<String>), St
         }
         Ok((program, vec!["-i".into()]))
     }
+}
+
+#[cfg(test)]
+static REJECT_READER_THREAD: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn reject_reader_thread(reject: bool) {
+    REJECT_READER_THREAD.store(reject, Ordering::SeqCst);
 }
 
 #[cfg(test)]
