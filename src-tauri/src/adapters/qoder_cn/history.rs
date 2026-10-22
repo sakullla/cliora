@@ -413,18 +413,39 @@ mod tests {
         UsageAttribution { kind: AgentKind::Main, name: None, session_key: None }
     }
 
-    fn lock_exclusive(path: &Path) -> fs::File {
+    /// Windows holds a sharing lock. Unix has no equivalent that blocks a later
+    /// open, so the stand-in removes permissions and puts them back on drop.
+    struct ExclusiveLock {
+        _file: fs::File,
+        #[cfg(not(windows))]
+        path: PathBuf,
+        #[cfg(not(windows))]
+        mode: u32,
+    }
+
+    fn lock_exclusive(path: &Path) -> ExclusiveLock {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap();
+            return ExclusiveLock {
+                _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
+            };
         }
         #[cfg(not(windows))]
         {
             use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o7777;
             let file = fs::File::open(path).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
-            file
+            fs::set_permissions(path, fs::Permissions::from_mode(0o0)).unwrap();
+            ExclusiveLock { _file: file, path: path.to_path_buf(), mode }
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for ExclusiveLock {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
         }
     }
 
@@ -655,7 +676,7 @@ mod tests {
             #[cfg(not(windows))]
             {
                 use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o0)).unwrap();
             }
             Self { path: path.to_path_buf() }
         }

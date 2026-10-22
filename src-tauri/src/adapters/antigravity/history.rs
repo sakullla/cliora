@@ -1161,7 +1161,7 @@ mod tests {
             #[cfg(not(windows))]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0)).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o0)).unwrap();
             }
             Self { path: path.to_path_buf() }
         }
