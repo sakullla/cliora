@@ -46,7 +46,7 @@
   --accent-soft: #e1f2e7;
   --accent-line: #b3d6c1;
   --accent-ring: rgb(14 107 67 / 20%);
-  --selection: #b9d4f5;
+  --selection: #d0e4fa;
 
   /* Status */
   --danger: #a62f2a;
@@ -137,7 +137,7 @@
   --accent-soft: #172e21;
   --accent-line: #2f5a3d;
   --accent-ring: rgb(123 227 167 / 26%);
-  --selection: #1d3f66;
+  --selection: #173557;
 
   --danger: #fcd6d0;
   --danger-soft: #3a2422;
