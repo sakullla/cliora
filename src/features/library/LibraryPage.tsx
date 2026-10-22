@@ -286,7 +286,8 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
       if (opened) { onWorkbenchSession?.(opened); return; }
       showNotice(t('library.page.sessionStarted'));
     } catch (value) {
-      if (await failedInWorkbench(false)) {
+      const desktop = managedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
+      if (await failedInWorkbench(desktop)) {
         setLaunchItem(null);
         onWorkbenchFailure?.({ detail: formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext')), retry: { kind: 'launch', request } });
         return;

@@ -632,6 +632,43 @@ test('command palette lists indexed sessions and library entries without scannin
   expect(await page.evaluate(() => (window as typeof window & { __commands: string[] }).__commands)).not.toContain('refresh_history');
 });
 
+test('a desktop command-palette resume failure stays on the current page', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions = [
+      { id: 'desk', toolId: 'cursor', nativeId: null, title: '桌面会话', cwd: null, model: null, projectId: null, startedAt: null, updatedAt: 2, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 },
+      { id: 'term', toolId: 'codex', nativeId: null, title: '终端会话', cwd: null, model: null, projectId: null, startedAt: null, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['cursor', 'codex'], theme: 'light' }, tools: [{ id: 'cursor', name: 'Cursor' }, { id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'cursor', name: 'Cursor', launchForm: 'desktop', interfaceFormats: [], history: { state: 'available', reason: '' } }, { id: 'codex', name: 'Codex', launchForm: 'terminal', interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['cursor', 'codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_library_items' || command === 'list_history_prices') return [];
+          if (command === 'list_history_sessions') return sessions;
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'resume_history_session') throw new Error(args.id === 'desk' ? '桌面会话没有恢复' : '终端会话没有恢复');
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: /快速前往/ }).click();
+  await page.getByRole('dialog', { name: '快速前往' }).getByRole('option', { name: '桌面会话' }).click();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: '桌面会话没有恢复' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
+  await page.getByRole('button', { name: /快速前往/ }).click();
+  await page.getByRole('dialog', { name: '快速前往' }).getByRole('option', { name: '终端会话' }).click();
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
+  await expect(page.getByRole('region', { name: '当前会话' }).getByRole('alert')).toContainText('终端会话没有恢复');
+});
+
 test('command palette hides the session and library groups when data is empty', async ({ page }) => {
   await installDesktop(page);
   await page.goto('/');
@@ -695,7 +732,19 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
-          if (command === 'replay_workbench_session') return btoa(args.sessionId === 's2' ? 'claude-ready' : 'codex-ready');
+          if (command === 'replay_workbench_session') {
+            const text = args.sessionId === 's2' ? 'claude-ready' : 'codex-ready';
+            const encoded = btoa(text);
+            const emitOutput = (dataBase64: string) => {
+              const id = bridge.listens['cliora:session-output'];
+              bridge.handlers[id]?.({ payload: { sessionId: args.sessionId, dataBase64 } });
+            };
+            queueMicrotask(() => {
+              emitOutput(args.sessionId === 's2' ? encoded : btoa('ready'));
+              if (args.sessionId === 's2') emitOutput(btoa('!'));
+            });
+            return encoded;
+          }
           if (command === 'write_workbench_session') { writes.push({ sessionId: args.sessionId, dataBase64: args.dataBase64 }); return null; }
           if (command === 'resize_workbench_session') return null;
           if (command === 'close_workbench_session') { closed.push(args.sessionId); const index = sessions.findIndex((item) => item.id === args.sessionId); if (index >= 0) sessions.splice(index, 1); return null; }
@@ -722,7 +771,9 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toContainText('普通');
   await expect(claude).toContainText('YOLO');
   await expect(claude).toContainText('beta-work');
-  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  const codexOutput = page.locator('.xterm-accessibility-tree').first();
+  await expect(codexOutput).toContainText('codex-ready');
+  await expect(codexOutput).not.toContainText('codex-readyready');
   const stage = page.getByRole('region', { name: '当前会话' });
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('Alpha');
@@ -733,7 +784,9 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await claude.click();
   await expect(stage).toContainText('Claude Code');
   await expect(stage).toContainText('YOLO');
-  await expect(page.locator('.xterm-accessibility-tree').last()).toContainText('claude-ready');
+  const claudeOutput = page.locator('.xterm-accessibility-tree').last();
+  await expect(claudeOutput).toContainText('claude-ready!');
+  await expect(claudeOutput).not.toContainText('claude-readyclaude-ready');
   await page.evaluate(() => { (window as unknown as { __writes: unknown[] }).__writes.length = 0; });
   await page.locator('.xterm-helper-textarea:visible').focus();
   await page.keyboard.type('z');

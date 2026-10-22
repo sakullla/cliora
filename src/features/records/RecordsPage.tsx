@@ -336,7 +336,8 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
       showNotice(t('records.page.resumeRequested'));
     }
     catch (value) {
-      if (await failedInWorkbench(false)) {
+      const desktop = tools.find((item) => item.id === selected.session.toolId)?.launchForm === 'desktop';
+      if (await failedInWorkbench(desktop)) {
         onWorkbenchFailure?.({ detail: formatFailure(value, t('records.page.operationFailed'), recordNext()), retry: { kind: 'resume', id: selected.session.id, mode } });
         return;
       }

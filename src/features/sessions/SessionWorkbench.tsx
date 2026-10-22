@@ -44,6 +44,26 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    merged.set(part, offset);
+    offset += part.length;
+  }
+  return merged;
+}
+
+/** Bytes from output events that the replay snapshot does not already contain. */
+function queuedAfterSnapshot(snapshot: Uint8Array, queue: Uint8Array): Uint8Array {
+  if (snapshot.length > queue.length) return new Uint8Array();
+  for (let index = 0; index < snapshot.length; index += 1) {
+    if (queue[index] !== snapshot[index]) return queue;
+  }
+  return queue.subarray(snapshot.length);
+}
+
 function readTheme(): ITheme {
   const css = getComputedStyle(document.documentElement);
   const pick = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
@@ -140,11 +160,22 @@ function SessionTerminal({ sessionId, active, running, writers, pending, onWrite
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     void native.replayWorkbenchSession(sessionId).then((encoded) => {
       if (disposed) return;
-      writeEncoded(typeof encoded === 'string' ? encoded : '');
-      acceptLive = true;
-      queued.splice(0).forEach(writeEncoded);
-      (pending.current.get(sessionId) ?? []).splice(0).forEach(writeEncoded);
+      let snapshot = new Uint8Array(0);
+      try { snapshot = Uint8Array.from(decodeBase64(typeof encoded === 'string' ? encoded : '')); }
+      catch { snapshot = new Uint8Array(0); }
+      const earlier = (pending.current.get(sessionId) ?? []).splice(0);
       pending.current.delete(sessionId);
+      const arrived = queued.splice(0);
+      const queuedBytes = concatBytes([...earlier, ...arrived].flatMap((part) => {
+        try { return [decodeBase64(part)]; }
+        catch { return []; }
+      }));
+      const suffix = queuedAfterSnapshot(snapshot, queuedBytes);
+      acceptLive = true;
+      try {
+        if (snapshot.length) term.write(snapshot);
+        if (suffix.length) term.write(suffix);
+      } catch { /* Malformed bytes stay out of the terminal. */ }
       requestAnimationFrame(fitNow);
     }).catch(() => {
       acceptLive = true;

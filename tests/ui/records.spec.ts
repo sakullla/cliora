@@ -767,14 +767,14 @@ test('resuming into the workbench opens that session and an external resume does
   await page.addInitScript(() => {
     const session = { id: 'record-a', toolId: 'codex', nativeId: '1111', title: 'Review change', cwd: 'C:\\project', model: 'gpt', projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
     const live: Array<Record<string, unknown>> = [];
-    const control = { external: false };
+    const control = { external: false, fail: false };
     Object.assign(window, {
       isTauri: true, __resumeMode: control,
       __TAURI_INTERNALS__: {
         transformCallback: () => 1,
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
-          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: 'desktop', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_projects') return [];
           if (command === 'refresh_history') return [];
           if (command === 'list_history_prices') return [];
@@ -785,6 +785,7 @@ test('resuming into the workbench opens that session and an external resume does
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'resume_history_session') {
+            if (control.fail) throw new Error('无法恢复');
             if (control.external) return { toolId: 'codex', projectId: null, mode: args.mode, terminal: 'power_shell', status: 'terminal_requested', sessionId: null };
             const id = 'live-1';
             if (!live.length) live.push({ id, toolId: 'codex', projectId: null, directory: 'C:/project', mode: args.mode, running: true, exitCode: null });
@@ -813,4 +814,10 @@ test('resuming into the workbench opens that session and an external resume does
   await expect(page.getByText('已请求外部终端恢复会话。')).toBeVisible();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.evaluate(() => { (window as unknown as { __resumeMode: { fail: boolean; external: boolean } }).__resumeMode.fail = true; (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = false; });
+  await page.getByRole('button', { name: '在外部终端继续' }).click();
+  await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('无法恢复');
+  await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
 });
