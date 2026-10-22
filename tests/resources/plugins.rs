@@ -119,7 +119,11 @@ fn command_contract_does_not_invent_cross_cli_parity() {
         adapters::plugins::command_args("pi", "update", "npm:example", false).unwrap(),
         ["update", "--extension", "npm:example", "--no-approve"]
     );
-    assert!(adapters::plugins::command_args("codex", "update", "x@m", false).is_err());
+    // Codex has no plugin update subcommand. Update reinstalls with plugin add.
+    assert_eq!(
+        adapters::plugins::command_args("codex", "update", "x@m", false).unwrap(),
+        ["plugin", "add", "x@m", "--json"]
+    );
     assert!(adapters::plugins::command_args("grok", "install", "x", true).is_err());
     assert!(adapters::plugins::command_args("pi", "update", "x", true).is_err());
     assert!(adapters::plugins::command_args("claude_code", "install", "--yes", false).is_err());
