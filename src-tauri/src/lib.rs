@@ -89,6 +89,7 @@ pub mod database;
 pub mod domain;
 pub mod history;
 pub mod launch;
+pub mod session_host;
 pub mod library;
 pub mod native;
 pub mod portable;
@@ -111,6 +112,7 @@ pub fn run() {
             use tauri::{Listener, Manager};
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
+            session_host::install(app.handle().clone());
             tray::setup(app);
             let usage_handle = app.handle().clone();
             std::thread::spawn(move || loop {
@@ -291,6 +293,11 @@ pub fn run() {
             commands::set_custom_terminal,
             commands::set_default_launch_mode,
             commands::launch_cli,
+            commands::list_workbench_sessions,
+            commands::replay_workbench_session,
+            commands::write_workbench_session,
+            commands::resize_workbench_session,
+            commands::close_workbench_session,
             commands::cli_latest_version,
             commands::maintain_registered_cli,
             commands::cancel_cli_maintenance,
@@ -395,6 +402,9 @@ async fn auto_check_update(handle: tauri::AppHandle) {
 
 /// Dock click on macOS. A hidden main window stays hidden unless we show it.
 fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        session_host::shutdown();
+    }
     #[cfg(target_os = "macos")]
     if let tauri::RunEvent::Reopen {
         has_visible_windows: false,
