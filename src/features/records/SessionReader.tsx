@@ -4,7 +4,7 @@ import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/hi
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
-import { ChildCard } from './SessionAssociation';
+import { ChildCluster } from './SessionAssociation';
 import { timelineRows } from './sessionTimeline';
 import { useDisclosure } from './useDisclosure';
 import i18n from '../../i18n';
@@ -95,6 +95,31 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
   }, []);
   const visible = useMemo(() => detail.messages.filter((item) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
   const rows = useMemo(() => timelineRows(visible, onlyQuestions ? [] : children), [visible, children, onlyQuestions]);
+  const displayBlocks = useMemo(() => {
+    const blocks: Array<
+      | { kind: 'message'; item: HistoryMessage; at: number | null; changedDay: boolean; date: string }
+      | { kind: 'children'; items: ChildSession[]; at: number | null; changedDay: boolean; date: string }
+    > = [];
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      const stamp = row.at;
+      const previous = index === 0 ? undefined : rows[index - 1];
+      const previousStamp = previous?.at;
+      const changedDay = previousStamp === undefined || (previousStamp === null ? 'unknown' : new Date(previousStamp).toDateString()) !== (stamp === null ? 'unknown' : new Date(stamp).toDateString());
+      const date = !changedDay ? '' : stamp === null ? t('records.reader.dateUnknown') : new Date(stamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
+      if (row.kind === 'child') {
+        const last = blocks[blocks.length - 1];
+        if (last && last.kind === 'children' && !changedDay) {
+          last.items.push(row.child);
+        } else {
+          blocks.push({ kind: 'children', items: [row.child], at: stamp, changedDay, date });
+        }
+      } else {
+        blocks.push({ kind: 'message', item: row.item, at: stamp, changedDay, date });
+      }
+    }
+    return blocks;
+  }, [rows, t]);
   const matches = useMemo(() => search ? visible.filter((item) => item.text.toLowerCase().includes(search.toLowerCase())).map((item) => ({ item })) : [], [visible, search]);
   const selected = matches.length ? current % matches.length : 0;
   useEffect(() => {
@@ -154,17 +179,12 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
       {search && <small className={styles.findHint}>{t('records.reader.findHint')}</small>}
     </div>
     <div className={styles.messages}>
-      {rows.map((row, index) => {
-        const stamp = row.at;
-        const previous = index === 0 ? undefined : rows[index - 1];
-        const previousStamp = previous?.at;
-        const changedDay = previousStamp === undefined || (previousStamp === null ? 'unknown' : new Date(previousStamp).toDateString()) !== (stamp === null ? 'unknown' : new Date(stamp).toDateString());
-        const date = !changedDay ? '' : stamp === null ? t('records.reader.dateUnknown') : new Date(stamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
-        if (row.kind === 'child') {
-          return <div key={`child:${row.child.key}:${index}`}>{changedDay && <div className={styles.dayDivider}>{date}</div>}{onOpenChild && <ChildCard child={row.child} onOpen={onOpenChild} />}</div>;
+      {displayBlocks.map((block, index) => {
+        if (block.kind === 'children') {
+          return <div key={`children:${block.items[0].key}:${index}`}>{block.changedDay && <div className={styles.dayDivider}>{block.date}</div>}{onOpenChild && <ChildCluster items={block.items} onOpen={onOpenChild} />}</div>;
         }
-        const item = row.item;
-        return <div key={item.id}>{changedDay && <div className={styles.dayDivider}>{date}</div>}<Message item={item} toolId={detail.session.toolId} toolName={toolName} raw={raw} query={search} current={matches[selected]?.item.id === item.id} renderMarkdown={rendered.has(item.id)} /></div>;
+        const item = block.item;
+        return <div key={item.id}>{block.changedDay && <div className={styles.dayDivider}>{block.date}</div>}<Message item={item} toolId={detail.session.toolId} toolName={toolName} raw={raw} query={search} current={matches[selected]?.item.id === item.id} renderMarkdown={rendered.has(item.id)} /></div>;
       })}
       {!visible.length && <div className={styles.empty}><Icon name="records" size={24} /><h3>{onlyQuestions ? t('records.reader.emptyQuestions') : t('records.reader.emptyTitle')}</h3><p>{onlyQuestions ? t('records.reader.emptyQuestionsHint') : t('records.reader.emptyHint')}</p>{onlyQuestions && <button type="button" onClick={() => setOnlyQuestions(false)}>{t('records.reader.viewAll')}</button>}</div>}
     </div>

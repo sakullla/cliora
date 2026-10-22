@@ -661,8 +661,19 @@ test('session detail shows a child on the chat timeline and opens one level at a
         children: [
           {
             key: 'child-review', name: 'Reviewer', readable: true,
-            messages: [{ id: 'c1', role: 'assistant', text: 'CHILD_BODY', timestamp: 1790668803000 }],
+            messages: [
+              { id: 'c-ask', role: 'user', text: '请核查备份对象模型、加密配置与恢复链路。', timestamp: 1790668802900 },
+              { id: 'c1', role: 'assistant', text: 'CHILD_BODY', timestamp: 1790668803000 },
+            ],
             children: [{ key: 'grand-1', name: 'Nested', readable: true, messages: [{ id: 'g1', role: 'assistant', text: 'GRAND_BODY', timestamp: 1790668803000 }], children: [] }],
+          },
+          {
+            key: 'child-audit', name: 'Auditor', readable: true,
+            messages: [
+              { id: 'c2-ask', role: 'user', text: '请核查权限与密钥流转。', timestamp: 1790668802950 },
+              { id: 'c2', role: 'assistant', text: 'AUDIT_BODY', timestamp: 1790668803000 },
+            ],
+            children: [],
           },
           { key: 'child-gap', name: null, readable: false, messages: [{ id: 'bad', role: 'assistant', text: 'SHOULD_NOT_APPEAR', timestamp: 1790668803000 }], children: [] },
         ],
@@ -722,6 +733,18 @@ test('session detail shows a child on the chat timeline and opens one level at a
   await expect(reader.getByRole('button', { name: '打开 Nested' })).toHaveCount(0);
   await expect(reader.getByText('正文不可读取')).toBeVisible();
   await expect(reader.getByRole('button', { name: '打开 未命名子会话' })).toHaveCount(0);
+  const cluster = reader.getByRole('region', { name: '3 个并行子会话' });
+  await expect(cluster).toContainText('派发了 3 个子会话');
+  const reviewCard = cluster.getByRole('article', { name: '子会话 Reviewer' });
+  await expect(reviewCard.getByRole('button', { name: '展开详情' })).toHaveAttribute('aria-expanded', 'false');
+  await reviewCard.getByRole('button', { name: '展开详情' }).click();
+  await expect(reviewCard.getByRole('button', { name: '收起详情' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(reviewCard).toContainText('请核查备份对象模型、加密配置与恢复链路。');
+  await reviewCard.getByRole('button', { name: '收起详情' }).click();
+  await cluster.getByRole('button', { name: '收起列表' }).click();
+  await expect(cluster.getByRole('article')).toHaveCount(0);
+  await cluster.getByRole('button', { name: '展开 3 个' }).click();
+  await expect(cluster.getByRole('article')).toHaveCount(3);
   await expect(page.getByRole('button', { name: '收藏会话' })).toBeVisible();
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
   await reader.getByRole('button', { name: '打开 Reviewer' }).click();
