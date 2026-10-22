@@ -916,3 +916,61 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
     crate::session_host::shutdown();
     assert!(crate::session_host::list().is_empty());
 }
+
+struct ClearReaderRejection;
+
+impl Drop for ClearReaderRejection {
+    fn drop(&mut self) {
+        crate::session_host::reject_reader_thread(false);
+    }
+}
+
+#[test]
+fn reader_thread_failure_does_not_publish_or_leave_the_child() {
+    let _guard = crate::session_host::lock_for_tests();
+    let _clear = ClearReaderRejection;
+    crate::session_host::shutdown();
+    crate::session_host::reject_reader_thread(true);
+    let temp = tempfile::tempdir().unwrap();
+    let marker = temp.path().join("leaked.txt");
+    #[cfg(windows)]
+    let (program, args) = (
+        std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        vec!["-NoProfile".into(), "-Command".into(), format!("Start-Sleep -Seconds 1; Set-Content -LiteralPath '{}' -Value leaked", marker.display().to_string().replace('\'', "''"))],
+    );
+    #[cfg(not(windows))]
+    let (program, args) = (
+        std::path::PathBuf::from("/bin/sh"),
+        vec!["-c".into(), format!("sleep 1; printf leaked > '{}'", marker.display())],
+    );
+    let mut plan = sample(TerminalId::Workbench);
+    plan.executable = program;
+    plan.cli_args = args;
+    plan.directory = temp.path().to_path_buf();
+    let error = crate::session_host::start(plan, None).unwrap_err();
+    assert!(error.contains("无法接收会话输出"));
+    assert!(crate::session_host::list().is_empty());
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(!marker.exists(), "failed workbench launch left the child running");
+}
+
+#[cfg(windows)]
+#[test]
+fn workbench_starts_a_powershell_script_with_its_arguments() {
+    let _guard = crate::session_host::lock_for_tests();
+    crate::session_host::shutdown();
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("cli dir");
+    std::fs::create_dir(&directory).unwrap();
+    let script = directory.join("tool.ps1");
+    std::fs::write(&script, "Write-Output ('ps1-marker ' + $args[0])\n").unwrap();
+    let mut plan = sample(TerminalId::Workbench);
+    plan.executable = script;
+    plan.cli_args = vec!["workspace".into()];
+    plan.directory = temp.path().to_path_buf();
+    let started = crate::session_host::start(plan, None).unwrap();
+    let id = started.session_id.expect("session id");
+    crate::session_host::wait_for_replay(&id, "ps1-marker workspace").unwrap();
+    crate::session_host::close(&id).unwrap();
+    crate::session_host::shutdown();
+}
