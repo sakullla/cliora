@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -19,6 +19,7 @@ const EXIT_EVENT: &str = "cliora:session-exit";
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,7 @@ pub struct SessionSnapshot {
     pub mode: LaunchMode,
     pub running: bool,
     pub exit_code: Option<i32>,
+    pub started_at: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -48,6 +50,8 @@ struct SessionExit {
 
 struct Session {
     id: String,
+    sequence: u64,
+    started_at: u64,
     tool_id: String,
     project_id: Option<String>,
     directory: String,
@@ -93,8 +97,14 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
             return Err(format!("无法写入会话：{error}"));
         }
     };
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
     let session = Arc::new(Session {
         id: uuid::Uuid::new_v4().to_string(),
+        sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::SeqCst),
+        started_at,
         tool_id: plan.tool_id.clone(),
         project_id: plan.project_id.clone(),
         directory: plan.directory.display().to_string(),
@@ -149,7 +159,9 @@ fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<
 }
 
 pub fn list() -> Vec<SessionSnapshot> {
-    sessions().values().map(|session| session.snapshot()).collect()
+    let mut items: Vec<_> = sessions().values().cloned().collect();
+    items.sort_by_key(|session| session.sequence);
+    items.into_iter().map(|session| session.snapshot()).collect()
 }
 
 pub fn replay(id: &str) -> Result<String, String> {
@@ -273,9 +285,9 @@ fn apply_environment(command: &mut CommandBuilder, plan: &LaunchPlan, credential
         command.env("PATH", path);
     }
     command.env_remove("NO_COLOR");
-    if std::env::var("TERM").as_deref() == Ok("dumb") {
-        command.env_remove("TERM");
-    }
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "Cliora");
     if matches!(std::env::var("FORCE_COLOR").as_deref(), Ok("0") | Ok("false")) {
         command.env_remove("FORCE_COLOR");
     }
@@ -305,13 +317,14 @@ impl Session {
             mode: self.mode,
             running: self.running.load(Ordering::SeqCst),
             exit_code: self.exit_code.lock().ok().and_then(|code| *code),
+            started_at: self.started_at,
         }
     }
 }
 
 #[cfg(test)]
 pub(crate) fn wait_for_replay(id: &str, marker: &str) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
     let mut answered = 0;
     while std::time::Instant::now() < deadline {
         if let Ok(encoded) = replay(id) {
@@ -328,7 +341,7 @@ pub(crate) fn wait_for_replay(id: &str, marker: &str) -> Result<(), String> {
                 }
             }
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(std::time::Duration::from_millis(50));
     }
     let seen = replay(id).ok().and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok()).unwrap_or_default();
     Err(format!("会话没有返回预期输出：{}", String::from_utf8_lossy(&seen)))
