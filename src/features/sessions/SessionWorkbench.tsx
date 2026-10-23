@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Terminal } from '@xterm/xterm';
@@ -15,6 +16,7 @@ import { FilterSelect, type FilterSelectOption } from '../../components/FilterSe
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { RowMenu } from '../../components/RowMenu';
+import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchSession } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
@@ -41,12 +43,13 @@ type TerminalHandle = {
 
 type RailFilter = 'all' | 'running' | 'ended';
 
-const DEFAULT_RAIL_WIDTH = 264;
-const MIN_RAIL_WIDTH = 216;
-const MAX_RAIL_WIDTH = 380;
+const DEFAULT_RAIL_WIDTH = 292;
+const MIN_RAIL_WIDTH = 236;
+const MAX_RAIL_WIDTH = 404;
 const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 20;
+const QUICK_TOOL_LIMIT = 6;
 
 export function workbenchSessionId(result: LaunchResult): string | null {
   return result.status === 'session_started' && result.sessionId ? result.sessionId : null;
@@ -93,15 +96,15 @@ function queuedAfterSnapshot(snapshot: Uint8Array, queue: Uint8Array): Uint8Arra
   return queue.subarray(snapshot.length);
 }
 
-function readTheme(): ITheme {
-  const css = getComputedStyle(document.documentElement);
+function readTheme(host?: HTMLElement | null): ITheme {
+  const css = getComputedStyle(host ?? document.documentElement);
   const pick = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
   const dark = document.documentElement.dataset.theme === 'dark';
   return {
-    background: pick('--bg', dark ? '#0a0f0c' : '#f5f7f3'),
+    background: pick('--wb-terminal-bg', pick('--bg', dark ? '#0a0f0c' : '#f5f7f3')),
     foreground: pick('--text', dark ? '#eef4ef' : '#111813'),
     cursor: pick('--accent', dark ? '#7be3a7' : '#0e6b43'),
-    cursorAccent: pick('--bg', dark ? '#0a0f0c' : '#f5f7f3'),
+    cursorAccent: pick('--wb-terminal-bg', pick('--bg', dark ? '#0a0f0c' : '#f5f7f3')),
     selectionBackground: pick('--selection', dark ? '#173557' : '#d0e4fa'),
     black: dark ? '#1a241e' : '#1c2420',
     red: dark ? '#f0a8a0' : '#a62f2a',
@@ -120,6 +123,17 @@ function readTheme(): ITheme {
     brightCyan: dark ? '#c6efe6' : '#1a8f84',
     brightWhite: dark ? '#ffffff' : '#111813',
   };
+}
+
+const TITLE_LIMIT = 80;
+
+/** CLIs put spinners and status glyphs in front of the task title; keep only the words. */
+export function cleanTerminalTitle(raw: string): string {
+  const text = raw
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/^[\s\u2800-\u28ff\u2700-\u27bf\u2600-\u26ff\u00b7\u2022\u25cf\u25cb\u25d0-\u25d3*\-\u2010-\u2015\u2731-\u273d]+/u, '')
+    .trim();
+  return text.length > TITLE_LIMIT ? text.slice(0, TITLE_LIMIT - 1).trimEnd() + '\u2026' : text;
 }
 
 function monoFont(): string {
@@ -195,7 +209,7 @@ function formatDuration(startedAt: number | undefined, now: number): string {
   return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
-function SessionTerminal({ sessionId, active, running, fontSize, writers, pending, handles, onWriteError, onBell }: {
+function SessionTerminal({ sessionId, active, running, fontSize, writers, pending, handles, onWriteError, onBell, onTitle }: {
   sessionId: string;
   active: boolean;
   running: boolean;
@@ -205,6 +219,7 @@ function SessionTerminal({ sessionId, active, running, fontSize, writers, pendin
   handles: MutableRefObject<Map<string, TerminalHandle>>;
   onWriteError: MutableRefObject<(error: unknown) => void>;
   onBell: MutableRefObject<(sessionId: string) => void>;
+  onTitle: MutableRefObject<(sessionId: string, title: string) => void>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -231,7 +246,7 @@ function SessionTerminal({ sessionId, active, running, fontSize, writers, pendin
       macOptionIsMeta: true,
       allowProposedApi: true,
       screenReaderMode: true,
-      theme: readTheme(),
+      theme: readTheme(node),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -276,6 +291,10 @@ function SessionTerminal({ sessionId, active, running, fontSize, writers, pendin
 
     const bellSub = term.onBell(() => {
       if (!disposed) onBell.current(sessionId);
+    });
+    // OSC 0/2: CLIs such as Codex and Claude Code name the current task in the window title.
+    const titleSub = term.onTitleChange((title) => {
+      if (!disposed) onTitle.current(sessionId, title);
     });
 
     const handle: TerminalHandle = {
@@ -342,7 +361,7 @@ function SessionTerminal({ sessionId, active, running, fontSize, writers, pendin
     };
     const observer = new ResizeObserver(() => fitNow());
     observer.observe(node);
-    const themeObserver = new MutationObserver(() => { term.options.theme = readTheme(); });
+    const themeObserver = new MutationObserver(() => { term.options.theme = readTheme(node); });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     void native.replayWorkbenchSession(sessionId).then((encoded) => {
       if (disposed) return;
@@ -374,14 +393,17 @@ function SessionTerminal({ sessionId, active, running, fontSize, writers, pendin
       if (writers.current.get(sessionId) === publish) writers.current.delete(sessionId);
       if (handles.current.get(sessionId) === handle) handles.current.delete(sessionId);
       bellSub.dispose();
+      titleSub.dispose();
       subscription.dispose();
       observer.disconnect();
       themeObserver.disconnect();
-      term.dispose();
+      // xterm 5.5 schedules `setTimeout(syncScrollArea)` while opening; disposing in the same tick
+      // makes that timer read a torn-down renderer. Dispose after it has run.
+      window.setTimeout(() => term.dispose(), 0);
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [sessionId, writers, pending, handles, onWriteError, onBell]);
+  }, [sessionId, writers, pending, handles, onWriteError, onBell, onTitle]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -437,6 +459,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   // Per-session attention (BEL) state
   const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
+  // Titles the CLIs set through OSC 0/2, keyed by session.
+  const [titles, setTitles] = useState<Map<string, string>>(() => new Map());
+  const [contextMenu, setContextMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const [contextMenuBox, setContextMenuBox] = useState<{ top: number; left: number } | null>(null);
 
   // New Session Modal (GuideDialog) state — supports 40+ CLIs cleanly via searchable FilterSelect
   const [newDialogOpen, setNewDialogOpen] = useState(false);
@@ -489,6 +516,18 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         return next;
       });
     }
+  };
+
+  const onTitleRef = useRef<(id: string, title: string) => void>(() => {});
+  onTitleRef.current = (id: string, raw: string) => {
+    const title = cleanTerminalTitle(raw);
+    setTitles((prev) => {
+      if ((prev.get(id) ?? '') === title) return prev;
+      const next = new Map(prev);
+      if (title) next.set(id, title);
+      else next.delete(id);
+      return next;
+    });
   };
 
   const terminalTools = useMemo(
@@ -668,6 +707,13 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return tools.find((item) => item.id === session.toolId)?.name ?? session.toolId;
   }
 
+  /** The task title the CLI reported, unless it only repeats the tool name. */
+  function taskTitle(session: WorkbenchSession): string {
+    const title = titles.get(session.id) ?? '';
+    const name = toolName(session);
+    return title && title.toLowerCase() !== name.toLowerCase() ? title : '';
+  }
+
   function modeLabel(mode: LaunchMode): string {
     return mode === 'yolo' ? t('sessions.modeYolo') : t('sessions.modeNormal');
   }
@@ -679,6 +725,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     try {
       await native.closeWorkbenchSession(session.id);
       firstSeenAt.current.delete(session.id);
+      setTitles((prev) => { if (!prev.has(session.id)) return prev; const next = new Map(prev); next.delete(session.id); return next; });
       const rest = sessions.filter((item) => item.id !== session.id);
       setSessions(rest);
       setSelectedId((current) => current === session.id ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
@@ -732,8 +779,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     } finally { setRetrying(false); }
   }
 
-  function openNewSessionDialog() {
+  function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }) {
     setDialogError('');
+    if (prefill?.projectId) {
+      const project = projects.find((item) => item.id === prefill.projectId);
+      setWorkspaceValue('project:' + prefill.projectId);
+      if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) {
+        setLaunchToolId(project.preferredTool);
+      }
+    }
+    if (prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId)) setLaunchToolId(prefill.toolId);
+    if (prefill) setLaunchMode(preferredLaunchMode(launchSettings, prefill.projectId ? 'project' : 'cli', !!selectedLaunchTool?.yoloAvailable));
     setNewDialogOpen(true);
   }
 
@@ -895,25 +951,105 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (railFilter === 'ended' && session.running) return false;
       if (!query) return true;
       const name = toolName(session).toLowerCase();
+      const title = (titles.get(session.id) ?? '').toLowerCase();
       const place = placeOf(session).toLowerCase();
       const dir = (session.directory ?? '').toLowerCase();
-      return name.includes(query) || place.includes(query) || dir.includes(query);
+      return name.includes(query) || title.includes(query) || place.includes(query) || dir.includes(query);
     });
-  }, [sessions, railFilter, railSearch, projects, tools]);
+  }, [sessions, railFilter, railSearch, projects, tools, titles]);
+
+  // Right-click menu on a session row: placed at the pointer, kept inside the window.
+  useEffect(() => { if (!contextMenu) setContextMenuBox(null); }, [contextMenu]);
+  useLayoutEffect(() => {
+    if (!contextMenu) return;
+    const menu = contextMenuRef.current;
+    if (!menu) return;
+    const left = Math.max(8, Math.min(contextMenu.x, window.innerWidth - menu.offsetWidth - 8));
+    const top = Math.max(8, Math.min(contextMenu.y, window.innerHeight - menu.offsetHeight - 8));
+    setContextMenuBox({ top, left });
+    menu.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+  }, [contextMenu]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = (event: Event) => {
+      if (event.target instanceof Node && contextMenuRef.current?.contains(event.target)) return;
+      setContextMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      const id = contextMenu.sessionId;
+      setContextMenu(null);
+      document.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`)?.focus();
+    };
+    const close = () => setContextMenu(null);
+    document.addEventListener('mousedown', dismiss);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('blur', close);
+    document.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('blur', close);
+      document.removeEventListener('scroll', close, true);
+    };
+  }, [contextMenu]);
+
+  function openRowMenu(session: WorkbenchSession, x: number, y: number) {
+    setSelectedId(session.id);
+    setContextMenu({ sessionId: session.id, x, y });
+  }
+
+  function contextMenuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const items = [...contextMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
+    if (!items.length) return;
+    if (event.key === 'Tab') { event.preventDefault(); setContextMenu(null); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next].focus();
+  }
 
   const availableProjects = useMemo(
     () => projects.filter((item) => item.available && item.path),
     [projects],
   );
 
+  // Power-user switching without taking focus away from the terminal.
+  useEffect(() => {
+    if (!active || newDialogOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      // The terminal keeps its own Alt handling; text fields keep word-wise caret movement.
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const editing = !!target && (target.tagName === 'INPUT' || target.isContentEditable
+        || (target.tagName === 'TEXTAREA' && !target.classList.contains('xterm-helper-textarea')));
+      if (editing) return;
+      const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
+      if (step) {
+        if (filteredSessions.length < 2) return;
+        event.preventDefault();
+        setSelectedId((current) => {
+          const index = filteredSessions.findIndex((item) => item.id === current);
+          return filteredSessions[(index + step + filteredSessions.length) % filteredSessions.length].id;
+        });
+        return;
+      }
+      if (event.key.toLowerCase() === 'n' && terminalTools.length > 0) {
+        event.preventDefault();
+        openNewSessionDialog();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active, newDialogOpen, filteredSessions, terminalTools]);
+
   // Searchable options for 40+ CLIs and Projects
-  const cliSelectOptions = useMemo<FilterSelectOption[]>(
-    () => toolOptions(terminalTools).map((opt) => ({
-      ...opt,
-      detail: terminalTools.find((item) => item.id === opt.value)?.id,
-    })),
-    [terminalTools],
-  );
+  // Same picker as the home page: icon + name, searchable by name.
+  const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
 
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
     const list: FilterSelectOption[] = [
@@ -936,100 +1072,138 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return list;
   }, [availableProjects, customFolderPath, t]);
 
-  return <div className={styles.root} data-focus-mode={focusMode || undefined} data-empty={showEmpty && !listError || undefined}>
+  return <div className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined}>
     {listError && <div className={styles.banner} role="alert">
       <div className={styles.bannerCopy}>
         <strong>{t('sessions.listFailed')}</strong>
         <p>{listError}</p>
       </div>
-      <button type="button" onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button>
+      <button type="button" className={styles.ghostButton} onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button>
     </div>}
 
     <div
       className={styles.layout}
-      style={{ '--rail-w': `${railWidth}px` } as React.CSSProperties}
+      style={{ '--rail-w': railWidth + 'px' } as React.CSSProperties}
     >
       <aside className={styles.rail} aria-label={t('sessions.listLabel')}>
         <div className={styles.railHead}>
           <div className={styles.railTitleRow}>
             <span className={styles.railTitle}>{t('sessions.listLabel')}</span>
-            {sessions.length > 0 && <span className={styles.railCountBadge} data-active={runningCount > 0 || undefined}>
+            <span className={styles.railCountBadge} data-live={runningCount > 0 || undefined}>
               <span className={styles.liveDot} data-live={runningCount > 0 || undefined} aria-hidden="true" />
-              {runningCount > 0 ? runningCount : sessions.length}
-            </span>}
+              {runningCount > 0 ? t('sessions.runningCount', { count: runningCount }) : t('sessions.totalCount', { count: sessions.length })}
+            </span>
             {terminalTools.length > 0 && <button
               type="button"
               className={styles.newSessionBtn}
-              onClick={openNewSessionDialog}
+              title={t('sessions.newSession')}
+              onClick={() => openNewSessionDialog()}
             >
-              <Icon name="plus" size={13} />
+              <Icon name="plus" size={14} />
               <span>{t('sessions.newSession')}</span>
             </button>}
           </div>
 
-          {sessions.length > 1 && <div className={styles.railControls}>
-            <div className={styles.filterPills}>
-              <button type="button" aria-pressed={railFilter === 'all'} onClick={() => setRailFilter('all')}>
-                {t('sessions.filterAll')} <em>{sessions.length}</em>
-              </button>
-              <button type="button" aria-pressed={railFilter === 'running'} onClick={() => setRailFilter('running')}>
-                {t('sessions.filterRunning')} <em>{runningCount}</em>
-              </button>
-              {endedCount > 0 && <button type="button" aria-pressed={railFilter === 'ended'} onClick={() => setRailFilter('ended')}>
-                {t('sessions.filterEnded')} <em>{endedCount}</em>
-              </button>}
-            </div>
-            {sessions.length > 3 && <input
+          {sessions.length > 1 && <div className={styles.railSearchField}>
+            <Icon name="search" size={13} />
+            <input
               type="search"
-              className={styles.railSearch}
               value={railSearch}
               placeholder={t('sessions.searchPlaceholder')}
               aria-label={t('sessions.searchPlaceholder')}
               onChange={(event) => setRailSearch(event.target.value)}
-            />}
+            />
+            {railSearch && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => setRailSearch('')}>
+              <Icon name="close" size={12} />
+            </button>}
+          </div>}
+
+          {sessions.length > 1 && <div className={styles.segmented} role="group" aria-label={t('sessions.filterLabel')}>
+            <button type="button" aria-pressed={railFilter === 'all'} onClick={() => setRailFilter('all')}>
+              <span>{t('sessions.filterAll')}</span><em>{sessions.length}</em>
+            </button>
+            <button type="button" aria-pressed={railFilter === 'running'} onClick={() => setRailFilter('running')}>
+              <span>{t('sessions.filterRunning')}</span><em>{runningCount}</em>
+            </button>
+            {endedCount > 0 && <button type="button" aria-pressed={railFilter === 'ended'} onClick={() => setRailFilter('ended')}>
+              <span>{t('sessions.filterEnded')}</span><em>{endedCount}</em>
+            </button>}
           </div>}
         </div>
 
-        <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} onKeyDown={navigateChoices}>
+        <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={navigateChoices}>
           {filteredSessions.map((session) => {
             const name = toolName(session);
+            const title = taskTitle(session);
             const place = placeOf(session);
             const mode = modeLabel(session.mode);
             const isSelected = session.id === selectedId;
             const hasBell = attentionIds.has(session.id);
             const elapsed = formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock);
-            return <button
-              type="button"
-              role="tab"
+            return <div
               key={session.id}
-              data-session-id={session.id}
+              className={styles.row}
               data-running={session.running || undefined}
               data-attention={hasBell || undefined}
-              className={styles.session}
-              aria-selected={isSelected}
-              onClick={() => setSelectedId(session.id)}
+              data-selected={isSelected || undefined}
             >
-              <div className={styles.sessionIconWrap}>
-                <ToolIcon toolId={session.toolId} size={26} />
-                <span className={styles.sessionStateDot} data-tone={hasBell ? 'bell' : session.running ? 'live' : 'ended'} aria-hidden="true" />
-              </div>
-              <div className={styles.sessionBody}>
-                <div className={styles.sessionTop}>
-                  <strong>{name}</strong>
-                  <span className={styles.sessionIndex} aria-hidden="true">
-                    {session.running ? elapsed : ''}
-                  </span>
-                </div>
-                <small title={session.directory ? displayPath(session.directory) : place}>{place}</small>
-                <span className={styles.meta}>
-                  <span className={styles.pill} data-mode={session.mode}>{mode}</span>
-                  {hasBell && <span className={styles.pill} data-tone="bell">{t('sessions.bellBadge')}</span>}
-                  {!session.running && <span className={styles.pill} data-tone="ended">
-                    {t('sessions.ended')}{session.exitCode != null ? ` (${session.exitCode})` : ''}
-                  </span>}
+              <button
+                type="button"
+                role="tab"
+                data-session-id={session.id}
+                className={styles.session}
+                aria-selected={isSelected}
+                aria-haspopup="menu"
+                title={[title, displayPath(session.directory || place)].filter(Boolean).join('\n')}
+                onClick={() => setSelectedId(session.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  openRowMenu(session, event.clientX, event.clientY);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openRowMenu(session, rect.left + 24, rect.bottom - 6);
+                  }
+                }}
+              >
+                <span className={styles.sessionIconWrap}>
+                  <ToolIcon toolId={session.toolId} size={24} />
+                  <span className={styles.sessionStateDot} data-tone={hasBell ? 'bell' : session.running ? 'live' : 'ended'} aria-hidden="true" />
                 </span>
-              </div>
-            </button>;
+                <span className={styles.sessionBody}>
+                  <span className={styles.sessionTop}>
+                    <strong>{title || name}</strong>
+                    <span className={styles.sessionTime} data-tone={session.running ? 'live' : 'ended'}>
+                      {session.running ? (elapsed || t('sessions.running')) : t('sessions.ended')}
+                    </span>
+                  </span>
+                  <span className={styles.sessionPlace}>{title ? name + ' \u00b7 ' + place : place}</span>
+                  <span className={styles.sessionMeta}>
+                    <span className={styles.modeTag} data-mode={session.mode}>{mode}</span>
+                    {hasBell && <span className={styles.attentionTag}>
+                      <span className={styles.attentionDot} aria-hidden="true" />
+                      {t('sessions.bellBadge')}
+                    </span>}
+                    {!session.running && session.exitCode != null && <span className={styles.exitTag}>
+                      {t('sessions.exitCode', { code: session.exitCode })}
+                    </span>}
+                  </span>
+                </span>
+              </button>
+              {!session.running && <button
+                type="button"
+                tabIndex={-1}
+                className={styles.rowRemove}
+                aria-label={t('sessions.removeSession') + '：' + name}
+                title={t('sessions.removeSession')}
+                disabled={!!busy}
+                onClick={() => void endSession(session)}
+              >
+                <Icon name="close" size={12} />
+              </button>}
+            </div>;
           })}
           {sessions.length > 0 && filteredSessions.length === 0 && <div className={styles.railNoMatch}>
             <p>{t('sessions.noFilterMatch')}</p>
@@ -1039,17 +1213,21 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           </div>}
         </div>
 
-        {endedCount > 0 && <div className={styles.railFoot}>
-          <button
+        {sessions.length > 0 && <div className={styles.railFoot}>
+          <span className={styles.railSummary}>
+            <span className={styles.summaryDot} data-live={runningCount > 0 || undefined} aria-hidden="true" />
+            {t('sessions.summary', { running: runningCount, ended: endedCount })}
+          </span>
+          {endedCount > 0 && <button
             type="button"
             className={styles.clearEndedBtn}
             disabled={!!busy}
             title={t('sessions.clearEndedTitle')}
             onClick={() => void clearEndedSessions()}
           >
-            <Icon name="trash" size={13} />
-            <span>{t('sessions.clearEnded')} ({endedCount})</span>
-          </button>
+            <Icon name="trash" size={12} />
+            <span>{t('sessions.clearEnded')}</span>
+          </button>}
         </div>}
       </aside>
 
@@ -1088,161 +1266,178 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
         {actionError && <div className={styles.banner} role="alert">
           <div className={styles.bannerCopy}><p>{actionError}</p></div>
-          <button type="button" className={styles.ghostButton} onClick={() => setActionError('')}>
+          <button type="button" className={styles.ghostButton} onClick={() => setActionError('')} aria-label={t('common.dismissError')}>
             <Icon name="close" size={14} />
           </button>
         </div>}
 
         {notice && <div className={styles.banner} data-tone="status" role="status">
           <div className={styles.bannerCopy}><p>{notice}</p></div>
-          <button type="button" className={styles.ghostButton} onClick={() => setNotice('')}>
+          <button type="button" className={styles.ghostButton} onClick={() => setNotice('')} aria-label={t('common.dismissError')}>
             <Icon name="close" size={14} />
           </button>
         </div>}
 
-        {selected && <div className={styles.identity}>
-          <button
-            type="button"
-            className={styles.iconBtn}
-            aria-pressed={focusMode}
-            aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
-            title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
-            onClick={() => setFocusMode((current) => !current)}
-          >
-            <Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} />
-          </button>
-
-          <ToolIcon toolId={selected.toolId} size={24} />
-
-          <div className={styles.identityText}>
-            <strong>{toolName(selected)}</strong>
-            <span className={styles.identityDivider} aria-hidden="true">·</span>
+        {selected && (() => {
+          const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
+          return <div className={styles.stageBar}>
             <button
               type="button"
-              className={styles.pathBreadcrumb}
-              title={selected.directory ? `${displayPath(selected.directory)} (${t('sessions.copyPath')})` : placeOf(selected)}
-              onClick={() => void copySessionPath(selected)}
+              className={styles.focusBtn}
+              aria-pressed={focusMode}
+              aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
+              title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
+              onClick={() => setFocusMode((current) => !current)}
             >
-              <Icon name={copiedState === 'path' ? 'check' : 'folder'} size={13} />
-              <span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span>
+              <Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={15} />
             </button>
-            <span className={styles.pill} data-mode={selected.mode}>{modeLabel(selected.mode)}</span>
-            {!selected.running && (
-              <span className={styles.pill} data-tone="ended">
-                {t('sessions.ended')}{selected.exitCode != null ? ` (${selected.exitCode})` : ''}
+            <span className={styles.stageDivider} aria-hidden="true" />
+
+            <ToolIcon toolId={selected.toolId} size={22} />
+
+            <div className={styles.identityText}>
+              <span className={styles.identityMain}>
+                <strong title={taskTitle(selected) ? toolName(selected) + ' \u00b7 ' + taskTitle(selected) : undefined}>
+                  {taskTitle(selected) ? <>{toolName(selected)}<span className={styles.identityTitle}>{taskTitle(selected)}</span></> : toolName(selected)}
+                </strong>
+                <span className={styles.statusChip} data-tone={selected.running ? 'live' : 'ended'}>
+                  <span className={styles.statusDot} aria-hidden="true" />
+                  {selected.running
+                    ? (elapsed ? t('sessions.running') + ' ' + elapsed : t('sessions.running'))
+                    : t('sessions.ended') + (selected.exitCode != null ? ' · ' + t('sessions.exitCode', { code: selected.exitCode }) : '')}
+                </span>
+                <span className={styles.modeChip} data-mode={selected.mode}>{modeLabel(selected.mode)}</span>
               </span>
-            )}
-          </div>
-
-          <div className={styles.toolbarActions}>
-            <button
-              type="button"
-              className={styles.iconBtn}
-              aria-pressed={findOpen}
-              aria-label={t('sessions.findOutput')}
-              title={t('sessions.findOutput')}
-              onClick={() => {
-                const next = !findOpen;
-                setFindOpen(next);
-                if (next) requestAnimationFrame(() => findInputRef.current?.focus());
-              }}
-            >
-              <Icon name="search" size={15} />
-            </button>
-
-            {selected.running && <button
-              type="button"
-              className={styles.iconBtn}
-              aria-pressed={composerOpen}
-              aria-label={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
-              title={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
-              onClick={() => {
-                const next = !composerOpen;
-                setComposerOpen(next);
-                if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
-              }}
-            >
-              <Icon name="library" size={15} />
-            </button>}
-
-            <RowMenu label={t('common.models.more')}>
-              <button role="menuitem" onClick={() => void copyTerminalOutput(selected)}>
-                {copiedState === 'output' ? t('sessions.outputCopied') : t('sessions.copyOutput')}
+              <button
+                type="button"
+                className={styles.pathChip}
+                title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)}
+                onClick={() => void copySessionPath(selected)}
+              >
+                <Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} />
+                <span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span>
               </button>
-              {selected.directory && <button role="menuitem" onClick={() => void copySessionPath(selected)}>
-                {t('sessions.copyPath')}
+            </div>
+
+            <div className={styles.stageActions}>
+              <div className={styles.toolbarGroup}>
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  aria-pressed={findOpen}
+                  aria-label={t('sessions.findOutput')}
+                  title={t('sessions.findOutput')}
+                  onClick={() => {
+                    const next = !findOpen;
+                    setFindOpen(next);
+                    if (next) requestAnimationFrame(() => findInputRef.current?.focus());
+                  }}
+                >
+                  <Icon name="search" size={15} />
+                </button>
+
+                {selected.running && <button
+                  type="button"
+                  className={styles.iconBtn}
+                  aria-pressed={composerOpen}
+                  aria-label={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
+                  title={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
+                  onClick={() => {
+                    const next = !composerOpen;
+                    setComposerOpen(next);
+                    if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
+                  }}
+                >
+                  <Icon name="library" size={15} />
+                </button>}
+
+                <RowMenu label={t('common.models.more')}>
+                  <button role="menuitem" onClick={() => void copyTerminalOutput(selected)}>
+                    {copiedState === 'output' ? t('sessions.outputCopied') : t('sessions.copyOutput')}
+                  </button>
+                  {selected.directory && <button role="menuitem" onClick={() => void copySessionPath(selected)}>
+                    {t('sessions.copyPath')}
+                  </button>}
+                  {selected.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(selected.projectId!).catch(() => {})}>
+                    {t('sessions.openFolder')}
+                  </button>}
+                  <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(selected, !selected.running)}>
+                    {selected.running ? t('sessions.cloneSession') : t('sessions.restartSession')}
+                  </button>
+                  {selected.running && <button role="menuitem" onClick={() => void sendToSession(selected, '\x03')}>
+                    {t('sessions.sendInterrupt')}
+                  </button>}
+                  <button role="menuitem" onClick={() => handles.current.get(selected.id)?.clear()}>
+                    {t('sessions.clearScreen')}
+                  </button>
+                  <button role="menuitem" onClick={() => { handles.current.get(selected.id)?.scrollToBottom(); handles.current.get(selected.id)?.focus(); }}>
+                    {t('sessions.scrollToBottom')}
+                  </button>
+                  <button role="menuitem" disabled={fontSize <= MIN_FONT_SIZE} onClick={() => updateFontSize(fontSize - 1)}>
+                    {t('sessions.fontSizeDown')} ({fontSize}px)
+                  </button>
+                  <button role="menuitem" disabled={fontSize >= MAX_FONT_SIZE} onClick={() => updateFontSize(fontSize + 1)}>
+                    {t('sessions.fontSizeUp')} ({fontSize}px)
+                  </button>
+                  {fontSize !== DEFAULT_FONT_SIZE && <button role="menuitem" onClick={() => updateFontSize(DEFAULT_FONT_SIZE)}>
+                    {t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE })}
+                  </button>}
+                  <button role="menuitem" onClick={toggleSound}>
+                    {soundEnabled ? t('sessions.soundNotifyOn') : t('sessions.soundNotifyOff')}
+                  </button>
+                </RowMenu>
+              </div>
+
+              <span className={styles.stageDivider} aria-hidden="true" />
+
+              {!selected.running && <button
+                type="button"
+                className={styles.restartBtn}
+                disabled={!!busy}
+                onClick={() => void restartOrCloneSession(selected, true)}
+              >
+                <Icon name="refresh" size={13} />
+                <span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span>
               </button>}
-              {selected.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(selected.projectId!).catch(() => {})}>
-                {t('sessions.openFolder')}
-              </button>}
-              <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(selected, !selected.running)}>
-                {selected.running ? t('sessions.cloneSession') : t('sessions.restartSession')}
-              </button>
-              {selected.running && <button role="menuitem" onClick={() => void sendToSession(selected, '\x03')}>
-                {t('sessions.sendInterrupt')}
-              </button>}
-              <button role="menuitem" onClick={() => handles.current.get(selected.id)?.clear()}>
-                {t('sessions.clearScreen')}
-              </button>
-              <button role="menuitem" onClick={() => { handles.current.get(selected.id)?.scrollToBottom(); handles.current.get(selected.id)?.focus(); }}>
-                {t('sessions.scrollToBottom')}
-              </button>
-              <button role="menuitem" disabled={fontSize <= MIN_FONT_SIZE} onClick={() => updateFontSize(fontSize - 1)}>
-                {t('sessions.fontSizeDown')} ({fontSize}px)
-              </button>
-              <button role="menuitem" disabled={fontSize >= MAX_FONT_SIZE} onClick={() => updateFontSize(fontSize + 1)}>
-                {t('sessions.fontSizeUp')} ({fontSize}px)
-              </button>
-              {fontSize !== DEFAULT_FONT_SIZE && <button role="menuitem" onClick={() => updateFontSize(DEFAULT_FONT_SIZE)}>
-                {t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE })}
-              </button>}
-              <button role="menuitem" onClick={toggleSound}>
-                {soundEnabled ? t('sessions.soundNotifyOn') : t('sessions.soundNotifyOff')}
-              </button>
-            </RowMenu>
 
-            {!selected.running && <button
-              type="button"
-              className="button primary"
-              disabled={!!busy}
-              onClick={() => void restartOrCloneSession(selected, true)}
-            >
-              <Icon name="refresh" size={13} />
-              <span>{busy === `restart:${selected.id}` ? t('sessions.restarting') : t('sessions.restartSession')}</span>
-            </button>}
-
-            <button
-              type="button"
-              className={styles.endBtn}
-              onClick={() => void endSession(selected)}
-              disabled={!!busy}
-            >
-              <span>{busy === selected.id ? t('sessions.ending') : t('sessions.end')}</span>
-            </button>
-          </div>
-        </div>}
+              <button
+                type="button"
+                className={styles.endBtn}
+                onClick={() => void endSession(selected)}
+                disabled={!!busy}
+                aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')}
+                title={selected.running ? t('sessions.end') : t('sessions.closeTab')}
+              >
+                <Icon name="close" size={13} />
+                <span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span>
+              </button>
+            </div>
+          </div>;
+        })()}
 
         {selected && findOpen && <div className={styles.findBar}>
-          <Icon name="search" size={14} />
-          <input
-            ref={findInputRef}
-            type="search"
-            value={findQuery}
-            placeholder={t('sessions.findPlaceholder')}
-            aria-label={t('sessions.findPlaceholder')}
-            onChange={(event) => setFindQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                stepFindMatch(event.shiftKey ? -1 : 1);
-              } else if (event.key === 'Escape') {
-                event.preventDefault();
-                setFindOpen(false);
-                handles.current.get(selected.id)?.focus();
-              }
-            }}
-          />
-          <span className={styles.findCount}>
+          <span className={styles.findLabel}><Icon name="search" size={13} />{t('sessions.findOutput')}</span>
+          <div className={styles.findField}>
+            <input
+              ref={findInputRef}
+              type="search"
+              value={findQuery}
+              placeholder={t('sessions.findPlaceholder')}
+              aria-label={t('sessions.findPlaceholder')}
+              onChange={(event) => setFindQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  stepFindMatch(event.shiftKey ? -1 : 1);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setFindOpen(false);
+                  handles.current.get(selected.id)?.focus();
+                }
+              }}
+            />
+          </div>
+          <span className={styles.findCount} data-empty={findQuery.trim() && !findMatches.length || undefined}>
             {!findQuery.trim()
               ? ''
               : findMatches.length > 0
@@ -1282,21 +1477,29 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           </button>
         </div>}
 
-        <div className={styles.terminalStage} hidden={!sessions.length}>
-          {sessions.map((session) => (
-            <SessionTerminal
-              key={session.id}
-              sessionId={session.id}
-              active={session.id === selectedId}
-              running={session.running}
-              fontSize={fontSize}
-              writers={writers}
-              pending={pending}
-              handles={handles}
-              onWriteError={writeError}
-              onBell={onBellRef}
-            />
-          ))}
+        {selected && !selected.running && <div className={styles.endedStrip}>
+          <Icon name="lock" size={12} />
+          <span><strong>{t('sessions.sessionEndedBanner')}</strong> · {t('sessions.endedHintShort')}</span>
+        </div>}
+
+        <div className={styles.canvas} hidden={!sessions.length}>
+          <div className={styles.terminalStage}>
+            {sessions.map((session) => (
+              <SessionTerminal
+                key={session.id}
+                sessionId={session.id}
+                active={session.id === selectedId}
+                running={session.running}
+                fontSize={fontSize}
+                writers={writers}
+                pending={pending}
+                handles={handles}
+                onWriteError={writeError}
+                onBell={onBellRef}
+                onTitle={onTitleRef}
+              />
+            ))}
+          </div>
         </div>
 
         {selected && selected.running && composerOpen && <div className={styles.composerDrawer} aria-label={t('sessions.composerTitle')}>
@@ -1309,7 +1512,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                   type="button"
                   className={styles.promptPill}
                   title={prompt.body}
-                  onClick={() => setComposerText((prev) => prev ? `${prev}\n${prompt.body}` : prompt.body)}
+                  onClick={() => setComposerText((prev) => prev ? prev + '\n' + prompt.body : prompt.body)}
                 >
                   {prompt.title}
                 </button>
@@ -1345,28 +1548,119 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               <span>{t('sessions.sendInput')}</span>
             </button>
           </div>
+          <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
         </div>}
 
         {loading && !sessions.length && <p className={styles.loading}>{t('sessions.loading')}</p>}
 
         {showEmpty && !listError && <div className={styles.empty}>
-          <span className="empty-symbol" aria-hidden="true">
-            <Icon name="terminal" size={22} />
-          </span>
-          <h2>{t('sessions.emptyTitle')}</h2>
-          <p>{t('sessions.emptyDetail')}</p>
-          <div className={styles.emptyActions}>
-            {terminalTools.length > 0 && <button type="button" className="button primary" onClick={openNewSessionDialog}>
-              <Icon name="plus" size={14} />
-              <span>{t('sessions.newSession')}</span>
-            </button>}
-            <button type="button" className={terminalTools.length > 0 ? 'button' : 'button primary'} onClick={onOpenHome}>
-              <span>{t('sessions.openHome')}</span>
-            </button>
+          <div className={styles.emptyHero}>
+            <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="terminal" size={24} /></span>
+            <h2>{t('sessions.emptyTitle')}</h2>
+            <p>{t('sessions.emptyDetail')}</p>
+            <div className={styles.emptyActions}>
+              {terminalTools.length > 0 && <button type="button" className="button primary" onClick={() => openNewSessionDialog()}>
+                <Icon name="plus" size={14} />
+                <span>{t('sessions.newSession')}</span>
+              </button>}
+              <button type="button" className={terminalTools.length > 0 ? 'button' : 'button primary'} onClick={onOpenHome}>
+                <span>{t('sessions.openHome')}</span>
+                <Icon name="arrowRight" size={14} />
+              </button>
+            </div>
           </div>
+
+          {terminalTools.length > 0 && <div className={styles.emptyRecents}>
+            <span className={styles.emptySectionLabel}>{t('sessions.quickTools')}</span>
+            <div className={styles.toolChips}>
+              {terminalTools.slice(0, QUICK_TOOL_LIMIT).map((tool) => <button
+                key={tool.id}
+                type="button"
+                className={styles.toolChip}
+                title={t('sessions.quickToolTitle', { name: tool.name })}
+                onClick={() => openNewSessionDialog({ toolId: tool.id })}
+              >
+                <ToolIcon toolId={tool.id} size={18} />
+                <span>{tool.name}</span>
+              </button>)}
+              {terminalTools.length > QUICK_TOOL_LIMIT && <button
+                type="button"
+                className={styles.toolChip}
+                data-more
+                onClick={() => openNewSessionDialog()}
+              >
+                <span>{t('sessions.moreTools', { count: terminalTools.length - QUICK_TOOL_LIMIT })}</span>
+              </button>}
+            </div>
+          </div>}
+
+          {availableProjects.length > 0 && terminalTools.length > 0 && <div className={styles.emptyRecents}>
+            <span className={styles.emptySectionLabel}>{t('sessions.recentProjects')}</span>
+            <div className={styles.recentsGrid}>
+              {availableProjects.slice(0, 4).map((project) => {
+                const toolId = project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
+                  ? project.preferredTool
+                  : terminalTools[0]?.id;
+                return <button
+                  key={project.id}
+                  type="button"
+                  className={styles.recentCard}
+                  onClick={() => openNewSessionDialog({ projectId: project.id, toolId: project.preferredTool ?? undefined })}
+                >
+                  {toolId ? <ToolIcon toolId={toolId} size={22} /> : <Icon name="folder" size={18} />}
+                  <span className={styles.recentCopy}>
+                    <strong>{project.name}</strong>
+                    <small>{project.path ? shortPath(displayPath(project.path)) : t('sessions.placeUnknown')}</small>
+                  </span>
+                  <span className={styles.recentAction} aria-hidden="true"><Icon name="play" size={12} /></span>
+                </button>;
+              })}
+            </div>
+          </div>}
+
+          <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}>
+            <kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span>
+            <span className={styles.shortcutSep} aria-hidden="true">·</span>
+            <kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span>
+          </span>
         </div>}
       </section>
     </div>
+
+    {contextMenu && (() => {
+      const session = sessions.find((item) => item.id === contextMenu.sessionId);
+      if (!session) return null;
+      const name = toolName(session);
+      return createPortal(<div
+        ref={contextMenuRef}
+        className={rowMenuStyles.rowMenuList}
+        role="menu"
+        aria-label={t('sessions.sessionMenu', { name })}
+        style={contextMenuBox ?? { top: 0, left: -10000 }}
+        onKeyDown={contextMenuNavigate}
+        onContextMenu={(event) => event.preventDefault()}
+        onClick={() => setContextMenu(null)}
+      >
+        {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>
+          {t('sessions.sendInterrupt')}
+        </button>}
+        <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}>
+          {session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}
+        </button>
+        <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>
+          {t('sessions.copyOutput')}
+        </button>
+        {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>
+          {t('sessions.copyPath')}
+        </button>}
+        {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>
+          {t('sessions.openFolder')}
+        </button>}
+        <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>
+          {session.running ? t('sessions.end') : t('sessions.removeSession')}
+        </button>
+      </div>, document.body);
+    })()}
 
     <GuideDialog
       open={newDialogOpen}
@@ -1383,8 +1677,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             label={t('sessions.pickToolLabel')}
             value={effectiveLaunchToolId}
             options={cliSelectOptions}
-            searchable
-            forceSearch={terminalTools.length > 4}
+            placeholder={t('home.launcher.pickTool')}
             searchLabel={t('sessions.searchCliTool')}
             onChange={(value) => {
               setLaunchToolId(value);
@@ -1432,11 +1725,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               className={styles.modeCard}
               onClick={() => setLaunchMode('normal')}
             >
-              <Icon name="shield" size={15} />
-              <div>
+              <span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={15} /></span>
+              <span className={styles.modeCardCopy}>
                 <strong>{t('sessions.modeNormal')}</strong>
                 <small>{t('sessions.modeNormalDesc')}</small>
-              </div>
+              </span>
             </button>
             <button
               type="button"
@@ -1447,11 +1740,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               className={styles.modeCard}
               onClick={() => setLaunchMode('yolo')}
             >
-              <Icon name="sparkle" size={15} />
-              <div>
+              <span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={15} /></span>
+              <span className={styles.modeCardCopy}>
                 <strong>{t('sessions.modeYolo')}</strong>
                 <small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small>
-              </div>
+              </span>
             </button>
           </div>
           {selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}>
@@ -1475,7 +1768,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             onChange={(event) => setInitialPrompt(event.target.value)}
           />
           {libraryPrompts.length > 0 && <div className={styles.dialogPrompts}>
-            <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}：</span>
+            <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
             {libraryPrompts.slice(0, 6).map((prompt) => (
               <button
                 key={prompt.id}
@@ -1488,6 +1781,21 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               </button>
             ))}
           </div>}
+        </div>
+
+        <div className={styles.dialogSummary}>
+          {effectiveLaunchToolId && <ToolIcon toolId={effectiveLaunchToolId} size={20} />}
+          <span>
+            {t('sessions.launchSummary', {
+              tool: selectedLaunchTool?.name ?? '',
+              place: workspaceValue.startsWith('project:')
+                ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome')
+                : workspaceValue.startsWith('custom:')
+                  ? shortPath(displayPath(workspaceValue.slice('custom:'.length)))
+                  : t('sessions.workspaceHome'),
+              mode: modeLabel(launchMode),
+            })}
+          </span>
         </div>
 
         <div className={styles.dialogActions}>

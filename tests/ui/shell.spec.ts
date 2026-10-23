@@ -775,6 +775,26 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codexOutput).toContainText('codex-ready');
   await expect(codexOutput).not.toContainText('codex-readyready');
   const stage = page.getByRole('region', { name: '当前会话' });
+  // A CLI names its task through OSC 0; the rail and header follow it and drop the spinner glyph.
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { __events: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } }).__events;
+    const title = String.fromCharCode(0x1b) + ']0;\u280b \u4fee\u590d\u767b\u5f55' + String.fromCharCode(7);
+    const bytes = new TextEncoder().encode(title);
+    bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's1', dataBase64: btoa(String.fromCharCode(...bytes)) } });
+  });
+  await expect(codex.locator('strong')).toHaveText('修复登录');
+  await expect(codex).toContainText('Codex · Alpha');
+  await expect(stage).toContainText('修复登录');
+  await codex.click({ button: 'right' });
+  const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
+  await expect(rowMenu.getByRole('menuitem')).toHaveText(['发送中断 (Ctrl+C)', '同目录新开', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
+  await page.keyboard.press('Escape');
+  await expect(rowMenu).toHaveCount(0);
+  await expect(codex).toBeFocused();
+  await codex.press('Shift+F10');
+  await expect(rowMenu).toBeVisible();
+  await page.mouse.click(5, 5);
+  await expect(rowMenu).toHaveCount(0);
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('Alpha');
   await expect(stage).toContainText('普通');

@@ -57,6 +57,8 @@ The Skill fixture treats the directory name as the skill. `crud-page` has a mism
 
 `scripts/capture-sync.mjs` captures only 迁移与同步: WebDAV unconnected, healthy, needs-attention, failing and paused states, the connect/export/import dialogs, an open conflict, and the sync progress and result dialogs. It takes the same `--theme`/`--size` options and writes to `docs/verification/ui-sync` unless `CLIORA_CAPTURE_OUT` is set.
 
+`scripts/capture-workbench.mjs` captures the 工作台 screen: the session rail, terminal canvas, quick input and find bar, ended-session state, the new-session dialog, and the empty launchpad in both themes at 1360, 900, and 640. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes `docs/verification/ui-workbench` unless `CLIORA_CAPTURE_OUT` is set.
+
 `scripts/capture-memory.mjs` captures only 工具与连接 → 记忆: the grouped list, reading, frontmatter properties, editing, creating, type filtering, no-match, the CLI-wide switch off, per-store and per-entry switches, a read-only CLI, and the empty state. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes to `docs/verification/ui-memory` unless `CLIORA_CAPTURE_OUT` is set.
 
 Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and `capture-ui[-mode]-manifest.json`. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
