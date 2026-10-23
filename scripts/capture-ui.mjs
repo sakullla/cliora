@@ -108,6 +108,7 @@ async function mock(initialTheme){
   if(command==='save_native_skill')return null;
   if(command==='get_skill_enabled')return true;
   if(command==='refresh_history')return scans;
+  if(command==='list_history_scans')return scans;
   if(command==='list_history_sessions')return records.filter(i=>!args.filter.search||i.title.includes(args.filter.search));
   if(command==='get_usage_report')return usageReport(args.filter);
   if(command==='list_history_prices')return [];

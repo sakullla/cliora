@@ -23,7 +23,7 @@ export function qoderHistoryFixtures(options = {}) {
     calls.push({ command, args });
     if (command === 'get_bootstrap') { const original = prior ? await prior(command, args) : null; return { preferences: { schema_version: 1, managed_tools: ['qoder_cn'], theme: original?.preferences?.theme ?? 'light' }, tools: [tool] }; }
     if (command === 'list_cli_adapters') return { registered: [tool], managedIds: ['qoder_cn'], preservedUnknown: [] };
-    if (['list_projects', 'list_history_prices', 'refresh_history'].includes(command)) return [];
+    if (['list_projects', 'list_history_prices', 'list_history_scans', 'refresh_history'].includes(command)) return [];
     if (command === 'list_history_sessions') return included(args.filter) ? [session] : [];
     if (command === 'get_history_session') return { session, totals, usage: [], resumeReason: null, messages: [
       { id: 'qoder-u', role: 'user', text: '请检查项目并给出修改建议。', timestamp: now - 600000, timestampSource: 'native' },
@@ -97,7 +97,7 @@ export function workflowFixtures() {
     }
     if (command === 'list_cli_adapters') return { registered: tools, managedIds: tools.map(item => item.id), preservedUnknown: [] };
     if (command === 'list_projects') return [project];
-    if (['list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_accounts', 'account_capabilities', 'list_history_prices', 'refresh_history'].includes(command)) return [];
+    if (['list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_accounts', 'account_capabilities', 'list_history_prices', 'list_history_scans', 'refresh_history'].includes(command)) return [];
     if (command === 'get_registered_tool_workspace') {
       const id = args.toolId;
       return {
