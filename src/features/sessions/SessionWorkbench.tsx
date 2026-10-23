@@ -105,55 +105,118 @@ function queuedAfterSnapshot(snapshot: Uint8Array, queue: Uint8Array): Uint8Arra
 export type TerminalTheme = 'dark' | 'light';
 export type TerminalThemePreference = 'auto' | TerminalTheme;
 
+function hexPair(n: number): string {
+  return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+}
+
+function rgbHex(r: number, g: number, b: number): string {
+  return `#${hexPair(r)}${hexPair(g)}${hexPair(b)}`;
+}
+
+function relLuminance(r: number, g: number, b: number): number {
+  const lin = (c: number) => {
+    const v = c / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/**
+ * 240-colour extended ANSI table (indices 16..255).
+ * Dark-first TUIs paint prompt blocks with ANSI 232..238 dark-grey fills and bright 6x6x6 cube accents.
+ * Remapping the dark-grey ramp to soft sage surfaces in light mode avoids harsh black highlight bars.
+ */
+function buildExtendedAnsi(mode: TerminalTheme): string[] {
+  const cubeSteps = [0, 95, 135, 175, 215, 255];
+  const out: string[] = [];
+  for (let rIdx = 0; rIdx < 6; rIdx += 1) {
+    for (let gIdx = 0; gIdx < 6; gIdx += 1) {
+      for (let bIdx = 0; bIdx < 6; bIdx += 1) {
+        let r = cubeSteps[rIdx];
+        let g = cubeSteps[gIdx];
+        let b = cubeSteps[bIdx];
+        if (mode === 'light') {
+          const lum = relLuminance(r, g, b);
+          if (rIdx === gIdx && gIdx === bIdx && r < 80) {
+            r = 228; g = 235; b = 226;
+          } else if (lum > 0.34) {
+            const scale = Math.min(0.72, (0.34 / lum) ** 0.52);
+            r *= scale;
+            g *= scale;
+            b *= scale;
+          }
+        }
+        out.push(rgbHex(r, g, b));
+      }
+    }
+  }
+  if (mode === 'light') {
+    out.push(
+      '#eef3ec', '#e9efe7', '#e4ebe2', '#dfe7dd', '#dae3d7', '#d4ded1', '#ced9cb', '#c6d2c3',
+      '#76847b', '#6d7b72', '#647269', '#5c6960', '#536057', '#4b574f', '#434f47', '#3b463f',
+      '#343e38', '#2e3731', '#28312b', '#232b26', '#1f2621', '#1b221e', '#181e1a', '#141a17',
+    );
+  } else {
+    out.push(
+      '#111714', '#151c18', '#19221d', '#1e2822', '#232e27', '#28352d', '#2e3c33', '#35443a',
+      '#425247', '#4e5f53', '#5a6c60', '#67796d', '#74867a', '#829488', '#90a296', '#9eb0a4',
+      '#acbeb2', '#b8cabe', '#c4d6ca', '#d0e1d5', '#dcebe0', '#e6f3ea', '#f0f8f2', '#f8fcf9',
+    );
+  }
+  return out;
+}
+
 const DARK_THEME: ITheme = {
-  background: '#0c110e',
-  foreground: '#e3ebe5',
+  background: '#0b100d',
+  foreground: '#e5eee8',
   cursor: '#7be3a7',
-  cursorAccent: '#0c110e',
-  selectionBackground: '#7be3a74d',
-  selectionInactiveBackground: '#7be3a726',
-  black: '#1b2420',
+  cursorAccent: '#0b100d',
+  selectionBackground: '#7be3a745',
+  selectionInactiveBackground: '#7be3a722',
+  black: '#18211c',
   red: '#ff7b72',
   green: '#7ee2a8',
-  yellow: '#e6c47c',
+  yellow: '#ecc97e',
   blue: '#79b8ff',
   magenta: '#d2a8ff',
   cyan: '#76d9c8',
-  white: '#d3dbd5',
-  brightBlack: '#64736a',
+  white: '#d5ded8',
+  brightBlack: '#68786e',
   brightRed: '#ffa198',
   brightGreen: '#a8f0c8',
-  brightYellow: '#f4d896',
+  brightYellow: '#f5da98',
   brightBlue: '#a8d1ff',
   brightMagenta: '#e3c6ff',
   brightCyan: '#a6ecdf',
   brightWhite: '#ffffff',
+  extendedAnsi: buildExtendedAnsi('dark'),
 };
 
-/** Light palette: "white" stays readable on a light canvas, since many CLIs print it for emphasis. */
+/** Light palette: "white" and extended 256-colour slots stay readable on a warm light canvas. */
 const LIGHT_THEME: ITheme = {
-  background: '#fbfcfa',
-  foreground: '#1b231e',
+  background: '#f9fbf8',
+  foreground: '#18211b',
   cursor: '#0e6b43',
-  cursorAccent: '#fbfcfa',
-  selectionBackground: '#0e6b4333',
-  selectionInactiveBackground: '#0e6b431c',
+  cursorAccent: '#f9fbf8',
+  selectionBackground: '#0e6b432e',
+  selectionInactiveBackground: '#0e6b4318',
   black: '#1b231e',
-  red: '#c0362c',
-  green: '#17784d',
-  yellow: '#8f5d00',
-  blue: '#1f63b5',
-  magenta: '#8a3fa8',
-  cyan: '#0c7a72',
-  white: '#7d8a82',
-  brightBlack: '#5f6c64',
-  brightRed: '#d6463b',
-  brightGreen: '#1f8f5c',
-  brightYellow: '#a56c00',
-  brightBlue: '#2f78cc',
-  brightMagenta: '#a053c0',
-  brightCyan: '#139189',
-  brightWhite: '#39443e',
+  red: '#b93127',
+  green: '#146c43',
+  yellow: '#8a5700',
+  blue: '#1b5dab',
+  magenta: '#8238a0',
+  cyan: '#0a7169',
+  white: '#54625a',
+  brightBlack: '#5c6b62',
+  brightRed: '#cf3f34',
+  brightGreen: '#198252',
+  brightYellow: '#9c6300',
+  brightBlue: '#2870c4',
+  brightMagenta: '#964ab6',
+  brightCyan: '#0f857d',
+  brightWhite: '#2b352f',
+  extendedAnsi: buildExtendedAnsi('light'),
 };
 
 export function terminalTheme(mode: TerminalTheme): ITheme {
@@ -162,7 +225,7 @@ export function terminalTheme(mode: TerminalTheme): ITheme {
 
 /** Light canvases get a contrast floor so pale true-colour output (syntax, dim hints) stays legible. */
 function contrastFloor(mode: TerminalTheme): number {
-  return mode === 'light' ? 4.5 : 1;
+  return mode === 'light' ? 4.5 : 1.2;
 }
 
 /** xterm only disables its own reflow for ConPTY when it knows the Windows build. */
@@ -229,6 +292,7 @@ type TerminalBridge = {
   writeError: (error: unknown) => void;
   bell: (sessionId: string) => void;
   title: (sessionId: string, title: string) => void;
+  outputActive: (sessionId: string, active: boolean) => void;
   shortcut: (action: ShortcutAction) => void;
   canSwitch: () => boolean;
   scrolled: (sessionId: string, awayFromBottom: boolean) => void;
@@ -292,6 +356,8 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
     fitRef.current = fit;
     let disposed = false;
     let acceptLive = false;
+    let liveStreaming = false;
+    let liveTimer = 0;
     const queued: string[] = [];
     void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
 
@@ -323,19 +389,35 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
         queueMicrotask(flushWrites);
       }
     };
-    const writeEncoded = (encoded: string) => {
+    const markLiveOutput = () => {
+      if (disposed || !runningRef.current) return;
+      if (!liveStreaming) {
+        liveStreaming = true;
+        bridge.current.outputActive(sessionId, true);
+      }
+      window.clearTimeout(liveTimer);
+      liveTimer = window.setTimeout(() => {
+        liveStreaming = false;
+        if (!disposed) bridge.current.outputActive(sessionId, false);
+      }, 1500);
+    };
+    const writeEncoded = (encoded: string, isLive = false) => {
       if (!encoded || disposed) return;
-      try { scheduleWriteBytes(decodeBase64(encoded)); }
-      catch { /* Malformed bytes stay out of the terminal. */ }
+      try {
+        const decoded = decodeBase64(encoded);
+        if (isLive && decoded.length > 0) markLiveOutput();
+        scheduleWriteBytes(decoded);
+      } catch { /* Malformed bytes stay out of the terminal. */ }
     };
     const publish = (encoded: string) => {
-      if (acceptLive) writeEncoded(encoded);
+      if (acceptLive) writeEncoded(encoded, true);
       else queued.push(encoded);
     };
     writers.current.set(sessionId, publish);
 
     const sendToPty = (data: string) => {
       if (!activeRef.current || !runningRef.current || !data) return;
+      if (data.includes('\r') || data.includes('\n')) markLiveOutput();
       void native.writeWorkbenchSession(sessionId, encodeBase64(new TextEncoder().encode(data))).catch((error) => bridge.current.writeError(error));
     };
 
@@ -509,12 +591,13 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
       requestAnimationFrame(fitNow);
     }).catch(() => {
       acceptLive = true;
-      queued.splice(0).forEach(writeEncoded);
-      (pending.current.get(sessionId) ?? []).splice(0).forEach(writeEncoded);
+      queued.splice(0).forEach((item) => writeEncoded(item));
+      (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeEncoded(item));
       pending.current.delete(sessionId);
     });
     return () => {
       disposed = true;
+      window.clearTimeout(liveTimer);
       flushWrites();
       cancelAnimationFrame(resizeFrame);
       if (writers.current.get(sessionId) === publish) writers.current.delete(sessionId);
@@ -706,6 +789,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const terminalMode: TerminalTheme = themePreference === 'auto' ? appTheme : themePreference;
 
   const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
+  const [activeOutputIds, setActiveOutputIds] = useState<Set<string>>(() => new Set());
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
   const [sizes, setSizes] = useState<Map<string, { cols: number; rows: number }>>(() => new Map());
   const [titles, setTitles] = useState<Map<string, string>>(() => new Map());
@@ -803,6 +887,23 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         return next;
       });
     },
+    outputActive: (id, isActive) => {
+      setActiveOutputIds((prev) => {
+        if (prev.has(id) === isActive) return prev;
+        const next = new Set(prev);
+        if (isActive) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+      if (!isActive && id !== selectedIdRef.current) {
+        setAttentionIds((prev) => {
+          if (prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        });
+      }
+    },
     shortcut: (action) => {
       if (action === 'find') openFind();
       else if (action === 'zoomIn') updateFontSize(fontSize + 1);
@@ -876,6 +977,12 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     void listen<{ sessionId: string; exitCode: number | null }>('cliora:session-exit', (event) => {
       if (!alive) return;
       if (soundEnabledRef.current) playWorkbenchChime('exit');
+      setActiveOutputIds((prev) => {
+        if (!prev.has(event.payload.sessionId)) return prev;
+        const next = new Set(prev);
+        next.delete(event.payload.sessionId);
+        return next;
+      });
       setSessions((current) => current.map((item) => item.id === event.payload.sessionId ? { ...item, running: false, exitCode: event.payload.exitCode ?? null } : item));
     }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
     return () => { alive = false; stops.forEach((stop) => { void Promise.resolve(stop()).catch(() => {}); }); };
@@ -1012,7 +1119,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   function forgetSession(id: string) {
     firstSeenAt.current.delete(id);
     setTitles((prev) => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+    setActiveOutputIds((prev) => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
     setScrolledIds((prev) => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
+  }
+
+  function sessionTone(session: WorkbenchSession): 'live' | 'idle' | 'bell' | 'error' | 'ended' {
+    if (!session.running) {
+      return session.exitCode != null && session.exitCode !== 0 ? 'error' : 'ended';
+    }
+    if (attentionIds.has(session.id)) return 'bell';
+    if (activeOutputIds.has(session.id)) return 'live';
+    return 'idle';
   }
 
   async function endSession(session: WorkbenchSession) {
@@ -1481,6 +1598,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             const place = placeOf(session);
             const isSelected = session.id === selectedId;
             const hasBell = attentionIds.has(session.id);
+            const tone = sessionTone(session);
             const elapsed = formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock);
             return <div
               key={session.id}
@@ -1511,26 +1629,28 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 }}
               >
                 <span className={styles.sessionIconWrap}>
-                  <ToolIcon toolId={session.toolId} size={22} />
-                  <span className={styles.sessionStateDot} data-tone={hasBell ? 'bell' : session.running ? 'live' : 'ended'} aria-hidden="true" />
+                  <ToolIcon toolId={session.toolId} size={20} />
+                  <span className={styles.sessionStateDot} data-tone={tone} aria-hidden="true" />
                 </span>
                 <span className={styles.sessionBody}>
                   <span className={styles.sessionTop}>
                     <strong>{title || name}</strong>
-                    <span className={styles.sessionTime} data-tone={session.running ? 'live' : 'ended'}>
+                    <span className={styles.sessionTime} data-tone={tone}>
                       {session.running ? (elapsed || t('sessions.running')) : t('sessions.ended')}
                     </span>
                   </span>
                   <span className={styles.sessionSub}>
                     <span className={styles.sessionPlace}>{title ? name + ' \u00b7 ' + place : place}</span>
-                    {hasBell && <span className={styles.attentionTag}>
-                      <span className={styles.attentionDot} aria-hidden="true" />
-                      {t('sessions.bellBadge')}
-                    </span>}
-                    {!session.running && session.exitCode != null && session.exitCode !== 0 && <span className={styles.exitTag}>
-                      {t('sessions.exitCode', { code: session.exitCode })}
-                    </span>}
-                    <span className={styles.modeTag} data-mode={session.mode}>{modeLabel(session.mode)}</span>
+                    <span className={styles.sessionBadges}>
+                      {hasBell && <span className={styles.attentionTag}>
+                        <span className={styles.attentionDot} aria-hidden="true" />
+                        {t('sessions.bellBadge')}
+                      </span>}
+                      {!session.running && session.exitCode != null && session.exitCode !== 0 && <span className={styles.exitTag}>
+                        {t('sessions.exitCode', { code: session.exitCode })}
+                      </span>}
+                      <span className={styles.modeTag} data-mode={session.mode}>{modeLabel(session.mode)}</span>
+                    </span>
                   </span>
                 </span>
               </button>
@@ -1623,6 +1743,8 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         {selected && (() => {
           const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
           const title = taskTitle(selected);
+          const tone = sessionTone(selected);
+          const isOutputting = activeOutputIds.has(selected.id);
           return <div className={styles.stageBar}>
             <button
               type="button"
@@ -1635,7 +1757,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               <Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} />
             </button>
 
-            <span className={styles.stageIcon}><ToolIcon toolId={selected.toolId} size={22} /></span>
+            <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={20} /></span>
 
             <div className={styles.identityText}>
               <span className={styles.identityMain}>
@@ -1644,10 +1766,12 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 </strong>
               </span>
               <span className={styles.identityMeta}>
-                <span className={styles.statusChip} data-tone={selected.running ? 'live' : 'ended'}>
+                <span className={styles.statusChip} data-tone={tone}>
                   <span className={styles.statusDot} aria-hidden="true" />
                   {selected.running
-                    ? (elapsed ? t('sessions.running') + ' ' + elapsed : t('sessions.running'))
+                    ? (isOutputting
+                      ? (elapsed ? t('sessions.stateWorking') + ' · ' + elapsed : t('sessions.stateWorking'))
+                      : (elapsed ? t('sessions.stateIdle') + ' · ' + elapsed : t('sessions.stateIdle')))
                     : t('sessions.ended') + (selected.exitCode != null ? ' · ' + t('sessions.exitCode', { code: selected.exitCode }) : '')}
                 </span>
                 <span className={styles.modeChip} data-mode={selected.mode}>{modeLabel(selected.mode)}</span>
@@ -1691,6 +1815,16 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 >
                   <Icon name="pencil" size={15} />
                 </button>}
+
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  aria-label={t('sessions.copyOutput')}
+                  title={copiedState === 'output' ? t('sessions.outputCopied') : t('sessions.copyOutput')}
+                  onClick={() => void copyTerminalOutput(selected)}
+                >
+                  <Icon name={copiedState === 'output' ? 'check' : 'copy'} size={15} />
+                </button>
 
                 <RowMenu label={t('common.models.more')} className={styles.iconBtn}>
                   <button role="menuitem" onClick={() => void copyTerminalOutput(selected)}>
@@ -1845,22 +1979,25 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         </div>
 
         {selected && selected.running && composerOpen && <div className={styles.composerDrawer} aria-label={t('sessions.composerTitle')}>
-          {libraryPrompts.length > 0 && <div className={styles.composerPrompts}>
-            <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
-            <div className={styles.composerPromptList}>
-              {libraryPrompts.map((prompt) => (
-                <button
-                  key={prompt.id}
-                  type="button"
-                  className={styles.promptPill}
-                  title={prompt.body}
-                  onClick={() => setComposerText((prev) => prev ? prev + '\n' + prompt.body : prompt.body)}
-                >
-                  {prompt.title}
-                </button>
-              ))}
-            </div>
-          </div>}
+          <div className={styles.composerTop}>
+            {libraryPrompts.length > 0 && <div className={styles.composerPrompts}>
+              <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
+              <div className={styles.composerPromptList}>
+                {libraryPrompts.map((prompt) => (
+                  <button
+                    key={prompt.id}
+                    type="button"
+                    className={styles.promptPill}
+                    title={prompt.body}
+                    onClick={() => setComposerText((prev) => prev ? prev + '\n' + prompt.body : prompt.body)}
+                  >
+                    {prompt.title}
+                  </button>
+                ))}
+              </div>
+            </div>}
+            <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
+          </div>
           <div className={styles.composerInputRow}>
             <textarea
               ref={composerInputRef}
@@ -1886,15 +2023,14 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               <span>{t('sessions.sendInput')}</span>
             </button>
           </div>
-          <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
         </div>}
 
         {selected && <div className={styles.statusBar} onMouseDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault(); }}>
           <span className={styles.statusHints}>
-            <span><kbd>Shift</kbd><kbd>Enter</kbd>{t('sessions.hintNewline')}</span>
-            <span><kbd>{modLabel}</kbd><kbd>V</kbd>{t('sessions.hintPaste')}</span>
-            <span data-optional><kbd>{modLabel}</kbd><kbd>C</kbd>{t('sessions.hintCopy')}</span>
-            <span data-optional><kbd>{modLabel}</kbd><kbd>Shift</kbd><kbd>F</kbd>{t('sessions.hintFind')}</span>
+            <span><kbd>Shift+Enter</kbd>{t('sessions.hintNewline')}</span>
+            <span><kbd>{modLabel}+V</kbd>{t('sessions.hintPaste')}</span>
+            <span data-optional><kbd>{modLabel}+C</kbd>{t('sessions.hintCopy')}</span>
+            <span data-optional><kbd>{modLabel}+Shift+F</kbd>{t('sessions.hintFind')}</span>
           </span>
           <span className={styles.statusSpacer} />
           {selectedSize && <span className={styles.statusMeta} title={t('sessions.terminalSizeTitle')}>{selectedSize.cols}×{selectedSize.rows}</span>}

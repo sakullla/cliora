@@ -125,4 +125,11 @@ test('font zoom, terminal colours, and a page that never scrolls sideways', asyn
     return main.scrollLeft + document.documentElement.scrollLeft;
   });
   expect(shifted).toBe(0);
+
+  // Indicator light reflects active output vs idle standby once output stops.
+  const dot = page.getByRole('tab', { name: /Codex/ }).locator('[data-tone]').first();
+  await expect(dot).toHaveAttribute('data-tone', 'idle');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('streaming...'));
+  await expect(dot).toHaveAttribute('data-tone', 'live');
+  await expect(dot).toHaveAttribute('data-tone', 'idle', { timeout: 3000 });
 });
