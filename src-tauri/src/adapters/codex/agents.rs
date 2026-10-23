@@ -37,7 +37,7 @@ impl AgentAdapter for Codex {
         "toml"
     }
     fn validate_fields(&self, value: &Value) -> Result<(), String> {
-        string(&value, "developer_instructions", true)?;
+        string(value, "developer_instructions", true)?;
         static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
         let schema = SCHEMA.get_or_init(|| {
             serde_json::from_str(include_str!(
@@ -90,7 +90,7 @@ impl AgentAdapter for Codex {
                 let file = value
                     .get("config_file")
                     .and_then(Value::as_str)
-                    .map(|file| path.parent().unwrap_or(&root).join(file));
+                    .map(|file| path.parent().unwrap_or(root).join(file));
                 if let Some(file) = &file {
                     for e in entries.iter_mut() {
                         if Path::new(&e.path).canonicalize().ok() == file.canonicalize().ok()

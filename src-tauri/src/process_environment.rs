@@ -32,7 +32,7 @@ pub(crate) fn apply(command: &mut Command) {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn merged_macos_path(
     shell: Option<&std::ffi::OsStr>,
     inherited: Option<&std::ffi::OsStr>,

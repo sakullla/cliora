@@ -42,343 +42,6 @@ fn action_role(action: &ConfigurationAction) -> &'static str {
         "settings"
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{adapters::Registry, native::configuration};
-    fn action(operation: &str, field: Option<&str>, value: Value) -> ConfigurationAction {
-        ConfigurationAction {
-            version: 1,
-            target: json!("configuration"),
-            operation: operation.into(),
-            field: field.map(str::to_owned),
-            value: Some(value),
-        }
-    }
-    fn profile() -> RegisteredProfile {
-        serde_json::from_value(json!({"id":"","tool":"claude_code","name":"Native roles","version":0,"inheritCommon":false,"files":{"settings":include_str!("../../../../tests/fixtures/native/claude-model-editor.json")},"connection":null,"nativeCredentials":{}})).unwrap()
-    }
-    #[test]
-    fn claude_descriptor_origin_tracks_roles_inheritance_and_unknown_fields() {
-        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
-        let mut profile = profile();
-        profile.inherit_common = true;
-        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
-        settings.as_object_mut().unwrap().remove("effortLevel");
-        profile
-            .files
-            .insert("settings".into(), settings.to_string());
-        let common = crate::native::profile::RegisteredCommon {
-            tool: "claude_code".into(),
-            version: 1,
-            revision: "common-1".into(),
-            files: BTreeMap::from([("settings".into(), "{\"effortLevel\":\"high\"}".into())]),
-        };
-        let draft = configuration::open_with_common(
-            &registry,
-            profile,
-            Some(common),
-            Scope::Global,
-            "claude-origin-session".into(),
-        )
-        .unwrap();
-        let mut draft = draft;
-        draft.subject = Some(ConfigurationSubject::Profile);
-        let draft = configuration::refresh(&registry, draft);
-        let fields = &draft.descriptor.as_ref().unwrap().fields;
-        let origin = |id: &str| {
-            fields
-                .iter()
-                .find(|field| field.id == id)
-                .unwrap()
-                .origin
-        };
-        assert_eq!(origin("default.model"), Some(FieldOrigin::Explicit));
-        assert_eq!(origin("base_url"), Some(FieldOrigin::Explicit));
-        assert_eq!(origin("sonnet.model"), Some(FieldOrigin::Explicit));
-        assert_eq!(origin("sonnet.name"), Some(FieldOrigin::Explicit));
-        assert_eq!(origin("opus.model"), Some(FieldOrigin::Unset));
-        assert_eq!(origin("effortLevel"), Some(FieldOrigin::Inherited));
-        // Dynamic per-model fields have no static location and stay unclassified.
-        assert_eq!(origin("modelEffortLevel"), None);
-    }
-    #[test]
-    fn claude_roles_edit_independently_and_unify_is_explicit() {
-        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
-        let mut draft =
-            configuration::open(&registry, profile(), Scope::Global, "claude-session".into())
-                .unwrap();
-        assert!(draft.issues.is_empty());
-        draft = configuration::edit(
-            &registry,
-            draft,
-            action("set", Some("default.model"), json!("claude-sonnet-4-6")),
-        )
-        .unwrap();
-        assert_eq!(draft.view["values"]["sonnet.model"], "gateway-sonnet");
-        assert_eq!(draft.view["values"]["subagent.model"], "gateway-subagent");
-        assert!(draft.issues.is_empty());
-        assert_eq!(draft.view["values"]["effortLevel"], "xhigh");
-        assert!(!draft.view["effortWarnings"].as_array().unwrap().is_empty());
-        draft = configuration::edit(
-            &registry,
-            draft,
-            action("reset", Some("effortLevel"), Value::Null),
-        )
-        .unwrap();
-        draft = configuration::edit(
-            &registry,
-            draft,
-            action("set", Some("sonnet.model"), json!("中文模型")),
-        )
-        .unwrap();
-        assert_eq!(draft.view["values"]["sonnet.longContext"], true);
-        assert_eq!(draft.view["values"]["sonnet.model"], "中文模型");
-        draft = configuration::edit(
-            &registry,
-            draft,
-            action("unify", None, json!("gateway-all")),
-        )
-        .unwrap();
-        let parsed: Value = serde_json::from_str(&draft.profile.files["settings"]).unwrap();
-        for (_, key) in ROLES {
-            assert_eq!(parsed["env"][*key], "gateway-all");
-        }
-        assert_eq!(parsed["model"], "gateway-all");
-        assert_eq!(
-            parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
-            "Sonnet gateway"
-        );
-        assert_eq!(parsed["env"]["USER_CUSTOM_OPTION"], "preserve");
-        assert_eq!(parsed["permissions"]["allow"][0], "Read");
-        assert_eq!(parsed["modelPicker"]["options"][0]["custom"], true);
-    }
-    #[test]
-    fn claude_reset_and_raw_round_trip_keep_native_semantics() {
-        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
-        let draft =
-            configuration::open(&registry, profile(), Scope::Global, "claude-session".into())
-                .unwrap();
-        let reset = configuration::edit(
-            &registry,
-            draft,
-            action("reset", Some("default.model"), Value::Null),
-        )
-        .unwrap();
-        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
-        assert!(own.get("model").is_none());
-        assert!(own["env"].get("ANTHROPIC_MODEL").is_none());
-        let managed = Claude
-            .managed_fields("settings", &json!({}), &own, &reset.profile)
-            .unwrap();
-        assert_eq!(managed.released, vec!["/env/ANTHROPIC_MODEL", "/model"]);
-        let mut raw = own;
-        raw["model"] = json!("opus");
-        let restored = configuration::replace_text(
-            &registry,
-            reset,
-            BTreeMap::from([("settings".into(), raw.to_string())]),
-        );
-        assert_eq!(restored.view["values"]["default.model"], "opus");
-        assert!(restored.profile.editing.unwrap().intents.is_empty());
-        let settings =
-            json!({"effortLevel":"max","env":{"ANTHROPIC_DEFAULT_HAIKU_MODEL":"haiku[1m]"}});
-        let issues = Claude.validate(
-            &BTreeMap::from([("settings".into(), settings)]),
-            &EditingState::default(),
-            Scope::Global,
-        );
-        assert_eq!(issues.len(), 2);
-        let issues = Claude.validate(
-            &BTreeMap::from([("settings".into(), json!({"model":"claude-haiku-4-5[1m]"}))]),
-            &EditingState::default(),
-            Scope::Global,
-        );
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].field.as_deref(), Some("default.longContext"));
-    }
-    #[test]
-    fn claude_long_context_edit_uses_inherited_role_model() {
-        let effective = BTreeMap::from([(
-            "settings".into(),
-            json!({"env":{"ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-4-8"}}),
-        )]);
-        let mut own = BTreeMap::new();
-        Claude
-            .edit_inherited(
-                &mut own,
-                &effective,
-                &mut EditingState::default(),
-                &action("set", Some("opus.longContext"), json!(true)),
-            )
-            .unwrap();
-        assert_eq!(
-            own["settings"]["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-            "claude-opus-4-8[1m]"
-        );
-        assert!(own["settings"].get("model").is_none());
-    }
-    #[test]
-    fn claude_model_effort_edit_and_reset_preserve_other_model_settings() {
-        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
-        let mut profile = profile();
-        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
-        settings["modelSettings"] = json!({"claude-opus-4-8":{"effortLevel":"high","maxEffortLevel":"xhigh","autoCompactWindow":200000},"claude-sonnet-4-6":{"effortLevel":"xhigh"}});
-        profile
-            .files
-            .insert("settings".into(), settings.to_string());
-        let draft = configuration::open(&registry, profile, Scope::Global, "claude-session".into())
-            .unwrap();
-        assert_eq!(draft.view["currentEffortModel"], "claude-opus-4-8");
-        assert!(draft.issues.is_empty());
-        assert!(draft.view["effortWarnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning.as_str().is_some_and(|warning| warning
-                .contains("claude-sonnet-4-6")
-                && warning.contains("high"))));
-        let mut edit = action("set", Some("modelEffortLevel"), json!("low"));
-        edit.target = json!("model:claude-opus-4-8");
-        let changed = configuration::edit(&registry, draft, edit.clone()).unwrap();
-        assert_eq!(changed.view["modelEfforts"]["claude-opus-4-8"], "low");
-        assert_eq!(changed.view["values"]["effortLevel"], "xhigh");
-        edit.operation = "reset".into();
-        edit.value = None;
-        let reset = configuration::edit(&registry, changed, edit).unwrap();
-        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
-        assert!(own["modelSettings"]["claude-opus-4-8"]
-            .get("effortLevel")
-            .is_none());
-        assert_eq!(
-            own["modelSettings"]["claude-opus-4-8"]["maxEffortLevel"],
-            "xhigh"
-        );
-        assert_eq!(
-            own["modelSettings"]["claude-opus-4-8"]["autoCompactWindow"],
-            200000
-        );
-        assert_eq!(
-            own["modelSettings"]["claude-sonnet-4-6"]["effortLevel"],
-            "xhigh"
-        );
-        let managed = Claude
-            .managed_fields("settings", &json!({}), &own, &reset.profile)
-            .unwrap();
-        assert!(managed
-            .released
-            .contains(&"/modelSettings/claude-opus-4-8/effortLevel".into()));
-        assert!(reset.issues.is_empty());
-        let temp = tempfile::tempdir().unwrap();
-        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
-        assert!(crate::native::profile::save_registered_profile(
-            &db,
-            &registry,
-            reset.profile,
-            None
-        )
-        .is_ok());
-    }
-    #[test]
-    fn claude_project_local_editor_uses_native_precedence_and_stable_target() {
-        let documents = BTreeMap::from([
-            (
-                "settings".into(),
-                json!({"model":"claude-sonnet-4-6","effortLevel":"medium"}),
-            ),
-            (
-                "local_settings".into(),
-                json!({"env":{"ANTHROPIC_MODEL":"claude-opus-4-8"},"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"}}}),
-            ),
-        ]);
-        let view = Claude.read(&documents, &EditingState::default()).unwrap();
-        assert_eq!(view["values"]["default.model"], "claude-opus-4-8");
-        assert_eq!(view["editTarget"], "local_configuration");
-        let mut own = documents.clone();
-        let mut edit = action("set", Some("modelEffortLevel"), json!("low"));
-        edit.target = json!("local:model:claude-opus-4-8");
-        Claude
-            .edit_inherited(&mut own, &documents, &mut EditingState::default(), &edit)
-            .unwrap();
-        assert_eq!(
-            own["local_settings"]["modelSettings"]["claude-opus-4-8"]["effortLevel"],
-            "low"
-        );
-        assert_eq!(own["settings"], documents["settings"]);
-        assert_eq!(
-            Claude.suppression_changes(&edit, &crate::adapters::configuration::EditingState::default()).unwrap()[0].role,
-            "local_settings"
-        );
-    }
-    #[test]
-    fn claude_scalar_reset_does_not_claim_empty_native_containers() {
-        let mut own = BTreeMap::from([(
-            "settings".into(),
-            json!({"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"}},"env":{"ANTHROPIC_MODEL":"opus"},"model":"opus"}),
-        )]);
-        let mut state = EditingState::default();
-        let reset = action("reset", Some("default.model"), Value::Null);
-        Claude.edit(&mut own, &mut state, &reset).unwrap();
-        let mut model_reset = action("reset", Some("modelEffortLevel"), Value::Null);
-        model_reset.target = json!("model:claude-opus-4-8");
-        Claude.edit(&mut own, &mut state, &model_reset).unwrap();
-        let managed = Claude
-            .managed_fields(
-                "settings",
-                &json!({"env":{"USER_OWNED":"kept"}}),
-                &own["settings"],
-                &profile(),
-            )
-            .unwrap();
-        assert!(!managed.fields.contains_key("/env"));
-        assert!(!managed
-            .fields
-            .contains_key("/modelSettings/claude-opus-4-8"));
-    }
-    #[test]
-    fn claude_model_effort_pointer_escapes_native_identity_and_reset_clears_only_its_suppression() {
-        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
-        let mut profile = profile();
-        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
-        settings["modelSettings"] =
-            json!({"gateway/model~variant":{"effortLevel":"high","autoCompactWindow":200000}});
-        profile
-            .files
-            .insert("settings".into(), settings.to_string());
-        profile.suppressed.insert(
-            "settings".into(),
-            vec![
-                "/modelSettings/gateway~1model~0variant/effortLevel".into(),
-                "/permissions/deny".into(),
-            ],
-        );
-        let draft = configuration::open(&registry, profile, Scope::Global, "claude-session".into())
-            .unwrap();
-        let mut reset = action("reset", Some("modelEffortLevel"), Value::Null);
-        reset.target = json!("model:gateway/model~variant");
-        let reset = configuration::edit(&registry, draft, reset).unwrap();
-        assert_eq!(
-            reset.profile.suppressed["settings"],
-            vec!["/permissions/deny"]
-        );
-        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
-        assert!(own["modelSettings"]["gateway/model~variant"]
-            .get("effortLevel")
-            .is_none());
-        assert_eq!(
-            own["modelSettings"]["gateway/model~variant"]["autoCompactWindow"],
-            200000
-        );
-        let managed = Claude
-            .managed_fields("settings", &json!({}), &own, &reset.profile)
-            .unwrap();
-        assert!(managed
-            .released
-            .contains(&"/modelSettings/gateway~1model~0variant/effortLevel".into()));
-    }
-
-}
 fn paths(field: &str) -> Result<Vec<Vec<String>>, String> {
     if field == "effortLevel" {
         return Ok(vec![vec![field.into()]]);
@@ -911,10 +574,9 @@ impl ConfigurationAdapter for Claude {
         };
         for (role, key) in ROLES {
             for value in settings["env"].get(*key).into_iter().chain(
-                ((*role == "default")
+                (*role == "default")
                     .then(|| settings.get("model"))
-                    .flatten())
-                .into_iter(),
+                    .flatten(),
             ) {
                 if !value.as_str().is_some_and(|model| {
                     !strip(model).0.is_empty() && !model.chars().any(char::is_control)
@@ -1042,4 +704,341 @@ impl ConfigurationAdapter for Claude {
         }
         Ok(managed)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{adapters::Registry, native::configuration};
+    fn action(operation: &str, field: Option<&str>, value: Value) -> ConfigurationAction {
+        ConfigurationAction {
+            version: 1,
+            target: json!("configuration"),
+            operation: operation.into(),
+            field: field.map(str::to_owned),
+            value: Some(value),
+        }
+    }
+    fn profile() -> RegisteredProfile {
+        serde_json::from_value(json!({"id":"","tool":"claude_code","name":"Native roles","version":0,"inheritCommon":false,"files":{"settings":include_str!("../../../../tests/fixtures/native/claude-model-editor.json")},"connection":null,"nativeCredentials":{}})).unwrap()
+    }
+    #[test]
+    fn claude_descriptor_origin_tracks_roles_inheritance_and_unknown_fields() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let mut profile = profile();
+        profile.inherit_common = true;
+        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
+        settings.as_object_mut().unwrap().remove("effortLevel");
+        profile
+            .files
+            .insert("settings".into(), settings.to_string());
+        let common = crate::native::profile::RegisteredCommon {
+            tool: "claude_code".into(),
+            version: 1,
+            revision: "common-1".into(),
+            files: BTreeMap::from([("settings".into(), "{\"effortLevel\":\"high\"}".into())]),
+        };
+        let draft = configuration::open_with_common(
+            &registry,
+            profile,
+            Some(common),
+            Scope::Global,
+            "claude-origin-session".into(),
+        )
+        .unwrap();
+        let mut draft = draft;
+        draft.subject = Some(ConfigurationSubject::Profile);
+        let draft = configuration::refresh(&registry, draft);
+        let fields = &draft.descriptor.as_ref().unwrap().fields;
+        let origin = |id: &str| {
+            fields
+                .iter()
+                .find(|field| field.id == id)
+                .unwrap()
+                .origin
+        };
+        assert_eq!(origin("default.model"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("base_url"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("sonnet.model"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("sonnet.name"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("opus.model"), Some(FieldOrigin::Unset));
+        assert_eq!(origin("effortLevel"), Some(FieldOrigin::Inherited));
+        // Dynamic per-model fields have no static location and stay unclassified.
+        assert_eq!(origin("modelEffortLevel"), None);
+    }
+    #[test]
+    fn claude_roles_edit_independently_and_unify_is_explicit() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let mut draft =
+            configuration::open(&registry, profile(), Scope::Global, "claude-session".into())
+                .unwrap();
+        assert!(draft.issues.is_empty());
+        draft = configuration::edit(
+            &registry,
+            draft,
+            action("set", Some("default.model"), json!("claude-sonnet-4-6")),
+        )
+        .unwrap();
+        assert_eq!(draft.view["values"]["sonnet.model"], "gateway-sonnet");
+        assert_eq!(draft.view["values"]["subagent.model"], "gateway-subagent");
+        assert!(draft.issues.is_empty());
+        assert_eq!(draft.view["values"]["effortLevel"], "xhigh");
+        assert!(!draft.view["effortWarnings"].as_array().unwrap().is_empty());
+        draft = configuration::edit(
+            &registry,
+            draft,
+            action("reset", Some("effortLevel"), Value::Null),
+        )
+        .unwrap();
+        draft = configuration::edit(
+            &registry,
+            draft,
+            action("set", Some("sonnet.model"), json!("中文模型")),
+        )
+        .unwrap();
+        assert_eq!(draft.view["values"]["sonnet.longContext"], true);
+        assert_eq!(draft.view["values"]["sonnet.model"], "中文模型");
+        draft = configuration::edit(
+            &registry,
+            draft,
+            action("unify", None, json!("gateway-all")),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&draft.profile.files["settings"]).unwrap();
+        for (_, key) in ROLES {
+            assert_eq!(parsed["env"][*key], "gateway-all");
+        }
+        assert_eq!(parsed["model"], "gateway-all");
+        assert_eq!(
+            parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
+            "Sonnet gateway"
+        );
+        assert_eq!(parsed["env"]["USER_CUSTOM_OPTION"], "preserve");
+        assert_eq!(parsed["permissions"]["allow"][0], "Read");
+        assert_eq!(parsed["modelPicker"]["options"][0]["custom"], true);
+    }
+    #[test]
+    fn claude_reset_and_raw_round_trip_keep_native_semantics() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let draft =
+            configuration::open(&registry, profile(), Scope::Global, "claude-session".into())
+                .unwrap();
+        let reset = configuration::edit(
+            &registry,
+            draft,
+            action("reset", Some("default.model"), Value::Null),
+        )
+        .unwrap();
+        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
+        assert!(own.get("model").is_none());
+        assert!(own["env"].get("ANTHROPIC_MODEL").is_none());
+        let managed = Claude
+            .managed_fields("settings", &json!({}), &own, &reset.profile)
+            .unwrap();
+        assert_eq!(managed.released, vec!["/env/ANTHROPIC_MODEL", "/model"]);
+        let mut raw = own;
+        raw["model"] = json!("opus");
+        let restored = configuration::replace_text(
+            &registry,
+            reset,
+            BTreeMap::from([("settings".into(), raw.to_string())]),
+        );
+        assert_eq!(restored.view["values"]["default.model"], "opus");
+        assert!(restored.profile.editing.unwrap().intents.is_empty());
+        let settings =
+            json!({"effortLevel":"max","env":{"ANTHROPIC_DEFAULT_HAIKU_MODEL":"haiku[1m]"}});
+        let issues = Claude.validate(
+            &BTreeMap::from([("settings".into(), settings)]),
+            &EditingState::default(),
+            Scope::Global,
+        );
+        assert_eq!(issues.len(), 2);
+        let issues = Claude.validate(
+            &BTreeMap::from([("settings".into(), json!({"model":"claude-haiku-4-5[1m]"}))]),
+            &EditingState::default(),
+            Scope::Global,
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].field.as_deref(), Some("default.longContext"));
+    }
+    #[test]
+    fn claude_long_context_edit_uses_inherited_role_model() {
+        let effective = BTreeMap::from([(
+            "settings".into(),
+            json!({"env":{"ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-4-8"}}),
+        )]);
+        let mut own = BTreeMap::new();
+        Claude
+            .edit_inherited(
+                &mut own,
+                &effective,
+                &mut EditingState::default(),
+                &action("set", Some("opus.longContext"), json!(true)),
+            )
+            .unwrap();
+        assert_eq!(
+            own["settings"]["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+            "claude-opus-4-8[1m]"
+        );
+        assert!(own["settings"].get("model").is_none());
+    }
+    #[test]
+    fn claude_model_effort_edit_and_reset_preserve_other_model_settings() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let mut profile = profile();
+        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
+        settings["modelSettings"] = json!({"claude-opus-4-8":{"effortLevel":"high","maxEffortLevel":"xhigh","autoCompactWindow":200000},"claude-sonnet-4-6":{"effortLevel":"xhigh"}});
+        profile
+            .files
+            .insert("settings".into(), settings.to_string());
+        let draft = configuration::open(&registry, profile, Scope::Global, "claude-session".into())
+            .unwrap();
+        assert_eq!(draft.view["currentEffortModel"], "claude-opus-4-8");
+        assert!(draft.issues.is_empty());
+        assert!(draft.view["effortWarnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| warning
+                .contains("claude-sonnet-4-6")
+                && warning.contains("high"))));
+        let mut edit = action("set", Some("modelEffortLevel"), json!("low"));
+        edit.target = json!("model:claude-opus-4-8");
+        let changed = configuration::edit(&registry, draft, edit.clone()).unwrap();
+        assert_eq!(changed.view["modelEfforts"]["claude-opus-4-8"], "low");
+        assert_eq!(changed.view["values"]["effortLevel"], "xhigh");
+        edit.operation = "reset".into();
+        edit.value = None;
+        let reset = configuration::edit(&registry, changed, edit).unwrap();
+        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
+        assert!(own["modelSettings"]["claude-opus-4-8"]
+            .get("effortLevel")
+            .is_none());
+        assert_eq!(
+            own["modelSettings"]["claude-opus-4-8"]["maxEffortLevel"],
+            "xhigh"
+        );
+        assert_eq!(
+            own["modelSettings"]["claude-opus-4-8"]["autoCompactWindow"],
+            200000
+        );
+        assert_eq!(
+            own["modelSettings"]["claude-sonnet-4-6"]["effortLevel"],
+            "xhigh"
+        );
+        let managed = Claude
+            .managed_fields("settings", &json!({}), &own, &reset.profile)
+            .unwrap();
+        assert!(managed
+            .released
+            .contains(&"/modelSettings/claude-opus-4-8/effortLevel".into()));
+        assert!(reset.issues.is_empty());
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
+        assert!(crate::native::profile::save_registered_profile(
+            &db,
+            &registry,
+            reset.profile,
+            None
+        )
+        .is_ok());
+    }
+    #[test]
+    fn claude_project_local_editor_uses_native_precedence_and_stable_target() {
+        let documents = BTreeMap::from([
+            (
+                "settings".into(),
+                json!({"model":"claude-sonnet-4-6","effortLevel":"medium"}),
+            ),
+            (
+                "local_settings".into(),
+                json!({"env":{"ANTHROPIC_MODEL":"claude-opus-4-8"},"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"}}}),
+            ),
+        ]);
+        let view = Claude.read(&documents, &EditingState::default()).unwrap();
+        assert_eq!(view["values"]["default.model"], "claude-opus-4-8");
+        assert_eq!(view["editTarget"], "local_configuration");
+        let mut own = documents.clone();
+        let mut edit = action("set", Some("modelEffortLevel"), json!("low"));
+        edit.target = json!("local:model:claude-opus-4-8");
+        Claude
+            .edit_inherited(&mut own, &documents, &mut EditingState::default(), &edit)
+            .unwrap();
+        assert_eq!(
+            own["local_settings"]["modelSettings"]["claude-opus-4-8"]["effortLevel"],
+            "low"
+        );
+        assert_eq!(own["settings"], documents["settings"]);
+        assert_eq!(
+            Claude.suppression_changes(&edit, &crate::adapters::configuration::EditingState::default()).unwrap()[0].role,
+            "local_settings"
+        );
+    }
+    #[test]
+    fn claude_scalar_reset_does_not_claim_empty_native_containers() {
+        let mut own = BTreeMap::from([(
+            "settings".into(),
+            json!({"modelSettings":{"claude-opus-4-8":{"effortLevel":"high"}},"env":{"ANTHROPIC_MODEL":"opus"},"model":"opus"}),
+        )]);
+        let mut state = EditingState::default();
+        let reset = action("reset", Some("default.model"), Value::Null);
+        Claude.edit(&mut own, &mut state, &reset).unwrap();
+        let mut model_reset = action("reset", Some("modelEffortLevel"), Value::Null);
+        model_reset.target = json!("model:claude-opus-4-8");
+        Claude.edit(&mut own, &mut state, &model_reset).unwrap();
+        let managed = Claude
+            .managed_fields(
+                "settings",
+                &json!({"env":{"USER_OWNED":"kept"}}),
+                &own["settings"],
+                &profile(),
+            )
+            .unwrap();
+        assert!(!managed.fields.contains_key("/env"));
+        assert!(!managed
+            .fields
+            .contains_key("/modelSettings/claude-opus-4-8"));
+    }
+    #[test]
+    fn claude_model_effort_pointer_escapes_native_identity_and_reset_clears_only_its_suppression() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let mut profile = profile();
+        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
+        settings["modelSettings"] =
+            json!({"gateway/model~variant":{"effortLevel":"high","autoCompactWindow":200000}});
+        profile
+            .files
+            .insert("settings".into(), settings.to_string());
+        profile.suppressed.insert(
+            "settings".into(),
+            vec![
+                "/modelSettings/gateway~1model~0variant/effortLevel".into(),
+                "/permissions/deny".into(),
+            ],
+        );
+        let draft = configuration::open(&registry, profile, Scope::Global, "claude-session".into())
+            .unwrap();
+        let mut reset = action("reset", Some("modelEffortLevel"), Value::Null);
+        reset.target = json!("model:gateway/model~variant");
+        let reset = configuration::edit(&registry, draft, reset).unwrap();
+        assert_eq!(
+            reset.profile.suppressed["settings"],
+            vec!["/permissions/deny"]
+        );
+        let own: Value = serde_json::from_str(&reset.profile.files["settings"]).unwrap();
+        assert!(own["modelSettings"]["gateway/model~variant"]
+            .get("effortLevel")
+            .is_none());
+        assert_eq!(
+            own["modelSettings"]["gateway/model~variant"]["autoCompactWindow"],
+            200000
+        );
+        let managed = Claude
+            .managed_fields("settings", &json!({}), &own, &reset.profile)
+            .unwrap();
+        assert!(managed
+            .released
+            .contains(&"/modelSettings/gateway~1model~0variant/effortLevel".into()));
+    }
+
 }

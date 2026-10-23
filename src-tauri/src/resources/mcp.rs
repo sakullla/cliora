@@ -668,7 +668,7 @@ pub fn preview_targets(
                             else if exists { "将更新当前受管理的原生条目".into() } else { "将创建 CLI 原生条目".into() };
                         if !target.enabled {
                             if let Some(description) = registry.get(&target.tool_id).and_then(|adapter| adapter.mcp_disabled_description()) {
-                                result.detail.push_str("；");
+                                result.detail.push('；');
                                 result.detail.push_str(description);
                             }
                         }
@@ -709,11 +709,10 @@ pub fn distribute(
                 return Err("MCP 定义、目标范围或原生条目在预览后变化；请重新预览".into());
             }
             let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
-            if existing.is_some() && owned.as_deref() != Some(&actual_hash) {
-                if !target.allow_replace {
+            if existing.is_some() && owned.as_deref() != Some(&actual_hash)
+                && !target.allow_replace {
                     return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
                 }
-            }
             let retained_id = if adapter.mcp_redacts_secrets() {
                 Some(retained_mcp_secret_id(&target.tool_id, &scope_key, &definition.name)?)
             } else {

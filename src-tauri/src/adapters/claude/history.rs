@@ -701,9 +701,9 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return ExclusiveLock {
+            ExclusiveLock {
                 _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
-            };
+            }
         }
         #[cfg(not(windows))]
         {

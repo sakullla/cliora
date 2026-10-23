@@ -1233,9 +1233,7 @@ fn unchanged_digest_still_finishes_a_pending_native_write() {
         })
         .unwrap();
     assert_eq!(saved, before_digest);
-    let mut open = std::fs::metadata(&config).unwrap().permissions();
-    open.set_readonly(false);
-    std::fs::set_permissions(&config, open).unwrap();
+    crate::test_support::make_writable(&config).unwrap();
     let again = run(&fresh, &credentials, &registry, false).unwrap();
     assert!(again.blockers.iter().all(|item| item.key != key), "{:?}", again.blockers);
     let written = std::fs::read_to_string(&config).unwrap();
@@ -1492,9 +1490,7 @@ fn unchanged_digest_delete_does_not_keep_a_finished_write_blocker() {
             Ok(())
         })
         .unwrap();
-    let mut open = std::fs::metadata(&config).unwrap().permissions();
-    open.set_readonly(false);
-    std::fs::set_permissions(&config, open).unwrap();
+    crate::test_support::make_writable(&config).unwrap();
     source
         .with_connection(|conn| {
             conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", [])

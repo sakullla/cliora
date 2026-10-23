@@ -379,7 +379,7 @@ pub fn read_memories(
                     snapshot
                         .iter()
                         .find(|store| {
-                            store.directory == PathBuf::from(path)
+                            store.directory == *path
                                 && store.scope == target.scope
                                 && store.project_path == target.project_path
                         })
@@ -952,8 +952,11 @@ impl Drop for ExclusionReuse {
     }
 }
 
+/// Excluded paths per history root, or the error that stopped the scan.
+type ExclusionHistory = HashMap<String, Result<Vec<PathBuf>, String>>;
+
 thread_local! {
-    static EXCLUSION_HISTORY: RefCell<Option<HashMap<String, Result<Vec<PathBuf>, String>>>> =
+    static EXCLUSION_HISTORY: RefCell<Option<ExclusionHistory>> =
         const { RefCell::new(None) };
 }
 

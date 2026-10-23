@@ -183,6 +183,7 @@ fn skip_row(raw: &[u8]) -> bool {
 /// `conversationRequestId` is a turn id shared by many billed rows. Together
 /// with `messageId` it identifies one call, including the same call repeated
 /// in a child log. Without that pair, the row id stays the identity.
+#[allow(clippy::too_many_arguments)]
 fn record_usage(
     session: &mut ParsedSession,
     records: &mut HashSet<String>,
@@ -771,18 +772,16 @@ mod tests {
         // rows carry the subagent's intermediate calls' usage).
         fs::write(
             projects.join(format!("{session_id}/subagents/agent-0a2dcb4f1b794a44.jsonl")),
-            format!(
-                concat!(
-                    r#"{{"id":"s-user","type":"message","role":"user","timestamp":1789000002000,"sessionId":"subagent-own-id","cwd":"c:\\work\\demo","content":[{{"type":"text","text":"子代理输入不该进主会话"}}]}}"#,
+            concat!(
+                    r#"{"id":"s-user","type":"message","role":"user","timestamp":1789000002000,"sessionId":"subagent-own-id","cwd":"c:\\work\\demo","content":[{"type":"text","text":"子代理输入不该进主会话"}]}"#,
                     "\n",
-                    r#"{{"id":"s-f1","type":"function_call","timestamp":1789000002400,"name":"Read","arguments":{{}},"providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":300,"outputTokens":40,"totalTokens":340,"inputTokensDetails":[{{"cached_tokens":60}}],"outputTokensDetails":[]}}}},"sessionId":"subagent-own-id","cwd":"c:\\work\\demo"}}"#,
+                    r#"{"id":"s-f1","type":"function_call","timestamp":1789000002400,"name":"Read","arguments":{},"providerData":{"model":"kimi-k3-2","usage":{"requests":1,"inputTokens":300,"outputTokens":40,"totalTokens":340,"inputTokensDetails":[{"cached_tokens":60}],"outputTokensDetails":[]}},"sessionId":"subagent-own-id","cwd":"c:\\work\\demo"}"#,
                     "\n",
-                    r#"{{"id":"s-a1","type":"message","role":"assistant","timestamp":1789000003000,"sessionId":"subagent-own-id","providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":2000,"outputTokens":80,"totalTokens":2080,"inputTokensDetails":[{{"cached_tokens":1500}}],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"子代理输出"}}]}}"#,
+                    r#"{"id":"s-a1","type":"message","role":"assistant","timestamp":1789000003000,"sessionId":"subagent-own-id","providerData":{"model":"kimi-k3-2","usage":{"requests":1,"inputTokens":2000,"outputTokens":80,"totalTokens":2080,"inputTokensDetails":[{"cached_tokens":1500}],"outputTokensDetails":[]}},"content":[{"type":"text","text":"子代理输出"}]}"#,
                     "\n",
-                    r#"{{"type":"turn-metrics","durationMs":9,"tokenDelta":99}}"#,
+                    r#"{"type":"turn-metrics","durationMs":9,"tokenDelta":99}"#,
                     "\n",
                 ),
-            ),
         )
         .unwrap();
         let sources = sources(temp.path()).unwrap();
@@ -935,9 +934,9 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return ExclusiveLock {
+            ExclusiveLock {
                 _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
-            };
+            }
         }
         #[cfg(not(windows))]
         {

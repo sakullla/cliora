@@ -51,13 +51,13 @@ pub(crate) fn installations() -> Vec<Installation> {
         if !path.is_file() {
             return Vec::new();
         }
-        return vec![Installation {
+        vec![Installation {
             path: path.display().to_string(),
             version: record.version,
             source: "native",
             status: "available",
             detail: None,
-        }];
+        }]
     }
     #[cfg(not(windows))]
     {

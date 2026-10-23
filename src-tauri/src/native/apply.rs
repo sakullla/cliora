@@ -286,7 +286,7 @@ pub fn get_registered_binding(
     key: &str,
 ) -> Result<Option<AppliedBinding>, String> {
     db.with_connection(|conn| {
-        let row: Option<(String, i64, String, Option<String>,Option<i64>,Option<String>,Option<String>)> = conn.query_row("SELECT profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|e| e.to_string())?;
+        let row: Option<BindingRow> = conn.query_row("SELECT profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|e| e.to_string())?;
         row.map(|(profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile)| {
             let snapshot:Option<AppliedProfileSnapshot>=applied_profile.as_deref().map(serde_json::from_str).transpose().map_err(|_|"最后应用快照不兼容，请明确重新应用")?;
             let applied_summary=snapshot.as_ref().map(|snapshot|{
@@ -437,6 +437,7 @@ pub fn preview_registered(
     Ok(NativePreview { documents, rendered, sources })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_validated(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -462,6 +463,7 @@ pub fn apply_validated(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_registered_validated(
     registry: &crate::adapters::Registry,
     db: &Database,
@@ -476,6 +478,7 @@ pub fn apply_registered_validated(
     apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None,None,None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_registered_validated_compared(
     registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,
     profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
@@ -505,6 +508,7 @@ fn probed_native_form(
         .ok_or_else(|| "此 CLI 的安装版本尚未核验（未验证）；已拒绝写入原生配置".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_registered_validated_inner(
     registry: &crate::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
     profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
@@ -571,7 +575,7 @@ fn apply_registered_validated_inner(
     let mut new_managed = Managed::new();
     for (role, root) in &desired {
         let mut fields = BTreeMap::new();
-        flatten(&root, &mut Vec::new(), &mut fields);
+        flatten(root, &mut Vec::new(), &mut fields);
         new_managed.insert(role.clone(), fields);
     }
     for (role, fields) in &secrets.values {
@@ -838,6 +842,7 @@ fn apply_registered_validated_inner(
 }
 
 /// Common application supplies both trusted DB snapshots and an expected binding.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_registered_validated_expected(
     registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,
     profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
@@ -845,8 +850,12 @@ pub fn apply_registered_validated_expected(
 )->Result<ApplyOutcome,String>{
     apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,false,None,Some(expected),None)
 }
+/// `applied_bindings` columns: profile_id, profile_version, managed, context_id,
+/// common_version, common_revision, applied_profile.
+type BindingRow = (String, i64, String, Option<String>, Option<i64>, Option<String>, Option<String>);
+
 fn check_binding_snapshot(tx:&rusqlite::Transaction<'_>,expected:&AppliedBinding)->Result<(),String>{
-    let row:Option<(String,i64,String,Option<String>,Option<i64>,Option<String>,Option<String>)>=tx.query_row(
+    let row:Option<BindingRow>=tx.query_row(
         "SELECT profile_id,profile_version,managed,context_id,common_version,common_revision,applied_profile FROM applied_bindings WHERE tool=?1 AND scope_key=?2",
         params![expected.tool,expected.scope_key],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|error|error.to_string())?;
     let Some((id,version,managed,context,common_version,common_revision,snapshot))=row else{return Err("应用范围已变化，请重新查看影响范围".into());};
@@ -914,6 +923,7 @@ pub fn compare_registered_application(registry:&crate::adapters::Registry,db:&Da
     Ok(ApplyComparison{context_id:crate::accounts::selection::current(&profile.tool).map(|ctx|ctx.id),profile,common,files})
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_compared_application(registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,comparison:&ApplyComparison,home:&Path,scope:Scope,project:Option<&Path>,custom:Option<&Path>)->Result<ApplyOutcome,String> {
     let profile=profile::get_registered_profile(db,&comparison.profile.id)?;
     let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
@@ -968,6 +978,7 @@ fn check_apply_snapshot(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_profile(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -993,6 +1004,7 @@ pub fn apply_profile(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_registered_profile(
     registry: &crate::adapters::Registry,
     db: &Database,
@@ -1093,6 +1105,7 @@ mod tests {
     }
 
     // File/credential fixtures now also represent the persisted application snapshot.
+    #[allow(clippy::too_many_arguments)]
     fn apply_fixture(
         db: &Database, store: &dyn CredentialStore, snapshot: &NativeProfile,
         common: Option<&profile::CommonConfig>, files: &[NativeFile], key: &str,

@@ -228,6 +228,9 @@ fn endpoint(value: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+/// A remote object's bytes and its ETag, when the server sent one.
+type RemoteFile = (Vec<u8>, Option<String>);
+
 struct Dav {
     client: Client,
     base: Url,
@@ -267,7 +270,7 @@ impl Dav {
             .send()
             .map_err(|error| format!("WebDAV 无法连接：{error}"))
     }
-    fn read(&self, name: &str) -> Result<Option<(Vec<u8>, Option<String>)>, String> {
+    fn read(&self, name: &str) -> Result<Option<RemoteFile>, String> {
         let response = self.send(self.request(Method::GET, name)?)?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -387,7 +390,7 @@ fn test_connection(dav: &Dav) -> Result<(), String> {
 }
 
 fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> {
-    if !matches!(manifest.schema_version, 1 | 2 | 3)
+    if !matches!(manifest.schema_version, 1..=3)
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
         || manifest.history.len() > 10_000
@@ -475,7 +478,7 @@ fn read_manifest(
     let plain = crypto::open_sync(key, space_id, &bytes)?;
     let manifest: Manifest =
         serde_json::from_slice(&plain).map_err(|_| "同步清单结构损坏".to_string())?;
-    validate_manifest(&manifest, &space_id)?;
+    validate_manifest(&manifest, space_id)?;
     Ok(Some((manifest, etag)))
 }
 
@@ -774,6 +777,7 @@ fn record_transfer(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn take_remote(
     db: &Database,
     store: &dyn CredentialStore,
@@ -1245,6 +1249,7 @@ fn delete_local(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_remote(
     db: &Database,
     store: &dyn CredentialStore,

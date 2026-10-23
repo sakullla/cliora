@@ -13,9 +13,13 @@ const ITERATIONS: u32 = 3;
 
 // Protocol fixtures repeatedly unlock the same space. Reuse only identical pure KDF
 // inputs in this test thread; the first derivation still uses the full production cost.
+/// Test-only derived keys, keyed by passphrase and salt.
+#[cfg(test)]
+type TestSyncKeys = std::collections::BTreeMap<(String, [u8; 16]), [u8; 32]>;
+
 #[cfg(test)]
 thread_local! {
-    static TEST_SYNC_KEYS: std::cell::RefCell<std::collections::BTreeMap<(String, [u8; 16]), [u8; 32]>> = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    static TEST_SYNC_KEYS: std::cell::RefCell<TestSyncKeys> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
 const LANES: u32 = 4;
 
@@ -337,7 +341,7 @@ pub fn open_sync_space(password: &str, bytes: &[u8]) -> Result<(String, [u8; 32]
         nonce: space.nonce,
         wrapped_key: space.wrapped_key,
     })
-    .chain(space.previous.into_iter());
+    .chain(space.previous);
     for wrapped in wraps.take(3) {
         let salt = decode::<16>(&wrapped.salt)?;
         let nonce = decode::<24>(&wrapped.nonce)?;

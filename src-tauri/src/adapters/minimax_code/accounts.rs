@@ -177,7 +177,7 @@ fn unknown(detail: &str) -> Observation {
 
 fn signed_in(context: &NativeContext, directory: &Path, state: &AuthStatus) -> Result<Observation, String> {
     let identity = identity_from_file(directory, state)?;
-    let legacy = context.environment.get("MINIMAX_DATA_DIR").is_none() && directory != context.root;
+    let legacy = !context.environment.contains_key("MINIMAX_DATA_DIR") && directory != context.root;
     let detail = if identity.is_some() {
         "已登录。账号 ID 来自账号身份文件，未读取凭证。"
     } else if legacy {

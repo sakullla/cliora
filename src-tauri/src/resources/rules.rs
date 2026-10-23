@@ -176,6 +176,7 @@ fn find_spec<'a>(
         .ok_or_else(|| "规则不在已扫描的目录".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn save_file(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -312,6 +313,7 @@ pub fn delete_file(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn set_file_enabled(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -753,9 +755,7 @@ pub fn sync_clients(
         }
         let base_key = scope_key(place.scope, place.project_path.as_deref())?;
         let place_key=place.context_id.as_ref().map(|id|format!("context:{id}:{base_key}")).unwrap_or(base_key);
-        if place_key == key && !tools.iter().any(|tool| tool == &place.tool_id) {
-            affected.push((place.tool_id.clone(), place_key));
-        } else if place_key != key {
+        if place_key != key || !tools.iter().any(|tool| tool == &place.tool_id) {
             affected.push((place.tool_id.clone(), place_key));
         }
     }

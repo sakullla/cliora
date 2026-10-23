@@ -323,7 +323,7 @@ fn import_rechecks_digest_inside_the_write_transaction() {
     item.body = "remote".into();
     incoming.entities.push(PortableEntity {
         id: "secret-profile".into(),
-        payload: PortablePayload::Profile(PortableProfile {
+        payload: PortablePayload::Profile(Box::new(PortableProfile {
             profile: RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
                 revision: String::new(),
                 id: "secret-profile".into(),
@@ -347,7 +347,7 @@ fn import_rechecks_digest_inside_the_write_transaction() {
             connection_secret: Some("private-api-key".into()),
             native_secrets: BTreeMap::new(),
             pending_fields: Vec::new(),
-        }),
+        })),
     });
     let draft = preview_import(&db, &credentials, &registry, incoming).unwrap();
     let secret_preview = &draft
@@ -1204,7 +1204,7 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
         entities: vec![
             PortableEntity {
                 id: "acct".into(),
-                payload: PortablePayload::Account(PortableAccount {
+                payload: PortablePayload::Account(Box::new(PortableAccount {
                     account: remote,
                     auth_files: vec![PortableAuthFile {
                         context_id: "ctx".into(),
@@ -1212,11 +1212,11 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
                         relative: String::new(),
                         contents: STANDARD.encode("remote-login"),
                     }],
-                }),
+                })),
             },
             PortableEntity {
                 id: "acct-new".into(),
-                payload: PortablePayload::Account(PortableAccount {
+                payload: PortablePayload::Account(Box::new(PortableAccount {
                     account: sample_account(
                         "acct-new",
                         crate::accounts::NativeContext {
@@ -1238,7 +1238,7 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
                         relative: String::new(),
                         contents: STANDARD.encode("fresh-login"),
                     }],
-                }),
+                })),
             },
             PortableEntity {
                 id: "project-new".into(),
@@ -1397,7 +1397,7 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
     });
     snapshot.entities.push(PortableEntity {
         id: "acct-write".into(),
-        payload: PortablePayload::Account(PortableAccount {
+        payload: PortablePayload::Account(Box::new(PortableAccount {
             account: sample_account(
                 "acct-write",
                 crate::accounts::NativeContext {
@@ -1419,7 +1419,7 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
                 relative: String::new(),
                 contents: STANDARD.encode("login-bytes"),
             }],
-        }),
+        })),
     });
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
     assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
@@ -2025,9 +2025,7 @@ fn retry_rewrites_a_failed_active_binding_without_webdav() {
     assert!(blocker.action == "retry" || blocker.action == "install", "{blocker:?}");
     assert!(!blocker.detail.contains("写入已选目录"), "{}", blocker.detail);
     assert_ne!(blocker.detail, "上次写入失败");
-    let mut open = fs::metadata(&config).unwrap().permissions();
-    open.set_readonly(false);
-    fs::set_permissions(&config, open).unwrap();
+    crate::test_support::make_writable(&config).unwrap();
     retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
     let written = fs::read_to_string(&config).unwrap();
     assert!(written.contains("gpt-6"), "{written}");

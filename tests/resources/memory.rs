@@ -442,8 +442,8 @@ fn memory_target(
     }
 }
 
-fn save<'a>(
-    harness: &'a Harness,
+fn save(
+    harness: &Harness,
     target: MemoryTarget,
     id: &str,
     text: &str,
@@ -667,11 +667,7 @@ struct ClearReadonly(PathBuf);
 
 impl Drop for ClearReadonly {
     fn drop(&mut self) {
-        if let Ok(metadata) = fs::metadata(&self.0) {
-            let mut permissions = metadata.permissions();
-            permissions.set_readonly(false);
-            let _ = fs::set_permissions(&self.0, permissions);
-        }
+        let _ = crate::test_support::make_writable(&self.0);
     }
 }
 

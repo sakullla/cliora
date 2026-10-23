@@ -193,11 +193,10 @@ fn load_agent_wires(
         Err(_) => (Vec::new(), true),
     };
     // Listing can fail while the known main path is still readable.
-    if unlistable && !wires.iter().any(|wire| is_main_wire(wire)) {
-        if regular_file(&main_wire_path(session), cancelled)? {
+    if unlistable && !wires.iter().any(|wire| is_main_wire(wire))
+        && regular_file(&main_wire_path(session), cancelled)? {
             wires.push(main_wire_path(session));
         }
-    }
     wires.sort();
     Ok((wires, unlistable))
 }
@@ -781,9 +780,9 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return ExclusiveLock {
+            ExclusiveLock {
                 _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
-            };
+            }
         }
         #[cfg(not(windows))]
         {

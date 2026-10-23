@@ -127,6 +127,286 @@ pub(super) fn validate_public_settings(root: &Value) -> Result<(), String> {
     }
     visit(root, &mut Vec::new())
 }
+fn role(action: &ConfigurationAction) -> Result<&str, String> {
+    match action.target.as_str() {
+        Some("settings") => Ok("settings"),
+        Some("local_settings") => Ok("local_settings"),
+        _ => Err("Qoder CN 配置目标无效".into()),
+    }
+}
+fn fields() -> Vec<ConfigurationField> {
+    FIELDS
+        .iter()
+        .map(|(id, label, choices)| ConfigurationField {
+            id: (*id).into(),
+            label: (*label).into(),
+            kind: if id.starts_with("autoMemory") {
+                "boolean"
+            } else {
+                "string"
+            }
+            .into(),
+            required: false,
+            advanced: false,
+            choices: choices.iter().map(|s| (*s).into()).collect(),
+            minimum: None,
+            default_source: Some(
+                if id.starts_with("autoMemory") {
+                    "原生默认（当前生效状态未知）"
+                } else {
+                    "原生默认"
+                }
+                .into(),
+            ),
+            unavailable_reason: None,
+            origin: None,
+        })
+        .collect()
+}
+fn valid_value(id: &str, value: &Value) -> bool {
+    if id.starts_with("autoMemory") {
+        value.is_boolean()
+    } else {
+        value.as_str().is_some_and(|s| !s.trim().is_empty())
+    }
+}
+
+impl ConfigurationAdapter for QoderAdapter {
+    fn describe(&self, _scope: Scope) -> ConfigurationDescriptor {
+        ConfigurationDescriptor {
+            version: EDITING_VERSION,
+            fields: fields(),
+            operations: vec!["set".into(), "reset".into()],
+        }
+    }
+    fn common_parameters(&self, _scope: Scope) -> Vec<CommonParameter> {
+        fields()
+            .into_iter()
+            .map(|field| CommonParameter {
+                path: path(&field.id).unwrap(),
+                field,
+                role: "settings",
+                target: json!("settings"),
+            })
+            .collect()
+    }
+    fn field_locations(&self, field: &str, documents: &Documents) -> Vec<(String, Vec<String>)> {
+        let Ok(path) = path(field) else {
+            return vec![];
+        };
+        let role = if documents
+            .get("local_settings")
+            .and_then(|root| root.pointer(&location_pointer(&path)))
+            .is_some()
+        {
+            "local_settings"
+        } else {
+            "settings"
+        };
+        vec![(role.into(), path)]
+    }
+    fn read(&self, documents: &Documents, _state: &EditingState) -> Result<Value, String> {
+        let mut values = serde_json::Map::new();
+        let mut targets = serde_json::Map::new();
+        for (id, _, _) in FIELDS {
+            let pointer = location_pointer(&path(id)?);
+            let local = documents
+                .get("local_settings")
+                .and_then(|root| root.pointer(&pointer));
+            let value = local.or_else(|| {
+                documents
+                    .get("settings")
+                    .and_then(|root| root.pointer(&pointer))
+            });
+            values.insert((*id).into(), value.cloned().unwrap_or(Value::Null));
+            targets.insert(
+                (*id).into(),
+                json!(if local.is_some() {
+                    "local_settings"
+                } else {
+                    "settings"
+                }),
+            );
+        }
+        Ok(json!({"values":values,"targets":targets}))
+    }
+    fn edit(
+        &self,
+        documents: &mut Documents,
+        _state: &mut EditingState,
+        action: &ConfigurationAction,
+    ) -> Result<(), String> {
+        if action.version != EDITING_VERSION
+            || !matches!(action.operation.as_str(), "set" | "reset")
+        {
+            return Err("Qoder CN 只支持设置或恢复默认".into());
+        }
+        let role = role(action)?;
+        let id = action.field.as_deref().ok_or("缺少配置字段")?;
+        let path = path(id)?;
+        let value = if action.operation == "reset" {
+            None
+        } else {
+            let value = action.value.as_ref().ok_or("缺少配置值")?;
+            if !valid_value(id, value) {
+                return Err("配置值类型无效；清除设置请恢复默认".into());
+            }
+            let choices = FIELDS.iter().find(|(field, _, _)| *field == id).unwrap().2;
+            if !choices.is_empty() && !choices.contains(&value.as_str().unwrap_or_default()) {
+                return Err("请选择已核验的原生取值；已有未知值可保留".into());
+            }
+            Some(value)
+        };
+        let root = documents.entry(role.into()).or_insert_with(|| json!({}));
+        let text = format::render(FileKind::Json, root)?;
+        *root = format::parse(
+            FileKind::Json,
+            &format::set_path(FileKind::Json, &text, &path, value)?,
+        )?;
+        Ok(())
+    }
+    fn suppression_changes(
+        &self,
+        action: &ConfigurationAction,
+        _state: &EditingState,
+    ) -> Result<Vec<SuppressionChange>, String> {
+        Ok(vec![SuppressionChange {
+            role: role(action)?.into(),
+            path: location_pointer(&path(action.field.as_deref().ok_or("缺少配置字段")?)?),
+            suppressed: false,
+        }])
+    }
+    fn reconcile_text(
+        &self,
+        _previous: Option<&Documents>,
+        next: &Documents,
+        _effective: &Documents,
+        state: &mut EditingState,
+    ) -> Result<(), String> {
+        state.intents.retain(|action| {
+            action.operation == "reset"
+                && role(action)
+                    .ok()
+                    .zip(action.field.as_deref().and_then(|id| path(id).ok()))
+                    .is_some_and(|(role, path)| {
+                        next.get(role)
+                            .and_then(|root| root.pointer(&location_pointer(&path)))
+                            .is_none()
+                    })
+        });
+        Ok(())
+    }
+    fn validate(
+        &self,
+        documents: &Documents,
+        _state: &EditingState,
+        _scope: Scope,
+    ) -> Vec<ConfigurationIssue> {
+        let mut issues = vec![];
+        if let Err(message) = super::config_directory_name(
+            std::env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(),
+            self.directory,
+        ) {
+            issues.push(ConfigurationIssue {
+                target: Value::Null,
+                field: None,
+                code: "invalid_configuration_directory".into(),
+                message,
+            });
+        }
+        for (role, root) in documents {
+            if !root.is_object() {
+                issues.push(ConfigurationIssue {
+                    target: json!(role),
+                    field: None,
+                    code: "invalid_document".into(),
+                    message: "Qoder CN settings 顶层必须是对象".into(),
+                });
+                continue;
+            }
+            for parent in ["model", "general", "ui"] {
+                if root.get(parent).is_some_and(|value| !value.is_object()) {
+                    issues.push(ConfigurationIssue {
+                        target: json!(role),
+                        field: Some(parent.into()),
+                        code: "invalid_native_value".into(),
+                        message: format!("{parent} 必须是原生配置对象"),
+                    });
+                }
+            }
+            for (id, _, _) in FIELDS {
+                if root
+                    .pointer(&location_pointer(&path(id).unwrap()))
+                    .is_some_and(|value| !valid_value(id, value))
+                {
+                    issues.push(ConfigurationIssue {
+                        target: json!(role),
+                        field: Some((*id).into()),
+                        code: "invalid_native_value".into(),
+                        message: format!("{id} 原生类型无效"),
+                    });
+                }
+            }
+        }
+        issues
+    }
+    // Raw native enums remain forward-compatible. The form limits new choices
+    // in edit(); validating every persisted enum against today's catalog would
+    // reject an imported native extension when a new profile inherits common.
+    fn connection(
+        &self,
+        _documents: &Documents,
+        _state: &EditingState,
+    ) -> Result<Option<Connection>, String> {
+        Ok(None)
+    }
+    fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
+        if sensitive_path(path) {
+            PortableFieldKind::Credential
+        } else if self::path(&native_path(path).join(".")).is_ok() {
+            PortableFieldKind::Parameter
+        } else {
+            PortableFieldKind::Unknown
+        }
+    }
+    fn managed_fields(
+        &self,
+        role: &str,
+        _current: &Value,
+        desired: &Value,
+        profile: &RegisteredProfile,
+    ) -> Result<ManagedConfiguration, String> {
+        let mut flat = BTreeMap::new();
+        crate::native::apply::flatten(desired, &mut vec![], &mut flat);
+        flat.retain(|path, value| {
+            // A redacted credential-only provider/MCP entry is an empty object.
+            // It must not claim the whole native container during named apply.
+            !((matches!(
+                path.as_str(),
+                "/model" | "/general" | "/ui" | "/providers" | "/mcpServers"
+            ) || path.starts_with("/providers/")
+                || path.starts_with("/mcpServers/"))
+                && value.as_object().is_some_and(|v| v.is_empty()))
+        });
+        let mut managed = ManagedConfiguration {
+            fields: flat
+                .into_iter()
+                .map(|(key, value)| (key, Some(value)))
+                .collect(),
+            released: vec![],
+        };
+        if let Some(state) = &profile.editing {
+            for action in &state.intents {
+                if action.operation == "reset" && self::role(action)? == role {
+                    managed.released.push(location_pointer(&path(
+                        action.field.as_deref().ok_or("缺少配置字段")?,
+                    )?));
+                }
+            }
+        }
+        Ok(managed)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -667,285 +947,5 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::fs::read(root.join("credentials.json")).unwrap(), login);
-    }
-}
-fn role(action: &ConfigurationAction) -> Result<&str, String> {
-    match action.target.as_str() {
-        Some("settings") => Ok("settings"),
-        Some("local_settings") => Ok("local_settings"),
-        _ => Err("Qoder CN 配置目标无效".into()),
-    }
-}
-fn fields() -> Vec<ConfigurationField> {
-    FIELDS
-        .iter()
-        .map(|(id, label, choices)| ConfigurationField {
-            id: (*id).into(),
-            label: (*label).into(),
-            kind: if id.starts_with("autoMemory") {
-                "boolean"
-            } else {
-                "string"
-            }
-            .into(),
-            required: false,
-            advanced: false,
-            choices: choices.iter().map(|s| (*s).into()).collect(),
-            minimum: None,
-            default_source: Some(
-                if id.starts_with("autoMemory") {
-                    "原生默认（当前生效状态未知）"
-                } else {
-                    "原生默认"
-                }
-                .into(),
-            ),
-            unavailable_reason: None,
-            origin: None,
-        })
-        .collect()
-}
-fn valid_value(id: &str, value: &Value) -> bool {
-    if id.starts_with("autoMemory") {
-        value.is_boolean()
-    } else {
-        value.as_str().is_some_and(|s| !s.trim().is_empty())
-    }
-}
-
-impl ConfigurationAdapter for QoderAdapter {
-    fn describe(&self, _scope: Scope) -> ConfigurationDescriptor {
-        ConfigurationDescriptor {
-            version: EDITING_VERSION,
-            fields: fields(),
-            operations: vec!["set".into(), "reset".into()],
-        }
-    }
-    fn common_parameters(&self, _scope: Scope) -> Vec<CommonParameter> {
-        fields()
-            .into_iter()
-            .map(|field| CommonParameter {
-                path: path(&field.id).unwrap(),
-                field,
-                role: "settings",
-                target: json!("settings"),
-            })
-            .collect()
-    }
-    fn field_locations(&self, field: &str, documents: &Documents) -> Vec<(String, Vec<String>)> {
-        let Ok(path) = path(field) else {
-            return vec![];
-        };
-        let role = if documents
-            .get("local_settings")
-            .and_then(|root| root.pointer(&location_pointer(&path)))
-            .is_some()
-        {
-            "local_settings"
-        } else {
-            "settings"
-        };
-        vec![(role.into(), path)]
-    }
-    fn read(&self, documents: &Documents, _state: &EditingState) -> Result<Value, String> {
-        let mut values = serde_json::Map::new();
-        let mut targets = serde_json::Map::new();
-        for (id, _, _) in FIELDS {
-            let pointer = location_pointer(&path(id)?);
-            let local = documents
-                .get("local_settings")
-                .and_then(|root| root.pointer(&pointer));
-            let value = local.or_else(|| {
-                documents
-                    .get("settings")
-                    .and_then(|root| root.pointer(&pointer))
-            });
-            values.insert((*id).into(), value.cloned().unwrap_or(Value::Null));
-            targets.insert(
-                (*id).into(),
-                json!(if local.is_some() {
-                    "local_settings"
-                } else {
-                    "settings"
-                }),
-            );
-        }
-        Ok(json!({"values":values,"targets":targets}))
-    }
-    fn edit(
-        &self,
-        documents: &mut Documents,
-        _state: &mut EditingState,
-        action: &ConfigurationAction,
-    ) -> Result<(), String> {
-        if action.version != EDITING_VERSION
-            || !matches!(action.operation.as_str(), "set" | "reset")
-        {
-            return Err("Qoder CN 只支持设置或恢复默认".into());
-        }
-        let role = role(action)?;
-        let id = action.field.as_deref().ok_or("缺少配置字段")?;
-        let path = path(id)?;
-        let value = if action.operation == "reset" {
-            None
-        } else {
-            let value = action.value.as_ref().ok_or("缺少配置值")?;
-            if !valid_value(id, value) {
-                return Err("配置值类型无效；清除设置请恢复默认".into());
-            }
-            let choices = FIELDS.iter().find(|(field, _, _)| *field == id).unwrap().2;
-            if !choices.is_empty() && !choices.contains(&value.as_str().unwrap_or_default()) {
-                return Err("请选择已核验的原生取值；已有未知值可保留".into());
-            }
-            Some(value)
-        };
-        let root = documents.entry(role.into()).or_insert_with(|| json!({}));
-        let text = format::render(FileKind::Json, root)?;
-        *root = format::parse(
-            FileKind::Json,
-            &format::set_path(FileKind::Json, &text, &path, value)?,
-        )?;
-        Ok(())
-    }
-    fn suppression_changes(
-        &self,
-        action: &ConfigurationAction,
-        _state: &EditingState,
-    ) -> Result<Vec<SuppressionChange>, String> {
-        Ok(vec![SuppressionChange {
-            role: role(action)?.into(),
-            path: location_pointer(&path(action.field.as_deref().ok_or("缺少配置字段")?)?),
-            suppressed: false,
-        }])
-    }
-    fn reconcile_text(
-        &self,
-        _previous: Option<&Documents>,
-        next: &Documents,
-        _effective: &Documents,
-        state: &mut EditingState,
-    ) -> Result<(), String> {
-        state.intents.retain(|action| {
-            action.operation == "reset"
-                && role(action)
-                    .ok()
-                    .zip(action.field.as_deref().and_then(|id| path(id).ok()))
-                    .is_some_and(|(role, path)| {
-                        next.get(role)
-                            .and_then(|root| root.pointer(&location_pointer(&path)))
-                            .is_none()
-                    })
-        });
-        Ok(())
-    }
-    fn validate(
-        &self,
-        documents: &Documents,
-        _state: &EditingState,
-        _scope: Scope,
-    ) -> Vec<ConfigurationIssue> {
-        let mut issues = vec![];
-        if let Err(message) = super::config_directory_name(
-            std::env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(),
-            self.directory,
-        ) {
-            issues.push(ConfigurationIssue {
-                target: Value::Null,
-                field: None,
-                code: "invalid_configuration_directory".into(),
-                message,
-            });
-        }
-        for (role, root) in documents {
-            if !root.is_object() {
-                issues.push(ConfigurationIssue {
-                    target: json!(role),
-                    field: None,
-                    code: "invalid_document".into(),
-                    message: "Qoder CN settings 顶层必须是对象".into(),
-                });
-                continue;
-            }
-            for parent in ["model", "general", "ui"] {
-                if root.get(parent).is_some_and(|value| !value.is_object()) {
-                    issues.push(ConfigurationIssue {
-                        target: json!(role),
-                        field: Some(parent.into()),
-                        code: "invalid_native_value".into(),
-                        message: format!("{parent} 必须是原生配置对象"),
-                    });
-                }
-            }
-            for (id, _, _) in FIELDS {
-                if root
-                    .pointer(&location_pointer(&path(id).unwrap()))
-                    .is_some_and(|value| !valid_value(id, value))
-                {
-                    issues.push(ConfigurationIssue {
-                        target: json!(role),
-                        field: Some((*id).into()),
-                        code: "invalid_native_value".into(),
-                        message: format!("{id} 原生类型无效"),
-                    });
-                }
-            }
-        }
-        issues
-    }
-    // Raw native enums remain forward-compatible. The form limits new choices
-    // in edit(); validating every persisted enum against today's catalog would
-    // reject an imported native extension when a new profile inherits common.
-    fn connection(
-        &self,
-        _documents: &Documents,
-        _state: &EditingState,
-    ) -> Result<Option<Connection>, String> {
-        Ok(None)
-    }
-    fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
-        if sensitive_path(path) {
-            PortableFieldKind::Credential
-        } else if self::path(&native_path(path).join(".")).is_ok() {
-            PortableFieldKind::Parameter
-        } else {
-            PortableFieldKind::Unknown
-        }
-    }
-    fn managed_fields(
-        &self,
-        role: &str,
-        _current: &Value,
-        desired: &Value,
-        profile: &RegisteredProfile,
-    ) -> Result<ManagedConfiguration, String> {
-        let mut flat = BTreeMap::new();
-        crate::native::apply::flatten(desired, &mut vec![], &mut flat);
-        flat.retain(|path, value| {
-            // A redacted credential-only provider/MCP entry is an empty object.
-            // It must not claim the whole native container during named apply.
-            !((matches!(
-                path.as_str(),
-                "/model" | "/general" | "/ui" | "/providers" | "/mcpServers"
-            ) || path.starts_with("/providers/")
-                || path.starts_with("/mcpServers/"))
-                && value.as_object().is_some_and(|v| v.is_empty()))
-        });
-        let mut managed = ManagedConfiguration {
-            fields: flat
-                .into_iter()
-                .map(|(key, value)| (key, Some(value)))
-                .collect(),
-            released: vec![],
-        };
-        if let Some(state) = &profile.editing {
-            for action in &state.intents {
-                if action.operation == "reset" && self::role(action)? == role {
-                    managed.released.push(location_pointer(&path(
-                        action.field.as_deref().ok_or("缺少配置字段")?,
-                    )?));
-                }
-            }
-        }
-        Ok(managed)
     }
 }

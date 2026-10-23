@@ -612,7 +612,7 @@ mod tests {
                 Some("# Memory Index\n\n- [测试偏好](feedback_testing.md) — 保存验证用偏好\n"),
             )
         );
-        fs::write(&index, &created.contents.unwrap()).unwrap();
+        fs::write(&index, created.contents.unwrap()).unwrap();
         let second = CodeBuddy
             .index_after_save(&directory, "project_shape", "---\nname: 结构\ndescription: A\n---\nx")
             .unwrap()

@@ -576,10 +576,9 @@ fn month_number(name: &str) -> Option<u32> {
 fn offset_seconds(zone: &str) -> Option<i32> {
     let (sign, body) = if let Some(rest) = zone.strip_prefix('+') {
         (1, rest)
-    } else if let Some(rest) = zone.strip_prefix('-') {
-        (-1, rest)
     } else {
-        return None;
+        let rest = zone.strip_prefix('-')?;
+        (-1, rest)
     };
     let (hours, minutes) = if let Some((hours, minutes)) = body.split_once(':') {
         (hours.parse::<i32>().ok()?, minutes.parse::<i32>().ok()?)
@@ -983,9 +982,9 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return ExclusiveLock {
+            ExclusiveLock {
                 _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
-            };
+            }
         }
         #[cfg(not(windows))]
         {

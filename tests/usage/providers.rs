@@ -68,7 +68,7 @@ fn catalog_is_region_bound_versioned_manual_and_copyable() {
         assert_eq!(preset.config.identity.subject, UsageSubject::Plan);
         assert_eq!(
             preset.credentials[0].allowed_origins,
-            [preset.config.site.clone()]
+            std::slice::from_ref(&preset.config.site)
         );
         let source = builtin_script(&preset.config).unwrap();
         assert!(source.contains(&preset.config.site));

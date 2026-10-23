@@ -269,6 +269,7 @@ fn push_console(log: &mut String, cursor: &mut usize, pending: &mut String, byte
     trim_log(log, cursor);
 }
 
+#[cfg(test)]
 fn append(log: &mut String, bytes: &[u8]) {
     let mut cursor = log.chars().count();
     let mut pending = String::new();
