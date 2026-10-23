@@ -2,6 +2,10 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const pageNames = ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置'] as const;
 
+async function expectPageLanded(page: Page, name: (typeof pageNames)[number]) {
+  await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+}
+
 async function expectNoHorizontalScroll(page: Page) {
   await expect.poll(async () => page.evaluate(() => {
     const root = document.documentElement;
@@ -99,7 +103,7 @@ test('full pages are navigable and browser mode never implies native data', asyn
   await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
   for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
-    await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+    await expectPageLanded(page, name);
   }
   await expect(page.getByRole('checkbox').first()).toBeDisabled();
   await expect(page.locator('dialog')).toHaveCount(0);
@@ -388,14 +392,14 @@ test('browser preview keeps every page reachable at 640 and does not scroll side
     const box = await button.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThan(36);
     await button.click();
-    await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+    await expectPageLanded(page, name);
     await expect(status).toBeVisible();
   }
   for (const width of [1360, 900, 640]) {
     await page.setViewportSize({ width, height: 768 });
     for (const name of pageNames) {
       await nav.getByRole('button', { name }).click();
-      await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+      await expectPageLanded(page, name);
       await expectNoHorizontalScroll(page);
     }
   }
@@ -425,7 +429,7 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
     for (const name of pageNames) {
       const button = nav.getByRole('button', { name });
       await button.click();
-      await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+      await expectPageLanded(page, name);
       await expect(status).toHaveText('本机资料 · 仅存于此设备');
       await expectNoHorizontalScroll(page);
     }
@@ -771,6 +775,23 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toContainText('普通');
   await expect(claude).toContainText('YOLO');
   await expect(claude).toContainText('beta-work');
+
+  // Drag to reorder the rail: drop Claude Code above Codex.
+  // Playwright's dragAndDrop does not drive HTML5 draggable, so dispatch the drag events.
+  const railList = page.getByRole('tablist', { name: '会话列表' });
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
+  await page.evaluate(() => {
+    const row = document.querySelector('[data-session-id="s2"]')!.closest('[draggable]')!;
+    row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }));
+  });
+  await page.evaluate(() => {
+    const row = document.querySelector('[data-session-id="s1"]')!.closest('[draggable]')!;
+    const rect = row.getBoundingClientRect();
+    for (const type of ['dragover', 'drop']) {
+      row.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), clientX: rect.left + 12, clientY: rect.top + 8 }));
+    }
+  });
+  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
   const codexOutput = page.locator('.xterm-accessibility-tree').first();
   await expect(codexOutput).toContainText('codex-ready');
   await expect(codexOutput).not.toContainText('codex-readyready');
@@ -787,7 +808,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(stage).toContainText('修复登录');
   await codex.click({ button: 'right' });
   const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
-  await expect(rowMenu.getByRole('menuitem')).toHaveText(['发送中断 (Ctrl+C)', '同目录新开', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
+  await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '同目录新开', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
   await page.keyboard.press('Escape');
   await expect(rowMenu).toHaveCount(0);
   await expect(codex).toBeFocused();
@@ -795,6 +816,12 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(rowMenu).toBeVisible();
   await page.mouse.click(5, 5);
   await expect(rowMenu).toHaveCount(0);
+  // Pin Codex to the top; the pin badge shows and the arrangement persists.
+  await codex.click({ button: 'right' });
+  await page.getByRole('menu', { name: 'Codex 会话操作' }).getByRole('menuitem', { name: '置顶' }).click();
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
+  await expect(codex.locator('[title="取消置顶"]')).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange') ?? '{}'))).toMatchObject({ pinned: ['s1'] });
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('Alpha');
   await expect(stage).toContainText('普通');
@@ -921,8 +948,9 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
     { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动' },
   ]);
 
-  // Open on-demand Quick Input Drawer and send multi-line / prompt text
-  await stage.getByRole('button', { name: '打开快捷输入面板' }).click();
+  // Open the floating quick-input composer and send multi-line / prompt text
+  await stage.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+M');
   const composer = stage.getByRole('textbox', { name: /编写多行内容或从资料库选入提示词/ });
   await composer.fill('status check');
   await composer.press('Enter');
@@ -931,7 +959,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   ]);
 
   // Search terminal output
-  await stage.getByRole('button', { name: '查找输出' }).click();
+  await page.keyboard.press('Control+Shift+F');
   await stage.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('ready-line');
   await expect(stage).toContainText('1 / 1');
 

@@ -16,8 +16,7 @@ import { navigateChoices } from '../../lib/choiceNavigation';
 import { modLabel } from '../../lib/shortcut';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
-import { Icon, type IconName } from '../../components/Icon';
-import { RowMenu } from '../../components/RowMenu';
+import { Icon } from '../../components/Icon';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchSession } from '../../types/launch';
@@ -252,7 +251,7 @@ export function quoteDroppedPaths(paths: string[]): string {
     .join(' ');
 }
 
-type ShortcutAction = 'find' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
+type ShortcutAction = 'find' | 'composer' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
 
 /**
  * Keys the workbench owns before xterm sees them. Returns the action, or null to let xterm encode the key.
@@ -275,6 +274,7 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
   if (mod && !altKey && lower === 'c' && (shiftKey || options.mac || options.hasSelection)) return { kind: 'copy' };
   if (ctrlKey && !shiftKey && !altKey && key === 'Insert') return { kind: 'copy' };
   if (mod && shiftKey && !altKey && lower === 'f') return { kind: 'shortcut', action: 'find' };
+  if (mod && shiftKey && !altKey && lower === 'm') return { kind: 'shortcut', action: 'composer' };
   if (mod && !altKey && (key === '=' || key === '+')) return { kind: 'shortcut', action: 'zoomIn' };
   if (mod && !altKey && !shiftKey && (key === '-' || key === '_')) return { kind: 'shortcut', action: 'zoomOut' };
   if (mod && !altKey && !shiftKey && key === '0') return { kind: 'shortcut', action: 'zoomReset' };
@@ -296,7 +296,6 @@ type TerminalBridge = {
   shortcut: (action: ShortcutAction) => void;
   canSwitch: () => boolean;
   scrolled: (sessionId: string, awayFromBottom: boolean) => void;
-  size: (sessionId: string, cols: number, rows: number) => void;
   copied: () => void;
 };
 
@@ -320,6 +319,7 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
   const runningRef = useRef(running);
   const fontSizeRef = useRef(fontSize);
   const themeRef = useRef(theme);
+  const wasActiveRef = useRef(active);
   activeRef.current = active;
   runningRef.current = running;
   fontSizeRef.current = fontSize;
@@ -331,8 +331,8 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
     const term = new Terminal({
       fontFamily: monoFont(),
       fontSize: fontSizeRef.current,
-      lineHeight: 1.2,
-      letterSpacing: 0,
+      lineHeight: 1.35,
+      letterSpacing: 0.1,
       cursorBlink: true,
       cursorStyle: 'bar',
       cursorWidth: 2,
@@ -444,15 +444,37 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
       return false;
     });
 
-    // Without mouse reporting xterm turns the wheel into ↑/↓ on the alternate screen, which moves
-    // the CLI's input caret or history. Only forward the wheel when the CLI asked for mouse events.
+    // Wheel policy by buffer type:
+    // - Normal buffer with mouse tracking off: xterm's native scrollback scrolling applies.
+    // - Normal buffer with mouse tracking on (agent CLIs such as Pi render inline and enable
+    //   tracking for clicks but ignore wheel reports): forwarding the wheel to the app makes
+    //   scrolling look dead, so scroll the terminal viewport here instead.
+    // - Alternate screen: forward to apps that asked for mouse events (vim/less handle wheel);
+    //   otherwise swallow, because xterm would turn the wheel into ↑/↓ keys and move the CLI's
+    //   input caret or history.
+    const wheelScrollViewport = (event: WheelEvent) => {
+      if (event.deltaY === 0 || event.shiftKey) return;
+      const viewport = node.querySelector<HTMLElement>('.xterm-viewport');
+      if (!viewport) return;
+      let amount = event.deltaY;
+      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+        amount *= viewport.clientHeight / Math.max(1, term.rows);
+      } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+        amount *= viewport.clientHeight;
+      }
+      if (event.altKey) amount *= 5; // parity with fastScrollModifier: 'alt'
+      viewport.scrollTop = Math.max(0, Math.min(viewport.scrollTop + amount, viewport.scrollHeight));
+      event.preventDefault();
+    };
     term.attachCustomWheelEventHandler((event) => {
-      if (term.modes.mouseTrackingMode !== 'none') return true;
-      if (term.buffer.active.type === 'alternate') {
-        event.preventDefault();
+      if (term.buffer.active.type !== 'alternate') {
+        if (term.modes.mouseTrackingMode === 'none') return true;
+        wheelScrollViewport(event);
         return false;
       }
-      return true;
+      if (term.modes.mouseTrackingMode !== 'none') return true;
+      event.preventDefault();
+      return false;
     });
 
     // Clipboard without text (a screenshot): pass Ctrl+V through like Windows Terminal so the CLI can read the image.
@@ -560,7 +582,6 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
       if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
       try { fit.fit(); } catch { return; }
       if (term.cols < 2 || term.rows < 1) return;
-      bridge.current.size(sessionId, term.cols, term.rows);
       if (!runningRef.current) return;
       void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
     };
@@ -588,7 +609,11 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
         if (snapshot.length) term.write(snapshot);
         if (suffix.length) term.write(suffix);
       } catch { /* Malformed bytes stay out of the terminal. */ }
-      requestAnimationFrame(fitNow);
+      requestAnimationFrame(() => {
+        fitNow();
+        // The replayed snapshot must not leave the viewport parked at the top of the buffer.
+        term.scrollToBottom();
+      });
     }).catch(() => {
       acceptLive = true;
       queued.splice(0).forEach((item) => writeEncoded(item));
@@ -631,15 +656,19 @@ function SessionTerminal({ sessionId, label, active, running, fontSize, theme, c
     term.options.disableStdin = !active || !running;
     term.options.cursorBlink = cursorBlink && active && running;
     term.options.fontSize = fontSize;
+    // A hidden terminal's viewport can reset to the top of the scrollback (observed in
+    // WebView2); always land on the latest output when a session becomes visible.
+    const becameActive = active && !wasActiveRef.current;
+    wasActiveRef.current = active;
     if (!active) return;
     const frame = requestAnimationFrame(() => {
       const fit = fitRef.current;
       const node = host.current;
       if (!fit || !node || node.clientWidth < 8) return;
       try { fit.fit(); } catch { return; }
-      if (term.cols >= 2 && term.rows >= 1) {
-        bridge.current.size(sessionId, term.cols, term.rows);
-        if (running) void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
+      if (becameActive) term.scrollToBottom();
+      if (term.cols >= 2 && term.rows >= 1 && running) {
+        void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
       }
       if (running && !document.querySelector('dialog[open]')) term.focus();
     });
@@ -746,6 +775,21 @@ function readStoredCursorBlink(): boolean {
   catch { return true; }
 }
 
+/** User arrangement of the session rail: pinned ids on top, then the preferred order of the rest. */
+type RailArrangement = { pinned: string[]; order: string[] };
+
+const RAIL_ARRANGE_KEY = 'cliora:workbench-rail-arrange';
+
+function readRailArrangement(): RailArrangement {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RAIL_ARRANGE_KEY) ?? '') as Partial<RailArrangement> | null;
+    if (raw && Array.isArray(raw.pinned) && Array.isArray(raw.order)) {
+      return { pinned: raw.pinned.filter((id) => typeof id === 'string'), order: raw.order.filter((id) => typeof id === 'string') };
+    }
+  } catch { /* ignore */ }
+  return { pinned: [], order: [] };
+}
+
 function currentAppTheme(): TerminalTheme {
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
 }
@@ -781,6 +825,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [focusMode, setFocusMode] = useState(false);
   const [railFilter, setRailFilter] = useState<RailFilter>('all');
   const [railSearch, setRailSearch] = useState('');
+  const [arrangement, setArrangement] = useState<RailArrangement>(readRailArrangement);
+  const [drag, setDrag] = useState<{ id: string } | null>(null);
+  const [dropMark, setDropMark] = useState<{ id: string; before: boolean } | null>(null);
   const [fontSize, setFontSize] = useState<number>(readStoredFontSize);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(readStoredSoundEnabled);
   const [themePreference, setThemePreference] = useState<TerminalThemePreference>(readStoredTerminalTheme);
@@ -791,13 +838,32 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
   const [activeOutputIds, setActiveOutputIds] = useState<Set<string>>(() => new Set());
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
-  const [sizes, setSizes] = useState<Map<string, { cols: number; rows: number }>>(() => new Map());
   const [titles, setTitles] = useState<Map<string, string>>(() => new Map());
   const [menu, setMenu] = useState<MenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [narrowFrame, setNarrowFrame] = useState(false);
+  const [compactFrame, setCompactFrame] = useState(false);
+
+  // Width breakpoints drive the responsive layout. A ResizeObserver is used instead of CSS
+  // container queries: WebView2 has been seen evaluating the workbench container query against
+  // a stale width, collapsing the rail to the top strip inside a wide window.
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const update = () => {
+      const width = node.clientWidth;
+      setNarrowFrame((prev) => (prev === width <= 720 ? prev : width <= 720));
+      setCompactFrame((prev) => (prev === width <= 660 ? prev : width <= 660));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [launchToolId, setLaunchToolId] = useState('');
@@ -863,6 +929,13 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     requestAnimationFrame(() => { findInputRef.current?.focus(); findInputRef.current?.select(); });
   }
 
+  function toggleComposer(target?: boolean) {
+    const next = target ?? !composerOpen;
+    setComposerOpen(next);
+    if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
+    else if (selectedId) handles.current.get(selectedId)?.focus();
+  }
+
   // One bridge object for every terminal; refreshed each render so callbacks see current state.
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
   bridge.current = {
@@ -906,6 +979,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     },
     shortcut: (action) => {
       if (action === 'find') openFind();
+      else if (action === 'composer') { if (selected?.running) toggleComposer(); }
       else if (action === 'zoomIn') updateFontSize(fontSize + 1);
       else if (action === 'zoomOut') updateFontSize(fontSize - 1);
       else if (action === 'zoomReset') updateFontSize(DEFAULT_FONT_SIZE);
@@ -917,13 +991,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (prev.has(id) === away) return prev;
       const next = new Set(prev);
       if (away) next.add(id); else next.delete(id);
-      return next;
-    }),
-    size: (id, cols, rows) => setSizes((prev) => {
-      const old = prev.get(id);
-      if (old && old.cols === cols && old.rows === rows) return prev;
-      const next = new Map(prev);
-      next.set(id, { cols, rows });
       return next;
     }),
     copied: () => flashCopied('selection'),
@@ -1065,12 +1132,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     });
   }, []);
 
-  const cycleTerminalTheme = useCallback(() => {
-    setThemePreference((prev) => {
-      const next: TerminalThemePreference = prev === 'auto' ? 'dark' : prev === 'dark' ? 'light' : 'auto';
-      try { localStorage.setItem('cliora:workbench-terminal-theme', next); } catch { /* ignore */ }
-      return next;
-    });
+  const setTerminalTheme = useCallback((next: TerminalThemePreference) => {
+    setThemePreference(next);
+    try { localStorage.setItem('cliora:workbench-terminal-theme', next); } catch { /* ignore */ }
   }, []);
 
   const updateRailWidth = useCallback((nextWidth: number) => {
@@ -1362,7 +1426,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const showEmpty = !loading && !sessions.length;
   const runningCount = sessions.filter((item) => item.running).length;
   const endedCount = sessions.length - runningCount;
-  const selectedSize = selected ? sizes.get(selected.id) : undefined;
 
   const filteredSessions = useMemo(() => {
     const query = railSearch.trim().toLowerCase();
@@ -1378,11 +1441,71 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     });
   }, [sessions, railFilter, railSearch, projects, tools, titles]);
 
+  // Pinned sessions stay on top of the rail; the rest follow the user's drag order
+  // (sessions without a stored position keep the backend order and appear first).
+  const arrangedSessions = useMemo(() => {
+    const present = new Set(filteredSessions.map((session) => session.id));
+    const pinned = arrangement.pinned.filter((id) => present.has(id));
+    const pinnedSet = new Set(pinned);
+    const rest = filteredSessions.filter((session) => !pinnedSet.has(session.id));
+    const rank = new Map(arrangement.order.map((id, index) => [id, index]));
+    rest.sort((a, b) => {
+      const ra = rank.get(a.id);
+      const rb = rank.get(b.id);
+      if (ra === rb) return 0;
+      if (ra === undefined) return -1;
+      if (rb === undefined) return 1;
+      return ra - rb;
+    });
+    const byId = new Map(filteredSessions.map((session) => [session.id, session]));
+    return [...pinned.map((id) => byId.get(id)!), ...rest];
+  }, [filteredSessions, arrangement]);
+
+  useEffect(() => {
+    try { localStorage.setItem(RAIL_ARRANGE_KEY, JSON.stringify(arrangement)); } catch { /* ignore */ }
+  }, [arrangement]);
+
+  const pinnedIds = useMemo(() => new Set(arrangement.pinned), [arrangement]);
+
+  function togglePinSession(id: string) {
+    setArrangement((prev) => (prev.pinned.includes(id)
+      ? { pinned: prev.pinned.filter((item) => item !== id), order: prev.order }
+      : { pinned: [...prev.pinned, id], order: prev.order.filter((item) => item !== id) }));
+  }
+
+  /** Move a session relative to a rail target (or to the end when targetId is null). Pin state never changes here. */
+  function moveSession(dragId: string, targetId: string | null, before: boolean) {
+    const dragWasPinned = pinnedIds.has(dragId);
+    const targetPinned = targetId ? pinnedIds.has(targetId) : false;
+    if (dragWasPinned) {
+      const group = arrangement.pinned.filter((id) => id !== dragId);
+      if (targetId && targetPinned) {
+        const at = group.indexOf(targetId);
+        group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
+      } else {
+        group.push(dragId);
+      }
+      setArrangement((prev) => ({ pinned: group, order: prev.order }));
+      return;
+    }
+    // Derive the full new sequence from the current display order so every id keeps a rank.
+    const group = arrangedSessions.filter((session) => !pinnedIds.has(session.id)).map((session) => session.id).filter((id) => id !== dragId);
+    if (targetId === null) {
+      group.push(dragId);
+    } else if (!targetPinned) {
+      const at = group.indexOf(targetId);
+      group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
+    } else {
+      group.unshift(dragId);
+    }
+    setArrangement((prev) => ({ pinned: prev.pinned, order: group }));
+  }
+
   function stepSession(step: 1 | -1) {
-    if (filteredSessions.length < 2) return;
+    if (arrangedSessions.length < 2) return;
     setSelectedId((current) => {
-      const index = filteredSessions.findIndex((item) => item.id === current);
-      return filteredSessions[(index + step + filteredSessions.length) % filteredSessions.length].id;
+      const index = arrangedSessions.findIndex((item) => item.id === current);
+      return arrangedSessions[(index + step + arrangedSessions.length) % arrangedSessions.length].id;
     });
   }
 
@@ -1452,6 +1575,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if ((MAC ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f' && selectedIdRef.current) {
         event.preventDefault();
         openFind();
+        return;
+      }
+      if ((MAC ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selectedIdRef.current) {
+        event.preventDefault();
+        toggleComposer();
         return;
       }
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -1531,10 +1659,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return list;
   }, [availableProjects, customFolderPath, t]);
 
-  const themeLabel = themePreference === 'auto' ? t('sessions.termThemeAuto') : themePreference === 'dark' ? t('sessions.termThemeDark') : t('sessions.termThemeLight');
-  const themeGlyph: IconName = themePreference === 'auto' ? 'monitor' : themePreference === 'dark' ? 'moon' : 'sun';
-
-  return <div className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode}>
+  return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined}>
     {listError && <div className={styles.banner} role="alert">
       <div className={styles.bannerCopy}>
         <strong>{t('sessions.listFailed')}</strong>
@@ -1591,12 +1716,27 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           </div>}
         </div>
 
-        <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={navigateChoices}>
-          {filteredSessions.map((session) => {
+        <div
+          className={styles.list}
+          role="tablist"
+          aria-label={t('sessions.listLabel')}
+          title={t('sessions.shortcutsHint')}
+          onKeyDown={navigateChoices}
+          onDragOver={(event) => { if (drag && event.target === event.currentTarget) event.preventDefault(); }}
+          onDrop={(event) => {
+            if (!drag || event.target !== event.currentTarget) return;
+            event.preventDefault();
+            moveSession(drag.id, null, false);
+            setDrag(null);
+            setDropMark(null);
+          }}
+        >
+          {arrangedSessions.map((session) => {
             const name = toolName(session);
             const title = taskTitle(session);
             const place = placeOf(session);
             const isSelected = session.id === selectedId;
+            const isPinned = pinnedIds.has(session.id);
             const hasBell = attentionIds.has(session.id);
             const tone = sessionTone(session);
             const elapsed = formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock);
@@ -1606,6 +1746,37 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               data-running={session.running || undefined}
               data-attention={hasBell || undefined}
               data-selected={isSelected || undefined}
+              data-dragging={drag?.id === session.id || undefined}
+              data-drop={dropMark?.id === session.id ? (dropMark.before ? 'before' : 'after') : undefined}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData('text/plain', session.id);
+                event.dataTransfer.effectAllowed = 'move';
+                setDrag({ id: session.id });
+              }}
+              onDragEnd={() => { setDrag(null); setDropMark(null); }}
+              onDragOver={(event) => {
+                if (!drag || drag.id === session.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                const rect = event.currentTarget.getBoundingClientRect();
+                // The rail is a horizontal strip in narrow mode, vertical otherwise.
+                const before = narrowFrame
+                  ? event.clientX < rect.left + rect.width / 2
+                  : event.clientY < rect.top + rect.height / 2;
+                setDropMark((prev) => (prev && prev.id === session.id && prev.before === before ? prev : { id: session.id, before }));
+              }}
+              onDrop={(event) => {
+                if (!drag || drag.id === session.id) return;
+                event.preventDefault();
+                const rect = event.currentTarget.getBoundingClientRect();
+                const before = narrowFrame
+                  ? event.clientX < rect.left + rect.width / 2
+                  : event.clientY < rect.top + rect.height / 2;
+                moveSession(drag.id, session.id, before);
+                setDrag(null);
+                setDropMark(null);
+              }}
             >
               <button
                 type="button"
@@ -1634,6 +1805,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 </span>
                 <span className={styles.sessionBody}>
                   <span className={styles.sessionTop}>
+                    {isPinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={11} /></span>}
                     <strong>{title || name}</strong>
                     <span className={styles.sessionTime} data-tone={tone}>
                       {session.running ? (elapsed || t('sessions.running')) : t('sessions.ended')}
@@ -1757,7 +1929,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               <Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} />
             </button>
 
-            <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={20} /></span>
+            <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /></span>
 
             <div className={styles.identityText}>
               <span className={styles.identityMain}>
@@ -1787,104 +1959,33 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               </span>
             </div>
 
-            <div className={styles.stageActions}>
-              <div className={styles.toolbarGroup}>
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  aria-pressed={findOpen}
-                  aria-label={t('sessions.findOutput')}
-                  title={`${t('sessions.findOutput')} (${modLabel}+Shift+F)`}
-                  onClick={() => { if (findOpen) closeFind(); else openFind(); }}
-                >
-                  <Icon name="search" size={15} />
-                </button>
-
-                {selected.running && <button
-                  type="button"
-                  className={styles.iconBtn}
-                  aria-pressed={composerOpen}
-                  aria-label={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
-                  title={composerOpen ? t('sessions.composerClose') : t('sessions.composerToggle')}
-                  onClick={() => {
-                    const next = !composerOpen;
-                    setComposerOpen(next);
-                    if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
-                    else handles.current.get(selected.id)?.focus();
-                  }}
-                >
-                  <Icon name="pencil" size={15} />
-                </button>}
-
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  aria-label={t('sessions.copyOutput')}
-                  title={copiedState === 'output' ? t('sessions.outputCopied') : t('sessions.copyOutput')}
-                  onClick={() => void copyTerminalOutput(selected)}
-                >
-                  <Icon name={copiedState === 'output' ? 'check' : 'copy'} size={15} />
-                </button>
-
-                <RowMenu label={t('common.models.more')} className={styles.iconBtn}>
-                  <button role="menuitem" onClick={() => void copyTerminalOutput(selected)}>
-                    <Icon name="copy" size={14} />{copiedState === 'output' ? t('sessions.outputCopied') : t('sessions.copyOutput')}
-                  </button>
-                  {selected.directory && <button role="menuitem" onClick={() => void copySessionPath(selected)}>
-                    <Icon name="folder" size={14} />{t('sessions.copyPath')}
-                  </button>}
-                  {selected.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(selected.projectId!).catch(() => {})}>
-                    <Icon name="arrowRight" size={14} />{t('sessions.openFolder')}
-                  </button>}
-                  <span className={styles.menuDivider} role="separator" />
-                  <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(selected, !selected.running)}>
-                    <Icon name={selected.running ? 'plus' : 'refresh'} size={14} />{selected.running ? t('sessions.cloneSession') : t('sessions.restartSession')}
-                  </button>
-                  {selected.running && <button role="menuitem" onClick={() => void sendToSession(selected, '\x03')}>
-                    <Icon name="alert" size={14} />{t('sessions.sendInterrupt')}
-                  </button>}
-                  <button role="menuitem" onClick={() => handles.current.get(selected.id)?.clear()}>
-                    <Icon name="trash" size={14} />{t('sessions.clearScreen')}
-                  </button>
-                  <span className={styles.menuDivider} role="separator" />
-                  <button role="menuitem" onClick={toggleCursorBlink}>
-                    <Icon name="terminal" size={14} />{cursorBlink ? t('sessions.cursorBlinkOn') : t('sessions.cursorBlinkOff')}
-                  </button>
-                  <button role="menuitem" onClick={toggleSound}>
-                    <Icon name="info" size={14} />{soundEnabled ? t('sessions.soundNotifyOn') : t('sessions.soundNotifyOff')}
-                  </button>
-                </RowMenu>
-              </div>
-
-              {!selected.running && <button
-                type="button"
-                className={styles.restartBtn}
-                disabled={!!busy}
-                title={t('sessions.restartSession')}
-                onClick={() => void restartOrCloneSession(selected, true)}
-              >
-                <Icon name="refresh" size={13} />
-                <span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span>
-              </button>}
-
-              <button
-                type="button"
-                className={styles.endBtn}
-                onClick={() => void endSession(selected)}
-                disabled={!!busy}
-                aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')}
-                title={selected.running ? t('sessions.end') : t('sessions.closeTab')}
-              >
-                <Icon name="close" size={13} />
-                <span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              className={styles.endBtn}
+              onClick={() => void endSession(selected)}
+              disabled={!!busy}
+              aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')}
+              title={selected.running ? t('sessions.end') : t('sessions.closeTab')}
+            >
+              <Icon name="close" size={13} />
+              <span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span>
+            </button>
           </div>;
         })()}
 
         {selected && !selected.running && <div className={styles.endedStrip}>
           <Icon name="lock" size={12} />
           <span><strong>{t('sessions.sessionEndedBanner')}</strong> · {t('sessions.endedHintShort')}</span>
+          <button
+            type="button"
+            className={styles.endedRestart}
+            disabled={!!busy}
+            title={t('sessions.restartSession')}
+            onClick={() => void restartOrCloneSession(selected, true)}
+          >
+            <Icon name="refresh" size={12} />
+            <span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span>
+          </button>
         </div>}
 
         <div
@@ -1976,10 +2077,21 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               <span>{t('sessions.dropHintDetail', { tool: toolName(selected) })}</span>
             </div>
           </div>}
-        </div>
 
-        {selected && selected.running && composerOpen && <div className={styles.composerDrawer} aria-label={t('sessions.composerTitle')}>
-          <div className={styles.composerTop}>
+          {selected && selected.running && composerOpen && <div className={styles.composerFloat} aria-label={t('sessions.composerTitle')}>
+            <div className={styles.composerHead}>
+              <span className={styles.composerTitle}><Icon name="pencil" size={12} />{t('sessions.composerTitle')}</span>
+              <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
+              <button
+                type="button"
+                className={styles.composerClose}
+                aria-label={t('sessions.composerClose')}
+                title={t('sessions.composerClose') + ' (Esc)'}
+                onClick={() => toggleComposer(false)}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
             {libraryPrompts.length > 0 && <div className={styles.composerPrompts}>
               <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
               <div className={styles.composerPromptList}>
@@ -1996,60 +2108,32 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 ))}
               </div>
             </div>}
-            <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
-          </div>
-          <div className={styles.composerInputRow}>
-            <textarea
-              ref={composerInputRef}
-              rows={2}
-              className={styles.composerTextarea}
-              value={composerText}
-              placeholder={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
-              aria-label={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
-              onChange={(event) => setComposerText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  void submitComposer();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setComposerOpen(false);
-                  handles.current.get(selected.id)?.focus();
-                }
-              }}
-            />
-            <button type="button" className={`button primary ${styles.sendBtn}`} onClick={() => void submitComposer()}>
-              <Icon name="arrowRight" size={14} />
-              <span>{t('sessions.sendInput')}</span>
-            </button>
-          </div>
-        </div>}
-
-        {selected && <div className={styles.statusBar} onMouseDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault(); }}>
-          <span className={styles.statusHints}>
-            <span><kbd>Shift+Enter</kbd>{t('sessions.hintNewline')}</span>
-            <span><kbd>{modLabel}+V</kbd>{t('sessions.hintPaste')}</span>
-            <span data-optional><kbd>{modLabel}+C</kbd>{t('sessions.hintCopy')}</span>
-            <span data-optional><kbd>{modLabel}+Shift+F</kbd>{t('sessions.hintFind')}</span>
-          </span>
-          <span className={styles.statusSpacer} />
-          {selectedSize && <span className={styles.statusMeta} title={t('sessions.terminalSizeTitle')}>{selectedSize.cols}×{selectedSize.rows}</span>}
-          <div className={styles.fontStepper} role="group" aria-label={t('sessions.fontSize')}>
-            <button type="button" disabled={fontSize <= MIN_FONT_SIZE} aria-label={t('sessions.fontSizeDown')} title={`${t('sessions.fontSizeDown')} (${modLabel}+-)`} onClick={() => updateFontSize(fontSize - 1)}>
-              <span aria-hidden="true">A−</span>
-            </button>
-            <button type="button" className={styles.fontValue} title={t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE }) + ` (${modLabel}+0)`} aria-label={t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE })} onClick={() => updateFontSize(DEFAULT_FONT_SIZE)}>
-              {fontSize}
-            </button>
-            <button type="button" disabled={fontSize >= MAX_FONT_SIZE} aria-label={t('sessions.fontSizeUp')} title={`${t('sessions.fontSizeUp')} (${modLabel}+=)`} onClick={() => updateFontSize(fontSize + 1)}>
-              <span aria-hidden="true">A+</span>
-            </button>
-          </div>
-          <button type="button" className={styles.statusBtn} title={t('sessions.termThemeTitle', { mode: themeLabel })} aria-label={t('sessions.termThemeTitle', { mode: themeLabel })} onClick={cycleTerminalTheme}>
-            <Icon name={themeGlyph} size={13} />
-            <span>{themeLabel}</span>
-          </button>
-        </div>}
+            <div className={styles.composerInputRow}>
+              <textarea
+                ref={composerInputRef}
+                rows={2}
+                className={styles.composerTextarea}
+                value={composerText}
+                placeholder={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
+                aria-label={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
+                onChange={(event) => setComposerText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void submitComposer();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    toggleComposer(false);
+                  }
+                }}
+              />
+              <button type="button" className={`button primary ${styles.sendBtn}`} onClick={() => void submitComposer()}>
+                <Icon name="arrowRight" size={14} />
+                <span>{t('sessions.sendInput')}</span>
+              </button>
+            </div>
+          </div>}
+        </div>
 
         {loading && !sessions.length && <p className={styles.loading}>{t('sessions.loading')}</p>}
 
@@ -2157,16 +2241,67 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             <Icon name="check" size={14} /><span>{t('sessions.selectAll')}</span>
           </button>
           <span className={styles.menuDivider} role="separator" />
+          {session.running && <button role="menuitem" onClick={() => toggleComposer(true)}>
+            <Icon name="pencil" size={14} /><span>{t('sessions.composerShort')}</span><kbd>{modLabel}+Shift+M</kbd>
+          </button>}
           <button role="menuitem" onClick={openFind}>
             <Icon name="search" size={14} /><span>{t('sessions.findOutput')}</span><kbd>{modLabel}+Shift+F</kbd>
           </button>
           <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>
             <Icon name="clipboard" size={14} /><span>{t('sessions.copyOutput')}</span>
           </button>
+          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>
+            <Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span>
+          </button>}
+          {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>
+            <Icon name="arrowRight" size={14} /><span>{t('sessions.openFolder')}</span>
+          </button>}
           <button role="menuitem" onClick={() => { handle?.clear(); handle?.focus(); }}>
             <Icon name="trash" size={14} /><span>{t('sessions.clearScreen')}</span>
           </button>
+          <span className={styles.menuDivider} role="separator" />
+          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>
+            <Icon name="alert" size={14} /><span>{t('sessions.sendInterrupt')}</span>
+          </button>}
+          <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}>
+            <Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span>
+          </button>
+          <span className={styles.menuDivider} role="separator" />
+          <button role="menuitem" disabled={fontSize <= MIN_FONT_SIZE} onClick={() => updateFontSize(fontSize - 1)}>
+            <span aria-hidden="true" className={styles.menuGlyph}>A−</span><span>{t('sessions.fontSizeDown')}</span><kbd>{modLabel}+-</kbd>
+          </button>
+          <button role="menuitem" onClick={() => updateFontSize(DEFAULT_FONT_SIZE)}>
+            <Icon name="refresh" size={14} /><span>{t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE })}</span><kbd>{modLabel}+0</kbd>
+          </button>
+          <button role="menuitem" disabled={fontSize >= MAX_FONT_SIZE} onClick={() => updateFontSize(fontSize + 1)}>
+            <Icon name="plus" size={14} /><span>{t('sessions.fontSizeUp')}</span><kbd>{modLabel}+=</kbd>
+          </button>
+          <span className={styles.menuDivider} role="separator" />
+          <button role="menuitem" aria-pressed={themePreference === 'auto'} onClick={() => setTerminalTheme('auto')}>
+            <Icon name="monitor" size={14} /><span>{t('sessions.termThemeAuto')}</span>{themePreference === 'auto' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <button role="menuitem" aria-pressed={themePreference === 'dark'} onClick={() => setTerminalTheme('dark')}>
+            <Icon name="moon" size={14} /><span>{t('sessions.termThemeDark')}</span>{themePreference === 'dark' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <button role="menuitem" aria-pressed={themePreference === 'light'} onClick={() => setTerminalTheme('light')}>
+            <Icon name="sun" size={14} /><span>{t('sessions.termThemeLight')}</span>{themePreference === 'light' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <button role="menuitem" aria-pressed={cursorBlink} onClick={toggleCursorBlink}>
+            <Icon name="terminal" size={14} /><span>{t('sessions.cursorBlink')}</span>{cursorBlink && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <button role="menuitem" aria-pressed={soundEnabled} onClick={toggleSound}>
+            <Icon name="info" size={14} /><span>{t('sessions.sound')}</span>{soundEnabled && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <span className={styles.menuDivider} role="separator" />
+          <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>
+            <Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span>
+          </button>
         </> : <>
+          <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}>
+            <Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>
+            {pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
+          </button>
+          <span className={styles.menuDivider} role="separator" />
           {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>
             {t('sessions.sendInterrupt')}
           </button>}

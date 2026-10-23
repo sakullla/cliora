@@ -1,7 +1,7 @@
 export type IconName = 'home' | 'connections' | 'library' | 'records' | 'settings' | 'leaf' | 'migration' | 'tool'
   | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play'
   | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
-  | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link';
+  | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link' | 'pin';
 const paths: Record<IconName, string> = {
   sidebarClose: 'M3 4h18v16H3zM9 4v16m7-11-3 3 3 3',
   sidebarOpen: 'M3 4h18v16H3zM9 4v16m4-11 3 3-3 3',
@@ -51,6 +51,7 @@ const paths: Record<IconName, string> = {
   shield: 'M12 3 4.5 6v5.5c0 4.6 3.1 8 7.5 9.5 4.4-1.5 7.5-4.9 7.5-9.5V6ZM9 12l2 2 4-4',
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20.5a7.5 7.5 0 0 1 15 0',
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  pin: 'M12 21c-4.2-3.6-7-7-7-10.4A7 7 0 0 1 19 10.6C19 14 16.2 17.4 12 21ZM12 13.4a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6Z',
 };
 /*
  * Icon sizes follow the type scale in style.css:
