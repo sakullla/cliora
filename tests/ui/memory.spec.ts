@@ -740,6 +740,22 @@ test('refresh preserves drafts and switching tools ignores old queued batches', 
   await expect(entryButton(page, 'entry-0')).toHaveCount(0);
 });
 
+test('switching tools reuses a recent memory index instead of enumerating again', async ({ page }) => {
+  await installBatchProbe(page, 100, 100);
+  await openMemory(page);
+  await expect(entryButton(page, 'entry-99')).toBeVisible();
+  expect(await batchState(page)).toMatchObject({ lists: 1, bodies: 0 });
+  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await expect(entryButton(page, 'beta-note')).toBeVisible();
+  await page.getByRole('tab', { name: 'Alpha', exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await expect(entryButton(page, 'entry-99')).toBeVisible();
+  expect(await batchState(page)).toMatchObject({ lists: 1 });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect.poll(async () => (await batchState(page)).lists).toBe(2);
+});
+
 test('scope switches remain reachable with no stores and preserve native-default unknown', async ({ page }) => {
   await install(page);
   await page.addInitScript(() => {

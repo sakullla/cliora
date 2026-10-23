@@ -220,6 +220,7 @@ pub fn run() {
             commands::refresh_history,
             commands::cancel_history_refresh,
             commands::get_history_scan_progress,
+            commands::list_history_scans,
             commands::list_history_sessions,
             commands::get_history_session,
             commands::set_history_favorite,

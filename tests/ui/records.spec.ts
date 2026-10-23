@@ -94,6 +94,60 @@ test('records show the index before scanning and reuse a fresh usage report unti
   await expect.poll(async () => (await probe()).reports).toBe(5);
 });
 
+test('a recent saved scan index skips the opening scan', async ({ page }) => {
+  await page.addInitScript(({ scannedAt }) => {
+    const state = { scans: 0 };
+    const session = { id: 'indexed', toolId: 'codex', nativeId: null, title: 'Indexed session', cwd: 'C:/fixture', model: null, projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 0, usageCount: 0 };
+    (window as unknown as { __scanProbe: typeof state }).__scanProbe = state;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices') return [];
+        if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }];
+        if (command === 'list_history_sessions') return [{ ...session }];
+        if (command === 'get_history_session') return { session: { ...session }, messages: [], usage: [], resumeReason: 'fixture' };
+        if (command === 'refresh_history') { state.scans++; return []; }
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, { scannedAt: Date.now() - 5_000 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await expect(page.getByRole('button', { name: /Indexed session/ })).toBeVisible();
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => (window as unknown as { __scanProbe: { scans: number } }).__scanProbe.scans)).toBe(0);
+});
+
+test('an expired saved scan index still discovers new native logs', async ({ page }) => {
+  await page.addInitScript(({ scannedAt }) => {
+    const state = { scans: 0 };
+    const session = { id: 'indexed', toolId: 'codex', nativeId: null, title: 'Indexed session', cwd: 'C:/fixture', model: null, projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 0, usageCount: 0 };
+    (window as unknown as { __scanProbe: typeof state }).__scanProbe = state;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices') return [];
+        if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }];
+        if (command === 'list_history_sessions') return [{ ...session }];
+        if (command === 'get_history_session') return { session: { ...session }, messages: [], usage: [], resumeReason: 'fixture' };
+        if (command === 'refresh_history') { state.scans++; return []; }
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, { scannedAt: Date.now() - 60_000 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __scanProbe: { scans: number } }).__scanProbe.scans)).toBe(1);
+});
+
 test('records only lists managed CLIs and scopes session reads to them', async ({ page }) => {
   await page.addInitScript((report) => {
     const filters: Array<Record<string, unknown>> = [];
@@ -145,6 +199,7 @@ test('records keep search, show native resume command and only launch on request
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects') return [{ id: 'project-new', name: 'New project', path: 'C:\\new-project', available: true, preferredTool: 'codex', lastOpened: 0, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
         if (command === 'refresh_history') return [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }];
+        if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }];
         if (command === 'list_history_prices') return [];
         if (command === 'list_history_sessions') return records.filter((item) =>
           (!args.filter.search || item.title.toLowerCase().includes(args.filter.search.toLowerCase()))

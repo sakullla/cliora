@@ -521,6 +521,15 @@ pub fn cancel_history_refresh() { HISTORY_REFRESH_GENERATION.fetch_add(1, std::s
 pub fn get_history_scan_progress() -> history::ScanProgress { history::scan_progress() }
 
 #[tauri::command]
+pub async fn list_history_scans(app: AppHandle) -> Result<Vec<history::ScanStatus>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| history::scans(db).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn refresh_history(app: AppHandle) -> Result<Vec<history::ScanStatus>, ApiError> {
     let generation = HISTORY_REFRESH_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
     blocking(move || {

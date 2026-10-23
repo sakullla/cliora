@@ -50,6 +50,12 @@ export type MemoryProject = { name: string; path: string };
 
 const knownTypes = ['user', 'feedback', 'project', 'reference'];
 
+// Memory directories are native files and can be expensive to enumerate. Keep
+// the last aggregate briefly so switching between tools/views shows the saved
+// index immediately while an explicit refresh still revalidates the disk.
+const MEMORY_CACHE_TTL = 30_000;
+const aggregateCache = new Map<string, { value: MemoryAggregate; at: number }>();
+
 function isExternalChange(error: unknown): boolean {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
   return message.includes('外部修改');
@@ -194,6 +200,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         if (retained) { value.entries.push(retained); setMissingDraft(true); }
       }
       setAggregate(value);
+      aggregateCache.set(toolId, { value, at: Date.now() });
       setListFailure(null);
       void loadDocs(value, epoch);
       return value;
@@ -209,7 +216,18 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setAggregate(null); publishDocs({}); setSelected(null); setOpened(null); setDraft(''); setMode('read');
     setCompose(null); setFailure(null); setBusy(false); setQuery(''); setSource('all'); setKind('all'); setPicked([]);
   }, [toolId, publishDocs]);
-  useEffect(() => { if (active) void reload(); }, [active, reload]);
+  useEffect(() => {
+    if (!active) return;
+    const cached = aggregateCache.get(toolId);
+    if (cached && Date.now() - cached.at < MEMORY_CACHE_TTL) {
+      const epoch = ++loadEpoch.current;
+      setAggregate(cached.value);
+      setListFailure(null);
+      void loadDocs(cached.value, epoch);
+      return;
+    }
+    void reload();
+  }, [active, toolId, loadDocs, reload]);
 
   const report = useCallback((error: unknown, summary: string, retry: (() => Promise<void>) | null) => {
     setFailure({ message: formatFailure(error, summary, t('common.memory.retryNext')), retry });

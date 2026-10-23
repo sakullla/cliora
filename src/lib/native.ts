@@ -137,6 +137,7 @@ export const native = {
   previewWebdavConflict: (key: string) => command<ConflictPreview>('preview_webdav_conflict', { key }),
   cancelHistoryRefresh: () => command<void>('cancel_history_refresh'),
   getHistoryScanProgress: () => command<{ running: boolean; toolId: string; completedSources: number; totalSources: number }>('get_history_scan_progress'),
+  listHistoryScans: () => command<ScanStatus[]>('list_history_scans'),
   refreshHistory: () => command<ScanStatus[]>('refresh_history'),
   listHistorySessions: (filter: HistoryFilter) => command<HistorySession[]>('list_history_sessions', { filter }),
   getHistorySession: (id: string) => command<HistoryDetail>('get_history_session', { id }),

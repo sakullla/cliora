@@ -145,6 +145,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   const [scanning, setScanning] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
   const [initialListSettled, setInitialListSettled] = useState(false);
+  const [scanMetadataReady, setScanMetadataReady] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ running: boolean; toolId: string; completedSources: number; totalSources: number } | null>(null);
   const scanRequest = useRef(0);
   const scanningRef = useRef(false);
@@ -205,21 +206,27 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   useEffect(() => {
     if (!active || !nativeAvailable || initialized.current) return;
     initialized.current = true;
-    void Promise.all([native.listProjects(), native.listHistoryPrices()])
-      .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
-      .catch(value => showReadError(value));
+    void Promise.all([native.listProjects(), native.listHistoryPrices(), native.listHistoryScans()])
+      .then(([knownProjects, knownPrices, knownScans]) => {
+        const savedScans = knownScans ?? [];
+        setProjects(knownProjects); setPrices(knownPrices); setScans(savedScans);
+        const latest = savedScans.reduce((max, scan) => Math.max(max, scan.scannedAt), 0);
+        if (latest) { lastScan.current = latest; setLastScanAt(latest); }
+      })
+      .catch(value => showReadError(value))
+      .finally(() => setScanMetadataReady(true));
   }, [active]);
 
   // Scans are incremental, so the index is refreshed whenever the page is shown and
   // periodically while it stays open; today's numbers then track running sessions.
   useEffect(() => {
     // Give the saved index the first disk read before discovering native logs.
-    if (!active || !nativeAvailable || !initialListSettled) return;
+    if (!active || !nativeAvailable || !initialListSettled || !scanMetadataReady) return;
     const run = () => { if (Date.now() - lastScan.current > 45_000) void refresh(false, true); };
     run();
     const timer = window.setInterval(run, 120_000);
     return () => window.clearInterval(timer);
-  }, [active, initialListSettled]);
+  }, [active, initialListSettled, scanMetadataReady]);
 
   useEffect(() => {
     if (!initialized.current || !active) return;
