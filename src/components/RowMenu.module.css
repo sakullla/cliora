@@ -43,3 +43,8 @@
 }
 .rowMenuList button:hover:not(:disabled) { background: var(--surface-2); transform: none; }
 .rowMenuList button[data-danger="true"] { color: var(--danger); }
+.rowMenuList button { gap: 9px; }
+.rowMenuList button > svg { flex: none; color: var(--text-3); }
+.rowMenuList button:hover:not(:disabled) > svg { color: var(--text-2); }
+.rowMenuList button > kbd { margin-left: auto; padding-left: 14px; border: 0; background: none; box-shadow: none; color: var(--text-3); font-size: 10px; }
+.rowMenuList button:disabled { opacity: .45; }
