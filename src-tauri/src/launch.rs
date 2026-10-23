@@ -20,6 +20,8 @@ pub enum TerminalId {
     /// In-app session host. Selectable on the existing terminal control.
     Workbench,
     WindowsTerminal,
+    /// Standalone PowerShell 7 (`pwsh.exe`), installed separately from Windows PowerShell 5.
+    Pwsh,
     PowerShell,
     Cmd,
     MacTerminal,
@@ -39,7 +41,8 @@ impl TerminalId {
             Self::Auto => "系统默认",
             Self::Workbench => "工作台",
             Self::WindowsTerminal => "Windows Terminal",
-            Self::PowerShell => "PowerShell",
+            Self::Pwsh => "PowerShell 7",
+            Self::PowerShell => "Windows PowerShell",
             Self::Cmd => "CMD（命令提示符）",
             Self::MacTerminal => "Terminal",
             Self::Custom => "自定义",
@@ -54,6 +57,7 @@ impl TerminalId {
         match self {
             Self::Auto | Self::Workbench => None,
             Self::WindowsTerminal => Some("wt.exe"),
+            Self::Pwsh => Some("pwsh.exe"),
             Self::PowerShell => Some("powershell.exe"),
             Self::Cmd => Some("cmd.exe"),
             Self::MacTerminal => Some("/usr/bin/open"),
@@ -68,7 +72,7 @@ impl TerminalId {
     fn platform(self) -> bool {
         match self {
             Self::Auto | Self::Workbench => true,
-            Self::WindowsTerminal | Self::PowerShell | Self::Cmd => cfg!(windows),
+            Self::WindowsTerminal | Self::Pwsh | Self::PowerShell | Self::Cmd => cfg!(windows),
             Self::MacTerminal => cfg!(target_os = "macos"),
             Self::Custom => true,
             Self::GnomeTerminal | Self::Konsole | Self::Xterm => cfg!(target_os = "linux"),
@@ -186,7 +190,7 @@ pub struct LaunchPlan {
 
 #[derive(Clone, Debug)]
 pub struct TerminalCommand {
-    pub program: &'static str,
+    pub program: String,
     pub args: Vec<String>,
     pub directory: PathBuf,
     pub session_markers: &'static [&'static str],
@@ -282,9 +286,31 @@ pub fn terminal_presets() -> Vec<TerminalPreset> {
         .collect()
 }
 
+/// PowerShell 7 is usually on PATH, but its installer can skip that; fall back to the default install root.
+fn pwsh_path() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let on_path = crate::process_environment::directories().into_iter().map(|directory| directory.join("pwsh.exe"));
+    let installed = ["ProgramFiles", "ProgramW6432"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(|root| PathBuf::from(root).join(r"PowerShell\7\pwsh.exe"));
+    on_path.chain(installed).find(|path| path.is_absolute() && path.is_file())
+}
+
+/// Windows Terminal runs the command we give it, not its default profile, so prefer PowerShell 7 when present.
+fn windows_terminal_shell() -> Result<String, String> {
+    match pwsh_path() {
+        Some(path) => terminal_path(&path),
+        None => Ok("powershell.exe".into()),
+    }
+}
+
 fn terminal_available(id: TerminalId) -> bool {
     match id {
         TerminalId::Workbench | TerminalId::Custom => true,
+        TerminalId::Pwsh => pwsh_path().is_some(),
         #[cfg(windows)]
         TerminalId::Cmd => system_console_path(TerminalId::Cmd).is_ok() && system_console_path(TerminalId::PowerShell).is_ok(),
         other => other.binary().is_some_and(on_path),
@@ -293,7 +319,7 @@ fn terminal_available(id: TerminalId) -> bool {
 
 fn supported_terminals() -> &'static [TerminalId] {
     if cfg!(windows) {
-        &[TerminalId::WindowsTerminal, TerminalId::PowerShell, TerminalId::Cmd]
+        &[TerminalId::WindowsTerminal, TerminalId::Pwsh, TerminalId::PowerShell, TerminalId::Cmd]
     } else if cfg!(target_os = "macos") {
         &[TerminalId::MacTerminal]
     } else {
@@ -967,7 +993,7 @@ fn quote_shell(value: &str) -> String {
 }
 
 // Extended-length paths remain useful for file IO; shells and terminal brokers expect DOS/UNC paths.
-fn terminal_path(path: &Path) -> Result<String, String> {
+pub(crate) fn terminal_path(path: &Path) -> Result<String, String> {
     let text = path.to_str().ok_or("路径文字编码无法识别")?;
     #[cfg(windows)]
     {
@@ -1150,30 +1176,10 @@ pub fn terminal_command(
     } else {
         None
     };
-    let (program, args) = match plan.terminal {
-        TerminalId::WindowsTerminal => (
-            "wt.exe",
-            vec![
-                "powershell.exe".into(),
-                "-NoProfile".into(),
-                "-NoExit".into(),
-                "-ExecutionPolicy".into(),
-                "Bypass".into(),
-                "-EncodedCommand".into(),
-                powershell()?,
-            ],
-        ),
-        TerminalId::PowerShell => (
-            "powershell.exe",
-            vec![
-                "-NoProfile".into(),
-                "-NoExit".into(),
-                "-ExecutionPolicy".into(),
-                "Bypass".into(),
-                "-EncodedCommand".into(),
-                powershell()?,
-            ],
-        ),
+    let (program, args): (&str, Vec<String>) = match plan.terminal {
+        TerminalId::WindowsTerminal => ("wt.exe", windows_terminal_arguments(powershell()?)?),
+        TerminalId::Pwsh => return powershell_console(TerminalId::Pwsh, powershell()?, directory, plan.session_markers),
+        TerminalId::PowerShell => ("powershell.exe", powershell_arguments(powershell()?)),
         TerminalId::Cmd => ("cmd.exe", cmd_arguments(&interactive_powershell_script(plan, credential)?)?),
         TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
         TerminalId::Custom => ("", Vec::new()),
@@ -1207,12 +1213,31 @@ pub fn terminal_command(
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand {
-        program,
+        program: program.into(),
         args,
         directory: PathBuf::from(directory),
         session_markers: plan.session_markers,
         mac_script,
     })
+}
+
+fn powershell_arguments(encoded: String) -> Vec<String> {
+    vec!["-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded]
+}
+
+fn windows_terminal_arguments(encoded: String) -> Result<Vec<String>, String> {
+    let mut args = vec![windows_terminal_shell()?];
+    args.extend(powershell_arguments(encoded));
+    Ok(args)
+}
+
+/// PowerShell 7 runs from its resolved install path in its own console window.
+fn powershell_console(terminal: TerminalId, encoded: String, directory: String, session_markers: &'static [&'static str]) -> Result<TerminalCommand, String> {
+    let program = match terminal {
+        TerminalId::Pwsh => terminal_path(&pwsh_path().ok_or("未找到 PowerShell 7（pwsh.exe），请安装后重试或在设置中更换终端")?)?,
+        _ => return Err("所选终端不是 PowerShell".into()),
+    };
+    Ok(TerminalCommand { program, args: powershell_arguments(encoded), directory: PathBuf::from(directory), session_markers, mac_script: None })
 }
 
 #[cfg(windows)]
@@ -1229,12 +1254,17 @@ fn system_console_path(terminal: TerminalId) -> Result<PathBuf, String> {
 
 #[cfg(windows)]
 fn console_command_line(terminal: &TerminalCommand) -> Result<(PathBuf, String), String> {
-    let id = match terminal.program {
+    let pwsh = pwsh_path().filter(|path| terminal_path(path).ok().as_deref() == Some(terminal.program.as_str()));
+    let id = match terminal.program.as_str() {
         "powershell.exe" => TerminalId::PowerShell,
         "cmd.exe" => TerminalId::Cmd,
+        _ if pwsh.is_some() => TerminalId::Pwsh,
         _ => return Err("系统控制台命令无效".into()),
     };
-    let executable = system_console_path(id)?;
+    let executable = match pwsh {
+        Some(path) => path,
+        None => system_console_path(id)?,
+    };
     // Fixed flags and the base64 payload never contain shell-sensitive text.
     if terminal.args.iter().any(|arg| arg.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch == '\0')) { return Err("系统控制台启动参数无效".into()); }
     let application = terminal_path(&executable)?;
@@ -1278,15 +1308,10 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
     } else {
         None
     };
-    let (program, args) = match terminal {
-        TerminalId::WindowsTerminal => (
-            "wt.exe",
-            vec!["powershell.exe".into(), "-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
-        ),
-        TerminalId::PowerShell => (
-            "powershell.exe",
-            vec!["-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
-        ),
+    let (program, args): (&str, Vec<String>) = match terminal {
+        TerminalId::WindowsTerminal => ("wt.exe", windows_terminal_arguments(encoded_powershell(script))?),
+        TerminalId::Pwsh => return powershell_console(TerminalId::Pwsh, encoded_powershell(script), directory_text, &[]),
+        TerminalId::PowerShell => ("powershell.exe", powershell_arguments(encoded_powershell(script))),
         TerminalId::Cmd => ("cmd.exe", cmd_arguments(script)?),
         TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
         TerminalId::Custom => ("", Vec::new()),
@@ -1303,12 +1328,14 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
         TerminalId::Workbench => return Err("工作台不经过外部终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
-    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[], mac_script })
+    Ok(TerminalCommand { program: program.into(), args, directory: PathBuf::from(directory_text), session_markers: &[], mac_script })
 }
 
 fn spawn_terminal(db: &Database, terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
     #[cfg(windows)]
-    if matches!(terminal_id, TerminalId::PowerShell | TerminalId::Cmd) {
+    // Console shells need real console handles; the generic path below hands them NUL, and an
+    // interactive shell reading NUL exits at once.
+    if matches!(terminal_id, TerminalId::Pwsh | TerminalId::PowerShell | TerminalId::Cmd) {
         return spawn_console(&terminal);
     }
     if terminal_id == TerminalId::MacTerminal {
@@ -1327,7 +1354,7 @@ fn spawn_terminal(db: &Database, terminal_id: TerminalId, terminal: TerminalComm
         let script = terminal.mac_script.as_deref().ok_or("终端命令无效")?;
         return spawn_custom(db, script);
     }
-    let mut command = Command::new(terminal.program);
+    let mut command = Command::new(&terminal.program);
     crate::process_environment::apply(&mut command);
     command.args(&terminal.args).current_dir(&terminal.directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]

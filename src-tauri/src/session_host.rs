@@ -77,9 +77,12 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     }
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
     let pair = native_pty_system().openpty(size).map_err(|error| format!("无法创建会话终端：{error}"))?;
-    let (program, args) = hosted_command(&plan);
+    // Canonical Windows paths carry the `\\?\` prefix. cmd.exe (npm `.cmd` shims) rejects
+    // such a working directory and silently falls back to C:\Windows.
+    let directory = crate::launch::terminal_path(&plan.directory)?;
+    let (program, args) = hosted_command(&plan)?;
     let mut command = CommandBuilder::new(program);
-    command.cwd(&plan.directory);
+    command.cwd(&directory);
     command.args(args);
     apply_environment(&mut command, &plan, credential);
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
@@ -107,7 +110,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         started_at,
         tool_id: plan.tool_id.clone(),
         project_id: plan.project_id.clone(),
-        directory: plan.directory.display().to_string(),
+        directory,
         mode: plan.mode,
         running: AtomicBool::new(true),
         exit_code: Mutex::new(None),
@@ -132,17 +135,18 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     })
 }
 
-fn hosted_command(plan: &LaunchPlan) -> (std::path::PathBuf, Vec<String>) {
+fn hosted_command(plan: &LaunchPlan) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let executable = crate::launch::terminal_path(&plan.executable)?;
     let script = plan.executable.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"));
     #[cfg(windows)]
     if script {
-        let mut args = vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), plan.executable.display().to_string()];
+        let mut args = vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), executable];
         args.extend(plan.cli_args.iter().cloned());
-        return (std::path::PathBuf::from("powershell.exe"), args);
+        return Ok((std::path::PathBuf::from("powershell.exe"), args));
     }
     #[cfg(not(windows))]
     let _ = script;
-    (plan.executable.clone(), plan.cli_args.clone())
+    Ok((std::path::PathBuf::from(executable), plan.cli_args.clone()))
 }
 
 fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<(), String> {

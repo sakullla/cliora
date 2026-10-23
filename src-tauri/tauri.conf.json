@@ -12,7 +12,8 @@
   "app": {
     "windows": [{ "title": "栖点 · Cliora", "width": 1160, "height": 780, "minWidth": 720, "minHeight": 560, "backgroundColor": "#f5f7f3", "titleBarStyle": "Overlay", "hiddenTitle": true }],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": { "active": true, "targets": ["nsis", "dmg", "appimage", "deb"], "createUpdaterArtifacts": true, "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"], "macOS": { "entitlements": "entitlements.plist" } },

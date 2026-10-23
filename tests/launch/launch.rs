@@ -974,3 +974,65 @@ fn workbench_starts_a_powershell_script_with_its_arguments() {
     crate::session_host::close(&id).unwrap();
     crate::session_host::shutdown();
 }
+
+#[cfg(windows)]
+#[test]
+fn workbench_cmd_shim_runs_in_a_canonical_project_directory() {
+    let _guard = crate::session_host::lock_for_tests();
+    crate::session_host::shutdown();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project dir");
+    std::fs::create_dir(&project).unwrap();
+    // checked_directory canonicalizes, which yields a verbatim path that cmd.exe rejects as a cwd.
+    let project = crate::projects::checked_directory(project.to_str().unwrap()).unwrap();
+    assert!(project.to_str().unwrap().starts_with(r"\\?\"));
+    let shim = temp.path().join("tool.cmd");
+    std::fs::write(&shim, "@echo cwd-marker %CD%\r\n").unwrap();
+    let mut plan = sample(TerminalId::Workbench);
+    plan.executable = std::fs::canonicalize(&shim).unwrap();
+    plan.cli_args = Vec::new();
+    plan.directory = project.clone();
+    let started = crate::session_host::start(plan, None).unwrap();
+    let id = started.session_id.expect("session id");
+    let expected = terminal_path(&project).unwrap();
+    crate::session_host::wait_for_replay(&id, &format!("cwd-marker {expected}")).unwrap();
+    let listed = crate::session_host::list();
+    assert!(listed.iter().any(|session| session.id == id && session.directory == expected));
+    crate::session_host::close(&id).unwrap();
+    crate::session_host::shutdown();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_terminal_and_powershell_7_run_the_same_encoded_script() {
+    let console = terminal_command(&sample(TerminalId::PowerShell), None).unwrap();
+    assert_eq!(console.program, "powershell.exe");
+    let wt = terminal_command(&sample(TerminalId::WindowsTerminal), None).unwrap();
+    assert_eq!(wt.program, "wt.exe");
+    // WT executes the given command line, never its default profile, so the shell is chosen here.
+    match pwsh_path() {
+        Some(path) => assert_eq!(wt.args[0], terminal_path(&path).unwrap()),
+        None => assert_eq!(wt.args[0], "powershell.exe"),
+    }
+    assert_eq!(wt.args[1..], console.args[..]);
+    let pwsh = terminal_command(&sample(TerminalId::Pwsh), None);
+    match pwsh_path() {
+        Some(path) => {
+            let pwsh = pwsh.unwrap();
+            assert_eq!(pwsh.program, terminal_path(&path).unwrap());
+            assert_eq!(pwsh.args, console.args);
+            assert!(terminal_options().iter().any(|option| option.id == TerminalId::Pwsh && option.available));
+        }
+        None => assert!(pwsh.unwrap_err().contains("PowerShell 7")),
+    }
+    if let Some(path) = pwsh_path() {
+        // pwsh must get real console handles (spawn_console), not NUL stdio, or it exits at once.
+        let pwsh = terminal_command(&sample(TerminalId::Pwsh), None).unwrap();
+        let (executable, line) = console_command_line(&pwsh).unwrap();
+        assert_eq!(executable, path);
+        assert!(line.starts_with(&format!("\"{}\" -NoProfile -NoExit", terminal_path(&path).unwrap())));
+    }
+    let maintenance = shell_terminal(TerminalId::Pwsh, Path::new("C:/Users/me"), "Get-Date");
+    assert_eq!(maintenance.is_ok(), pwsh_path().is_some());
+    assert_eq!(serde_json::to_string(&TerminalId::Pwsh).unwrap(), "\"pwsh\"");
+}
