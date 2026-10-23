@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
-/** Terminal input semantics of the workbench, against synthetic native IPC. */
-async function openWorkbench(page: Page) {
+/** Synthetic native IPC shared by the workbench terminal tests. */
+async function installWorkbenchMock(page: Page) {
   await page.addInitScript(() => {
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }];
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
@@ -22,7 +22,7 @@ async function openWorkbench(page: Page) {
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
-          if (command === 'replay_workbench_session') return btoa('codex-ready\r\n> ');
+          if (command === 'replay_workbench_session') return (window as unknown as { __replayOverride?: string }).__replayOverride ?? btoa('codex-ready\r\n> ');
           if (command === 'write_workbench_session') { writes.push(new TextDecoder().decode(Uint8Array.from(atob(args.dataBase64), (c) => c.charCodeAt(0)))); return null; }
           if (command === 'resize_workbench_session') return null;
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
@@ -32,6 +32,10 @@ async function openWorkbench(page: Page) {
       },
     });
   });
+}
+
+async function openWorkbench(page: Page) {
+  await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
@@ -98,18 +102,80 @@ test('the mouse wheel on the alternate screen never turns into arrow keys', asyn
   expect(await writes(page)).toEqual([]);
 });
 
+test('the mouse wheel scrolls the viewport when the CLI tracks the mouse in the normal buffer', async ({ page }) => {
+  await openWorkbench(page);
+  // Pi-style CLI: inline normal-buffer rendering with mouse tracking enabled for clicks. It never
+  // consumes wheel reports, so the workbench must scroll the terminal itself instead of
+  // forwarding the wheel to the app.
+  await page.evaluate(() => {
+    const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
+    (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1002h' + lines + '\r\n');
+  });
+  await page.waitForTimeout(300);
+  const viewport = page.locator('.xterm-viewport');
+  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const box = await screen.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  const start = await scrollTop();
+  await page.mouse.wheel(0, 600);
+  await page.waitForTimeout(150);
+  const down = await scrollTop();
+  expect(down).toBeGreaterThan(start);
+  await page.mouse.wheel(0, -900);
+  await page.waitForTimeout(150);
+  expect(await scrollTop()).toBeLessThan(down);
+});
+
+test('the mouse wheel scrolls the native viewport when the CLI does not track the mouse', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
+    (window as unknown as { __output: (text: string) => void }).__output(lines + '\r\n');
+  });
+  await page.waitForTimeout(300);
+  const viewport = page.locator('.xterm-viewport');
+  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const box = await page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen').boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  const start = await scrollTop();
+  await page.mouse.wheel(0, 600);
+  await page.waitForTimeout(150);
+  expect(await scrollTop()).toBeGreaterThan(start);
+});
+
+test('a replayed session with long output opens scrolled to the latest line', async ({ page }) => {
+  await installWorkbenchMock(page);
+  const lines = Array.from({ length: 300 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
+  await page.addInitScript((encoded) => {
+    Object.assign(window, { __replayOverride: encoded });
+  }, btoa(lines + '\r\nlatest-output-marker\r\n> '));
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('latest-output-marker');
+  // The viewport parks on the latest output, not at the top of the scrollback.
+  await expect.poll(() => page.evaluate(() => {
+    const viewport = document.querySelector('.xterm-viewport');
+    if (!viewport) return Number.POSITIVE_INFINITY;
+    return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+  })).toBeLessThan(48);
+  await expect(page.getByRole('button', { name: '回到最新输出' })).toHaveCount(0);
+});
+
 test('font zoom, terminal colours, and a page that never scrolls sideways', async ({ page }) => {
   await openWorkbench(page);
   const stage = page.getByRole('region', { name: '当前会话' });
+  const storedFont = () => page.evaluate(() => localStorage.getItem('cliora:workbench-font-size'));
   await page.keyboard.press('Control+=');
-  await expect(stage.getByRole('button', { name: /重置默认字号/ })).toHaveText('15');
+  await expect.poll(storedFont).toBe('15');
   await page.keyboard.press('Control+0');
-  await expect(stage.getByRole('button', { name: /重置默认字号/ })).toHaveText('14');
+  await expect.poll(storedFont).toBe('14');
   expect(await writes(page)).toEqual([]);
 
   const root = page.locator('[data-term-theme]');
   await expect(root).toHaveAttribute('data-term-theme', 'light');
-  await stage.getByRole('button', { name: /终端配色：跟随应用/ }).click();
+  await stage.locator('.xterm-screen').click({ button: 'right' });
+  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: '深色终端', exact: true }).click();
   await expect(root).toHaveAttribute('data-term-theme', 'dark');
 
   await page.keyboard.press('Control+Shift+F');

@@ -29,8 +29,6 @@
   min-height: 0;
   min-width: 0;
   overflow: clip;
-  container-type: inline-size;
-  container-name: workbench;
 }
 
 :global([data-theme='dark']) .root {
@@ -156,7 +154,7 @@
   display: grid;
   flex: none;
   gap: 8px;
-  padding: 12px 12px 10px;
+  padding: 10px 10px 8px;
 }
 
 .railTitleRow {
@@ -571,6 +569,18 @@
   box-shadow: none;
 }
 
+/* Drag to reorder: the dragged row fades, the target row shows an accent edge. */
+.row[data-dragging] .session { opacity: .55; }
+.row[data-drop='before'] .session { box-shadow: 0 -2px 0 0 var(--accent); }
+.row[data-drop='after'] .session { box-shadow: 0 2px 0 0 var(--accent); }
+
+.pinBadge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--accent);
+}
+
 .railNoMatch {
   display: grid;
   justify-items: center;
@@ -660,9 +670,9 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 10px;
-  min-height: 54px;
-  padding: 8px 12px 8px 10px;
+  gap: 8px;
+  min-height: 46px;
+  padding: 6px 10px 6px 8px;
   border-bottom: 1px solid var(--line);
   background: var(--wb-chrome);
 }
@@ -696,10 +706,10 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--surface);
   box-shadow: var(--shadow-xs);
 }
@@ -708,15 +718,15 @@
 }
 
 .identityText {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
 .identityMain {
-  display: flex;
-  align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .identityMain strong {
@@ -742,6 +752,7 @@
 
 .identityMeta {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -842,24 +853,6 @@
   box-shadow: none;
 }
 
-.stageActions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.toolbarGroup {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-
 .iconBtn {
   display: inline-grid;
   place-items: center;
@@ -893,7 +886,6 @@
   background: var(--line);
 }
 
-.restartBtn,
 .endBtn {
   display: inline-flex;
   align-items: center;
@@ -905,19 +897,6 @@
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
   white-space: nowrap;
-}
-.restartBtn {
-  border: 1px solid transparent;
-  background: var(--accent);
-  color: var(--on-accent);
-  box-shadow: var(--shadow-accent);
-}
-.restartBtn:hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--accent-hover);
-  box-shadow: var(--shadow-accent);
-}
-.endBtn {
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text-2);
@@ -937,19 +916,44 @@
   flex: none;
   align-items: center;
   gap: 7px;
-  padding: 7px 14px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--term-line);
   background: color-mix(in srgb, var(--warning-soft) 55%, var(--term-chrome));
   color: color-mix(in srgb, var(--warning) 80%, var(--term-fg));
   font-size: var(--fs-micro);
 }
 .endedStrip > span {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .endedStrip strong { font-weight: var(--fw-semibold); }
+
+.endedRestart {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+  box-shadow: none;
+  white-space: nowrap;
+}
+.endedRestart:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
 
 /* ---------- Terminal canvas -------------------------------------------- */
 
@@ -961,7 +965,7 @@
   min-height: 120px;
   min-width: 0;
   overflow: clip;
-  padding: 12px 6px 6px 16px;
+  padding: 16px 16px 14px 20px;
   background: var(--term-bg);
   color: var(--term-fg);
 }
@@ -1060,7 +1064,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  width: min(300px, 46cqw);
+  width: min(300px, 46vw);
   height: 28px;
   margin-right: 2px;
   padding: 0 8px;
@@ -1157,126 +1161,63 @@
 .dropCard strong { font-size: var(--fs-title); }
 .dropCard span { color: var(--term-text-3); font-size: var(--fs-caption); }
 
-/* ---------- Status bar --------------------------------------------------- */
+/* ---------- Composer (floats over the terminal canvas) ------------------ */
 
-.statusBar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 10px;
-  min-height: 30px;
-  padding: 3px 8px 3px 14px;
-  border-top: 1px solid var(--term-line);
-  background: var(--term-chrome);
-  color: var(--term-text-3);
-  font-size: var(--fs-micro);
+.composerFloat {
+  position: absolute;
+  z-index: 6;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  width: min(680px, calc(100% - 28px));
+  padding: 10px 12px 12px;
+  border: 1px solid var(--term-float-line);
+  border-radius: var(--radius-lg);
+  background: var(--term-float);
+  color: var(--term-fg);
+  box-shadow: var(--shadow-lg);
+  animation: wbRise 160ms var(--ease);
 }
 
-.statusHints {
+.composerHead {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   min-width: 0;
-  overflow: hidden;
+}
+
+.composerTitle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--term-text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
   white-space: nowrap;
 }
-.statusHints > span {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 3px;
-}
-.statusHints kbd {
-  min-width: 0;
-  padding: 0 4px;
-  border: 1px solid var(--term-line);
-  border-bottom-width: 1px;
-  border-radius: 4px;
-  background: var(--term-kbd);
-  color: var(--term-text-2);
-  font-size: 10px;
-  line-height: 15px;
-  box-shadow: none;
-}
-.statusHints kbd:last-of-type { margin-right: 3px; }
 
-.statusSpacer { flex: 1 1 auto; }
-
-.statusMeta {
+.composerClose {
+  display: grid;
   flex: none;
-  color: var(--term-text-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.fontStepper {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
+  place-items: center;
+  width: 22px;
   height: 22px;
-  border: 1px solid var(--term-line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.fontStepper button,
-.statusBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 20px;
-  min-height: 20px;
-  padding: 0 7px;
+  min-height: 22px;
+  padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: 6px;
   background: transparent;
-  color: var(--term-text-2);
-  font-size: 10px;
-  font-weight: var(--fw-semibold);
   box-shadow: none;
+  color: var(--term-text-3);
 }
-.fontStepper button:hover:not(:disabled),
-.statusBtn:hover:not(:disabled) {
+.composerClose:hover:not(:disabled) {
   border: 0;
   background: var(--term-hover);
   color: var(--term-fg);
   box-shadow: none;
-}
-.fontValue {
-  min-width: 26px;
-  border-inline: 1px solid var(--term-line) !important;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-.statusBtn {
-  flex: none;
-  height: 22px;
-  min-height: 22px;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-weight: var(--fw-medium);
-}
-
-/* ---------- Composer ---------------------------------------------------- */
-
-.composerDrawer {
-  display: grid;
-  flex: none;
-  gap: 6px;
-  padding: 8px 12px 10px;
-  border-top: 1px solid var(--line);
-  background: var(--wb-chrome);
-  animation: wbRise 160ms var(--ease);
-}
-
-.composerTop {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-  min-width: 0;
 }
 
 .composerPrompts {
@@ -1291,7 +1232,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--text-3);
+  color: var(--term-text-3);
   font-size: var(--fs-micro);
   font-weight: var(--fw-medium);
   white-space: nowrap;
@@ -1328,6 +1269,16 @@
   color: var(--accent);
   box-shadow: none;
 }
+.composerFloat .promptPill {
+  border-color: var(--term-float-line);
+  background: var(--term-bg);
+  color: var(--term-text-2);
+}
+.composerFloat .promptPill:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--term-accent) 45%, var(--term-float-line));
+  background: var(--term-bg);
+  color: var(--term-accent);
+}
 
 .composerInputRow {
   display: flex;
@@ -1335,15 +1286,15 @@
   gap: 8px;
   min-width: 0;
   padding: 6px 6px 6px 12px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--term-float-line);
   border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-xs);
+  background: var(--term-bg);
+  box-shadow: none;
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 .composerInputRow:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
+  border-color: var(--term-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--term-accent) 22%, transparent);
 }
 
 .composerTextarea,
@@ -1372,7 +1323,7 @@
 
 .composerHint {
   margin-left: auto;
-  color: var(--text-3);
+  color: var(--term-text-3);
   font-size: var(--fs-micro);
   white-space: nowrap;
 }
@@ -1607,7 +1558,23 @@
 
 /* ---------- Context menu ----------------------------------------------- */
 
-.contextMenu { min-width: 200px; }
+.contextMenu { min-width: 216px; }
+
+.menuCheck {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.menuGlyph {
+  flex: none;
+  min-width: 14px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  text-align: center;
+}
 
 /* ==========================================================================
    New session dialog
@@ -1848,99 +1815,96 @@
   .findBar,
   .jumpBottom,
   .toastPill,
-  .composerDrawer { animation: none; }
+  .composerFloat { animation: none; }
 }
 
 /* ---------- Responsive -------------------------------------------------- */
 
-@container workbench (max-width: 720px) {
-  .layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .resizer { display: none; }
-  .rail {
-    flex-direction: row;
-    align-items: center;
-    border-bottom: 1px solid var(--line);
-  }
-  .railHead {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 4px 7px 10px;
-  }
-  .railTitle,
-  .railCountBadge,
-  .railSearchField,
-  .segmented,
-  .railFoot { display: none; }
-  .railTitleRow { min-height: 0; }
-  .newSessionBtn {
-    width: 30px;
-    padding: 0;
-    justify-content: center;
-  }
-  .newSessionBtn > span { display: none; }
-  .list {
-    flex: 1 1 auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 10px 6px 4px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-  .row {
-    flex: 0 0 auto;
-    max-width: 230px;
-  }
-  .session {
-    gap: 8px;
-    padding: 5px 10px 5px 8px;
-  }
-  .sessionIconWrap {
-    width: 24px;
-    height: 24px;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-  .session[aria-selected='true'] .sessionIconWrap {
-    background: transparent;
-  }
-  .row:not([data-running]) .session { padding-right: 10px; }
-  .sessionSub { display: none; }
-  .sessionBody { gap: 0; }
-  .sessionTop strong { font-size: var(--fs-caption); }
-  .session[aria-selected='true']::before {
-    top: auto;
-    bottom: -1px;
-    left: 10px;
-    right: 10px;
-    width: auto;
-    height: 2px;
-    border-radius: 99px;
-  }
-  .rowRemove { display: none; }
-  .modeCards { grid-template-columns: 1fr; }
-  .statusHints > [data-optional] { display: none; }
-}
+/* Breakpoints come from data-narrow/data-compact on .root (measured by a ResizeObserver),
+   not CSS container queries: WebView2 has evaluated the workbench container query against a
+   stale width, collapsing the rail into the top strip inside a wide window. */
 
-@container workbench (max-width: 660px) {
-  .stageBar { gap: 6px; min-height: 50px; padding: 7px 8px 7px 6px; }
-  .stageIcon { display: none; }
-  .identityMeta .pathChip { display: none; }
-  .stageActions { gap: 4px; }
-  .endBtn, .restartBtn { width: 30px; padding: 0; justify-content: center; }
-  .endBtn > span, .restartBtn > span { display: none; }
-  .canvas { padding: 8px 2px 2px 10px; }
-  .statusHints { display: none; }
-  .findBar { left: 10px; right: 10px; }
-  .findField { flex: 1 1 auto; width: auto; }
-  .recentsGrid { grid-template-columns: 1fr; }
-  .empty { gap: 20px; padding: 26px 16px; }
-  .dialogForm { min-width: min(420px, 84vw); }
+.root[data-narrow] .layout {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
+.root[data-narrow] .resizer { display: none; }
+.root[data-narrow] .rail {
+  flex-direction: row;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+.root[data-narrow] .railHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px 7px 10px;
+}
+.root[data-narrow] .railTitle,
+.root[data-narrow] .railCountBadge,
+.root[data-narrow] .railSearchField,
+.root[data-narrow] .segmented,
+.root[data-narrow] .railFoot { display: none; }
+.root[data-narrow] .railTitleRow { min-height: 0; }
+.root[data-narrow] .newSessionBtn {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+.root[data-narrow] .newSessionBtn > span { display: none; }
+.root[data-narrow] .list {
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px 6px 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.root[data-narrow] .row {
+  flex: 0 0 auto;
+  max-width: 230px;
+}
+.root[data-narrow] .session {
+  gap: 8px;
+  padding: 5px 10px 5px 8px;
+}
+.root[data-narrow] .sessionIconWrap {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.root[data-narrow] .session[aria-selected='true'] .sessionIconWrap {
+  background: transparent;
+}
+.root[data-narrow] .row:not([data-running]) .session { padding-right: 10px; }
+.root[data-narrow] .sessionSub { display: none; }
+.root[data-narrow] .sessionBody { gap: 0; }
+.root[data-narrow] .sessionTop strong { font-size: var(--fs-caption); }
+.root[data-narrow] .session[aria-selected='true']::before {
+  top: auto;
+  bottom: -1px;
+  left: 10px;
+  right: 10px;
+  width: auto;
+  height: 2px;
+  border-radius: 99px;
+}
+.root[data-narrow] .rowRemove { display: none; }
+.root[data-narrow] .modeCards { grid-template-columns: 1fr; }
+
+.root[data-compact] .stageBar { gap: 6px; min-height: 42px; padding: 5px 8px 5px 6px; }
+.root[data-compact] .stageIcon { display: none; }
+.root[data-compact] .identityMeta .pathChip { display: none; }
+.root[data-compact] .endBtn { width: 30px; padding: 0; justify-content: center; }
+.root[data-compact] .endBtn > span { display: none; }
+.root[data-compact] .canvas { padding: 10px 10px 10px 12px; }
+.root[data-compact] .findBar { left: 10px; right: 10px; }
+.root[data-compact] .findField { flex: 1 1 auto; width: auto; }
+.root[data-compact] .recentsGrid { grid-template-columns: 1fr; }
+.root[data-compact] .empty { gap: 20px; padding: 26px 16px; }
+.root[data-compact] .dialogForm { min-width: min(420px, 84vw); }

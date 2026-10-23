@@ -185,9 +185,12 @@ for (const width of widths) {
   await shot('workbench-active-' + theme + '-' + width, theme, width);
   await shot('workbench-composer-' + theme + '-' + width, theme, width, async (page) => {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
-    await stage.getByRole('button', { name: copy('打开快捷输入面板', 'Open quick input drawer') }).click();
+    const screen = stage.locator('.xterm-screen:visible');
+    await screen.waitFor({ timeout: 20000 });
+    await screen.click({ force: true });
+    await page.keyboard.press('Control+Shift+M');
     await stage.getByRole('textbox', { name: /编写多行内容|Compose multi-line/ }).fill('review the diff and summarise the risk in one paragraph');
-    await stage.getByRole('button', { name: copy('查找输出', 'Find in output') }).click();
+    await page.keyboard.press('Control+Shift+F');
     await stage.getByRole('searchbox', { name: copy('在终端输出中查找…', 'Find in terminal output…') }).fill('SessionWorkbench');
   });
   await shot('workbench-dialog-' + theme + '-' + width, theme, width, async (page) => {
