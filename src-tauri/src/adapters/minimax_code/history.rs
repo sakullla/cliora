@@ -265,7 +265,7 @@ pub fn parse_controlled(
     {
         return Err("会话 ID 与清单不一致".into());
     }
-    let identities = match identity_database(&directory) {
+    let identities = match identity_database(directory) {
         Some(path) => identities_for_parse(&path, cancelled)?,
         None => Arc::new(HashMap::new()),
     };
@@ -562,7 +562,7 @@ fn account_context_active() -> bool {
 }
 
 thread_local! {
-    static HELD_DATABASE: RefCell<Option<PathBuf>> = RefCell::new(None);
+    static HELD_DATABASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 fn held_database(path: &Path) -> bool {
@@ -1112,7 +1112,10 @@ mod tests {
         fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
 
-    fn write_runtime(home: &Path, rows: &[( &str, Option<&str>, Option<&str>, &str, &str, i64, Option<&str>)]) {
+    /// One `local_runtime_sessions` row: id, title, workspace, kind, visibility, archived, parent.
+    type RuntimeRow<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str, &'a str, i64, Option<&'a str>);
+
+    fn write_runtime(home: &Path, rows: &[RuntimeRow<'_>]) {
         let directory = home.join(".minimax").join("v2").join("sqlite");
         fs::create_dir_all(&directory).unwrap();
         let database = directory.join("runtime-state.sqlite");
@@ -1370,7 +1373,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
         let day = home.join(".minimax").join("v2").join("sessions").join("2026").join("10").join("11");
-        let names: [(&str, &str, &str, &str, i64, Option<&str>); 4] = [
+        type SessionFile = (&'static str, &'static str, &'static str, &'static str, i64, Option<&'static str>);
+        let names: [SessionFile; 4] = [
             ("01-00-00-000-session_child", "mvs_11111111111111111111111111111111", "conversation", "visible", 0, Some(SESSION)),
             ("02-00-00-000-session_archived", "mvs_22222222222222222222222222222222", "conversation", "visible", 1, None),
             ("03-00-00-000-session_hidden", "mvs_33333333333333333333333333333333", "conversation", "hidden", 0, None),

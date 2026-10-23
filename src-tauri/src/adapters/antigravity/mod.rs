@@ -474,7 +474,7 @@ mod tests {
         }
     }
 
-    struct MemoryStore(std::collections::HashMap<String, String>);
+    struct MemoryStore;
     impl crate::credentials::CredentialStore for MemoryStore {
         fn put(&self, _id: &str, _secret: &str) -> Result<(), String> {
             Ok(())
@@ -723,7 +723,7 @@ mod tests {
             connection: Some(connection()),
             native_credentials: std::collections::BTreeMap::new(),
         };
-        let keys = MemoryStore(std::collections::HashMap::new());
+        let keys = MemoryStore;
         let mut secrets = crate::native::apply::NativeSecrets::default();
         assert!(Antigravity
             .write_connection_secret(&profile, Scope::Global, &keys, &mut secrets)

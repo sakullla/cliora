@@ -118,6 +118,7 @@ struct UsageObservation {
     billable: Option<bool>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_usage(session: &mut ParsedSession, seen: &mut HashMap<String, UsageObservation>, row: &Value, source: &HistorySource, line: usize, time: Option<i64>, model: Option<String>, attribution: UsageAttribution) {
     let Some(message) = row.get("message") else { return; };
     let Some(usage) = message.get("usage").filter(|value| value.is_object()) else { return; };
@@ -427,9 +428,9 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            return ExclusiveLock {
+            ExclusiveLock {
                 _file: fs::OpenOptions::new().read(true).share_mode(0).open(path).unwrap(),
-            };
+            }
         }
         #[cfg(not(windows))]
         {
@@ -603,7 +604,7 @@ mod tests {
     #[test]
     fn qoder_invalid_native_shapes_fail_or_mark_partial_while_valid_empty_is_skipped() {
         for invalid in [serde_json::json!({"type":"assistant"}), serde_json::json!({"type":"user","uuid":"u","timestamp":123,"message":{}}), serde_json::json!({"type":"active-leaf"}), serde_json::json!({"type":"runtime-config"})] {
-            assert_ne!(parse_rows(&[invalid.clone()]).unwrap_err(), history::EMPTY_SESSION);
+            assert_ne!(parse_rows(std::slice::from_ref(&invalid)).unwrap_err(), history::EMPTY_SESSION);
             let parsed = parse_rows(&[message("u", None, "user", "valid body"), invalid]).unwrap();
             assert!(parsed.partial); assert_eq!(parsed.messages.len(), 1);
         }

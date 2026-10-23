@@ -59,6 +59,541 @@ fn capabilities(model: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+fn root(documents: &Documents) -> Value {
+    documents
+        .get("settings")
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+fn path(_root: &Value, action: &ConfigurationAction) -> Result<Vec<String>, String> {
+    let field = action.field.as_deref().ok_or("缺少 Codex 字段")?;
+    if PARAMETERS.contains(&field) {
+        if action.target != json!("configuration") {
+            return Err("Codex 参数是配置级设置".into());
+        }
+        return Ok(vec![field.into()]);
+    }
+    if field == "base_url" {
+        let provider = action
+            .target
+            .as_str()
+            .filter(|id| !id.trim().is_empty() && *id != "configuration")
+            .ok_or("缺少供应商身份")?;
+        if ["openai", "ollama", "lmstudio"].contains(&provider) {
+            return Err("内置供应商地址由 Codex 管理；自定义地址请使用独立供应商 ID".into());
+        }
+        return Ok(vec![
+            "model_providers".into(),
+            provider.into(),
+            "base_url".into(),
+        ]);
+    }
+    Err("不支持的 Codex 配置字段".into())
+}
+fn pointer(path: &[String]) -> String {
+    format!(
+        "/{}",
+        path.iter()
+            .map(|part| crate::adapters::pointer_token(part))
+            .collect::<Vec<_>>()
+            .join("/")
+    )
+}
+fn remove(root: &mut Value, path: &[String]) {
+    if let Some((last, parents)) = path.split_last() {
+        let mut target = root;
+        for part in parents {
+            let Some(next) = target.get_mut(part) else {
+                return;
+            };
+            target = next;
+        }
+        if let Some(map) = target.as_object_mut() {
+            map.remove(last);
+        }
+    }
+}
+fn field(
+    id: &str,
+    label: &str,
+    kind: &str,
+    choices: &[&str],
+    advanced: bool,
+) -> ConfigurationField {
+    ConfigurationField {
+        id: id.into(),
+        label: label.into(),
+        kind: kind.into(),
+        required: false,
+        advanced,
+        choices: choices.iter().map(|value| (*value).into()).collect(),
+        minimum: (kind == "integer").then_some(1.0),
+        default_source: Some("跟随 Codex 原生默认或继承值".into()),
+        unavailable_reason: None,
+        origin: None,
+    }
+}
+
+impl ConfigurationAdapter for Codex {
+    fn credential_paths(&self,connection:&Connection)->Vec<(&'static str,Vec<String>)>{
+        ["experimental_bearer_token","env_key"].iter().map(|field|("settings",vec!["model_providers".into(),connection.provider_id.clone(),(*field).into()])).collect()
+    }
+
+    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/codex/native_verification.mjs") }
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: false, reason: None } }
+    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
+        self.describe(scope).fields.into_iter().filter(|field| ["model_reasoning_effort", "model_context_window", "model_reasoning_summary", "model_verbosity"].contains(&field.id.as_str()))
+            .map(|field| CommonParameter { path: field.id.split('.').map(str::to_owned).collect(), field, role: "settings", target: json!("configuration") }).collect()
+    }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/model"), ("settings","/model_provider")] }
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let mut documents = documents.clone(); let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
+        let missing = settings.get("model").is_none(); if missing { settings["model"] = json!("__cliora_draft__"); }
+        let mut connection = self.connection(&documents, state)?; if missing { if let Some(connection) = &mut connection { connection.model.clear(); } }
+        Ok(connection)
+    }
+    fn catalog_actions(&self, _documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        if ids.len() != 1 { return Err("Codex 使用配置级单个模型，请选择一个模型".into()) }
+        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!("configuration"), operation: "set".into(), field: Some("model".into()), value: Some(json!(ids[0])) }])
+    }
+
+    fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
+        matches!(path,[role,providers,id,field] if role=="settings" && providers=="model_providers" && !id.is_empty() && field=="env_key")
+            && valid_environment_reference(value)
+    }
+    fn unmanaged_paths(
+        &self,
+        role: &str,
+        current: &Value,
+        desired: &Value,
+        profile: &RegisteredProfile,
+    ) -> Result<Vec<String>, String> {
+        if role != "settings" {
+            return Ok(vec![]);
+        }
+        let selected = desired["model_provider"].as_str().unwrap_or("openai");
+        let source = profile
+            .files
+            .get("settings")
+            .map(|text| crate::native::format::parse(crate::native::format::FileKind::Toml, text))
+            .transpose()?
+            .unwrap_or_else(|| json!({}));
+        Ok(current["model_providers"]
+            .as_object()
+            .into_iter()
+            .flat_map(|providers| providers.keys())
+            .filter(|id| {
+                // A declared reserved table is normalized to this same selected
+                // provider, rather than being an unrelated provider switch.
+                // Keep its old owned paths in the shared CAS cleanup; foreign
+                // tables remain detached and their native values stay intact.
+                let migrated = RESERVED_MODEL_PROVIDERS.contains(&id.as_str())
+                    && model_provider_id(id) == selected
+                    && source["model_providers"].get(*id).is_some();
+                id.as_str() != selected && !migrated
+            })
+            .map(|id| pointer(&["model_providers".into(), id.clone()]))
+            .collect())
+    }
+    fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
+        match path.last().map(String::as_str) {
+            Some("env_key") => PortableFieldKind::CredentialReference,
+            Some("experimental_bearer_token" | "api_key") => PortableFieldKind::Credential,
+            Some(value)
+                if PARAMETERS.contains(&value)
+                    || matches!(value, "base_url" | "wire_api" | "name") =>
+            {
+                PortableFieldKind::Parameter
+            }
+            _ => PortableFieldKind::Unknown,
+        }
+    }
+    fn suppression_changes(
+        &self,
+        action: &ConfigurationAction,
+        _state: &crate::adapters::configuration::EditingState,
+    ) -> Result<Vec<SuppressionChange>, String> {
+        let native = if action.field.as_deref() == Some("base_url") {
+            path(&json!({}), action)?
+        } else {
+            let Some(field) = action
+                .field
+                .as_deref()
+                .filter(|field| PARAMETERS.contains(field))
+            else {
+                return Ok(vec![]);
+            };
+            vec![field.into()]
+        };
+        Ok(vec![SuppressionChange {
+            role: "settings".into(),
+            path: pointer(&native),
+            suppressed: false,
+        }])
+    }
+    fn reconcile_text(
+        &self,
+        _: Option<&Documents>,
+        next: &Documents,
+        _: &Documents,
+        state: &mut EditingState,
+    ) -> Result<(), String> {
+        let root = root(next);
+        state.intents.retain(|action| {
+            action.operation == "reset"
+                && path(&root, action)
+                    .ok()
+                    .is_some_and(|path| root.pointer(&pointer(&path)).is_none())
+        });
+        state.selected_provider = root["model_provider"].as_str().map(str::to_owned);
+        Ok(())
+    }
+    fn describe(&self, scope: Scope) -> ConfigurationDescriptor {
+        let mut fields = vec![
+            field("model", "当前模型", "string", &[], false),
+            field("model_provider", "供应商 ID", "string", &[], false),
+            field("base_url", "Responses 地址", "string", &[], false),
+            field(
+                "model_reasoning_effort",
+                "推理强度（Codex 原生）",
+                "string",
+                &[],
+                true,
+            ),
+            field(
+                "model_context_window",
+                "上下文窗口（Token）",
+                "integer",
+                &[],
+                true,
+            ),
+            field(
+                "model_reasoning_summary",
+                "推理摘要",
+                "string",
+                &["auto", "concise", "detailed", "none"],
+                true,
+            ),
+            field(
+                "model_verbosity",
+                "回答详细程度",
+                "string",
+                &["low", "medium", "high"],
+                true,
+            ),
+        ];
+        if scope == Scope::Project {
+            for field in fields
+                .iter_mut()
+                .filter(|field| matches!(field.id.as_str(), "model_provider" | "base_url"))
+            {
+                field.unavailable_reason = Some("Codex 供应商连接仅在全局配置编辑".into());
+            }
+        }
+        ConfigurationDescriptor {
+            version: EDITING_VERSION,
+            fields,
+            operations: vec!["set".into(), "reset".into()],
+        }
+    }
+    fn field_locations(&self, field: &str, documents: &Documents) -> Vec<(String, Vec<String>)> {
+        if PARAMETERS.contains(&field) {
+            return vec![("settings".into(), vec![field.into()])];
+        }
+        if field == "base_url" {
+            let provider = documents
+                .get("settings")
+                .and_then(|settings| settings["model_provider"].as_str())
+                .unwrap_or("openai");
+            return vec![(
+                "settings".into(),
+                vec!["model_providers".into(), provider.into(), "base_url".into()],
+            )];
+        }
+        Vec::new()
+    }
+    fn read(&self, documents: &Documents, _: &EditingState) -> Result<Value, String> {
+        let settings = root(documents);
+        if !settings.is_object() {
+            return Err("Codex 配置须为对象".into());
+        }
+        let mut values = BTreeMap::new();
+        for key in PARAMETERS {
+            if let Some(value) = settings.get(*key) {
+                values.insert((*key).to_owned(), value.clone());
+            }
+        }
+        let provider = settings["model_provider"].as_str().unwrap_or("openai");
+        if let Some(base) = settings["model_providers"][provider].get("base_url") {
+            values.insert("base_url".into(), base.clone());
+        }
+        let choices = capabilities(settings["model"].as_str().unwrap_or(""));
+        let definition = &settings["model_providers"][provider];
+        let default_address_reason =
+            if definition.is_object() && definition.get("base_url").is_none() {
+                Some(if effective_api_base(provider, definition).is_some() {
+                    "未设置地址：跟随 Codex 原生 API 默认地址。"
+                } else {
+                    "未设置地址：由 Codex 原生登录或特殊认证决定，有效连接尚未核验。"
+                })
+            } else {
+                None
+            };
+        Ok(
+            json!({"values":values,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
+        )
+    }
+    fn edit(
+        &self,
+        documents: &mut Documents,
+        state: &mut EditingState,
+        action: &ConfigurationAction,
+    ) -> Result<(), String> {
+        let settings = documents
+            .entry("settings".into())
+            .or_insert_with(|| json!({}));
+        if !settings.is_object() {
+            return Err("Codex 配置须为对象".into());
+        }
+        if action.field.as_deref() == Some("base_url")
+            && (settings
+                .get("model_providers")
+                .is_some_and(|providers| !providers.is_object())
+                || settings["model_providers"]
+                    .get(action.target.as_str().unwrap_or(""))
+                    .is_some_and(|provider| !provider.is_object()))
+        {
+            return Err("供应商定义须为原生 TOML 表；请先修正原文".into());
+        }
+        let path = path(settings, action)?;
+        if action.operation == "set"
+            && action.field.as_deref() == Some("base_url")
+            && settings["model_provider"] != action.target
+        {
+            return Err("供应商身份已变化，请重新编辑地址".into());
+        }
+        match action.operation.as_str() {
+            "reset" => remove(settings, &path),
+            "set" => {
+                let value = action.value.clone().ok_or("缺少字段值")?;
+                if value.is_null() {
+                    return Err("恢复默认请使用 reset".into());
+                }
+                crate::native::apply::set_json(
+                    settings,
+                    &path.iter().map(String::as_str).collect::<Vec<_>>(),
+                    value,
+                );
+                if action.field.as_deref() == Some("base_url") {
+                    let provider = settings["model_provider"]
+                        .as_str()
+                        .ok_or("缺少供应商")?
+                        .to_owned();
+                    // Responses is the only supported Codex wire protocol.
+                    crate::native::apply::set_json(
+                        settings,
+                        &["model_providers", &provider, "wire_api"],
+                        json!("responses"),
+                    );
+                    if settings["model_providers"][&provider].get("name").is_none() {
+                        crate::native::apply::set_json(
+                            settings,
+                            &["model_providers", &provider, "name"],
+                            json!(provider),
+                        );
+                    }
+                }
+            }
+            _ => return Err("不支持的 Codex 编辑操作".into()),
+        }
+        state.selected_provider = settings["model_provider"].as_str().map(str::to_owned);
+        Ok(())
+    }
+    fn validate(
+        &self,
+        documents: &Documents,
+        _: &EditingState,
+        _: Scope,
+    ) -> Vec<ConfigurationIssue> {
+        let settings = root(documents);
+        if !settings.is_object() {
+            return vec![ConfigurationIssue {
+                target: json!("configuration"),
+                field: None,
+                code: "invalid_document".into(),
+                message: "Codex 配置须为对象".into(),
+            }];
+        }
+        let mut issues = vec![];
+        let mut issue = |field: &str, message: &str| {
+            issues.push(ConfigurationIssue {
+                target: json!("configuration"),
+                field: Some(field.into()),
+                code: "invalid_value".into(),
+                message: message.into(),
+            })
+        };
+        for key in PARAMETERS {
+            let Some(value) = settings.get(*key) else {
+                continue;
+            };
+            if *key == "model_context_window" {
+                if !value.as_i64().is_some_and(|value| value > 0) {
+                    issue(key, "上下文窗口须为正整数");
+                }
+            } else if !value
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty() && !text.chars().any(char::is_control))
+            {
+                issue(key, "请输入非空原生字符串值");
+            }
+        }
+        let choices = capabilities(settings["model"].as_str().unwrap_or(""));
+        if let Some(effort) = settings["model_reasoning_effort"].as_str() {
+            if !choices.is_empty()
+                && [
+                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+                ]
+                .contains(&effort)
+                && !choices.iter().any(|choice| choice == effort)
+            {
+                issue(
+                    "model_reasoning_effort",
+                    "当前模型的原生目录不支持此推理档位",
+                );
+            }
+        }
+        for (key, allowed) in [
+            (
+                "model_reasoning_summary",
+                &["auto", "concise", "detailed", "none"][..],
+            ),
+            ("model_verbosity", &["low", "medium", "high"][..]),
+        ] {
+            if settings
+                .get(key)
+                .is_some_and(|value| !value.as_str().is_some_and(|value| allowed.contains(&value)))
+            {
+                issue(key, "此值不符合 Codex 原生配置 schema");
+            }
+        }
+        if let Some(provider) = settings["model_provider"]
+            .as_str()
+            .filter(|id| !["openai", "ollama", "lmstudio"].contains(id))
+        {
+            let definition = &settings["model_providers"][provider];
+            if !definition.is_object() {
+                issue("model_provider", "自定义供应商没有原生定义");
+            }
+            if definition.get("base_url").is_some_and(|value| {
+                !value.as_str().is_some_and(|base| {
+                    url::Url::parse(base).is_ok_and(|url| {
+                        matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                    })
+                })
+            }) {
+                issue("base_url", "请输入有效 HTTP 或 HTTPS 供应商地址");
+            }
+            if definition
+                .get("wire_api")
+                .is_some_and(|value| value != "responses")
+            {
+                issue("base_url", "Codex 仅支持 Responses 接口");
+            }
+            if definition
+                .get("env_key")
+                .is_some_and(|value| !valid_environment_reference(value))
+            {
+                issue(
+                    "model_provider",
+                    "供应商 env_key 须为合法环境变量名称，不能使用字面密钥、路径或命令",
+                );
+            }
+        }
+        issues
+    }
+    fn connection(
+        &self,
+        documents: &Documents,
+        _: &EditingState,
+    ) -> Result<Option<Connection>, String> {
+        let settings = root(documents);
+        let provider = settings["model_provider"].as_str().unwrap_or("openai");
+        let definition = &settings["model_providers"][provider];
+        Ok(
+            match (
+                effective_api_base(provider, definition),
+                settings["model"].as_str(),
+            ) {
+                (Some(base), Some(model)) => Some(Connection {
+                    provider_id: provider.into(),
+                    interface_format: "openai_responses".into(),
+                    base_url: base.into(),
+                    model: model.into(),
+                    secret_ref: None,
+                    auth_env_var: definition["env_key"].as_str().map(str::to_owned),
+                    model_records: vec![],
+                }),
+                _ => None,
+            },
+        )
+    }
+    fn managed_documents(
+        &self,
+        mut documents: Documents,
+        _: &RegisteredProfile,
+        _: Scope,
+    ) -> Result<Documents, String> {
+        if let Some(settings) = documents.get_mut("settings") {
+            let selected = settings["model_provider"]
+                .as_str()
+                .unwrap_or("openai")
+                .to_owned();
+            if let Some(providers) = settings
+                .get_mut("model_providers")
+                .and_then(Value::as_object_mut)
+            {
+                providers.retain(|id, _| id == &selected);
+            }
+            if settings["model_providers"]
+                .as_object()
+                .is_some_and(|providers| providers.is_empty())
+            {
+                settings.as_object_mut().unwrap().remove("model_providers");
+            }
+        }
+        Ok(documents)
+    }
+    fn managed_fields(
+        &self,
+        role: &str,
+        _: &Value,
+        desired: &Value,
+        profile: &RegisteredProfile,
+    ) -> Result<ManagedConfiguration, String> {
+        let mut fields = BTreeMap::new();
+        crate::native::apply::flatten(desired, &mut vec![], &mut fields);
+        let mut managed = ManagedConfiguration {
+            fields: fields
+                .into_iter()
+                .map(|(path, value)| (path, Some(value)))
+                .collect(),
+            released: vec![],
+        };
+        if role == "settings" {
+            if let Some(state) = &profile.editing {
+                for action in &state.intents {
+                    if action.operation == "reset" {
+                        if let Ok(path) = path(desired, action) {
+                            managed.released.push(pointer(&path));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(managed)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1018,540 +1553,5 @@ mod tests {
             applied["model_providers"]["native_default"]["requires_openai_auth"],
             true
         );
-    }
-}
-fn root(documents: &Documents) -> Value {
-    documents
-        .get("settings")
-        .cloned()
-        .unwrap_or_else(|| json!({}))
-}
-fn path(_root: &Value, action: &ConfigurationAction) -> Result<Vec<String>, String> {
-    let field = action.field.as_deref().ok_or("缺少 Codex 字段")?;
-    if PARAMETERS.contains(&field) {
-        if action.target != json!("configuration") {
-            return Err("Codex 参数是配置级设置".into());
-        }
-        return Ok(vec![field.into()]);
-    }
-    if field == "base_url" {
-        let provider = action
-            .target
-            .as_str()
-            .filter(|id| !id.trim().is_empty() && *id != "configuration")
-            .ok_or("缺少供应商身份")?;
-        if ["openai", "ollama", "lmstudio"].contains(&provider) {
-            return Err("内置供应商地址由 Codex 管理；自定义地址请使用独立供应商 ID".into());
-        }
-        return Ok(vec![
-            "model_providers".into(),
-            provider.into(),
-            "base_url".into(),
-        ]);
-    }
-    Err("不支持的 Codex 配置字段".into())
-}
-fn pointer(path: &[String]) -> String {
-    format!(
-        "/{}",
-        path.iter()
-            .map(|part| crate::adapters::pointer_token(part))
-            .collect::<Vec<_>>()
-            .join("/")
-    )
-}
-fn remove(root: &mut Value, path: &[String]) {
-    if let Some((last, parents)) = path.split_last() {
-        let mut target = root;
-        for part in parents {
-            let Some(next) = target.get_mut(part) else {
-                return;
-            };
-            target = next;
-        }
-        if let Some(map) = target.as_object_mut() {
-            map.remove(last);
-        }
-    }
-}
-fn field(
-    id: &str,
-    label: &str,
-    kind: &str,
-    choices: &[&str],
-    advanced: bool,
-) -> ConfigurationField {
-    ConfigurationField {
-        id: id.into(),
-        label: label.into(),
-        kind: kind.into(),
-        required: false,
-        advanced,
-        choices: choices.iter().map(|value| (*value).into()).collect(),
-        minimum: (kind == "integer").then_some(1.0),
-        default_source: Some("跟随 Codex 原生默认或继承值".into()),
-        unavailable_reason: None,
-        origin: None,
-    }
-}
-
-impl ConfigurationAdapter for Codex {
-    fn credential_paths(&self,connection:&Connection)->Vec<(&'static str,Vec<String>)>{
-        ["experimental_bearer_token","env_key"].iter().map(|field|("settings",vec!["model_providers".into(),connection.provider_id.clone(),(*field).into()])).collect()
-    }
-
-    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/codex/native_verification.mjs") }
-    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: false, reason: None } }
-    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
-        self.describe(scope).fields.into_iter().filter(|field| ["model_reasoning_effort", "model_context_window", "model_reasoning_summary", "model_verbosity"].contains(&field.id.as_str()))
-            .map(|field| CommonParameter { path: field.id.split('.').map(str::to_owned).collect(), field, role: "settings", target: json!("configuration") }).collect()
-    }
-    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/model"), ("settings","/model_provider")] }
-    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
-        let mut documents = documents.clone(); let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
-        let missing = settings.get("model").is_none(); if missing { settings["model"] = json!("__cliora_draft__"); }
-        let mut connection = self.connection(&documents, state)?; if missing { if let Some(connection) = &mut connection { connection.model.clear(); } }
-        Ok(connection)
-    }
-    fn catalog_actions(&self, _documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
-        if ids.len() != 1 { return Err("Codex 使用配置级单个模型，请选择一个模型".into()) }
-        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!("configuration"), operation: "set".into(), field: Some("model".into()), value: Some(json!(ids[0])) }])
-    }
-
-    fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
-        matches!(path,[role,providers,id,field] if role=="settings" && providers=="model_providers" && !id.is_empty() && field=="env_key")
-            && valid_environment_reference(value)
-    }
-    fn unmanaged_paths(
-        &self,
-        role: &str,
-        current: &Value,
-        desired: &Value,
-        profile: &RegisteredProfile,
-    ) -> Result<Vec<String>, String> {
-        if role != "settings" {
-            return Ok(vec![]);
-        }
-        let selected = desired["model_provider"].as_str().unwrap_or("openai");
-        let source = profile
-            .files
-            .get("settings")
-            .map(|text| crate::native::format::parse(crate::native::format::FileKind::Toml, text))
-            .transpose()?
-            .unwrap_or_else(|| json!({}));
-        Ok(current["model_providers"]
-            .as_object()
-            .into_iter()
-            .flat_map(|providers| providers.keys())
-            .filter(|id| {
-                // A declared reserved table is normalized to this same selected
-                // provider, rather than being an unrelated provider switch.
-                // Keep its old owned paths in the shared CAS cleanup; foreign
-                // tables remain detached and their native values stay intact.
-                let migrated = RESERVED_MODEL_PROVIDERS.contains(&id.as_str())
-                    && model_provider_id(id) == selected
-                    && source["model_providers"].get(*id).is_some();
-                id.as_str() != selected && !migrated
-            })
-            .map(|id| pointer(&["model_providers".into(), id.clone()]))
-            .collect())
-    }
-    fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
-        match path.last().map(String::as_str) {
-            Some("env_key") => PortableFieldKind::CredentialReference,
-            Some("experimental_bearer_token" | "api_key") => PortableFieldKind::Credential,
-            Some(value)
-                if PARAMETERS.contains(&value)
-                    || matches!(value, "base_url" | "wire_api" | "name") =>
-            {
-                PortableFieldKind::Parameter
-            }
-            _ => PortableFieldKind::Unknown,
-        }
-    }
-    fn suppression_changes(
-        &self,
-        action: &ConfigurationAction,
-        _state: &crate::adapters::configuration::EditingState,
-    ) -> Result<Vec<SuppressionChange>, String> {
-        let native = if action.field.as_deref() == Some("base_url") {
-            path(&json!({}), action)?
-        } else {
-            let Some(field) = action
-                .field
-                .as_deref()
-                .filter(|field| PARAMETERS.contains(field))
-            else {
-                return Ok(vec![]);
-            };
-            vec![field.into()]
-        };
-        Ok(vec![SuppressionChange {
-            role: "settings".into(),
-            path: pointer(&native),
-            suppressed: false,
-        }])
-    }
-    fn reconcile_text(
-        &self,
-        _: Option<&Documents>,
-        next: &Documents,
-        _: &Documents,
-        state: &mut EditingState,
-    ) -> Result<(), String> {
-        let root = root(next);
-        state.intents.retain(|action| {
-            action.operation == "reset"
-                && path(&root, action)
-                    .ok()
-                    .is_some_and(|path| root.pointer(&pointer(&path)).is_none())
-        });
-        state.selected_provider = root["model_provider"].as_str().map(str::to_owned);
-        Ok(())
-    }
-    fn describe(&self, scope: Scope) -> ConfigurationDescriptor {
-        let mut fields = vec![
-            field("model", "当前模型", "string", &[], false),
-            field("model_provider", "供应商 ID", "string", &[], false),
-            field("base_url", "Responses 地址", "string", &[], false),
-            field(
-                "model_reasoning_effort",
-                "推理强度（Codex 原生）",
-                "string",
-                &[],
-                true,
-            ),
-            field(
-                "model_context_window",
-                "上下文窗口（Token）",
-                "integer",
-                &[],
-                true,
-            ),
-            field(
-                "model_reasoning_summary",
-                "推理摘要",
-                "string",
-                &["auto", "concise", "detailed", "none"],
-                true,
-            ),
-            field(
-                "model_verbosity",
-                "回答详细程度",
-                "string",
-                &["low", "medium", "high"],
-                true,
-            ),
-        ];
-        if scope == Scope::Project {
-            for field in fields
-                .iter_mut()
-                .filter(|field| matches!(field.id.as_str(), "model_provider" | "base_url"))
-            {
-                field.unavailable_reason = Some("Codex 供应商连接仅在全局配置编辑".into());
-            }
-        }
-        ConfigurationDescriptor {
-            version: EDITING_VERSION,
-            fields,
-            operations: vec!["set".into(), "reset".into()],
-        }
-    }
-    fn field_locations(&self, field: &str, documents: &Documents) -> Vec<(String, Vec<String>)> {
-        if PARAMETERS.contains(&field) {
-            return vec![("settings".into(), vec![field.into()])];
-        }
-        if field == "base_url" {
-            let provider = documents
-                .get("settings")
-                .and_then(|settings| settings["model_provider"].as_str())
-                .unwrap_or("openai");
-            return vec![(
-                "settings".into(),
-                vec!["model_providers".into(), provider.into(), "base_url".into()],
-            )];
-        }
-        Vec::new()
-    }
-    fn read(&self, documents: &Documents, _: &EditingState) -> Result<Value, String> {
-        let settings = root(documents);
-        if !settings.is_object() {
-            return Err("Codex 配置须为对象".into());
-        }
-        let mut values = BTreeMap::new();
-        for key in PARAMETERS {
-            if let Some(value) = settings.get(*key) {
-                values.insert((*key).to_owned(), value.clone());
-            }
-        }
-        let provider = settings["model_provider"].as_str().unwrap_or("openai");
-        if let Some(base) = settings["model_providers"][provider].get("base_url") {
-            values.insert("base_url".into(), base.clone());
-        }
-        let choices = capabilities(settings["model"].as_str().unwrap_or(""));
-        let definition = &settings["model_providers"][provider];
-        let default_address_reason =
-            if definition.is_object() && definition.get("base_url").is_none() {
-                Some(if effective_api_base(provider, definition).is_some() {
-                    "未设置地址：跟随 Codex 原生 API 默认地址。"
-                } else {
-                    "未设置地址：由 Codex 原生登录或特殊认证决定，有效连接尚未核验。"
-                })
-            } else {
-                None
-            };
-        Ok(
-            json!({"values":values,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
-        )
-    }
-    fn edit(
-        &self,
-        documents: &mut Documents,
-        state: &mut EditingState,
-        action: &ConfigurationAction,
-    ) -> Result<(), String> {
-        let settings = documents
-            .entry("settings".into())
-            .or_insert_with(|| json!({}));
-        if !settings.is_object() {
-            return Err("Codex 配置须为对象".into());
-        }
-        if action.field.as_deref() == Some("base_url")
-            && (settings
-                .get("model_providers")
-                .is_some_and(|providers| !providers.is_object())
-                || settings["model_providers"]
-                    .get(action.target.as_str().unwrap_or(""))
-                    .is_some_and(|provider| !provider.is_object()))
-        {
-            return Err("供应商定义须为原生 TOML 表；请先修正原文".into());
-        }
-        let path = path(settings, action)?;
-        if action.operation == "set"
-            && action.field.as_deref() == Some("base_url")
-            && settings["model_provider"] != action.target
-        {
-            return Err("供应商身份已变化，请重新编辑地址".into());
-        }
-        match action.operation.as_str() {
-            "reset" => remove(settings, &path),
-            "set" => {
-                let value = action.value.clone().ok_or("缺少字段值")?;
-                if value.is_null() {
-                    return Err("恢复默认请使用 reset".into());
-                }
-                crate::native::apply::set_json(
-                    settings,
-                    &path.iter().map(String::as_str).collect::<Vec<_>>(),
-                    value,
-                );
-                if action.field.as_deref() == Some("base_url") {
-                    let provider = settings["model_provider"]
-                        .as_str()
-                        .ok_or("缺少供应商")?
-                        .to_owned();
-                    // Responses is the only supported Codex wire protocol.
-                    crate::native::apply::set_json(
-                        settings,
-                        &["model_providers", &provider, "wire_api"],
-                        json!("responses"),
-                    );
-                    if settings["model_providers"][&provider].get("name").is_none() {
-                        crate::native::apply::set_json(
-                            settings,
-                            &["model_providers", &provider, "name"],
-                            json!(provider),
-                        );
-                    }
-                }
-            }
-            _ => return Err("不支持的 Codex 编辑操作".into()),
-        }
-        state.selected_provider = settings["model_provider"].as_str().map(str::to_owned);
-        Ok(())
-    }
-    fn validate(
-        &self,
-        documents: &Documents,
-        _: &EditingState,
-        _: Scope,
-    ) -> Vec<ConfigurationIssue> {
-        let settings = root(documents);
-        if !settings.is_object() {
-            return vec![ConfigurationIssue {
-                target: json!("configuration"),
-                field: None,
-                code: "invalid_document".into(),
-                message: "Codex 配置须为对象".into(),
-            }];
-        }
-        let mut issues = vec![];
-        let mut issue = |field: &str, message: &str| {
-            issues.push(ConfigurationIssue {
-                target: json!("configuration"),
-                field: Some(field.into()),
-                code: "invalid_value".into(),
-                message: message.into(),
-            })
-        };
-        for key in PARAMETERS {
-            let Some(value) = settings.get(*key) else {
-                continue;
-            };
-            if *key == "model_context_window" {
-                if !value.as_i64().is_some_and(|value| value > 0) {
-                    issue(key, "上下文窗口须为正整数");
-                }
-            } else if !value
-                .as_str()
-                .is_some_and(|text| !text.trim().is_empty() && !text.chars().any(char::is_control))
-            {
-                issue(key, "请输入非空原生字符串值");
-            }
-        }
-        let choices = capabilities(settings["model"].as_str().unwrap_or(""));
-        if let Some(effort) = settings["model_reasoning_effort"].as_str() {
-            if !choices.is_empty()
-                && [
-                    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-                ]
-                .contains(&effort)
-                && !choices.iter().any(|choice| choice == effort)
-            {
-                issue(
-                    "model_reasoning_effort",
-                    "当前模型的原生目录不支持此推理档位",
-                );
-            }
-        }
-        for (key, allowed) in [
-            (
-                "model_reasoning_summary",
-                &["auto", "concise", "detailed", "none"][..],
-            ),
-            ("model_verbosity", &["low", "medium", "high"][..]),
-        ] {
-            if settings
-                .get(key)
-                .is_some_and(|value| !value.as_str().is_some_and(|value| allowed.contains(&value)))
-            {
-                issue(key, "此值不符合 Codex 原生配置 schema");
-            }
-        }
-        if let Some(provider) = settings["model_provider"]
-            .as_str()
-            .filter(|id| !["openai", "ollama", "lmstudio"].contains(id))
-        {
-            let definition = &settings["model_providers"][provider];
-            if !definition.is_object() {
-                issue("model_provider", "自定义供应商没有原生定义");
-            }
-            if definition.get("base_url").is_some_and(|value| {
-                !value.as_str().is_some_and(|base| {
-                    url::Url::parse(base).is_ok_and(|url| {
-                        matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-                    })
-                })
-            }) {
-                issue("base_url", "请输入有效 HTTP 或 HTTPS 供应商地址");
-            }
-            if definition
-                .get("wire_api")
-                .is_some_and(|value| value != "responses")
-            {
-                issue("base_url", "Codex 仅支持 Responses 接口");
-            }
-            if definition
-                .get("env_key")
-                .is_some_and(|value| !valid_environment_reference(value))
-            {
-                issue(
-                    "model_provider",
-                    "供应商 env_key 须为合法环境变量名称，不能使用字面密钥、路径或命令",
-                );
-            }
-        }
-        issues
-    }
-    fn connection(
-        &self,
-        documents: &Documents,
-        _: &EditingState,
-    ) -> Result<Option<Connection>, String> {
-        let settings = root(documents);
-        let provider = settings["model_provider"].as_str().unwrap_or("openai");
-        let definition = &settings["model_providers"][provider];
-        Ok(
-            match (
-                effective_api_base(provider, definition),
-                settings["model"].as_str(),
-            ) {
-                (Some(base), Some(model)) => Some(Connection {
-                    provider_id: provider.into(),
-                    interface_format: "openai_responses".into(),
-                    base_url: base.into(),
-                    model: model.into(),
-                    secret_ref: None,
-                    auth_env_var: definition["env_key"].as_str().map(str::to_owned),
-                    model_records: vec![],
-                }),
-                _ => None,
-            },
-        )
-    }
-    fn managed_documents(
-        &self,
-        mut documents: Documents,
-        _: &RegisteredProfile,
-        _: Scope,
-    ) -> Result<Documents, String> {
-        if let Some(settings) = documents.get_mut("settings") {
-            let selected = settings["model_provider"]
-                .as_str()
-                .unwrap_or("openai")
-                .to_owned();
-            if let Some(providers) = settings
-                .get_mut("model_providers")
-                .and_then(Value::as_object_mut)
-            {
-                providers.retain(|id, _| id == &selected);
-            }
-            if settings["model_providers"]
-                .as_object()
-                .is_some_and(|providers| providers.is_empty())
-            {
-                settings.as_object_mut().unwrap().remove("model_providers");
-            }
-        }
-        Ok(documents)
-    }
-    fn managed_fields(
-        &self,
-        role: &str,
-        _: &Value,
-        desired: &Value,
-        profile: &RegisteredProfile,
-    ) -> Result<ManagedConfiguration, String> {
-        let mut fields = BTreeMap::new();
-        crate::native::apply::flatten(desired, &mut vec![], &mut fields);
-        let mut managed = ManagedConfiguration {
-            fields: fields
-                .into_iter()
-                .map(|(path, value)| (path, Some(value)))
-                .collect(),
-            released: vec![],
-        };
-        if role == "settings" {
-            if let Some(state) = &profile.editing {
-                for action in &state.intents {
-                    if action.operation == "reset" {
-                        if let Ok(path) = path(desired, action) {
-                            managed.released.push(pointer(&path));
-                        }
-                    }
-                }
-            }
-        }
-        Ok(managed)
     }
 }

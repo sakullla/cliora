@@ -1155,7 +1155,7 @@ where
         let mut item = item.clone();
         if item.existed {
             let bytes = fs::read(&item.path).map_err(|_| "准备备份时无法读取原生文件")?;
-            if keyed_fingerprint(&integrity, &bytes) != item.old_hash {
+            if keyed_fingerprint(integrity, &bytes) != item.old_hash {
                 return Err("原生文件在准备备份期间发生变化".into());
             }
             let (backup, nonce) = encrypt(&key, &bytes)?;
@@ -1182,20 +1182,20 @@ where
         set_status(db, &id, "applying")?;
         for (item, output) in &prepared {
             let current = read_bytes(&item.path)?;
-            if item.path.exists() != item.existed || keyed_fingerprint(&integrity, &current) != item.old_hash {
+            if item.path.exists() != item.existed || keyed_fingerprint(integrity, &current) != item.old_hash {
                 return Err(format!("原生文件写入前发生变化：{}", item.path.display()));
             }
             if item.new_exists { write_replacement(&item.path, output, &id, item.sensitive)?; }
             else { fs::remove_file(&item.path).map_err(|_| "无法移除原生文件")?; }
             let written = read_bytes(&item.path)?;
-            if keyed_fingerprint(&integrity, &written) != item.new_hash {
+            if keyed_fingerprint(integrity, &written) != item.new_hash {
                 return Err("原生写入后校验失败".into());
             }
         }
         for (item, _) in &prepared {
             let written = read_bytes(&item.path)?;
             if item.path.exists() != item.new_exists { return Err("提交前文件存在状态改变".into()); }
-            if keyed_fingerprint(&integrity, &written) != item.new_hash {
+            if keyed_fingerprint(integrity, &written) != item.new_hash {
                 return Err(format!("提交前发现外部修改：{}", item.path.display()));
             }
         }
@@ -1215,7 +1215,7 @@ where
         })
     })();
     if let Err(error) = attempt {
-        return match restore(db, credentials, &journal, &integrity) {
+        return match restore(db, credentials, &journal, integrity) {
             Ok(()) => Err(error),
             Err(recovery) => Err(format!("{error}；自动恢复未完成：{recovery}")),
         };
@@ -1751,7 +1751,7 @@ mod tests {
             force_restrict: false,
         };
         let db = Database::open(&temp.path().join("app.db")).unwrap();
-        apply(&db, &MemoryStore::default(), &[patch.clone()], |_| Ok(())).unwrap();
+        apply(&db, &MemoryStore::default(), std::slice::from_ref(&patch), |_| Ok(())).unwrap();
         let output = fs::read_to_string(&file).unwrap();
         assert!(output.contains("# keep"));
         assert!(output.contains("other = 1"));

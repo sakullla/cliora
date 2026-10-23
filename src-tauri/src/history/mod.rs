@@ -183,6 +183,15 @@ pub struct ParsedSession {
     pub partial: bool,
 }
 
+impl Default for ParsedSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A parsed source file with its encoded messages, usage and children, or the parse error.
+type ParsedFile = Result<(ParsedSession, String, String, String), String>;
+
 impl ParsedSession {
     pub fn new() -> Self {
         Self {
@@ -919,6 +928,7 @@ fn store_session(
     store_encoded_session(conn, tool, source, &parsed, projects, &messages, &usage, &children)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn store_encoded_session(
     conn: &Connection,
     tool: &str,
@@ -1033,7 +1043,7 @@ fn parse_and_store(
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let halted = || stop.load(Ordering::Relaxed) || cancelled();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<(ParsedSession, String, String, String), String>)>(workers * 2);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, ParsedFile)>(workers * 2);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let sender = sender.clone();
@@ -1063,7 +1073,7 @@ fn parse_and_store(
             // Give concurrent parsers a short, bounded window to fill a write
             // batch instead of fsyncing a separate transaction for each file.
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4);
-            let encoded_size = |item: &(usize, Result<(ParsedSession, String, String, String), String>)| {
+            let encoded_size = |item: &(usize, ParsedFile)| {
                 item.1.as_ref().map_or(0, |(_, messages, usage, children)| messages.len() + usage.len() + children.len())
             };
             let mut bytes = encoded_size(&batch[0]);

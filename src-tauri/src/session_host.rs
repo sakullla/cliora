@@ -359,7 +359,7 @@ pub(crate) fn shell_executable() -> Result<(std::path::PathBuf, Vec<String>), St
         if !program.is_file() {
             return Err("找不到命令提示符".into());
         }
-        return Ok((program, vec!["/d".into(), "/q".into(), "/k".into()]));
+        Ok((program, vec!["/d".into(), "/q".into(), "/k".into()]))
     }
     #[cfg(not(windows))]
     {

@@ -1808,7 +1808,7 @@ pub async fn launch_cli_login(app: AppHandle, tool_id: String) -> Result<launch:
         app.state::<AppState>().with_database(&app, |db| {
             let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
             let plan = launch::login_plan(db, &adapters::Registry::builtins(), &home, &tool_id, custom.as_deref()).map_err(native_error)?;
-            launch::spawn(&db, plan).map_err(native_error)
+            launch::spawn(db, plan).map_err(native_error)
         })
     }).await
 }
@@ -2438,13 +2438,13 @@ pub(crate) struct LaunchFailure {
 }
 
 impl LaunchFailure {
-    fn new(stage: launch::LaunchStage, error: ApiError) -> Self {
-        Self {
+    fn new(stage: launch::LaunchStage, error: ApiError) -> Box<Self> {
+        Box::new(Self {
             error,
             stage,
             project_path: None,
             profile_id: None,
-        }
+        })
     }
 }
 
@@ -2458,7 +2458,7 @@ pub(crate) fn launch_now(
 pub(crate) fn launch_now_with_stage(
     app: &AppHandle,
     request: launch::LaunchRequest,
-) -> Result<launch::LaunchResult, LaunchFailure> {
+) -> Result<launch::LaunchResult, Box<LaunchFailure>> {
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
     let project_id = request.project_id.clone();
@@ -2751,6 +2751,7 @@ pub async fn preview_native_backup(app: AppHandle, tool_id: String, scope: Scope
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn restore_native_backup(app: AppHandle, expected_context_id: Option<String>, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String, current: String) -> Result<transaction::ApplyOutcome, ApiError> {
     blocking(move || {
         let home = home()?; let project = checked_project(scope, project_path)?;
@@ -2773,6 +2774,7 @@ pub async fn restore_native_backup(app: AppHandle, expected_context_id: Option<S
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn save_registered_native_file(app: AppHandle, expected_context_id: Option<String>, tool_id: String, scope: Scope, project_path: Option<String>, role: String, original: String, edited: String) -> Result<crate::native::transaction::ApplyOutcome, ApiError> {
     blocking(move || {
         let home = home()?;

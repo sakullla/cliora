@@ -192,17 +192,14 @@ fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> ConfigurationD
     };
     draft
 }
+/// Values withheld from a redacted file, keyed by file role: field path and original value.
+type PendingValues = BTreeMap<String, Vec<(Vec<String>, Value)>>;
+
 fn redacted(
     registry: &Registry,
     tool: &str,
     raw: &BTreeMap<String, String>,
-) -> Result<
-    (
-        BTreeMap<String, String>,
-        BTreeMap<String, Vec<(Vec<String>, Value)>>,
-    ),
-    String,
-> {
+) -> Result<(BTreeMap<String, String>, PendingValues), String> {
     let adapter = registry.get(tool).ok_or("适配器未注册")?;
     if adapter.configuration().is_none() {
         // The existing adapter intake is pure: discard its pending values and

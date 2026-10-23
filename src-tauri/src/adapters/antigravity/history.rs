@@ -860,7 +860,7 @@ mod tests {
         assert!(found[0].fingerprint.starts_with("antigravity-session-v3|"));
         let before = found[0].fingerprint.clone();
         // A new usage row in the conversation database changes the fingerprint.
-        let usage = Connection::open(&conversation_db(
+        let usage = Connection::open(conversation_db(
             &super::super::data_root(home.path()),
             ROOT_ID,
         ))

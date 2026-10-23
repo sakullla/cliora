@@ -154,6 +154,7 @@ pub(crate) fn entry(
 ) -> AgentEntry {
     entry_versioned(tool, path, format, content, fallback, enabled, owner, None)
 }
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn entry_versioned(
     tool: &str,
     path: &Path,

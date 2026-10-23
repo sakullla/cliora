@@ -357,6 +357,7 @@ pub fn read_document(
     Ok(NativeSkillDocument { name: located.name, path: directory.to_owned(), content })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn save_document(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -712,18 +713,10 @@ fn resolved_skill_dir(path: &Path) -> Result<PathBuf, String> {
     }
     Err("请选择普通 Skills 目录".into())
 }
-fn snapshot(
-    path: &Path,
-) -> Result<
-    (
-        String,
-        String,
-        Option<String>,
-        BTreeMap<String, String>,
-        String,
-    ),
-    String,
-> {
+/// A Skill directory read as name, description, optional compatibility, files by relative path, and checksum.
+type SkillSnapshot = (String, String, Option<String>, BTreeMap<String, String>, String);
+
+fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -1070,9 +1063,12 @@ pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
         Ok(rows)
     })
 }
+/// `skill_packages` columns: id, name, description, source, digest, files_json, updated_at, in_library.
+type PackageRow = (String, String, String, String, String, String, i64, i64);
+
 fn package(db: &Database, id: &str) -> Result<(SkillPackage, BTreeMap<String, String>), String> {
     db.with_connection(|conn| {
-        let row: Option<(String, String, String, String, String, String, i64, i64)> = conn.query_row(
+        let row: Option<PackageRow> = conn.query_row(
             "SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages WHERE id = ?1", [id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)))
             .optional().map_err(|error| error.to_string())?;
@@ -1670,6 +1666,7 @@ pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str
     }
     Ok(true)
 }
+#[allow(clippy::too_many_arguments)]
 pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::CredentialStore, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>, enabled: bool) -> Result<(),String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
@@ -1747,6 +1744,7 @@ pub fn install(
         false,
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub fn install_confirmed(
     db: &Database,
     registry: &Registry,
@@ -1795,6 +1793,7 @@ pub fn remove(
         false,
     )
 }
+#[allow(clippy::too_many_arguments)]
 fn operate(
     db: &Database,
     registry: &Registry,

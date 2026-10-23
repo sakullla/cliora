@@ -757,7 +757,7 @@ mod tests {
         let profile = saved_profile(2);
         let binding = old_binding();
         assert_eq!(
-            applied_label(&[profile.clone()], Some(&binding)),
+            applied_label(std::slice::from_ref(&profile), Some(&binding)),
             "日常 · 有未应用修改（已应用 v1）"
         );
         assert_eq!(

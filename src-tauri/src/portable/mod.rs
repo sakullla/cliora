@@ -120,13 +120,13 @@ pub struct PortableMcp {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PortablePayload {
     Preferences(PortablePreferences),
-    Profile(PortableProfile),
+    Profile(Box<PortableProfile>),
     Common(RegisteredCommon),
     Project(PortableProject),
     Library(LibraryItem),
     Mcp(PortableMcp),
     Skill(PortableSkill),
-    Account(PortableAccount),
+    Account(Box<PortableAccount>),
     Binding(PortableBinding),
 }
 
@@ -435,7 +435,7 @@ struct Collected {
 }
 
 enum AccountRead {
-    Ready(crate::accounts::AuthAccount, Vec<PortableAuthFile>),
+    Ready(Box<crate::accounts::AuthAccount>, Vec<PortableAuthFile>),
     Blocked(RestoreBlocker),
 }
 
@@ -574,9 +574,9 @@ fn collect_snapshot_on(
                 let Ok(value) = serde_json::to_value(&*action) else { return false; };
                 let adapter = registry.get(&profile.tool);
                 if let Some(field) = &action.field {
-                    let kind = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(&[field.clone()]));
+                    let kind = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(std::slice::from_ref(field)));
                     let public_reference = kind == crate::adapters::configuration::PortableFieldKind::CredentialReference
-                        && action.value.as_ref().is_some_and(|value| adapter.and_then(|adapter| adapter.configuration()).is_some_and(|port| port.portable_reference_valid(&[field.clone()], value)));
+                        && action.value.as_ref().is_some_and(|value| adapter.and_then(|adapter| adapter.configuration()).is_some_and(|port| port.portable_reference_valid(std::slice::from_ref(field), value)));
                     if (kind == crate::adapters::configuration::PortableFieldKind::CredentialReference && action.value.is_some() && !public_reference)
                         || (unsafe_field(field) && kind != crate::adapters::configuration::PortableFieldKind::Parameter && !public_reference) {
                         pending_fields.push(format!("editing.intent.{field}")); return false;
@@ -609,12 +609,12 @@ fn collect_snapshot_on(
         pending_fields.dedup();
         entities.push(PortableEntity {
             id: profile.id.clone(),
-            payload: PortablePayload::Profile(PortableProfile {
+            payload: PortablePayload::Profile(Box::new(PortableProfile {
                 profile,
                 connection_secret,
                 native_secrets,
                 pending_fields,
-            }),
+            })),
         });
     }
     for text in commons {
@@ -727,7 +727,7 @@ fn collect_snapshot_on(
                 readable_account_keys.push(format!("account:{}", account.id));
                 entities.push(PortableEntity {
                     id: account.id.clone(),
-                    payload: PortablePayload::Account(PortableAccount { account, auth_files }),
+                    payload: PortablePayload::Account(Box::new(PortableAccount { account: *account, auth_files })),
                 });
             }
             AccountRead::Blocked(blocker) => blocked_accounts.push(blocker),
@@ -1191,9 +1191,7 @@ fn apply_import_selecting(
         }
         issues.extend(apply_active_bindings(db, store, registry, &home, &touched));
     }
-    if let Err(error) = store_blockers(db, &touched, &issues) {
-        return Err(error);
-    }
+    store_blockers(db, &touched, &issues)?;
     imported += prepared.len();
     Ok(imported)
 }
@@ -1526,7 +1524,7 @@ fn portable_account(mut account: crate::accounts::AuthAccount) -> AccountRead {
         left.context_id == right.context_id && left.name == right.name && left.relative == right.relative
     });
     normalize_account_digest(&mut account);
-    AccountRead::Ready(account, auth_files)
+    AccountRead::Ready(Box::new(account), auth_files)
 }
 
 /// Re-read login files and drop a stale "cannot export" blocker once a file can be read.
@@ -2463,7 +2461,7 @@ fn restore_roots(db: &Database) -> Option<(PathBuf, PathBuf)> {
     #[cfg(test)]
     {
         let _ = db;
-        return RESTORE_ROOTS.with(|cell| cell.borrow().clone());
+        RESTORE_ROOTS.with(|cell| cell.borrow().clone())
     }
     #[cfg(not(test))]
     {

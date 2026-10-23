@@ -985,6 +985,7 @@ fn take_plaintext(value: Option<&mut Value>) -> Option<String> {
     Some(text)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assign_secret(
     parsed: &mut Value,
     path: &[&str],

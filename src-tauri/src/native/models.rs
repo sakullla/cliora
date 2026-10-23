@@ -488,9 +488,8 @@ fn fetch_guarded<F:Fn()->bool>(
             .ok_or("模型目录缺少 data 列表")?;
         for item in data {
             if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
-                if !id.trim().is_empty() {
-                    if secret.as_ref().is_none_or(|secret|secret.is_empty()||!id.contains(secret)){models.insert(id.to_string());}
-                }
+                if !id.trim().is_empty()
+                    && secret.as_ref().is_none_or(|secret|secret.is_empty()||!id.contains(secret)){models.insert(id.to_string());}
             }
         }
         let has_more = body
@@ -880,7 +879,7 @@ mod tests {
             ),
         ];
         for (format, valid) in &examples {
-            assert!(has_model_output(format, &valid), "{format}");
+            assert!(has_model_output(format, valid), "{format}");
             assert!(
                 !has_model_output(format, &serde_json::json!({})),
                 "{format}"

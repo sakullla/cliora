@@ -38,6 +38,7 @@ mod path_policy {
 
     #[cfg(test)]
     mod tests {
+        #[cfg(unix)]
         use super::*;
 
         #[cfg(target_os = "macos")]
@@ -415,4 +416,22 @@ fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (app, event);
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// Undo a test's `set_readonly(true)` for the owner only: on Unix
+    /// `set_readonly(false)` would leave the file world-writable.
+    #[cfg_attr(not(unix), allow(clippy::permissions_set_readonly_false))]
+    pub(crate) fn make_writable(path: &std::path::Path) -> std::io::Result<()> {
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() | 0o200);
+        }
+        #[cfg(not(unix))]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)
+    }
 }

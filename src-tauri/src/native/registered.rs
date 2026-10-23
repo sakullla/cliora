@@ -196,6 +196,7 @@ where
     transaction::apply(db, credentials, patches, commit)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_registered_fields<F>(
     registry: &Registry,
     id: &str,
@@ -243,6 +244,7 @@ where
 
 /// Edit a declared native file without creating a named profile. Preserve its
 /// complete text and use the same journal/CAS/recovery boundary as other writes.
+#[allow(clippy::too_many_arguments)]
 pub fn save_registered_text(
     registry: &Registry,
     id: &str,
