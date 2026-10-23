@@ -854,8 +854,24 @@ fn missing_preference_and_stored_auto_select_the_workbench() {
             .map_err(|error| error.to_string())
     }).unwrap();
     assert_eq!(stored, "\"workbench\"");
-    set_terminal(&db, TerminalId::Auto).unwrap();
+    // The migration runs once: an Auto choice stored afterwards is kept, whatever terminals this host has.
+    db.with_connection(|conn| {
+        conn.execute("UPDATE app_settings SET value = '\"auto\"' WHERE key = 'preferred_terminal'", [])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Auto);
+    set_terminal(&db, TerminalId::Workbench).unwrap();
+    let auto_available = terminal_options().iter().any(|item| item.id == TerminalId::Auto && item.available);
+    if auto_available {
+        set_terminal(&db, TerminalId::Auto).unwrap();
+        assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Auto);
+    } else {
+        // CI hosts without an external terminal must refuse Auto and keep the workbench.
+        assert!(set_terminal(&db, TerminalId::Auto).unwrap_err().contains("不可用"));
+        assert_eq!(terminal_preference(&db).unwrap(), TerminalId::Workbench);
+    }
 }
 
 #[test]
