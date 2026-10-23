@@ -810,3 +810,132 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toContainText('已结束');
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
 });
+
+test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, find, bell attention, and ended cleanup', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions: Array<{ id: string; toolId: string; projectId: string | null; directory: string; mode: string; running: boolean; exitCode: number | null; startedAt: number }> = [];
+    const launches: Array<Record<string, unknown>> = [];
+    const writes: Array<{ sessionId: string; text: string }> = [];
+    const closed: string[] = [];
+    const names: Record<string, string> = {
+      codex: 'Codex',
+      claude_code: 'Claude Code',
+      ...Object.fromEntries(Array.from({ length: 42 }, (_, idx) => [`cli_tool_${idx + 1}`, `CLI Tool ${idx + 1}`])),
+    };
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    Object.assign(window, {
+      isTauri: true, __launches: launches, __writes: writes, __closed: closed,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __emitExit: (sessionId: string, exitCode: number) => {
+        const item = sessions.find((entry) => entry.id === sessionId);
+        if (item) { item.running = false; item.exitCode = exitCode; }
+        const id = bridge.listens['cliora:session-exit'];
+        bridge.handlers[id]?.({ payload: { sessionId, exitCode } });
+      },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+          if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'pr1', kind: 'prompt', title: '代码审查', body: '请审查当前改动', category: '开发', projectId: null, version: 1, updatedAt: 1 }] : [];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'launch_cli') {
+            launches.push(args.request);
+            const id = `wb-${sessions.length + 1}`;
+            sessions.push({
+              id,
+              toolId: args.request.toolId,
+              projectId: args.request.projectId ?? null,
+              directory: args.request.projectId === 'p1' ? 'C:/alpha' : (args.request.directory ?? 'C:/home'),
+              mode: args.request.mode,
+              running: true,
+              exitCode: null,
+              startedAt: Date.now(),
+            });
+            return { toolId: args.request.toolId, projectId: args.request.projectId ?? null, mode: args.request.mode, terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
+          if (command === 'replay_workbench_session') return btoa(`welcome-${args.sessionId}\r\nready-line-alpha`);
+          if (command === 'write_workbench_session') {
+            writes.push({ sessionId: args.sessionId, text: atob(args.dataBase64) });
+            return null;
+          }
+          if (command === 'resize_workbench_session') return null;
+          if (command === 'close_workbench_session') {
+            closed.push(args.sessionId);
+            const idx = sessions.findIndex((item) => item.id === args.sessionId);
+            if (idx >= 0) sessions.splice(idx, 1);
+            return null;
+          }
+          if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
+
+  // Open the New Session Modal Dialog from the clean empty state
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog).toBeVisible();
+
+  // Select workspace project (which auto-selects Claude Code) and choose YOLO mode + library prompt
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Alpha/ }).click();
+  await dialog.getByRole('radio', { name: /YOLO/ }).click();
+  await dialog.getByRole('button', { name: '代码审查' }).click();
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+  await expect(dialog).toBeHidden();
+
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('Alpha');
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('YOLO');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches)).toEqual([
+    { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动' },
+  ]);
+
+  // Open on-demand Quick Input Drawer and send multi-line / prompt text
+  await stage.getByRole('button', { name: '打开快捷输入面板' }).click();
+  const composer = stage.getByRole('textbox', { name: /编写多行内容或从资料库选入提示词/ });
+  await composer.fill('status check');
+  await composer.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string; text: string }> }).__writes)).toEqual([
+    { sessionId: 'wb-1', text: 'status check\r' },
+  ]);
+
+  // Search terminal output
+  await stage.getByRole('button', { name: '查找输出' }).click();
+  await stage.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('ready-line');
+  await expect(stage).toContainText('1 / 1');
+
+  // Toggle Focus Mode
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(stage.getByRole('button', { name: '展开会话列表' })).toBeVisible();
+  await stage.getByRole('button', { name: '展开会话列表' }).click();
+
+  // Open New Session Modal from the rail and search among 40+ CLIs
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  await rail.getByRole('button', { name: '新建会话' }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'CLI 工具' }).click();
+  await page.getByRole('textbox', { name: '搜索 40+ CLI 工具名称或标识' }).fill('CLI Tool 38');
+  await page.getByRole('option', { name: /CLI Tool 38/ }).click();
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+  await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
+
+  // Mark wb-1 exited, filter by ended, and clear ended sessions
+  await page.evaluate(() => (window as unknown as { __emitExit: (id: string, code: number) => void }).__emitExit('wb-1', 0));
+  await rail.getByRole('button', { name: /已结束/ }).first().click();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toHaveCount(0);
+  await rail.getByRole('button', { name: /清理已结束/ }).click();
+  await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
+});
