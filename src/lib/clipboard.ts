@@ -7,6 +7,7 @@ export async function writeClipboard(value: string): Promise<boolean> {
   } catch {
     // The desktop webview can reject the async clipboard API even on a click.
   }
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   try {
     const area = document.createElement('textarea');
     area.value = value;
@@ -20,8 +21,11 @@ export async function writeClipboard(value: string): Promise<boolean> {
     area.select();
     const copied = document.execCommand('copy');
     area.remove();
+    // The fallback borrows focus; hand it back so a terminal or editor keeps receiving keys.
+    previous?.focus({ preventScroll: true });
     return copied;
   } catch {
+    previous?.focus({ preventScroll: true });
     return false;
   }
 }
