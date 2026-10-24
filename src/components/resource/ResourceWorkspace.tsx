@@ -22,6 +22,7 @@ export type ResourceWorkspaceProps<T> = {
   onCloseDetails: () => void;
   detailsLabel: string;
   closeDetailsLabel: string;
+  detailsSuspended?: boolean;
   empty?: ReactNode;
   footer?: ReactNode;
 };
@@ -86,7 +87,7 @@ export function ResourceWorkspace<T>(props: ResourceWorkspaceProps<T>) {
       </div>
       {!narrow && selected && <aside className={styles.details} aria-label={props.detailsLabel}>{details}</aside>}
     </div>
-    {narrow && <GuideDialog open={!!selected} title={selected ? props.getItemLabel(selected) : props.detailsLabel} onClose={props.onCloseDetails}>{details}</GuideDialog>}
+    {narrow && <GuideDialog open={!!selected} suspended={props.detailsSuspended} title={selected ? props.getItemLabel(selected) : props.detailsLabel} onClose={props.onCloseDetails}>{details}</GuideDialog>}
     {props.footer}
   </section>;
 }
