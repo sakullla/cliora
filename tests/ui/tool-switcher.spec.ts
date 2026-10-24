@@ -71,7 +71,8 @@ test('the tool switcher stays one horizontal row', async ({ page }) => {
   expect(fitted.items.every((item) => !item.clipped)).toBe(true);
   expect(new Set(fitted.items.map((item) => item.top)).size).toBe(1);
   expect(fitted.scrollWidth).toBeGreaterThan(fitted.clientWidth);
-  expect(await list.evaluate((root) => root.offsetHeight - root.clientHeight - 2)).toBe(0);
+  // The strip has no border of its own; a classic scrollbar would make this positive.
+  expect(await list.evaluate((root) => root.offsetHeight - root.clientHeight)).toBe(0);
   await expect(list).toHaveAttribute('data-fade-end', 'true');
   await expect(list).not.toHaveAttribute('data-fade-start', /.*/);
 
