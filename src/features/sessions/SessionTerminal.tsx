@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { native, nativeAvailable } from '../../lib/native';
 import { writeClipboard } from '../../lib/clipboard';
@@ -148,6 +149,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
   linkHintRef.current = t('sessions.openLinkHint', { modifier: MAC ? '⌘' : 'Ctrl' });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const webglRef = useRef<WebglAddon | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
   const [, setScrollVersion] = useState(0);
   const activeRef = useRef(active);
@@ -508,6 +510,8 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
+      webglRef.current?.dispose();
+      webglRef.current = null;
       // xterm schedules a scroll-area sync while opening; let it finish before disposal.
       window.setTimeout(() => term.dispose(), 0);
       termRef.current = null;
@@ -531,12 +535,32 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     // Hidden terminals can reset their viewport; reveal the latest output on re-entry.
     const becameActive = active && !wasActiveRef.current;
     wasActiveRef.current = active;
-    if (!active) { linksRef.current?.dismiss(); return; }
+    if (!active) {
+      linksRef.current?.dismiss();
+      // Only one terminal renders at a time; releasing the GPU context on exit
+      // keeps many mounted sessions within the browser's WebGL context budget.
+      webglRef.current?.dispose();
+      webglRef.current = null;
+      return;
+    }
     const frame = requestAnimationFrame(() => {
       const fit = fitRef.current;
       const node = host.current;
       if (!fit || !node || node.clientWidth < 8) return;
       try { fit.fit(); } catch { return; }
+      // Test automation locates glyphs through the DOM rows; keep that renderer
+      // under webdriver so coordinates stay measurable. Everyone else gets WebGL.
+      if (!webglRef.current && navigator.webdriver !== true) {
+        try {
+          const addon = new WebglAddon();
+          addon.onContextLoss(() => {
+            addon.dispose();
+            if (webglRef.current === addon) webglRef.current = null;
+          });
+          term.loadAddon(addon);
+          webglRef.current = addon;
+        } catch { /* No WebGL here: the DOM renderer stays. */ }
+      }
       if (becameActive) handles.current.get(sessionId)?.scrollToBottom();
       if (term.cols >= 2 && term.rows >= 1 && running) {
         void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});

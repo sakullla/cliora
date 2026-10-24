@@ -231,6 +231,14 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const writers = useRef(new Map<string, (data: string) => void>());
   const pending = useRef(new Map<string, string[]>());
   const handles = useRef(new Map<string, TerminalHandle>());
+  // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
+  // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
+  const MOUNTED_ENDED_LIMIT = 6;
+  const [recentSessionIds, setRecentSessionIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!selectedId) return;
+    setRecentSessionIds((current) => current[0] === selectedId ? current : [selectedId, ...current.filter((id) => id !== selectedId)].slice(0, MOUNTED_ENDED_LIMIT));
+  }, [selectedId]);
 
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
@@ -1071,7 +1079,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div><span className={styles.findHint}>{t('sessions.findOutput')}</span><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)}><Icon name="arrowUp" size={14} /></button><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)}><Icon name="arrowDown" size={14} /></button><button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} title={t('common.dialog.close') + ' (Esc)'} onClick={closeFind}><Icon name="close" size={14} /></button></div>}
 
             <div ref={canvasRef} className={styles.canvas} data-drop={dropActive || undefined} onContextMenu={(event) => { event.preventDefault(); openTerminalMenu(selected, event.clientX, event.clientY); }}>
-              {sessions.map((session) => <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={session.id === selectedId} running={session.running} fontSize={fontSize} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge} />)}
+              {sessions.filter((session) => session.running || session.id === selectedId || recentSessionIds.includes(session.id)).map((session) => <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={session.id === selectedId} running={session.running} fontSize={fontSize} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge} />)}
               {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={13} /><span>{copiedMessage}</span></div>}
               {dropActive && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><Icon name="upload" size={22} /><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(selected) })}</span></div></div>}
             </div>

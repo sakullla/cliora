@@ -1,9 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -14,12 +15,66 @@ use crate::adapters::LaunchMode;
 use crate::launch::{LaunchPlan, LaunchResult, TerminalId};
 
 const REPLAY_LIMIT: usize = 256 * 1024;
+/// PTY reads arrive as thousands of small chunks; one IPC event per read floods the
+/// bridge with JSON and base64. Aggregate bursts for a few milliseconds instead.
+const OUTPUT_FLUSH_WINDOW: Duration = Duration::from_millis(8);
+const OUTPUT_FLUSH_BYTES: usize = 64 * 1024;
 const OUTPUT_EVENT: &str = "cliora:session-output";
 const EXIT_EVENT: &str = "cliora:session-exit";
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// `TerminateProcess` only reaches the direct child, but npm shims run `cmd.exe` →
+/// `node.exe` and CLIs spawn MCP servers of their own. Ending a session must tear
+/// down the whole tree, so the child is assigned to a kill-on-close job object.
+#[cfg(windows)]
+mod process_tree {
+    use std::os::raw::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        SetInformationJobObject,
+    };
+
+    pub struct Job(HANDLE);
+
+    // Ownership is exclusive; a job handle may be closed from any thread.
+    unsafe impl Send for Job {}
+
+    impl Job {
+        pub fn assign(child: HANDLE) -> Option<Job> {
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let configured = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                let assigned = AssignProcessToJobObject(job, child);
+                if configured == 0 || assigned == 0 {
+                    CloseHandle(job);
+                    return None;
+                }
+                Some(Job(job))
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +117,8 @@ struct Session {
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     replay: Mutex<VecDeque<u8>>,
+    #[cfg(windows)]
+    job: Mutex<Option<process_tree::Job>>,
 }
 
 pub fn install(app: AppHandle) {
@@ -104,6 +161,8 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
+    #[cfg(windows)]
+    let job = child.as_raw_handle().and_then(process_tree::Job::assign);
     let session = Arc::new(Session {
         id: uuid::Uuid::new_v4().to_string(),
         sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::SeqCst),
@@ -118,6 +177,8 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         writer: Mutex::new(writer),
         child: Mutex::new(child),
         replay: Mutex::new(VecDeque::new()),
+        #[cfg(windows)]
+        job: Mutex::new(job),
     });
     let id = session.id.clone();
     if let Err(error) = attach_reader(Arc::clone(&session), reader) {
@@ -225,7 +286,57 @@ fn end_child(session: &Session) {
     if let Ok(mut child) = session.child.lock() {
         let _ = child.kill();
     }
+    // Closing the job handle terminates whatever the process tree still runs.
+    #[cfg(windows)]
+    if let Ok(mut job) = session.job.lock() {
+        *job = None;
+    }
     session.running.store(false, Ordering::SeqCst);
+}
+
+static OUTPUT_CHANNEL: LazyLock<Sender<(String, Vec<u8>)>> = LazyLock::new(|| {
+    let (sender, receiver) = mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("cliora-session-output".into())
+        .spawn(move || coalesce_output(receiver));
+    sender
+});
+
+fn forward_output(id: &str, bytes: &[u8]) {
+    let _ = OUTPUT_CHANNEL.send((id.to_owned(), bytes.to_vec()));
+}
+
+fn coalesce_output(receiver: Receiver<(String, Vec<u8>)>) {
+    let mut pending: HashMap<String, Vec<u8>> = HashMap::new();
+    while let Some((id, bytes)) = receiver.recv().ok() {
+        pending.entry(id).or_default().extend_from_slice(&bytes);
+        while pending.values().map(Vec::len).sum::<usize>() < OUTPUT_FLUSH_BYTES {
+            match receiver.recv_timeout(OUTPUT_FLUSH_WINDOW) {
+                Ok((id, bytes)) => { pending.entry(id).or_default().extend_from_slice(&bytes); }
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        for (id, bytes) in pending.drain() {
+            flush_output(&id, &bytes);
+        }
+    }
+}
+
+fn flush_output(id: &str, bytes: &[u8]) {
+    let Ok(session) = lookup(id) else { return };
+    {
+        let Ok(mut replay) = session.replay.lock() else { return };
+        replay.extend(bytes);
+        let overflow = replay.len().saturating_sub(REPLAY_LIMIT);
+        if overflow > 0 {
+            replay.drain(..overflow);
+        }
+    }
+    emit(OUTPUT_EVENT, SessionBytes {
+        session_id: id.to_owned(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
 }
 
 fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
@@ -236,8 +347,7 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
             Ok(size) => {
-                remember(&session, &buffer[..size]);
-                emit_output(&session.id, &buffer[..size]);
+                forward_output(&session.id, &buffer[..size]);
             }
         }
     }
@@ -247,24 +357,6 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
         *exit_code = code;
     }
     emit_exit(&session.id, code);
-}
-
-fn remember(session: &Session, bytes: &[u8]) {
-    let Ok(mut replay) = session.replay.lock() else {
-        return;
-    };
-    replay.extend(bytes);
-    let overflow = replay.len().saturating_sub(REPLAY_LIMIT);
-    if overflow > 0 {
-        replay.drain(..overflow);
-    }
-}
-
-fn emit_output(id: &str, bytes: &[u8]) {
-    emit(OUTPUT_EVENT, SessionBytes {
-        session_id: id.to_owned(),
-        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-    });
 }
 
 fn emit_exit(id: &str, exit_code: Option<i32>) {
@@ -383,4 +475,77 @@ pub(crate) fn reject_reader_thread(reject: bool) {
 pub(crate) fn lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(all(test, windows))]
+fn process_name_running(name: &str) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {name}")])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).to_lowercase().contains(&name.to_lowercase()))
+}
+
+#[cfg(all(test, windows))]
+fn replay_text(id: &str) -> String {
+    replay(id)
+        .ok()
+        .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .unwrap_or_default()
+}
+
+/// `start /b` leaves a grandchild attached to the pty while the shim child exits;
+/// ending the session must terminate that grandchild too (kill-on-close job object).
+#[cfg(all(test, windows))]
+#[test]
+fn ending_a_session_terminates_the_process_tree() {
+    let _guard = lock_for_tests();
+    let (program, _) = shell_executable().expect("shell available");
+    let plan = LaunchPlan {
+        account_version: None,
+        account_context: None,
+        tool_id: "cliora-test".into(),
+        project_id: None,
+        mode: LaunchMode::Normal,
+        executable: program,
+        cli_args: vec![
+            "/d".into(),
+            "/q".into(),
+            "/c".into(),
+            "start /b ping -n 45 127.0.0.1".into(),
+        ],
+        directory: std::env::temp_dir(),
+        terminal: TerminalId::Workbench,
+        session_markers: &[],
+        credential: None,
+    };
+    let result = start(plan, None).expect("session started");
+    let id = result.session_id.expect("session id");
+    // Parallel test suites load the machine heavily; process startup needs headroom.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut answered = 0;
+    while !process_name_running("PING.EXE") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "grandchild never started; replay: {:?}",
+            replay_text(&id)
+        );
+        // A real terminal view answers cursor queries; the test host has none,
+        // and cmd's startup stalls until the position report arrives.
+        let queries = replay_text(&id).matches("[6n").count();
+        while answered < queries && answered < 8 {
+            let _ = write(&id, &base64::engine::general_purpose::STANDARD.encode("\u{1b}[1;1R".as_bytes()));
+            answered += 1;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    close(&id).expect("session closed");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while process_name_running("PING.EXE") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ending the session left the grandchild process alive"
+        );
+        thread::sleep(Duration::from_millis(250));
+    }
 }
