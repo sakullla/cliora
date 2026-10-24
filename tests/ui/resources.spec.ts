@@ -495,6 +495,79 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   expect(writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })] })]);
 });
 
+test('library MCP quick removal requires preview confirmation and preserves placement on cancel', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const marks = page.getByRole('group', { name: 'filesystem 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'Codex · 已生效' }).click();
+  const confirmation = page.getByRole('dialog', { name: '从 CLI 移除 MCP' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  let state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes).toEqual([]);
+  expect(state.places).toHaveLength(1);
+  await expect(marks.getByRole('button', { name: 'Codex · 已生效' })).toBeVisible();
+
+  await marks.getByRole('button', { name: 'Codex · 已生效' }).click();
+  await confirmation.getByRole('button', { name: '移除', exact: true }).click();
+  await expect(marks.getByRole('button', { name: 'Codex · 未写入' })).toBeVisible();
+  state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })] })]);
+  expect(state.places).toEqual([]);
+});
+
+test('library MCP quick removal rejects an external change after preview', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'preview_mcp_draft') {
+        win.__resourceQuickRemovePreview = args;
+        return invoke(command, args);
+      }
+      if (command === 'commit_mcp_draft') {
+        win.__resourceQuickRemoveCommit = args;
+        throw new Error('MCP 候选、目标上下文或原生条目在预览后变化；请重新预览');
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const marks = page.getByRole('group', { name: 'filesystem 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'Codex · 已生效' }).click();
+  const confirmation = page.getByRole('dialog', { name: '从 CLI 移除 MCP' });
+  await confirmation.getByRole('button', { name: '移除', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '原生条目在预览后变化' })).toBeVisible();
+  await expect(marks.getByRole('button', { name: 'Codex · 已生效' })).toBeVisible();
+  const state = await page.evaluate(() => ({
+    preview: (window as any).__resourceQuickRemovePreview,
+    commit: (window as any).__resourceQuickRemoveCommit,
+    writes: (window as any).__resourceWrites,
+    places: (window as any).__resourceMcpPlacements,
+    definitions: (window as any).__resourceMcpDefinitions,
+  }));
+  expect(state.preview.targets).toEqual([expect.objectContaining({ operation: 'remove', enabled: true })]);
+  expect(state.commit.targets).toEqual([expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })]);
+  expect(state.writes).toEqual([]);
+  expect(state.places).toHaveLength(1);
+  expect(state.definitions[0].version).toBe(1);
+});
+
 test('MCP removal rejects an external change after preview without deleting the placement', async ({ page }) => {
   await mockResources(page);
   await page.addInitScript(() => {
@@ -1256,6 +1329,7 @@ test('MCP card results float as a toast and never push the card list down', asyn
   const documentTop = () => list.evaluate(element => element.offsetTop);
   const before = await documentTop();
   await page.getByRole('button', { name: 'Codex · 已生效' }).click();
+  await page.getByRole('dialog', { name: '从 CLI 移除 MCP' }).getByRole('button', { name: '移除', exact: true }).click();
   const status = page.getByRole('region', { name: '资料库内容' }).getByRole('status').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
   expect(await status.evaluate((element) => getComputedStyle(element.parentElement as Element).position)).toBe('fixed');

@@ -18,7 +18,7 @@ import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest } from '../../types/resources';
 import { McpDistribution, type McpConfirmation, type McpDistributeHandle } from './McpDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
@@ -241,8 +241,16 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError(''); setNotice('');
     try {
       if (place) {
-        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
-        setNotice(t('library.page.removed', { where, tool: toolName }));
+        const target: McpDraftTargetRequest = { toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled, operation: 'remove' };
+        const candidate = await native.previewMcpDraft(mcpDraftOf(item), [target]);
+        const first = candidate.targets[0];
+        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
+        if (!await confirmAction(t('library.resources.confirmRemoveMcpPlacement', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.removeMcpPlacementTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
+        const committed = await native.commitMcpDraft(candidate.draft, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        keepDefinition(committed.definition);
+        const failed = committed.targets.find(result => result.status !== 'removed');
+        if (failed) setError(failed.detail || t('library.resources.cannotWrite', { tool: toolName }));
+        else setNotice(t('library.page.removed', { where, tool: toolName }));
       } else {
         const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
         const preview = await native.previewMcpTargets(item.id, [target]);
