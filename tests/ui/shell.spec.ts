@@ -835,10 +835,45 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(claudeOutput).toContainText('claude-ready!');
   await expect(claudeOutput).not.toContainText('claude-readyclaude-ready');
   await page.evaluate(() => { (window as unknown as { __writes: unknown[] }).__writes.length = 0; });
+  await stage.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = stage.getByRole('region', { name: '多行输入与提示词投递' });
+  const composerInput = composer.getByRole('textbox');
+  await composerInput.fill('second-session draft');
+  await codex.click();
+  await expect(composerInput).toHaveValue('');
+  await composerInput.fill('  first draft  ');
+  await claude.click();
+  await expect(composerInput).toHaveValue('second-session draft');
+  await composerInput.fill('  second draft  ');
+  await composerInput.press('Enter');
+  await expect(composerInput).toHaveValue('');
+  await codex.click();
+  await expect(composerInput).toHaveValue('  first draft  ');
+  await composerInput.press('Enter');
+  await expect(composerInput).toBeFocused();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string; dataBase64: string }> }).__writes.map((item) => ({ sessionId: item.sessionId, text: atob(item.dataBase64) })))).toEqual([
+    { sessionId: 's2', text: '  second draft  \r' },
+    { sessionId: 's1', text: '  first draft  \r' },
+  ]);
+  const collapsed = await composerInput.boundingBox();
+  await composerInput.fill(Array.from({ length: 6 }, (_, index) => `line-${index + 1}`).join('\n'));
+  await expect.poll(async () => (await composerInput.boundingBox())!.height).toBeGreaterThan(collapsed!.height);
+  expect((await composerInput.boundingBox())!.height).toBeLessThanOrEqual(144);
+  const terminalBox = await stage.locator('.xterm:visible').boundingBox();
+  const composerBox = await composer.boundingBox();
+  expect(composerBox!.y).toBeGreaterThanOrEqual(terminalBox!.y + terminalBox!.height);
+  await page.evaluate(() => { (window as unknown as { __writes: unknown[] }).__writes.length = 0; });
+  await claude.click();
   await page.locator('.xterm-helper-textarea:visible').focus();
   await page.keyboard.type('z');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string }> }).__writes.map((item) => item.sessionId))).toEqual(['s2']);
   await stage.getByRole('button', { name: '结束此会话' }).click();
+  const endConfirmation = page.getByRole('dialog', { name: '结束这个会话？' });
+  await expect(endConfirmation).toBeVisible();
+  await endConfirmation.getByRole('button', { name: '取消' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __closed: string[] }).__closed)).toEqual([]);
+  await stage.getByRole('button', { name: '结束此会话' }).click();
+  await endConfirmation.getByRole('button', { name: '结束进程' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __closed: string[] }).__closed)).toEqual(['s2']);
   await expect(claude).toHaveCount(0);
   await expect(codex).toBeVisible();
@@ -948,7 +983,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
     { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动' },
   ]);
 
-  // Open the floating quick-input composer and send multi-line / prompt text
+  // Open the docked quick-input composer and send multi-line / prompt text
   await stage.locator('.xterm-screen').click();
   await page.keyboard.press('Control+Shift+M');
   const composer = stage.getByRole('textbox', { name: /编写多行内容或从资料库选入提示词/ });

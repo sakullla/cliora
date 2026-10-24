@@ -458,12 +458,12 @@ test('an empty workbench follows the light and dark theme and offers a next step
     return { actual: getComputedStyle(element).backgroundColor, expected };
   });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect.poll(async () => { const current = await color(); return current.actual === current.expected; }).toBe(true);
   const light = await color();
-  expect(light.actual).toBe(light.expected);
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect.poll(async () => { const current = await color(); return current.actual === current.expected; }).toBe(true);
   const dark = await color();
-  expect(dark.actual).toBe(dark.expected);
   expect(dark.actual).not.toBe(light.actual);
   await stage.getByRole('button', { name: '去快速开始' }).click();
   await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();

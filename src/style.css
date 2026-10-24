@@ -481,12 +481,8 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
 .content-locked > .content-inner { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: 16px; max-width: none; }
 /* The workbench never scrolls: an IME caret near the edge must not slide the page sideways. */
 .content-workbench, .content-workbench > .content-inner { overflow: clip; min-width: 0; min-height: 0; }
-.content-workbench > .content-inner { padding: 14px 18px 14px; }
+.content-workbench > .content-inner { padding: 10px 12px 12px; }
 html[data-native="macos"] .content-workbench > .content-inner { padding-top: 10px; }
-.page-head[data-dense] { margin-bottom: 8px; }
-.page-head[data-dense] > div { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; }
-.page-head[data-dense] h1 { font-size: 17px; letter-spacing: -.01em; }
-.page-head[data-dense] p { margin-top: 0; color: var(--text-3); font-size: var(--fs-caption); opacity: .82; }
 .records-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .records-shell[hidden] { display: none; }
 .content-inner { width: 100%; max-width: 1320px; margin: 0 auto; padding: 32px 40px 56px; }
@@ -1123,5 +1119,4 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
 
 @media (max-width: 760px) {
   .content-workbench > .content-inner { padding: 12px 12px 12px; }
-  .page-head[data-dense] p { display: none; }
 }
