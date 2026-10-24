@@ -306,6 +306,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
   bridge.current = {
     writeError: (error) => setActionError(formatFailure(error, t('sessions.writeFailed'), t('sessions.retry'))),
+    linkError: (error) => setActionError(formatFailure(error, t('common.externalLink.openFailed'), t('sessions.retry'))),
     bell: (id) => {
       if (soundEnabledRef.current) playWorkbenchChime('bell');
       if (id === selectedIdRef.current && document.hasFocus()) return;
@@ -843,27 +844,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       : { pinned: [...current.pinned, id], order: current.order.filter((item) => item !== id) });
   }
 
-  function moveSession(dragId: string, targetId: string | null, before: boolean) {
-    const dragWasPinned = pinnedIds.has(dragId);
-    const targetPinned = targetId ? pinnedIds.has(targetId) : false;
-    if (dragWasPinned) {
-      const group = arrangement.pinned.filter((id) => id !== dragId);
-      if (targetId && targetPinned) {
-        const at = group.indexOf(targetId);
-        group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
-      } else group.push(dragId);
-      setArrangement((current) => ({ pinned: group, order: current.order }));
-      return;
-    }
-    const group = arrangedSessions.filter((session) => !pinnedIds.has(session.id)).map((session) => session.id).filter((id) => id !== dragId);
-    if (targetId === null) group.push(dragId);
-    else if (!targetPinned) {
-      const at = group.indexOf(targetId);
-      group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
-    } else group.unshift(dragId);
-    setArrangement((current) => ({ pinned: current.pinned, order: group }));
-  }
-
   function stepSession(step: 1 | -1) {
     if (arrangedSessions.length < 2) return;
     setSelectedId((current) => {
@@ -1035,7 +1015,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
     <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as CSSProperties}>
       <SessionRail sessions={railSessions} total={sessions.length} running={runningCount} ended={endedCount} filter={railFilter} search={railSearch} selectedId={selectedId} narrow={narrowFrame} busy={!!busy} canLaunch={terminalTools.length > 0}
-        onFilter={setRailFilter} onSearch={setRailSearch} onSelect={setSelectedId} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onMove={moveSession} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} />
+        onFilter={setRailFilter} onSearch={setRailSearch} onSelect={setSelectedId} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} />
       <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
         if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }

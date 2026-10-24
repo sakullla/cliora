@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { native } from '../../lib/native';
+import { native, nativeAvailable } from '../../lib/native';
 import { writeClipboard } from '../../lib/clipboard';
 import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalTheme';
+import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import styles from './SessionWorkbench.module.css';
 
@@ -115,6 +117,7 @@ const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 
 export type TerminalBridge = {
   writeError: (error: unknown) => void;
+  linkError: (error: unknown) => void;
   bell: (sessionId: string) => void;
   title: (sessionId: string, title: string) => void;
   outputActive: (sessionId: string, active: boolean) => void;
@@ -138,7 +141,11 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
   handles: MutableRefObject<Map<string, TerminalHandle>>;
   bridge: MutableRefObject<TerminalBridge>;
 }) {
+  const { t } = useTranslation();
   const host = useRef<HTMLDivElement>(null);
+  const linksRef = useRef<TerminalLinks | null>(null);
+  const linkHintRef = useRef('');
+  linkHintRef.current = t('sessions.openLinkHint', { modifier: MAC ? '⌘' : 'Ctrl' });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
@@ -187,6 +194,16 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     let liveStreaming = false;
     let liveTimer = 0;
     const queued: string[] = [];
+    const links = registerTerminalLinks(term, {
+      mac: MAC,
+      hint: () => linkHintRef.current,
+      open: async (url) => {
+        if (nativeAvailable) await native.openExternalUrl(url);
+        else window.open(url, '_blank', 'noopener,noreferrer');
+      },
+      onError: (error) => bridge.current.linkError(error),
+    });
+    linksRef.current = links;
     void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
 
     // Batch output bursts into one write per frame; hidden sessions continue on a microtask.
@@ -489,6 +506,8 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       parsedSub.dispose();
       subscription.dispose();
       observer.disconnect();
+      links.dispose();
+      linksRef.current = null;
       // xterm schedules a scroll-area sync while opening; let it finish before disposal.
       window.setTimeout(() => term.dispose(), 0);
       termRef.current = null;
@@ -512,7 +531,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     // Hidden terminals can reset their viewport; reveal the latest output on re-entry.
     const becameActive = active && !wasActiveRef.current;
     wasActiveRef.current = active;
-    if (!active) return;
+    if (!active) { linksRef.current?.dismiss(); return; }
     const frame = requestAnimationFrame(() => {
       const fit = fitRef.current;
       const node = host.current;

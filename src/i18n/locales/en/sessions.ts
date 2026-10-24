@@ -22,6 +22,7 @@ export default {
   listFailed: 'The session list could not be read',
   listNext: 'You can try reading it again.',
   writeFailed: 'Input did not reach the current session',
+  openLinkHint: '{{modifier}} + click to open',
   externalOpened: 'This launch opened an external terminal. The workbench has no matching live session.',
   desktopOpened: 'The desktop app was requested. The workbench did not create a session.',
   placeUnknown: 'No directory',

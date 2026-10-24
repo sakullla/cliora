@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -21,7 +20,7 @@ export type RailSession = {
   attention: boolean;
 };
 
-export function SessionRail({ sessions, total, running, ended, filter, search, selectedId, narrow, busy, canLaunch, onFilter, onSearch, onSelect, onNewSession, onOpenMenu, onMove, onRemove, onClearEnded }: {
+export function SessionRail({ sessions, total, running, ended, filter, search, selectedId, narrow, busy, canLaunch, onFilter, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded }: {
   sessions: RailSession[];
   total: number;
   running: number;
@@ -37,13 +36,10 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
   onSelect: (id: string) => void;
   onNewSession: () => void;
   onOpenMenu: (session: WorkbenchSession, x: number, y: number) => void;
-  onMove: (id: string, targetId: string | null, before: boolean) => void;
   onRemove: (session: WorkbenchSession) => void;
   onClearEnded: () => void;
 }) {
   const { t } = useTranslation();
-  const [drag, setDrag] = useState<string | null>(null);
-  const [dropMark, setDropMark] = useState<{ id: string; before: boolean } | null>(null);
 
   const activityLabel = (item: RailSession) => {
     if (item.attention) return t('sessions.bellBadge');
@@ -79,39 +75,11 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
       </div>}
     </div>
 
-    <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={navigateChoices}
-      onDragOver={(event) => { if (drag && event.target === event.currentTarget) event.preventDefault(); }}
-      onDrop={(event) => {
-        if (!drag || event.target !== event.currentTarget) return;
-        event.preventDefault();
-        onMove(drag, null, false);
-        setDrag(null);
-        setDropMark(null);
-      }}>
+    <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={navigateChoices}>
       {sessions.map((item) => {
         const { session } = item;
         const selected = session.id === selectedId;
-        return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-dragging={drag === session.id || undefined} data-drop={dropMark?.id === session.id ? (dropMark.before ? 'before' : 'after') : undefined}
-          draggable
-          onDragStart={(event) => { event.dataTransfer.setData('text/plain', session.id); event.dataTransfer.effectAllowed = 'move'; setDrag(session.id); }}
-          onDragEnd={() => { setDrag(null); setDropMark(null); }}
-          onDragOver={(event) => {
-            if (!drag || drag === session.id) return;
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'move';
-            const rect = event.currentTarget.getBoundingClientRect();
-            const before = narrow ? event.clientX < rect.left + rect.width / 2 : event.clientY < rect.top + rect.height / 2;
-            setDropMark((current) => current?.id === session.id && current.before === before ? current : { id: session.id, before });
-          }}
-          onDrop={(event) => {
-            if (!drag || drag === session.id) return;
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            const before = narrow ? event.clientX < rect.left + rect.width / 2 : event.clientY < rect.top + rect.height / 2;
-            onMove(drag, session.id, before);
-            setDrag(null);
-            setDropMark(null);
-          }}>
+        return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined}>
           <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={[item.title, item.directory || item.place].filter(Boolean).join('\n')}
             onClick={() => onSelect(session.id)}
             onContextMenu={(event) => { event.preventDefault(); onOpenMenu(session, event.clientX, event.clientY); }}
