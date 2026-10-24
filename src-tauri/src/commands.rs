@@ -817,6 +817,49 @@ pub async fn preview_mcp_targets(
 }
 
 #[tauri::command]
+pub async fn preview_mcp_draft(
+    app: AppHandle,
+    draft: resources::mcp::McpDraft,
+    targets: Vec<resources::mcp::McpTargetRequest>,
+) -> Result<resources::mcp::McpDraftPreview, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::preview_draft(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            draft,
+            targets,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn commit_mcp_draft(
+    app: AppHandle,
+    draft: resources::mcp::McpDraft,
+    targets: Vec<resources::mcp::McpTargetRequest>,
+) -> Result<resources::mcp::McpCommitResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::commit_draft(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            draft,
+            targets,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn distribute_mcp(
     app: AppHandle,
     definition_id: String,

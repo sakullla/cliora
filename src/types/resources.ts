@@ -21,10 +21,12 @@ export type McpDefinition = {
   version: number;
   readonly updatedAt?: number;
 };
-export type McpDraft = Omit<McpDefinition, 'id' | 'version'> & { id: string | null; expectedVersion: number | null };
+export type McpDraft = Omit<McpDefinition, 'id' | 'version' | 'updatedAt'> & { id: string | null; expectedVersion: number | null };
 export type McpPlacement = { contextId?: string | null; definitionId: string; toolId: string; scope: Scope; projectPath: string | null; enabled: boolean };
 export type McpTargetRequest = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; enabled: boolean; baselineHash?: string | null; previewToken?: string | null; allowReplace?: boolean };
 export type McpTargetResult = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'ready' | 'conflict' | 'unsupported' | 'written' | 'failed'; detail: string; baselineHash: string | null; previewToken: string | null; existing: unknown | null; proposed: unknown | null };
+export type McpDraftPreview = { draft: McpDraft; definition: McpDefinition; targets: McpTargetResult[] };
+export type McpCommitResult = { definition: McpDefinition; targets: McpTargetResult[] };
 export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };

@@ -41,7 +41,7 @@ pub struct McpDefinition {
     pub updated_at: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDraft {
     pub id: Option<String>,
@@ -55,6 +55,21 @@ pub struct McpDraft {
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub expected_version: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDraftPreview {
+    pub draft: McpDraft,
+    pub definition: McpDefinition,
+    pub targets: Vec<McpTargetResult>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCommitResult {
+    pub definition: McpDefinition,
+    pub targets: Vec<McpTargetResult>,
 }
 
 fn default_in_library() -> bool {
@@ -256,9 +271,33 @@ fn masked_export_map(values: &IndexMap<String, String>) -> serde_json::Map<Strin
         .collect()
 }
 
+fn candidate_definition(draft: &McpDraft) -> Result<McpDefinition, String> {
+    validate(draft)?;
+    let id = draft.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let version = draft.expected_version.map_or(1, |old| old + 1);
+    let (command, args) = match draft.transport {
+        McpTransport::Stdio => stdio_command(&draft.command, &draft.args),
+        McpTransport::Http => (draft.command.trim().into(), draft.args.clone()),
+    };
+    Ok(McpDefinition {
+        id,
+        name: draft.name.trim().into(),
+        transport: draft.transport,
+        command,
+        args,
+        url: draft.url.trim().into(),
+        env: draft.env.clone(),
+        headers: draft.headers.clone(),
+        in_library: draft.in_library,
+        version,
+        updated_at: None,
+    })
+}
+
 pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, String> {
-    validate(&draft)?;
-    if let Some(id) = draft.id.as_deref() {
+    let mut definition = candidate_definition(&draft)?;
+    if draft.expected_version.is_some() {
+        let id = draft.id.as_deref().ok_or("MCP 候选预览已失效，请重新预览")?;
         let previous = get_definition(db, id)?;
         if previous.name != draft.name.trim() {
             let installed: bool = db.with_connection(|conn| {
@@ -274,25 +313,8 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
             }
         }
     }
-    let id = draft.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let version = draft.expected_version.map_or(1, |old| old + 1);
-    let (command, args) = match draft.transport {
-        McpTransport::Stdio => stdio_command(&draft.command, &draft.args),
-        McpTransport::Http => (draft.command.trim().into(), draft.args.clone()),
-    };
-    let mut definition = McpDefinition {
-        id: id.clone(),
-        name: draft.name.trim().into(),
-        transport: draft.transport,
-        command,
-        args,
-        url: draft.url.trim().into(),
-        env: draft.env,
-        headers: draft.headers,
-        in_library: draft.in_library,
-        version,
-        updated_at: None,
-    };
+    let id = definition.id.clone();
+    let version = definition.version;
     let data = serde_json::to_string(&definition).map_err(|error| error.to_string())?;
     let now = timestamp();
     db.with_connection(|conn| {
@@ -484,9 +506,11 @@ fn preview_token(
     scope_key: &str,
     actual: &str,
 ) -> Result<String, String> {
+    let mut content = definition.clone();
+    // Saving assigns the wall-clock timestamp; it is not candidate content.
+    content.updated_at = None;
     let bound = serde_json::to_vec(&(
-        definition.id.as_str(),
-        definition.version,
+        content,
         target.tool_id.as_str(),
         scope_key,
         location.path.to_string_lossy(),
@@ -636,6 +660,16 @@ pub fn preview_targets(
     targets: Vec<McpTargetRequest>,
 ) -> Vec<McpTargetResult> {
     let definition = get_definition(db, definition_id);
+    preview_definition(db, registry, home, &definition, targets)
+}
+
+fn preview_definition(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    definition: &Result<McpDefinition, String>,
+    targets: Vec<McpTargetRequest>,
+) -> Vec<McpTargetResult> {
     targets.into_iter().map(|mut target| {
         if target.context_id.is_none() {
             if let Ok(Some((_,context)))=crate::accounts::selection::bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new),false) {target.context_id=Some(context.id);}
@@ -652,7 +686,7 @@ pub fn preview_targets(
                     let entries = adapter.mcp_entries(&parsed, &location)?;
                     let existing = entries.get(&definition.name);
                     let actual = entry_hash(existing)?;
-                    let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
+                    let owned = managed_hash(db, &definition.id, &target.tool_id, &scope_key)?;
                     let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
                     let redact = adapter.mcp_redacts_secrets();
                     Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing, redact), visible_entry(proposal.as_ref(), redact), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
@@ -680,6 +714,61 @@ pub fn preview_targets(
         }
         result
     }).collect()
+}
+
+pub fn preview_draft(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    mut draft: McpDraft,
+    targets: Vec<McpTargetRequest>,
+) -> Result<McpDraftPreview, String> {
+    let definition = candidate_definition(&draft)?;
+    draft.id = Some(definition.id.clone());
+    let targets = preview_definition(db, registry, home, &Ok(definition.clone()), targets);
+    Ok(McpDraftPreview { draft, definition, targets })
+}
+
+pub fn commit_draft(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    draft: McpDraft,
+    targets: Vec<McpTargetRequest>,
+) -> Result<McpCommitResult, String> {
+    if draft.id.is_none() {
+        return Err("MCP 候选预览已失效，请重新预览".into());
+    }
+    let candidate = candidate_definition(&draft)?;
+    let inspected = preview_definition(db, registry, home, &Ok(candidate), targets.clone());
+    for (request, current) in targets.iter().zip(&inspected) {
+        let preview_matches = request.preview_token == current.preview_token
+            && request.baseline_hash == current.baseline_hash;
+        if matches!(current.status, "ready" | "conflict") {
+            if request.preview_token.is_none() || !preview_matches {
+                return Err("MCP 候选、目标上下文或原生条目在预览后变化；请重新预览".into());
+            }
+        } else if request.preview_token.is_some() || request.baseline_hash.is_some() {
+            return Err("MCP 候选、目标上下文或原生条目在预览后变化；请重新预览".into());
+        }
+    }
+
+    // Saving is deliberately separate from native writes: later per-target
+    // failures are reported alongside the saved definition, not fake a rollback.
+    let definition = save_definition(db, draft)?;
+    let mut results = distribute(db, credentials, registry, home, &definition.id, targets.clone());
+    for ((result, current), request) in results.iter_mut().zip(inspected).zip(&targets) {
+        if current.status == "unsupported"
+            || (current.status == "conflict" && !request.allow_replace)
+        {
+            result.status = if current.status == "unsupported" { "unsupported" } else { "conflict" };
+            if current.status == "unsupported" {
+                result.detail = current.detail;
+            }
+        }
+    }
+    Ok(McpCommitResult { definition, targets: results })
 }
 
 pub fn distribute(
@@ -1195,3 +1284,7 @@ pub fn http_doc(
 #[cfg(test)]
 #[path = "../../../tests/resources/mcp.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../src-tauri/tests/resources/mcp.rs"]
+mod draft_tests;
