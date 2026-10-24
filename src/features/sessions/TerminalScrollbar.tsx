@@ -58,7 +58,7 @@ export function TerminalScrollbar({ terminal, viewport, onUserScroll }: {
     if (!viewport || !terminal) return;
     const row = viewport.clientHeight / Math.max(1, terminal.rows);
     if (event.key === 'Home') viewport.scrollTop = 0;
-    else if (event.key === 'End') { terminal.scrollToBottom(); viewport.scrollTop = viewport.scrollHeight; }
+    else if (event.key === 'End') terminal.scrollToBottom();
     else if (event.key === 'ArrowUp') viewport.scrollTop -= row;
     else if (event.key === 'ArrowDown') viewport.scrollTop += row;
     else if (event.key === 'PageUp') viewport.scrollTop -= viewport.clientHeight;

@@ -328,7 +328,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
   await expect(page.getByRole('dialog', { name: /^复制配置 · / })).toBeVisible();
 });
 
-test('a long configuration list can be searched without growing the page', async ({ page }) => {
+test('a long configuration list scrolls with the page and can be searched', async ({ page }) => {
   await page.addInitScript(() => {
     const applied = { id: 'p0' };
     const profiles = Array.from({ length: 20 }, (_, index) => ({ id: `p${index}`, tool: 'claude_code', name: index === 0 ? 'Kimi For Coding' : `配置 ${index}`, version: 1, revision: String(index), inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: null }));
@@ -357,10 +357,18 @@ test('a long configuration list can be searched without growing the page', async
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   const group = page.getByRole('list', { name: '配置项' });
   await expect(page.getByLabel('搜索配置')).toBeVisible();
-  const overflow = await group.evaluate((element) => element.scrollHeight > element.clientHeight && element.clientHeight <= 406);
-  expect(overflow).toBe(true);
+  // Cards flow with the page. A long list must not bring back the old 406px inner scroller.
+  const before = await group.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    innerScroll: element.scrollHeight > element.clientHeight + 1,
+    pageWider: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+  }));
+  expect(before.innerScroll).toBe(false);
+  expect(before.pageWider).toBe(false);
+  expect(before.height).toBeGreaterThan(406);
   await page.getByLabel('搜索配置').fill('配置 12');
   await expect(group.getByRole('listitem')).toHaveCount(1);
+  await expect.poll(() => group.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(before.height);
   await group.getByRole('button', { name: '使用' }).click();
   await expect(group.getByText('正在使用')).toBeVisible();
 });

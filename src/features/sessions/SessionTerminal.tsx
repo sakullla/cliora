@@ -153,6 +153,9 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
   linkHintRef.current = t('sessions.openLinkHint', { modifier: MAC ? '⌘' : 'Ctrl' });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // The last grid sent to the PTY. A one-row proposal with no real height change is glyph
+  // measurement noise; applying it makes a live TUI redraw and the view jumps.
+  const fitLockRef = useRef({ cols: 0, rows: 0, height: 0 });
   const webglRef = useRef<WebglAddon | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
@@ -338,10 +341,9 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       return false;
     });
 
-    // Mouse-tracking CLIs still need native normal-buffer scrollback; an idle alternate
-    // screen must never translate the wheel into arrow keys and move its input caret.
+    // Shift+wheel reads normal-buffer scrollback. The unmodified wheel is left to xterm.
     const wheelScrollViewport = (event: WheelEvent) => {
-      if (event.deltaY === 0 || event.shiftKey) return;
+      if (event.deltaY === 0) return;
       const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
       if (!viewport) return;
       userScrollRef.current = true;
@@ -355,17 +357,6 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       viewport.scrollTop = Math.max(0, Math.min(viewport.scrollTop + amount, viewport.scrollHeight));
       event.preventDefault();
     };
-    term.attachCustomWheelEventHandler((event) => {
-      if (term.buffer.active.type !== 'alternate') {
-        if (event.deltaY !== 0 && !event.shiftKey) userScrollRef.current = true;
-        if (term.modes.mouseTrackingMode === 'none') return true;
-        wheelScrollViewport(event);
-        return false;
-      }
-      if (term.modes.mouseTrackingMode !== 'none') return true;
-      event.preventDefault();
-      return false;
-    });
 
     // An image-only clipboard stays available to the CLI through Ctrl+V.
     const onPaste = (event: ClipboardEvent) => {
@@ -400,7 +391,6 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     });
     let awayFromBottom = false;
     let followFrame = 0;
-    let followTimer = 0;
     let scrollUiFrame = 0;
     const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
     viewportRef.current = viewport ?? null;
@@ -412,6 +402,34 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       return buffer.type === 'normal'
         && remaining > Math.max(2, rowHeight);
     };
+    // Grok and other fullscreen TUIs enable mouse-wheel reporting and scroll their own
+    // transcript. Taking that wheel moves xterm's viewport instead, so the view opens a
+    // blank gap and the CLI never receives the scroll. Shift+wheel still reads the
+    // normal-buffer scrollback. An alternate screen without wheel reporting must not
+    // turn the wheel into arrow keys.
+    term.attachCustomWheelEventHandler((event) => {
+      if (event.deltaY === 0) return true;
+      const alternate = term.buffer.active.type === 'alternate';
+      const mode = term.modes.mouseTrackingMode;
+      const appOwnsWheel = mode === 'vt200' || mode === 'drag' || mode === 'any';
+      if (!alternate && event.shiftKey) {
+        wheelScrollViewport(event);
+        return false;
+      }
+      if (appOwnsWheel) {
+        if (!alternate && userScrollRef.current && isAwayFromBottom()) {
+          wheelScrollViewport(event);
+          return false;
+        }
+        return true;
+      }
+      if (!alternate) {
+        userScrollRef.current = true;
+        return true;
+      }
+      event.preventDefault();
+      return false;
+    });
     const reportScroll = () => {
       if (disposed) return;
       if (!scrollUiFrame && activeRef.current) {
@@ -432,22 +450,33 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       else delete node.dataset.scrollAway;
       bridge.current.scrolled(sessionId, away);
     };
+    const pinViewport = () => {
+      if (!viewport || term.buffer.active.type !== 'normal') return;
+      const deviceCell = (term as unknown as { _core?: { _renderService?: { dimensions?: { device?: { cell?: { height?: number } } } } } })._core
+        ?._renderService?.dimensions?.device?.cell?.height ?? 0;
+      const rowHeight = deviceCell > 0 ? deviceCell / (window.devicePixelRatio || 1) : 0;
+      if (rowHeight <= 0) return;
+      // Match xterm's own scroll offset. scrollHeight is taller than the buffer by the
+      // unused host pixels, and writing that max makes the viewport round to another row,
+      // scroll up, then snap back on the next agent redraw.
+      const top = term.buffer.active.baseY * rowHeight;
+      if (Math.abs(viewport.scrollTop - top) <= 0.5) return;
+      viewport.scrollTop = top;
+    };
     const scrollToLatest = () => {
       if (disposed) return;
       userScrollRef.current = false;
       term.scrollToBottom();
-      if (viewport) viewport.scrollTop = viewport.scrollHeight;
+      pinViewport();
       cancelAnimationFrame(followFrame);
-      window.clearTimeout(followTimer);
       const applyLatest = () => {
         followFrame = 0;
         if (disposed || userScrollRef.current) return;
         term.scrollToBottom();
-        if (viewport) viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        pinViewport();
         reportScroll();
       };
       followFrame = requestAnimationFrame(applyLatest);
-      followTimer = window.setTimeout(applyLatest, 60);
       reportScroll();
     };
     // xterm updates scroll-area height in a deferred frame; that actual change
@@ -528,11 +557,31 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     const binarySubscription = term.onBinary((data) => sendToPty(data));
     const fitNow = () => {
       if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
-      try { fit.fit(); } catch { return; }
+      const dims = fit.proposeDimensions();
+      if (!dims) return;
+      const height = node.clientHeight;
+      const locked = fitLockRef.current;
+      // Glyph measurement can move the proposed grid by one row while the host
+      // height is unchanged. Applying that resize makes CodeBuddy redraw its agent
+      // panel, which measures again and the whole view bounces.
+      const rowFlicker = locked.rows > 0
+        && dims.cols === locked.cols
+        && Math.abs(dims.rows - locked.rows) === 1
+        && Math.abs(height - locked.height) < 8;
+      if (rowFlicker) return;
+      const changed = term.cols !== dims.cols || term.rows !== dims.rows;
+      if (changed) {
+        const core = (term as unknown as { _core?: { _renderService?: { clear?: () => void } } })._core;
+        try { core?._renderService?.clear?.(); } catch { /* The renderer can already be gone. */ }
+        try { term.resize(dims.cols, dims.rows); } catch { return; }
+        fitLockRef.current = { cols: term.cols, rows: term.rows, height };
+      } else if (locked.rows === 0) {
+        fitLockRef.current = { cols: term.cols, rows: term.rows, height };
+      }
       if (term.cols < 2 || term.rows < 1) return;
-      if (!awayFromBottom) scrollToLatest();
+      if (changed && !awayFromBottom) scrollToLatest();
       reportScroll();
-      if (!runningRef.current) return;
+      if (!changed || !runningRef.current) return;
       void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
     };
     let resizeFrame = 0;
@@ -578,7 +627,6 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       cancelAnimationFrame(resizeFrame);
       cancelAnimationFrame(scrollUiFrame);
       cancelAnimationFrame(followFrame);
-      window.clearTimeout(followTimer);
       scrollAreaObserver.disconnect();
       viewport?.removeEventListener('scroll', reportScroll);
       viewportRef.current = null;
@@ -636,7 +684,9 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       const fit = fitRef.current;
       const node = host.current;
       if (!fit || !node || node.clientWidth < 8) return;
+      fitLockRef.current = { cols: 0, rows: 0, height: 0 };
       try { fit.fit(); } catch { return; }
+      fitLockRef.current = { cols: term.cols, rows: term.rows, height: node.clientHeight };
       // Test automation locates glyphs through the DOM rows; keep that renderer
       // under webdriver so coordinates stay measurable. Everyone else gets WebGL.
       if (!webglRef.current && navigator.webdriver !== true) {
