@@ -230,7 +230,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (data: string) => void>());
   const pending = useRef(new Map<string, string[]>());
+  const pendingBytes = useRef(new Map<string, number>());
   const handles = useRef(new Map<string, TerminalHandle>());
+  const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
   // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
   // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
   const MOUNTED_ENDED_LIMIT = 6;
@@ -405,8 +407,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (write) write(data);
       else {
         const queued = pending.current.get(sessionId) ?? [];
+        let bytes = pendingBytes.current.get(sessionId) ?? 0;
         queued.push(data);
+        bytes += data.length;
+        // A terminal that is not mounted can still receive output while the
+        // session list is loading. Keep only a bounded tail; replay() supplies
+        // the complete recent output when the terminal mounts.
+        while (bytes > MAX_PENDING_OUTPUT_BYTES && queued.length > 1) {
+          bytes -= queued.shift()?.length ?? 0;
+        }
         pending.current.set(sessionId, queued);
+        pendingBytes.current.set(sessionId, bytes);
       }
     };
     void listen<{ sessionId: string; dataBase64: string }>('cliora:session-output', (event) => {
@@ -457,6 +468,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           queued.splice(0).forEach(write);
           pending.current.delete(session.id);
         }
+        if (!pending.current.has(session.id)) pendingBytes.current.delete(session.id);
       }
     }).catch((value) => {
       if (alive) setListError(formatFailure(value, t('sessions.listFailed'), t('sessions.listNext')));
@@ -573,6 +585,10 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       delete next[id];
       return next;
     });
+    pending.current.delete(id);
+    pendingBytes.current.delete(id);
+    writers.current.delete(id);
+    handles.current.delete(id);
   }
 
   async function endSession(session: WorkbenchSession) {

@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 24 {
+        if version > 25 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -482,6 +482,14 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 24;")?;
             tx.commit()?;
         }
+        if version < 25 {
+            let tx = connection.transaction()?;
+            // Session/date and model filters use correlated EXISTS clauses. This
+            // index keeps those reads on the session key instead of scanning the
+            // complete usage table for every history row.
+            tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_history_usage_session_time_model ON history_usage(session_id, timestamp, model); PRAGMA user_version = 25;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -714,7 +722,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 24);
+            assert_eq!(version, 25);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

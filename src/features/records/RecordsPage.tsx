@@ -291,6 +291,13 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
       setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
+      // Scanning is the operation represented by the toolbar button. The index
+      // list may still need a disk read, but that work is tracked by
+      // filterLoading so the refresh control becomes responsive as soon as the
+      // native scan has finished.
+      scanningRef.current = false;
+      setScanning(false);
+      setScanProgress(null);
       const loaded = await load(filterRef.current);
       if (sequence !== scanRequest.current || !loaded || !announce) return;
       showNotice(t('records.page.refreshed'));

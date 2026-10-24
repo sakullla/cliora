@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +19,7 @@ const REPLAY_LIMIT: usize = 256 * 1024;
 /// bridge with JSON and base64. Aggregate bursts for a few milliseconds instead.
 const OUTPUT_FLUSH_WINDOW: Duration = Duration::from_millis(8);
 const OUTPUT_FLUSH_BYTES: usize = 64 * 1024;
+const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const OUTPUT_EVENT: &str = "cliora:session-output";
 const EXIT_EVENT: &str = "cliora:session-exit";
 
@@ -294,8 +295,10 @@ fn end_child(session: &Session) {
     session.running.store(false, Ordering::SeqCst);
 }
 
-static OUTPUT_CHANNEL: LazyLock<Sender<(String, Vec<u8>)>> = LazyLock::new(|| {
-    let (sender, receiver) = mpsc::channel();
+static OUTPUT_CHANNEL: LazyLock<SyncSender<(String, Vec<u8>)>> = LazyLock::new(|| {
+    // Backpressure keeps a CLI that produces output faster than the WebView can
+    // consume it from growing an unbounded native queue.
+    let (sender, receiver) = mpsc::sync_channel(OUTPUT_CHANNEL_CAPACITY);
     let _ = thread::Builder::new()
         .name("cliora-session-output".into())
         .spawn(move || coalesce_output(receiver));

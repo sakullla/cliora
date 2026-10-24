@@ -116,6 +116,10 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
 
 const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 
+// Keep the browser-side terminal buffer bounded. The native replay remains the
+// source of truth when an ended session is mounted again.
+const TERMINAL_SCROLLBACK = 6000;
+
 export type TerminalBridge = {
   writeError: (error: unknown) => void;
   linkError: (error: unknown) => void;
@@ -151,6 +155,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
   const fitRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
+  const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
   const activeRef = useRef(active);
   const runningRef = useRef(running);
@@ -174,7 +179,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       cursorStyle: 'bar',
       cursorWidth: 2,
       cursorInactiveStyle: 'outline',
-      scrollback: 10000,
+      scrollback: TERMINAL_SCROLLBACK,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
       fastScrollModifier: 'alt',
@@ -192,6 +197,50 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
+    let imeComposing = false;
+    let imeFrame = 0;
+
+    // WebView2 can keep the native IME candidate window at the last textarea
+    // position when the terminal is inside a clipped, scrollable workbench.
+    // xterm updates this anchor during composition, but a layout/scroll between
+    // composition events can leave it stale. Re-anchor the helper to the
+    // rendered cursor after xterm has laid out the current frame.
+    const syncImeAnchor = () => {
+      if (disposed || !imeComposing || !activeRef.current) return;
+      cancelAnimationFrame(imeFrame);
+      imeFrame = requestAnimationFrame(() => {
+        if (disposed || !imeComposing || !activeRef.current) return;
+        const textarea = term.textarea;
+        const element = term.element;
+        const rows = element?.querySelector<HTMLElement>('.xterm-rows');
+        const firstRow = rows?.firstElementChild as HTMLElement | null;
+        if (!textarea || !element || !firstRow || !term.cols || !term.rows) return;
+        const elementBox = element.getBoundingClientRect();
+        const rowBox = firstRow.getBoundingClientRect();
+        const cellWidth = rowBox.width / term.cols;
+        const cellHeight = rowBox.height;
+        if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) return;
+        const cursor = term.buffer.active;
+        const left = Math.max(0, rowBox.left - elementBox.left + Math.min(cursor.cursorX, term.cols - 1) * cellWidth);
+        const top = Math.max(0, rowBox.top - elementBox.top + Math.min(cursor.cursorY, term.rows - 1) * cellHeight);
+        textarea.style.left = `${left}px`;
+        textarea.style.top = `${top}px`;
+        textarea.style.width = `${Math.max(1, cellWidth)}px`;
+        textarea.style.height = `${Math.max(1, cellHeight)}px`;
+        textarea.style.lineHeight = `${Math.max(1, cellHeight)}px`;
+      });
+    };
+    const textarea = term.textarea;
+    const onCompositionStart = () => { imeComposing = true; syncImeAnchor(); };
+    const onCompositionUpdate = () => syncImeAnchor();
+    const onCompositionEnd = () => {
+      imeComposing = false;
+      cancelAnimationFrame(imeFrame);
+    };
+    textarea?.addEventListener('compositionstart', onCompositionStart);
+    textarea?.addEventListener('compositionupdate', onCompositionUpdate);
+    textarea?.addEventListener('compositionend', onCompositionEnd);
+    const cursorSub = term.onCursorMove(syncImeAnchor);
     let acceptLive = false;
     let liveStreaming = false;
     let liveTimer = 0;
@@ -295,6 +344,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       if (event.deltaY === 0 || event.shiftKey) return;
       const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
       if (!viewport) return;
+      userScrollRef.current = true;
       let amount = event.deltaY;
       if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
         amount *= viewport.clientHeight / Math.max(1, term.rows);
@@ -307,6 +357,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     };
     term.attachCustomWheelEventHandler((event) => {
       if (term.buffer.active.type !== 'alternate') {
+        if (event.deltaY !== 0 && !event.shiftKey) userScrollRef.current = true;
         if (term.modes.mouseTrackingMode === 'none') return true;
         wheelScrollViewport(event);
         return false;
@@ -337,6 +388,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       if (!(target instanceof Element) || target === node || !target.contains(node)) return;
       if (target.scrollLeft) target.scrollLeft = 0;
       if (target.scrollTop) target.scrollTop = 0;
+      syncImeAnchor();
     };
     document.addEventListener('scroll', resetAncestorScroll, true);
 
@@ -347,7 +399,19 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       if (!disposed) bridge.current.title(sessionId, title);
     });
     let awayFromBottom = false;
+    let followFrame = 0;
+    let followTimer = 0;
     let scrollUiFrame = 0;
+    const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
+    viewportRef.current = viewport ?? null;
+    if (viewport) viewport.id = `terminal-viewport-${sessionId}`;
+    const isAwayFromBottom = () => {
+      const rowHeight = viewport ? viewport.clientHeight / Math.max(1, term.rows) : 1;
+      const remaining = viewport ? viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight : 0;
+      const buffer = term.buffer.active;
+      return buffer.type === 'normal'
+        && remaining > Math.max(2, rowHeight);
+    };
     const reportScroll = () => {
       if (disposed) return;
       if (!scrollUiFrame && activeRef.current) {
@@ -357,20 +421,33 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
         });
       }
       // The DOM viewport also reflects wheel input whose xterm scroll event is suppressed.
-      const rowHeight = viewport ? viewport.clientHeight / Math.max(1, term.rows) : 1;
-      const remaining = viewport ? viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight : 0;
-      const away = term.buffer.active.type === 'normal' && remaining > Math.max(2, rowHeight);
+      // `viewportY/baseY` is xterm's authoritative scroll position. The DOM
+      // viewport can lag one frame behind it (especially with WebGL and a
+      // mouse-tracking CLI), so use both signals before deciding to follow
+      // incoming output.
+      const away = userScrollRef.current && isAwayFromBottom();
       if (away === awayFromBottom) return;
       awayFromBottom = away;
+      if (away) node.dataset.scrollAway = 'true';
+      else delete node.dataset.scrollAway;
       bridge.current.scrolled(sessionId, away);
     };
-    const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
-    viewportRef.current = viewport ?? null;
-    if (viewport) viewport.id = `terminal-viewport-${sessionId}`;
     const scrollToLatest = () => {
       if (disposed) return;
+      userScrollRef.current = false;
       term.scrollToBottom();
       if (viewport) viewport.scrollTop = viewport.scrollHeight;
+      cancelAnimationFrame(followFrame);
+      window.clearTimeout(followTimer);
+      const applyLatest = () => {
+        followFrame = 0;
+        if (disposed || userScrollRef.current) return;
+        term.scrollToBottom();
+        if (viewport) viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        reportScroll();
+      };
+      followFrame = requestAnimationFrame(applyLatest);
+      followTimer = window.setTimeout(applyLatest, 60);
       reportScroll();
     };
     // xterm updates scroll-area height in a deferred frame; that actual change
@@ -446,6 +523,9 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     handles.current.set(sessionId, handle);
 
     const subscription = term.onData((data) => sendToPty(data));
+    // xterm emits legacy mouse reports through onBinary; forwarding only onData
+    // makes terminal UIs that use the default mouse encoding appear unclickable.
+    const binarySubscription = term.onBinary((data) => sendToPty(data));
     const fitNow = () => {
       if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
       try { fit.fit(); } catch { return; }
@@ -491,10 +571,14 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     });
     return () => {
       disposed = true;
+      imeComposing = false;
+      cancelAnimationFrame(imeFrame);
       window.clearTimeout(liveTimer);
       flushWrites();
       cancelAnimationFrame(resizeFrame);
       cancelAnimationFrame(scrollUiFrame);
+      cancelAnimationFrame(followFrame);
+      window.clearTimeout(followTimer);
       scrollAreaObserver.disconnect();
       viewport?.removeEventListener('scroll', reportScroll);
       viewportRef.current = null;
@@ -506,7 +590,12 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       titleSub.dispose();
       scrollSub.dispose();
       parsedSub.dispose();
+      cursorSub.dispose();
       subscription.dispose();
+      binarySubscription.dispose();
+      textarea?.removeEventListener('compositionstart', onCompositionStart);
+      textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
+      textarea?.removeEventListener('compositionend', onCompositionEnd);
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
@@ -572,7 +661,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
 
   return <div className={styles.terminalInstance} hidden={!active}>
     <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={cursorBlink || undefined} />
-    <TerminalScrollbar terminal={termRef.current} viewport={viewportRef.current} />
+    <TerminalScrollbar terminal={termRef.current} viewport={viewportRef.current} onUserScroll={() => { userScrollRef.current = true; }} />
   </div>;
 }
 
