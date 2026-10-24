@@ -116,7 +116,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   }
   async function canReplace() {
     const started = currentFingerprint;
-    return !dirty || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && currentFingerprint === started, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
+    return !(dirty || batchItems) || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && currentFingerprint === started, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
   async function startNew() {
     if (!await canReplace()) return;
@@ -132,6 +132,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   }
   async function closeCompose() {
     if (!await canReplace()) return;
+    setBatchItems(null); setImportSource('');
     setComposing(false); setPreview(null); setCommitResults(null); setError('');
   }
   function normalizedDraft() {
@@ -186,9 +187,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
         draft: { id: found?.id ?? null, name, transport: server.transport, command: server.command, args: server.args, url: server.url,
           env: server.env, headers: server.headers, inLibrary: found?.inLibrary === true || syncLibrary, expectedVersion: found?.version ?? null } };
     });
-    const needsCorrection = items.some(item => item.blocked || hasMcpIssues(mcpDraftIssues(item.draft)));
-    setBatchItems(items); setImportSource(needsCorrection ? source : ''); setError('');
-    return needsCorrection;
+    setBatchItems(items); setImportSource(source); setError('');
+    return true;
   }
   async function removeNative(item: NativeMcpEntry) {
     const found = definitions.find(definition => definition.name === item.name);
@@ -250,10 +250,11 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
         </div>
       </div>
     </GuideDialog>
-    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => { if (!busy) setBatchItems(null); }}>
+    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeCompose()}>
       {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(value, [{ ...target, enabled }])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
-        onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); void refreshNative(); }} />}
+        onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); void refreshNative(); }}
+        onComplete={() => setImportSource('')} />}
     </GuideDialog>
   </>;
 }

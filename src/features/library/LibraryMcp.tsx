@@ -110,11 +110,13 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   formKeyRef.current = formKey;
 
   async function closeEditor() {
-    if (dirty) {
+    if (dirty || batchItems) {
       const opened = formKey;
       const keep = !await confirmAction(t('library.resources.confirmDiscard'), () => opened === formKeyRef.current, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
       if (keep) return;
     }
+    setBatchItems(null);
+    setImportSource('');
     setDraft(null);
     setConfirmation('none');
   }
@@ -137,11 +139,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         draft: { ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, url: server.url,
           env: server.env, headers: server.headers, inLibrary: true } };
     });
-    const needsCorrection = items.some(item => item.blocked || hasMcpIssues(mcpDraftIssues(item.draft)));
     setBatchItems(items);
-    setImportSource(needsCorrection ? source : '');
+    setImportSource(source);
     setDialogError('');
-    return needsCorrection;
+    return true;
   }
 
   function keepDefinition(saved: McpDefinition) {
@@ -346,11 +347,12 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </div>
       </>}
     </GuideDialog>
-    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchLibraryHint')} onClose={() => setBatchItems(null)}>
+    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchLibraryHint')} onClose={() => void closeEditor()}>
       {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)}
         onPreview={value => native.previewMcpDraft(value, [])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: true, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
-        onDefinitionSaved={result => { keepDefinition(result.definition); setNotice(t('library.resources.saved')); }} />}
+        onDefinitionSaved={result => { keepDefinition(result.definition); setNotice(t('library.resources.saved')); }}
+        onComplete={() => setImportSource('')} />}
     </GuideDialog>
   </>;
 }

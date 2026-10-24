@@ -24,12 +24,13 @@ function isComplete(row: Pick<Row, 'result'>) {
   return !!row.result && row.result.targets.every(target => target.status === 'written');
 }
 
-export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinitionSaved }: {
+export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinitionSaved, onComplete }: {
   items: McpBatchItem[];
   onPreview: (draft: McpDraft) => Promise<McpDraftPreview>;
   onCommit: (draft: McpDraft, preview: McpDraftPreview, allowReplace: boolean) => Promise<McpCommitResult>;
   onCancel: () => void;
   onDefinitionSaved?: (result: McpCommitResult) => void;
+  onComplete?: () => void;
 }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Row[]>(() => items.map(item => ({ ...item, selected: !item.blocked && !hasMcpIssues(mcpDraftIssues(item.draft)), preview: null, replace: false, result: null, error: '', pending: false })));
@@ -57,11 +58,13 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
   }
   async function commit() {
     setBusy(true);
+    const incomplete = new Set(rows.filter(row => !isComplete(row)).map(row => row.key));
     for (const row of confirmable) {
       patch(row.key, { pending: true, error: '' });
       try {
         const result = await onCommit(row.preview!.draft, row.preview!, row.replace);
         const complete = result.targets.every(target => target.status === 'written');
+        if (complete) incomplete.delete(row.key);
         patch(row.key, { result, selected: !complete, preview: complete ? row.preview : null, error: complete ? '' : t('tools.mcp.partialFailed'),
           draft: { ...row.draft, id: result.definition.id, expectedVersion: result.definition.version, inLibrary: result.definition.inLibrary !== false }, pending: false });
         onDefinitionSaved?.(result);
@@ -70,6 +73,7 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
       }
     }
     setBusy(false);
+    if (incomplete.size === 0) onComplete?.();
   }
   const canConfirm = reviewed && confirmable.length > 0 && confirmable.length === selectedCount;
   const needsPreview = rows.some(row => row.selected && !isComplete(row) &&
