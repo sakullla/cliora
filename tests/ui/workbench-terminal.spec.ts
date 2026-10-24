@@ -620,3 +620,110 @@ test('terminal link hint stays within a narrow dark viewport', async ({ page }, 
   await page.keyboard.up('Control');
   await expect(page.locator('.xterm-cursor-pointer')).toHaveCount(0);
 });
+
+const writeLog = (page: Page) => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog.slice());
+
+test('split view shows two sessions side by side and keyboard input follows the focused pane', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const split = stage.getByRole('button', { name: '分屏', exact: true });
+  await split.click();
+  await expect(split).toHaveAttribute('aria-pressed', 'true');
+  const codexPane = stage.locator('[data-pane-session="s1"]');
+  const claudePane = stage.locator('[data-pane-session="s2"]');
+  await expect(codexPane).toBeVisible();
+  await expect(claudePane).toBeVisible();
+  await expect(codexPane).toContainText('codex-ready');
+  await expect(claudePane).toContainText('claude-ready');
+  const left = (await codexPane.boundingBox())!;
+  const right = (await claudePane.boundingBox())!;
+  expect(right.x).toBeGreaterThanOrEqual(left.x + left.width);
+  expect(Math.abs(right.width - left.width)).toBeLessThan(4);
+  await expect(codexPane).toHaveAttribute('data-focused', 'true');
+
+  // Clicking the other pane moves focus there without swapping the layout.
+  await claudePane.locator('.xterm-screen').click();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(stage.getByRole('heading', { level: 2 })).toHaveText('Claude Code');
+  await expect(claudePane).toHaveAttribute('data-focused', 'true');
+  expect((await claudePane.boundingBox())!.x).toBe(right.x);
+  await resetWrites(page);
+  await page.keyboard.type('x');
+  await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's2', text: 'x' }]);
+
+  // The rail marks both on-screen sessions; Ctrl+Shift+D leaves split view.
+  await expect(page.getByRole('tab', { name: /Codex/ })).toContainText('1');
+  await page.keyboard.press('Control+Shift+D');
+  await expect(split).toHaveAttribute('aria-pressed', 'false');
+  await expect(codexPane).toBeHidden();
+  await expect(claudePane).toBeVisible();
+  expect((await writeLog(page)).map((item) => item.text)).toEqual(['x']);
+
+  // Closing a pane keeps the other session on screen.
+  await page.keyboard.press('Control+Shift+D');
+  await expect(codexPane).toBeVisible();
+  await stage.getByRole('button', { name: '关闭 Claude Code 分屏', exact: true }).click();
+  await expect(split).toHaveAttribute('aria-pressed', 'false');
+  await expect(codexPane).toBeVisible();
+  await expect(claudePane).toBeHidden();
+  await expect(page.getByRole('tab', { name: /Codex/ })).toHaveAttribute('aria-selected', 'true');
+});
+
+test('Ctrl+Tab cycles sessions and background output marks a card unread', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const codex = page.getByRole('tab', { name: /Codex/ });
+  const claude = page.getByRole('tab', { name: /Claude Code/ });
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id: string) => void }).__output('background work\r\n', 's2'));
+  await expect(claude.getByLabel('有新输出')).toBeVisible();
+  await expect(codex.getByLabel('有新输出')).toHaveCount(0);
+  await page.locator('.xterm-helper-textarea:visible').focus();
+  await resetWrites(page);
+  await page.keyboard.press('Control+Tab');
+  await expect(claude).toHaveAttribute('aria-selected', 'true');
+  await expect(claude.getByLabel('有新输出')).toHaveCount(0);
+  await page.locator('.xterm-helper-textarea:visible').focus();
+  await page.keyboard.press('Control+Shift+Tab');
+  await expect(codex).toHaveAttribute('aria-selected', 'true');
+  expect(await writes(page)).toEqual([]);
+});
+
+test('find can match case, line spacing persists, shortcuts are listed, and the rail collapses to icons', async ({ page }) => {
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\nCODEX-READY\r\n> '));
+  await page.keyboard.press('Control+Shift+F');
+  const find = stage.getByRole('searchbox', { name: '在终端输出中查找…' });
+  await find.fill('codex-ready');
+  await expect(stage.getByRole('search')).toContainText('1 / 2');
+  await stage.getByRole('button', { name: '区分大小写', exact: true }).click();
+  await expect(stage.getByRole('search')).toContainText('1 / 1');
+  await expect(find).toBeFocused();
+  await page.keyboard.press('Escape');
+
+  await expect(stage.locator('footer')).toContainText(/\d+×\d+/);
+  await stage.getByRole('button', { name: '终端显示', exact: true }).click();
+  const appearance = page.getByRole('dialog', { name: '终端显示' });
+  await appearance.getByRole('radio', { name: '宽松', exact: true }).click();
+  await expect(appearance.getByRole('radio', { name: '宽松', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-density'))).toBe('relaxed');
+  await page.keyboard.press('Escape');
+
+  await stage.getByRole('button', { name: '键盘快捷键', exact: true }).click();
+  const shortcuts = page.getByRole('dialog', { name: '键盘快捷键' });
+  await expect(shortcuts).toContainText('分屏');
+  await expect(shortcuts).toContainText('查找输出');
+  await page.keyboard.press('Escape');
+  await expect(shortcuts).toHaveCount(0);
+
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  await rail.getByRole('button', { name: '收起会话栏', exact: true }).click();
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await expect.poll(async () => (await rail.boundingBox())!.width).toBeLessThan(80);
+  await expect(page.getByRole('tab', { name: /Codex/ })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('true');
+  await rail.getByRole('button', { name: '展开会话栏', exact: true }).click();
+  await expect(rail).not.toHaveAttribute('data-slim', 'true');
+  expect(await writes(page)).toEqual([]);
+});

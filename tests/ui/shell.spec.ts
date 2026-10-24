@@ -772,7 +772,8 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   const codex = page.getByRole('tab', { name: /Codex/ });
   const claude = page.getByRole('tab', { name: /Claude Code/ });
   await expect(codex).toContainText('Alpha');
-  await expect(codex).toContainText('普通');
+  // Rail cards only flag the exceptional YOLO mode; the normal mode stays in the stage header.
+  await expect(codex).not.toContainText('YOLO');
   await expect(claude).toContainText('YOLO');
   await expect(claude).toContainText('beta-work');
 

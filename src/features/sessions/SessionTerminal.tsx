@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -22,7 +22,7 @@ export type TerminalHandle = {
   copySelection: () => boolean;
   paste: (text: string) => void;
   readOutput: () => string;
-  findMatches: (query: string) => TerminalMatch[];
+  findMatches: (query: string, caseSensitive?: boolean) => TerminalMatch[];
   revealMatch: (match: TerminalMatch | null) => void;
 };
 
@@ -84,7 +84,7 @@ export function quoteDroppedPaths(paths: string[]): string {
     .join(' ');
 }
 
-export type ShortcutAction = 'find' | 'composer' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
+export type ShortcutAction = 'find' | 'composer' | 'split' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
 
 /** Keys the workbench owns before xterm sees them. Null lets xterm encode the key. */
 export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>, options: { hasSelection: boolean; canSwitch: boolean; mac: boolean }):
@@ -103,6 +103,12 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
   if (ctrlKey && !shiftKey && !altKey && key === 'Insert') return { kind: 'copy' };
   if (mod && shiftKey && !altKey && lower === 'f') return { kind: 'shortcut', action: 'find' };
   if (mod && shiftKey && !altKey && lower === 'm') return { kind: 'shortcut', action: 'composer' };
+  // Ctrl+Shift+D would otherwise reach the CLI as Ctrl+D (EOF); the workbench owns it for split view.
+  if (mod && shiftKey && !altKey && lower === 'd') return { kind: 'shortcut', action: 'split' };
+  if (ctrlKey && !altKey && !metaKey && key === 'Tab') {
+    if (!options.canSwitch) return null;
+    return { kind: 'shortcut', action: shiftKey ? 'prevSession' : 'nextSession' };
+  }
   if (mod && !altKey && (key === '=' || key === '+')) return { kind: 'shortcut', action: 'zoomIn' };
   if (mod && !altKey && !shiftKey && (key === '-' || key === '_')) return { kind: 'shortcut', action: 'zoomOut' };
   if (mod && !altKey && !shiftKey && key === '0') return { kind: 'shortcut', action: 'zoomReset' };
@@ -131,16 +137,27 @@ export type TerminalBridge = {
   canSwitch: () => boolean;
   scrolled: (sessionId: string, awayFromBottom: boolean) => void;
   copied: () => void;
+  grid: (sessionId: string, cols: number, rows: number) => void;
 };
 
-export function SessionTerminal({ sessionId, label, active, running, fontSize, theme, cursorBlink, writers, pending, handles, bridge }: {
+/**
+ * `active` means the terminal is on screen (one pane, or either pane of a split).
+ * `focused` marks the one pane that owns keyboard input.
+ */
+export function SessionTerminal({ sessionId, label, active, focused = active, running, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
   sessionId: string;
   label: string;
   active: boolean;
+  focused?: boolean;
   running: boolean;
   fontSize: number;
+  lineHeight?: number;
   theme: TerminalTheme;
   cursorBlink: boolean;
+  pane?: number;
+  header?: ReactNode;
+  overlay?: ReactNode;
+  footer?: ReactNode;
   writers: MutableRefObject<Map<string, (data: string) => void>>;
   pending: MutableRefObject<Map<string, string[]>>;
   handles: MutableRefObject<Map<string, TerminalHandle>>;
@@ -161,13 +178,17 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
   const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
   const activeRef = useRef(active);
+  const focusedRef = useRef(focused);
   const runningRef = useRef(running);
   const fontSizeRef = useRef(fontSize);
+  const lineHeightRef = useRef(lineHeight);
   const themeRef = useRef(theme);
   const wasActiveRef = useRef(active);
   activeRef.current = active;
+  focusedRef.current = focused;
   runningRef.current = running;
   fontSizeRef.current = fontSize;
+  lineHeightRef.current = lineHeight;
   themeRef.current = theme;
 
   useEffect(() => {
@@ -176,8 +197,8 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     const term = new Terminal({
       fontFamily: monoFont(),
       fontSize: fontSizeRef.current,
-      lineHeight: 1.5,
-      letterSpacing: 0.15,
+      lineHeight: lineHeightRef.current,
+      letterSpacing: 0,
       cursorBlink: true,
       cursorStyle: 'bar',
       cursorWidth: 2,
@@ -389,6 +410,9 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     const titleSub = term.onTitleChange((title) => {
       if (!disposed) bridge.current.title(sessionId, title);
     });
+    const gridSub = term.onResize(({ cols, rows }) => {
+      if (!disposed) bridge.current.grid(sessionId, cols, rows);
+    });
     let awayFromBottom = false;
     let followFrame = 0;
     let scrollUiFrame = 0;
@@ -518,15 +542,17 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
         while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
         return lines.join('\n');
       },
-      findMatches: (query: string) => {
-        const needle = query.trim().toLowerCase();
+      findMatches: (query: string, caseSensitive = false) => {
+        const trimmed = query.trim();
+        const needle = caseSensitive ? trimmed : trimmed.toLowerCase();
         if (disposed || !needle) return [];
         const buffer = term.buffer.active;
         const found: TerminalMatch[] = [];
         for (let row = 0; row < buffer.length; row += 1) {
           const line = buffer.getLine(row);
           if (!line) continue;
-          const text = line.translateToString(true).toLowerCase();
+          const raw = line.translateToString(true);
+          const text = caseSensitive ? raw : raw.toLowerCase();
           let start = 0;
           while (start <= text.length - needle.length) {
             const index = text.indexOf(needle, start);
@@ -611,6 +637,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       requestAnimationFrame(() => {
         fitNow();
         scrollToLatest();
+        if (!disposed) bridge.current.grid(sessionId, term.cols, term.rows);
       });
     }).catch(() => {
       acceptLive = true;
@@ -636,6 +663,7 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       document.removeEventListener('scroll', resetAncestorScroll, true);
       bellSub.dispose();
       titleSub.dispose();
+      gridSub.dispose();
       scrollSub.dispose();
       parsedSub.dispose();
       cursorSub.dispose();
@@ -667,8 +695,8 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
     const term = termRef.current;
     if (!term) return;
     term.options.disableStdin = !active || !running;
-    term.options.cursorBlink = cursorBlink && active && running;
     term.options.fontSize = fontSize;
+    term.options.lineHeight = lineHeight;
     // Hidden terminals can reset their viewport; reveal the latest output on re-entry.
     const becameActive = active && !wasActiveRef.current;
     wasActiveRef.current = active;
@@ -704,14 +732,37 @@ export function SessionTerminal({ sessionId, label, active, running, fontSize, t
       if (term.cols >= 2 && term.rows >= 1 && running) {
         void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
       }
-      if (running && !document.querySelector('dialog[open]')) term.focus();
+      if (running && focusedRef.current && !document.querySelector('dialog[open]')) term.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [active, running, fontSize, cursorBlink, sessionId, bridge]);
+  }, [active, running, fontSize, lineHeight, sessionId, bridge]);
 
-  return <div className={styles.terminalInstance} hidden={!active}>
-    <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={cursorBlink || undefined} />
-    <TerminalScrollbar terminal={termRef.current} viewport={viewportRef.current} onUserScroll={() => { userScrollRef.current = true; }} />
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.cursorBlink = cursorBlink && focused && running;
+  }, [cursorBlink, focused, running]);
+
+  // In a split, moving focus between two visible panes does not change `active`.
+  const wasFocusedRef = useRef(focused);
+  useEffect(() => {
+    const gained = focused && !wasFocusedRef.current;
+    wasFocusedRef.current = focused;
+    if (!gained || !active || !running) return;
+    const frame = requestAnimationFrame(() => {
+      if (!document.querySelector('dialog[open]')) termRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focused, active, running]);
+
+  const placement: CSSProperties | undefined = pane != null && pane >= 0 ? { gridColumn: pane + 1, gridRow: 1 } : undefined;
+  return <div className={styles.terminalInstance} hidden={!active} style={placement} data-pane-session={sessionId} data-focused={(active && focused) || undefined} data-running={running || undefined}>
+    {header}
+    <div className={styles.terminalBody}>
+      <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={cursorBlink || undefined} />
+      <TerminalScrollbar terminal={termRef.current} viewport={viewportRef.current} onUserScroll={() => { userScrollRef.current = true; }} />
+      {overlay}
+    </div>
+    {footer}
   </div>;
 }
 
