@@ -187,6 +187,12 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     if (!current || !candidate) return { status: 'failed', message: t('library.distribute.noPreview') };
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
+    const blocked = current.filter((item) => item.status === 'failed' || item.status === 'unsupported');
+    if (blocked.length) {
+      const message = blocked.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
+      setError(message);
+      return { status: 'failed', message };
+    }
     const active = current.filter((item) => item.status === 'ready' || item.status === 'conflict');
     setError('');
     try {

@@ -474,6 +474,58 @@ test('MCP removal rejects an external change after preview without deleting the 
   expect(state.definitions[0].version).toBe(1);
 });
 
+for (const status of ['failed', 'unsupported'] as const) {
+  test(`MCP mixed preview blocks commit when removal is ${status}`, async ({ page }) => {
+    await mockResources(page);
+    await page.addInitScript((blockedStatus) => {
+      const win = window as any;
+      const invoke = win.__TAURI_INTERNALS__.invoke;
+      win.__resourceMixedCommits = 0;
+      win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+        if (command === 'list_cli_adapters') {
+          const catalog = await invoke(command, args);
+          return { ...catalog, registered: [...catalog.registered, { ...catalog.registered[0], id: 'claude_code', name: 'Claude Code' }], managedIds: ['codex', 'claude_code'] };
+        }
+        if (command === 'preview_mcp_draft') {
+          const response = await invoke(command, args);
+          return { ...response, targets: response.targets.map((target: any) => target.operation === 'remove' ? { ...target, status: blockedStatus, detail: `removal ${blockedStatus}` } : target) };
+        }
+        if (command === 'commit_mcp_draft') win.__resourceMixedCommits += 1;
+        return invoke(command, args);
+      };
+    }, status);
+    await page.goto('/');
+    await page.evaluate(() => {
+      const state = window as any;
+      state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+      state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+    });
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+    await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+    await page.getByRole('button', { name: '修改' }).click();
+    await expect(page.getByRole('checkbox', { name: 'Claude Code' })).toBeEnabled();
+    await page.getByRole('checkbox', { name: 'Claude Code' }).check();
+    await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+    await page.getByRole('button', { name: '保存并分发' }).click();
+    await expect(page.getByText('可写入', { exact: true })).toBeVisible();
+    await expect(page.getByText(`removal ${status}`, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '确认并分发', exact: true }).click();
+    await expect(page.getByRole('region', { name: '写入到 CLI' }).getByRole('alert')).toContainText(`removal ${status}`);
+    await expect(page.getByText(`removal ${status}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    const state = await page.evaluate(() => ({
+      commits: (window as any).__resourceMixedCommits,
+      writes: (window as any).__resourceWrites,
+      places: (window as any).__resourceMcpPlacements,
+      definitions: (window as any).__resourceMcpDefinitions,
+    }));
+    expect(state.commits).toBe(0);
+    expect(state.writes).toEqual([]);
+    expect(state.places).toEqual([expect.objectContaining({ definitionId: 'mcp-1', toolId: 'codex' })]);
+    expect(state.definitions[0].version).toBe(1);
+  });
+}
+
 test('MCP removal notice expires after four seconds', async ({ page }) => {
   await mockResources(page);
   await page.clock.install();
