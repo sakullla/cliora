@@ -1,126 +1,38 @@
-/* ---------- Library MCP list ------------------------------------- */
+/* ---------- Library MCP resource list and read-only details ---------- */
 
-.layout { display: grid; align-content: start; gap: 16px; min-width: 0; }
-.searchBox { position: relative; display: flex; align-items: center; min-width: 0; }
+.searchBox { position: relative; display: flex; align-items: center; width: 100%; min-width: 0; }
 .searchBox > input { width: 100%; }
-.list { display: grid; align-content: start; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); container-type: inline-size; container-name: mcp-list; }
-.list:has(> .empty) { border: 0; background: none; box-shadow: none; overflow: visible; }
-
 .primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background-color: var(--accent) !important; background-image: var(--accent) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight) !important; }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background-color: var(--accent-hover) !important; background-image: none !important; }
+.danger, .danger:hover:not(:disabled) { color: var(--danger); }
 .dangerQuiet, .dangerQuiet:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 6px; border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
 .dangerQuiet:hover:not(:disabled) { background: var(--danger-soft); }
 
-/* One row per server: identity and command | where it is written | actions.
-   The name track keeps a floor so a full set of CLI marks cannot crush it. */
-.row {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(13rem, 1.4fr) minmax(0, 1fr) auto;
-  grid-template-areas: 'icon main targets actions';
-  align-items: center;
-  gap: 4px 16px;
-  min-width: 0;
-  padding: 14px 16px;
-  animation: reveal var(--medium) var(--ease) backwards;
-  transition: background-color var(--fast) var(--ease);
-}
-.row + .row { border-top: 1px solid var(--line); }
-.row:nth-child(2) { animation-delay: 25ms; }
-.row:nth-child(3) { animation-delay: 50ms; }
-.row:nth-child(n+4) { animation-delay: 75ms; }
-.row:hover { background: color-mix(in srgb, var(--surface-2) 70%, var(--surface)); }
-.row:has(.cardTitle:focus-visible) { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
-
-.rowIcon { grid-area: icon; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--surface-2); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
-.rowIcon[data-transport='http'] { background: var(--info-soft); color: var(--info); box-shadow: inset 0 0 0 1px var(--info-line); }
-.row[data-placed] .rowIcon[data-transport='stdio'] { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
-.rowMain { grid-area: main; display: grid; gap: 4px; min-width: 0; }
-.rowTitle { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.cardTitle {
-  display: inline-grid;
-  grid-template-columns: minmax(0, 1fr);
-  justify-content: flex-start !important;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  min-height: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  background: none !important;
-  box-shadow: none !important;
-  color: var(--text) !important;
-  font-size: var(--fs-body) !important;
-  font-weight: var(--fw-semibold) !important;
-  line-height: 1.4;
-  text-align: left;
-  white-space: nowrap !important;
-}
-.cardName {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow-wrap: normal;
-}
-/* The whole row opens the editor; inner controls sit above this layer. */
-.cardTitle::after { content: ''; position: absolute; inset: 0; }
-.cardTitle:hover { color: var(--accent) !important; text-decoration: none; }
-.cardTitle:focus { color: var(--text) !important; }
-.cardTitle:focus-visible { outline: none; }
+.resourceBody { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; width: 100%; min-width: 0; text-align: left; }
+.resourceTitle { display: flex; grid-column: 1 / -1; align-items: center; gap: 7px; min-width: 0; }
+.resourceTitle > strong { min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .badge { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; }
 .badge[data-accent] { background: var(--info-soft); color: var(--info); }
-.metaChip { position: relative; z-index: 1; display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 0 7px; border-radius: 99px; background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 18px; box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
 .command { display: block; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; user-select: text; }
-
-.rowTargets { position: relative; z-index: 1; grid-area: targets; display: grid; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
-/* Scope lines live in the shared marks stylesheet. Constrain them here so the
-   mark buttons wrap inside this column instead of widening the row. */
-.rowTargets > * { display: flex; flex-direction: column; align-items: flex-end; width: 100%; min-width: 0; max-width: 100%; }
-.rowTargets > * > * { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; width: fit-content; max-width: 100%; margin-left: auto; min-width: 0; }
-.rowTargets > * > * > :last-child { display: flex; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 100%; }
-.placedNote { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
+.placedNote { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
 .placedNote:not([data-placed])::before { content: '·'; }
 .placedNote[data-placed] { color: var(--accent); font-weight: var(--fw-semibold); }
 .placedNote[data-placed]::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
-.rowActions { position: relative; z-index: 1; grid-area: actions; display: flex; align-items: center; gap: 4px; }
-.iconActions { display: flex; gap: 2px; }
-.iconActions button { display: grid; place-items: center; width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-3); opacity: .7; transition: opacity var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.row:hover .iconActions button, .iconActions button:focus-visible { opacity: 1; }
-.iconActions button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.iconActions .danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
-.editButton, .editButton:hover:not(:disabled) {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 30px;
-  padding: 0 11px;
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  background: var(--surface);
-  box-shadow: none;
-  color: var(--text-2);
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-medium);
-}
-.editButton:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.placementDetails { display: grid; gap: 12px; min-width: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+.placementHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.placementHeading h4 { margin: 0; }
+.placementHeading > span { color: var(--text-3); font-size: var(--fs-caption); }
+.placementDetails > div { display: flex; flex-direction: column; align-items: stretch; width: 100%; min-width: 0; max-width: 100%; }
+.placementDetails > div > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.placementDetails > div > div > :last-child { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
 
-@container mcp-list (max-width: 760px) {
-  .row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'icon main actions' 'icon targets targets'; gap: 10px 12px; align-items: start; }
-  .rowTargets { justify-items: start; }
-  .rowTargets > * { align-items: flex-start; }
-  .rowTargets > * > * { margin-left: 0; justify-content: flex-start; }
-  .rowTargets > * > * > :last-child { justify-content: flex-start; }
-}
-
-.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
-.empty > svg { margin-bottom: 2px; color: var(--text-3); }
-.emptyIcon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
-.empty > strong { color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); }
+.progress { margin: 0; color: var(--text-3); font-size: var(--fs-caption); }
+.stale { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--text-2); font-size: var(--fs-caption); }
+.stale strong { color: var(--warning); }
+.stale span { flex: 1 1 240px; }
 .emptyActions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
 .emptyActions button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-h); padding: 0 16px; }
-
 .error { margin: 0; padding: 10px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .dirty { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .dirty::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--warning); }

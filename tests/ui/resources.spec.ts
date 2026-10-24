@@ -83,7 +83,11 @@ async function mockResources(page: Page) {
           const definition = { ...args.draft, id: args.draft.id ?? 'candidate-' + (definitions.length + 1), version: (args.draft.expectedVersion ?? 0) + 1 };
           const targets = args.targets.map((target: Record<string, unknown>) =>
             ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: args.draft.command || args.draft.url } }));
-          return { draft: args.draft, definition, targets };
+          const response = { draft: args.draft, definition, targets };
+          if ((window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview) {
+            return new Promise((resolve) => { pendingPreviews.push(() => resolve(response)); });
+          }
+          return response;
         }
         if (command === 'commit_mcp_draft') {
           const definition = await (window as any).__TAURI_INTERNALS__.invoke('save_mcp_definition', { draft: args.draft });
@@ -349,7 +353,7 @@ test('MCP duplicate name stays within the 80 byte backend limit when the source 
   expect(copies[1].name).not.toBe(copies[0].name);
 });
 
-test('MCP card keeps only delete, duplicate, and edit actions', async ({ page }) => {
+test('MCP details keep delete, duplicate, edit, and distribution actions', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.evaluate(() => {
@@ -357,10 +361,11 @@ test('MCP card keeps only delete, duplicate, and edit actions', async ({ page })
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  const card = page.locator('article', { hasText: 'filesystem' });
+  const card = page.getByRole('complementary', { name: 'MCP 详情' });
   await expect(card.getByRole('button', { name: '删除' })).toBeVisible();
   await expect(card.getByRole('button', { name: '创建副本' })).toBeVisible();
   await expect(card.getByRole('button', { name: '修改' })).toBeVisible();
+  await expect(card.getByRole('button', { name: '编辑并分发' })).toBeVisible();
   await expect(card.getByRole('button', { name: '复制 JSON' })).toHaveCount(0);
   await expect(card.getByRole('button', { name: '复制命令' })).toHaveCount(0);
 });
@@ -377,6 +382,7 @@ test('MCP replacement shows both native entries and can be canceled', async ({ p
   await page.getByRole('button', { name: '保留当前文件' }).click();
   let writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: unknown[] }).__resourceWrites);
   expect(writes).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__resourceMcpDefinitions)).toEqual([]);
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByText('old-command')).toHaveCount(0);
   await page.getByRole('button', { name: '保存并分发' }).click();
@@ -406,6 +412,7 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   await expect(page.getByRole('checkbox', { name: 'Codex' })).toHaveAccessibleDescription('保存时移除');
   await expect(page.getByRole('dialog').getByText('将从 Codex 移除')).toBeVisible();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: '已从 Codex 移除。' })).toBeVisible();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites);
@@ -430,6 +437,7 @@ test('MCP removal notice expires after four seconds', async ({ page }) => {
   await codex.uncheck();
   await expect(codex).not.toBeChecked();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites)).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
   const status = page.getByRole('status').filter({ hasText: '已从 Codex 移除。' });
@@ -457,6 +465,7 @@ test('editing an MCP rewrites every CLI that already has it, including another s
   await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
   await page.getByRole('textbox', { name: '命令' }).fill('node');
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
   expect(writes).toHaveLength(1);
@@ -485,6 +494,7 @@ test('an unfinished MCP preview cannot return after switching scope or distribut
   await expect(page.getByRole('button', { name: '替换并分发', exact: true })).toHaveCount(0);
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
   expect(writes).toHaveLength(1);
   expect(writes[0].targets[0]).toEqual(expect.objectContaining({ scope: 'project', projectPath: '/tmp/second-project' }));
@@ -621,6 +631,7 @@ test('OAuth MCP uncheck passes its exact context with one account', async ({ pag
   await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'remove_native_mcp', args: { name: 'filesystem', target: expect.objectContaining({ contextId: 'ctx-a' }) } }]);
 });
@@ -635,6 +646,7 @@ test('A and B MCP placements stay distinct and unchecking B preserves A', async 
   await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
   expect(state.writes).toHaveLength(1);
@@ -716,6 +728,7 @@ test('MCP isolates failed historical projects and bindings while default global 
   await page.evaluate(() => { const win = window as any; win.__deferContext = false; win.__pendingContexts.forEach((resolve: () => void) => resolve()); });
   await expect(codex).toBeEnabled(); await expect(codex).toBeChecked();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const writes = await page.evaluate(() => (window as any).__resourceWrites);
   expect(writes).toHaveLength(1);
@@ -724,6 +737,7 @@ test('MCP isolates failed historical projects and bindings while default global 
   await expect(codex).toBeEnabled(); await expect(codex).toBeChecked();
   await codex.uncheck();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
   expect(state.writes[1]).toMatchObject({ command: 'remove_native_mcp', args: { target: { toolId: 'codex', scope: 'global', contextId: null } } });
@@ -893,9 +907,10 @@ test('current MCP details reveal secrets explicitly and library navigation retur
   await details.getByRole('button', { name: '显示 API_TOKEN 的值' }).click();
   await expect(details).toContainText('literal-secret');
   await details.getByRole('button', { name: '在资料库中打开' }).click();
-  const editor = page.getByRole('dialog', { name: '修改 MCP' });
-  await expect(editor.getByRole('textbox', { name: '名称' })).toHaveValue('native-one');
-  await editor.getByRole('button', { name: '关闭' }).click();
+  const libraryDetails = page.getByRole('complementary', { name: 'MCP 详情' });
+  await expect(libraryDetails).toContainText('native-one');
+  await expect(libraryDetails).toContainText('••••');
+  await expect(page.getByRole('dialog', { name: '修改 MCP' })).toHaveCount(0);
   await page.getByRole('button', { name: '返回工具与连接' }).click();
   await expect(page.getByRole('tab', { name: 'MCP', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(row).toBeVisible();
@@ -1064,12 +1079,13 @@ test('MCP card results float as a toast and never push the card list down', asyn
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   const list = page.getByLabel('MCP 列表', { exact: true });
-  const before = await list.boundingBox();
+  const documentTop = () => list.evaluate(element => element.offsetTop);
+  const before = await documentTop();
   await page.getByRole('button', { name: 'Codex · 已生效' }).click();
   const status = page.getByRole('region', { name: '资料库内容' }).getByRole('status').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
   expect(await status.evaluate((element) => getComputedStyle(element.parentElement as Element).position)).toBe('fixed');
-  expect((await list.boundingBox())?.y).toBe(before?.y);
+  expect(await documentTop()).toBe(before);
   await status.getByRole('button', { name: '关闭提示' }).click();
   await expect(status).toHaveCount(0);
 });

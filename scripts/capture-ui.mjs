@@ -68,6 +68,7 @@ async function mock(initialTheme){
  const quotaCaches=quotaQueries.map(query=>({queryId:query.id,generation:1,success:{execution:{kind:'saved',queryId:query.id,generation:1,identity:query.config.identity},source:query.id==='linked-glm'?'profile:glm:1:1':'javascript:v1',attemptedAt:'2026-10-03T04:00:00Z',measuredAt:'2026-10-03T04:00:00Z',result:quotaResult},attemptedAt:'2026-10-03T04:00:00Z',errors:[],nextAllowedAt:0,nextAutoAt:0,failures:0,authPaused:false,refreshing:false}));
  const accounts=ids.map(toolId=>({id:'account-'+toolId,toolId,provider:toolId,version:1,label:'开发账号',state:'signed_in',identity:{subject:'fixture-'+toolId,email:'developer@example.test',plan:'订阅套餐',source:'synthetic'},context:{id:'context-'+toolId},retiredContexts:[],pendingLogin:null,detail:null,checkedAt:1790992800}));
  const pluginEntry={id:'code-review@official',name:'Code Review',source:'code-review@official',version:'1.2.0',scope:'user',enabled:true,state:'installed_load_unknown',policy:'AVAILABLE',readOnly:false,root:'C:/fixture/plugins/code-review',resources:[{kind:'agents',path:'C:/fixture/plugins/code-review/agents',ownerId:'code-review@official'}]};
+ const pluginSnapshot=target=>({target,capability:{version:versions[target.toolId],sources:'plugin@marketplace',actions:['install','update','enable','disable','uninstall'],project:true,detail:'静态安装状态；重启会话后加载'},entries:window.__capturePluginsEmpty?[]:[pluginEntry,{...pluginEntry,id:'required@org',name:'Organization Plugin',policy:'REQUIRED',readOnly:true}],baseline:'capture-plugins',detail:'合成插件列表，实际加载未验证'});
  const agentEntry={id:'reviewer',name:'reviewer',description:'审查正确性、安全与边界条件',path:'C:/fixture/agents/reviewer.md',format:'markdown',content:'---\nname: reviewer\ndescription: 审查正确性、安全与边界条件\ntools: Read, Grep, Glob\nmodel: inherit\n---\n检查改动影响，引用具体证据并说明验证范围。\n',enabled:true,readOnly:false,owner:'独立定义',detail:'下一次委派读取此定义'};
  const callbacks=new Map(); let callbackId=0;
  window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(_event,id){callbacks.delete(id);}};
@@ -86,7 +87,13 @@ async function mock(initialTheme){
   if(command==='usage_presets')return [{id:'glm-cn',label:quotaConfig.label,description:'官方套餐查询，独立展示额度窗口',config:{...quotaConfig,identity:{...quotaConfig.identity,profileId:null},program:{kind:'builtin',provider:'glm',templateVersion:1}},credentials:[{name:'api_key',label:'API Key',instructions:'需要所选区域的套餐 API Key',allowedOrigins:['https://open.bigmodel.cn']}]},{id:'javascript-example',label:'自定义 JavaScript',description:'受控 HTTP 查询与结构化结果',config:{...quotaQueries[1].config,identity:{...quotaConfig.identity,profileId:null}},credentials:[]}];
   if(command==='create_usage_test')return 'capture-test';
   if(command==='test_usage_query')return {execution:{kind:'draft',executionId:args.executionId,draftRevision:args.draftRevision},result:quotaResult,error:null,elapsedMs:42,stage:'validation',preview:JSON.stringify(quotaResult,null,2),requestOrigins:[args.draft.config.site]};
-  if(command==='scan_native_plugins')return {target:args.target,capability:{version:versions[args.target.toolId],sources:'plugin@marketplace',actions:['install','update','enable','disable','uninstall'],project:true,detail:'静态安装状态；重启会话后加载'},entries:[pluginEntry,{...pluginEntry,id:'required@org',name:'Organization Plugin',policy:'REQUIRED',readOnly:true}],baseline:'capture-plugins',detail:'合成插件列表，实际加载未验证'};
+  if(command==='preview_native_plugins')return pluginSnapshot(args.target);
+  if(command==='scan_native_plugins'){if(window.__capturePluginScanFailure)throw new Error('插件扫描暂时失败');return pluginSnapshot(args.target);}
+  if(command==='operate_native_plugin'){
+   if(window.__capturePluginHold)await new Promise(resolve=>{window.__releaseCapturePlugin=resolve;});
+   if(window.__capturePluginFailure)return {status:'failed_possible_side_effects',detail:'原生命令失败；实际副作用尚未核验',transactionId:null,snapshot:pluginSnapshot(args.request.target)};
+   return {status:'native_result_observed',detail:'插件操作已完成',transactionId:'capture-operation',snapshot:pluginSnapshot(args.request.target)};
+  }
   if(command==='scan_native_agents')return {target:args.target,capability:{version:versions[args.target.toolId],supported:true,format:'markdown',template:agentEntry.content,detail:'下一次委派读取定义'},entries:[agentEntry,{...agentEntry,id:'plugin-reviewer',name:'plugin-reviewer',owner:'插件：code-review@official',readOnly:true}],baseline:'capture-agents',detail:'合成原生定义，插件所属定义只读'};
   if(command==='list_projects')return projects;
   if(command==='get_registered_tool_workspace'){const id=args.toolId;const format=id==='codex'||id==='grok'?'toml':'json';const file=format==='toml'?'config.toml':'settings.json';const text=format==='toml'?'# 日常开发\nmodel = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n[projects."C:/Projects/cliora"]\ntrust_level = "trusted"':JSON.stringify({model:'claude-sonnet-4-6',permissions:{allow:['Read','Edit']}},null,2);const profile={id:id+'-daily',tool:id,name:'日常开发',version:1,revision:'r1',inheritCommon:true,files:{settings:text},suppressed:{},nativeCredentials:{},connection:null};return {probe:{selectedPath:'C:/Tools/'+id+'.cmd',installations:[{path:'C:/Tools/'+id+'.cmd',version:versions[id],status:'available',source:'npm_shim'}],nativeFiles:[{role:'settings',path:'C:/Users/local/.'+id+'/'+file,format,writable:true,sensitive:false}],nativeWrites:{state:'supported',reason:'可编辑与应用原生配置'},interfaceFormats:['openai_chat'],providerPresets:[],dependencies:[],installUrl:'https://example.com',upgradeHint:'沿用官方安装方式升级',installCommand:'npm install -g '+id,upgradeCommand:null,connectionPolicy:connectionPolicy(id,args.scope??'global')},profiles:[profile,{...profile,id:id+'-work',name:id==='codex'?'GLM 官方套餐':'工作项目',version:1,inheritCommon:false,authentication:{kind:'api_key'},connection:id==='codex'?{providerId:'glm',interfaceFormat:'openai_responses',baseUrl:'https://open.bigmodel.cn/api/coding/paas/v4',model:'glm-5.3',secretRef:'synthetic-profile-key',authEnvVar:null}:null}],common:{tool:id,version:1,revision:'c1',files:{settings:format==='toml'?'# 所有配置共享的设置':'{}'}},binding:{profileId:profile.id,profileVersion:1},snapshots:[{role:'settings',fingerprint:'hash',error:null}],recoveryNeeded:[],customPath:null,effectiveContextId:null};}
@@ -96,8 +103,14 @@ async function mock(initialTheme){
   if(command==='get_launch_settings')return {selected:'power_shell',terminals:[{id:'auto',label:'系统默认',available:true},{id:'power_shell',label:'PowerShell',available:true},{id:'windows_terminal',label:'Windows Terminal',available:true}]};
   if(command==='get_tray_status')return {available:true,error:null};
   if(command==='list_library_items')return library.filter(i=>i.kind===args.kind&&(!args.search||(i.title+i.body+i.category).includes(args.search)));
-  if(command==='list_mcp_definitions')return definitions;
-  if(command==='list_mcp_placements')return mcpPlacements;
+  if(command==='list_mcp_definitions'){if(window.__captureMcpReadFailure)throw new Error('MCP 资料读取暂时失败');return window.__captureMcpEmpty?[]:definitions;}
+  if(command==='list_mcp_placements'){if(window.__captureMcpReadFailure)throw new Error('MCP 写入分布读取暂时失败');return window.__captureMcpEmpty?[]:mcpPlacements;}
+  if(command==='preview_mcp_draft')return {draft:args.draft,targets:args.targets.map((target,index)=>({...target,status:window.__captureMcpConflict&&index===0?'conflict':'ready',detail:window.__captureMcpConflict&&index===0?'原生已有同名条目，确认后替换':'候选已绑定当前基线',path:'C:/fixture/'+target.toolId+'/mcp.json',baselineHash:'capture-baseline',previewToken:'capture-preview',existing:window.__captureMcpConflict&&index===0?{command:'old-command'}:null,proposed:{command:args.draft.command,args:args.draft.args,url:args.draft.url}}))};
+  if(command==='commit_mcp_draft'){
+   if(window.__captureMcpBatchFailure===args.draft.name)throw new Error('该条目校验失败，其他条目继续处理');
+   const definition={...args.draft,id:args.draft.id??'capture-'+args.draft.name,version:(args.draft.expectedVersion??0)+1,inLibrary:true};
+   return {definition,targets:args.targets.map(target=>({...target,status:'written',detail:'已写入',path:'C:/fixture/'+target.toolId+'/mcp.json',baselineHash:'capture-baseline'}))};
+  }
   if(command==='list_native_mcp')return args.target?.scope==='project'?[]:[{...definitions[0],enabled:true,protectedValues:false},{...definitions[2],enabled:false,protectedValues:false},{name:'sequential-thinking',transport:'stdio',command:'npx',args:['-y','@modelcontextprotocol/server-sequential-thinking'],url:'',env:{},headers:{},enabled:true,protectedValues:false}];
   if(command==='list_skill_packages')return skills;
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
@@ -389,22 +402,106 @@ async function captureConnectionScreens(page,capture,width){
  if(previous)await page.setViewportSize(previous);
 }
 async function captureMcpScreens(page,capture){
+ const nav=page.getByRole('navigation',{name:'页面'});
  const region=page.getByRole('region',{name:'工具与连接'});
- await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
+ await nav.getByRole('button',{name:'工具与连接'}).click();
  await region.getByRole('tablist',{name:'CLI'}).waitFor();
  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
  await page.getByRole('tab',{name:'MCP',exact:true}).click();
  const tool=page.getByRole('region',{name:'MCP 服务器'});
  await tool.getByRole('button',{name:/filesystem/}).first().waitFor();
+ await tool.getByRole('button',{name:/filesystem/}).first().click();
+ await page.getByRole('complementary',{name:'MCP 详情'}).or(page.getByRole('dialog',{name:'filesystem',exact:true})).waitFor();
  await capture('mcp-tool');
- await tool.getByRole('button',{name:/filesystem/}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-edit');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ const toolEditor=page.getByRole('dialog',{name:'修改 MCP',exact:true});
+ await page.getByRole('button',{name:'修改',exact:true}).click();await toolEditor.waitFor();await capture('mcp-tool-edit');await page.keyboard.press('Escape');await toolEditor.waitFor({state:'hidden'});
+ const closeToolDetails=page.getByRole('button',{name:'关闭 MCP 详情',exact:true});if(await closeToolDetails.isVisible())await closeToolDetails.click();
  await tool.getByRole('button',{name:'添加 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
- await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'资料库'}).click();
- await page.getByRole('tab',{name:/^MCP/}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('mcp-library');
- await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('mcp-library-edit');
- await page.getByRole('dialog').evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
- await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
- await page.getByRole('button',{name:'新建 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-library-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await nav.getByRole('button',{name:'资料库'}).click();
+ await page.getByRole('tab',{name:/^MCP/}).click();
+ const list=page.getByLabel('MCP 列表');
+ await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ await capture('mcp-library');
+ await page.getByRole('button',{name:'修改',exact:true}).click();
+ let dialog=page.getByRole('dialog',{name:'修改 MCP'});await dialog.waitFor();await capture('mcp-library-edit');
+ await dialog.evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
+ await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+ const closeLibraryDetails=page.getByRole('button',{name:'关闭 MCP 详情',exact:true});if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
+ await page.getByRole('button',{name:'新建 MCP',exact:true}).first().click();
+ dialog=page.getByRole('dialog',{name:'新建 MCP'});await dialog.waitFor();await capture('mcp-library-new');
+ await dialog.getByRole('button',{name:'粘贴导入'}).click();
+ await dialog.getByRole('textbox',{name:'粘贴 MCP JSON'}).fill(JSON.stringify({mcpServers:{good:{command:'npx',args:['-y','good-server']},bad:{command:'uvx',args:['bad-server']}}}));
+ await dialog.getByRole('button',{name:'解析并填入'}).click();
+ const review=page.getByRole('dialog',{name:'审查 MCP 导入'});await review.waitFor();await capture('mcp-library-batch');
+ await review.getByRole('button',{name:'预览选中的 2 项'}).click();
+ await review.getByRole('button',{name:'确认导入 2 项'}).waitFor();await capture('mcp-library-batch-preview');
+ await page.evaluate(()=>window.__captureMcpBatchFailure='bad');
+ await review.getByRole('button',{name:'确认导入 2 项'}).click();
+ await review.getByText('该条目校验失败，其他条目继续处理').waitFor();await capture('mcp-library-batch-failure');
+ await page.evaluate(()=>window.__captureMcpBatchFailure=null);
+ await review.getByRole('button',{name:'返回',exact:true}).click();
+ await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+ if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
+ await list.getByRole('button',{name:/^filesystem/}).click();
+ await page.getByRole('button',{name:'修改',exact:true}).click();dialog=page.getByRole('dialog',{name:'修改 MCP'});await dialog.waitFor();
+ await page.evaluate(()=>window.__captureMcpConflict=true);
+ await dialog.locator('[data-dialog-save]').click();await dialog.locator('[data-conflict="true"]').waitFor();await capture('mcp-library-conflict');
+ await dialog.getByRole('button',{name:'保留当前文件',exact:true}).click();
+ await page.evaluate(()=>window.__captureMcpConflict=false);
+ await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+ if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
+ await page.evaluate(()=>window.__captureMcpEmpty=true);
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByText('还没有 MCP',{exact:true}).waitFor();await capture('mcp-library-empty');
+ await page.evaluate(()=>window.__captureMcpEmpty=false);
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
+ await page.evaluate(()=>window.__captureMcpReadFailure=true);
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByText('最近一次读取失败，已保留上次成功的定义与写入分布。').waitFor();await capture('mcp-library-stale');
+ await page.evaluate(()=>window.__captureMcpReadFailure=false);
+ await page.getByRole('button',{name:'重试',exact:true}).click();await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
+ await page.getByRole('textbox',{name:'搜索资料'}).fill('missing-mcp');await page.getByText('没有匹配「missing-mcp」的 MCP。').waitFor();await capture('mcp-library-no-match');
+ await page.getByRole('button',{name:'清除搜索',exact:true}).click();
+}
+
+async function capturePluginScreens(page,capture){
+ await page.getByRole('tab',{name:'Claude Code',exact:true}).click();
+ await page.getByRole('tab',{name:'插件',exact:true}).click();
+ const list=page.getByRole('list',{name:'插件',exact:true});
+ await list.getByRole('button',{name:/Code Review/}).waitFor();await capture('native-plugins');
+ await list.getByRole('button',{name:/Code Review/}).click();
+ let details=page.getByRole('complementary',{name:'插件详情'}).or(page.getByRole('dialog',{name:'Code Review',exact:true}));await details.waitFor();await capture('plugin-details');
+ await details.getByRole('button',{name:'关闭插件详情',exact:true}).click();
+ await page.getByLabel('插件来源',{exact:true}).fill('capture-plugin@official');
+ await page.getByRole('checkbox',{name:/我信任所选来源/}).check();await capture('plugin-install');
+ await page.evaluate(()=>window.__capturePluginHold=true);
+ await list.getByRole('button',{name:/Code Review/}).click();details=page.getByRole('complementary',{name:'插件详情'}).or(page.getByRole('dialog',{name:'Code Review',exact:true}));
+ await details.getByRole('button',{name:'禁用',exact:true}).click();
+ await details.getByRole('button',{name:'关闭插件详情',exact:true}).click();
+ const queue=page.locator('[aria-label="插件操作队列"]');await queue.waitFor();
+ await page.getByRole('button',{name:'安装插件',exact:true}).click();
+ await queue.locator('[data-state="queued"]').waitFor();await capture('plugin-queue');
+ await page.evaluate(()=>{window.__capturePluginHold=false;window.__capturePluginFailure=true;window.__releaseCapturePlugin?.();});
+ await queue.locator('[data-state="failed"]').first().waitFor();
+ await expect(queue.locator('[data-state="running"]')).toHaveCount(0);await capture('plugin-operation-failure');
+ await page.evaluate(()=>window.__capturePluginFailure=false);
+ await list.getByRole('button',{name:/Code Review/}).click();details=page.getByRole('complementary',{name:'插件详情'}).or(page.getByRole('dialog',{name:'Code Review',exact:true}));
+ await details.getByRole('button',{name:'更新',exact:true}).click();
+ const confirmation=page.getByRole('dialog',{name:'更新原生插件'});await confirmation.waitFor();await capture('plugin-update-confirmation');
+ await confirmation.getByRole('button',{name:'取消',exact:true}).click();
+ await details.getByRole('button',{name:'关闭插件详情',exact:true}).click();
+ await page.getByLabel('搜索插件').fill('missing-plugin');await capture('plugin-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();
+ await page.getByLabel('插件状态筛选').selectOption('readonly');await capture('plugin-readonly-filter');await page.getByLabel('插件状态筛选').selectOption('all');
+ await page.evaluate(()=>window.__capturePluginsEmpty=true);
+ await page.getByRole('button',{name:'重新扫描',exact:true}).first().click();
+ await page.getByText('此作用域还没有插件',{exact:true}).waitFor();await capture('plugin-empty');
+ await page.evaluate(()=>window.__capturePluginsEmpty=false);
+ await page.getByRole('button',{name:'重新扫描',exact:true}).first().click();await list.getByRole('button',{name:/Code Review/}).waitFor();
+ await page.evaluate(()=>window.__capturePluginScanFailure=true);
+ await page.getByRole('button',{name:'重新扫描',exact:true}).first().click();
+ await page.getByText('最近一次扫描失败，已保留上次成功读取的插件。').waitFor();await capture('plugin-scan-failure');
+ await page.evaluate(()=>window.__capturePluginScanFailure=false);
+ for(const name of ['关闭错误提示','关闭提示']){const dismiss=page.getByRole('button',{name,exact:true});if(await dismiss.count())await dismiss.click();}
 }
 
 if(!workflowsOnly){
@@ -452,11 +549,10 @@ for(const width of widths)for(const theme of themes){
  await accountRow.getByText('管理与关联',{exact:true}).click();await accountRow.getByText('更多账号操作',{exact:true}).click();await accountRow.getByRole('button',{name:'删除账号',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('account-delete-confirmation');await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
  await page.evaluate(()=>window.__captureNativeOnly=true);await page.getByRole('tab',{name:'OpenCode',exact:true}).click();await page.getByRole('tab',{name:'账号',exact:true}).click();await page.getByText(/还没有独立账号/).waitFor();await page.getByText('CLI 已登录',{exact:true}).first().waitFor();await capture('native-cli-login');
  await page.evaluate(()=>{window.__captureNativeOnly=false;window.__captureLoginPending=true;});await page.getByRole('button',{name:'打开授权页面',exact:true}).waitFor();await capture('oauth-browser-retry');await page.evaluate(()=>window.__captureLoginPending=false);
- await page.getByRole('tab',{name:'Claude Code',exact:true}).click();
- await page.getByRole('tab',{name:'插件',exact:true}).click();await page.getByText('Code Review',{exact:true}).waitFor();await capture('native-plugins');await page.getByLabel('插件来源',{exact:true}).fill('code-review@official');await page.getByRole('checkbox').check();await capture('plugin-install');
- await page.getByLabel('搜索插件').fill('missing-plugin');await capture('plugin-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('插件状态筛选').selectOption('readonly');await capture('plugin-readonly-filter');await page.getByLabel('插件状态筛选').selectOption('all');
+ await capturePluginScreens(page,capture);
  await page.getByRole('tab',{name:'Agents',exact:true}).click();await page.getByText('reviewer',{exact:true}).waitFor();await capture('native-agents');await page.getByRole('listitem').filter({has:page.getByText('reviewer',{exact:true})}).getByRole('button').click();await page.getByRole('region',{name:'Agent 定义预览'}).waitFor();await capture('agent-reading');await page.getByRole('article',{name:'reviewer'}).getByRole('button',{name:'编辑',exact:true}).click();await page.getByRole('textbox',{name:'原生 Agent 定义',exact:true}).waitFor();await capture('agent-editor');await page.getByRole('button',{name:'完成',exact:true}).click();
- await page.getByLabel('搜索 Agent 定义').fill('missing-agent');await capture('agent-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('Agent 状态筛选').selectOption('readonly');await capture('agent-readonly-filter');await page.getByLabel('Agent 状态筛选').selectOption('all');
+ const agentSearch=page.getByLabel('搜索 Agent 定义');if(!await agentSearch.isVisible())await page.getByRole('button',{name:'返回列表',exact:true}).click();
+ await agentSearch.fill('missing-agent');await capture('agent-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('Agent 状态筛选').selectOption('readonly');await capture('agent-readonly-filter');await page.getByLabel('Agent 状态筛选').selectOption('all');
  await page.getByRole('tab',{name:'Grok',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'账号',exact:true}).count())throw new Error('Unsupported Grok accounts tab is visible');await capture('grok-capabilities');
  await page.getByRole('tab',{name:'Pi',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'Agents',exact:true}).count())throw new Error('Unsupported Pi agents tab is visible');await capture('pi-capabilities');
  await page.getByRole('tab',{name:'Codex',exact:true}).click();
@@ -465,7 +561,8 @@ for(const width of widths)for(const theme of themes){
  await captureConnectionScreens(page,capture,width);
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
  await page.getByRole('tab',{name:/^长期规则/}).click();await page.getByRole('button',{name:'项目协作约定',exact:true}).waitFor();await capture('library-rules');
- await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('library-mcp');
+ await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:/^filesystem/}).waitFor();await capture('library-mcp');
+ const closeLibraryOverview=page.getByRole('button',{name:'关闭 MCP 详情',exact:true});if(await closeLibraryOverview.isVisible())await closeLibraryOverview.click();
  await page.getByRole('button',{name:'新建 MCP',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-mcp-editor');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByLabel('Skill 列表').getByRole('button',{name:'code-review',exact:true}).waitFor();await capture('library-skills');
  await page.getByRole('button',{name:'添加 Skill',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-skill-add');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
