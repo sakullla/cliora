@@ -13,7 +13,7 @@ const transports: Array<{ value: McpTransport; label: string; icon: 'terminal' |
   { value: 'http', label: 'HTTP', icon: 'globe' },
 ];
 
-export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, headerRows, onHeaderRowsChange, disabled = false, showIssues = false, onImport, initialPasteOpen = false, title }: {
+export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, headerRows, onHeaderRowsChange, disabled = false, showIssues = false, onImport, initialPasteOpen = false, initialPasteText = '', title }: {
   draft: McpDraft;
   onChange: (draft: McpDraft) => void;
   envRows: KeyValueRow[];
@@ -23,15 +23,16 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   disabled?: boolean;
   /** Reveals empty-field issues after a save attempt; malformed names show while typing. */
   showIssues?: boolean;
-  /** Enables JSON paste import (toggle box and pasting JSON into the name field). */
-  onImport?: (parsed: McpParsedServer[]) => void;
+  /** Enables JSON paste import. Return true when the source must stay available for corrections. */
+  onImport?: (parsed: McpParsedServer[], source: string) => boolean | void;
   initialPasteOpen?: boolean;
+  initialPasteText?: string;
   title?: string;
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [pasteOpen, setPasteOpen] = useState(initialPasteOpen);
-  const [pasteText, setPasteText] = useState('');
+  const [pasteOpen, setPasteOpen] = useState(initialPasteOpen || !!initialPasteText);
+  const [pasteText, setPasteText] = useState(initialPasteText);
   const [pasteError, setPasteError] = useState('');
   const [pasteNotice, setPasteNotice] = useState('');
   const [urlBlurred, setUrlBlurred] = useState(false);
@@ -52,17 +53,20 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   const urlIssue = showIssues || (urlBlurred && draft.url.trim()) ? issues.url : undefined;
   const preview = draft.transport === 'stdio' ? mcpCommandLine(draft.command, draft.args) : '';
 
-  function imported(parsed: McpParsedServer[]) {
-    onImport?.(parsed);
+  function imported(parsed: McpParsedServer[], source: string) {
+    const needsCorrection = onImport?.(parsed, source) ?? false;
     setPasteNotice(t('tools.mcp.pasted'));
+    return needsCorrection;
   }
   function applyPaste() {
     const parsed = parseMcpServerCollection(pasteText);
     if (!parsed.length) { setPasteError(t('library.resources.pasteImportError')); return; }
-    imported(parsed);
-    setPasteText('');
+    const needsCorrection = imported(parsed, pasteText);
     setPasteError('');
-    setPasteOpen(false);
+    if (!needsCorrection) {
+      setPasteText('');
+      setPasteOpen(false);
+    }
   }
   function pasteIntoName(event: ClipboardEvent<HTMLInputElement>) {
     if (!onImport) return;
@@ -71,7 +75,10 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
     const parsed = parseMcpServerCollection(text);
     if (!parsed.length) return;
     event.preventDefault();
-    imported(parsed);
+    if (imported(parsed, text)) {
+      setPasteText(text);
+      setPasteOpen(true);
+    }
   }
 
   return <div className={styles.form}>

@@ -128,6 +128,8 @@ export function mcpSummary(item: { transport: McpTransport; command: string; arg
   return item.transport === 'http' ? (item.url ?? '').trim() : mcpCommandLine(item.command, item.args);
 }
 
+export type McpParseIssue = 'serverInvalid' | 'argsInvalid' | 'envInvalid' | 'headersInvalid';
+
 export type McpParsedServer = {
   total: number;
   name: string;
@@ -137,14 +139,20 @@ export type McpParsedServer = {
   url: string;
   env: Record<string, string>;
   headers: Record<string, string>;
+  invalid: McpParseIssue[];
 };
 
-function stringMap(value: unknown): Record<string, string> {
+function stringMap(value: unknown, issue: McpParseIssue, invalid: McpParseIssue[]): Record<string, string> {
   const output: Record<string, string> = {};
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return output;
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+  if (value === undefined) return output;
+  if (!plainObject(value)) {
+    invalid.push(issue);
+    return output;
+  }
+  for (const [key, item] of Object.entries(value)) {
     if (typeof item === 'string') output[key] = item;
     else if (typeof item === 'number' || typeof item === 'boolean') output[key] = String(item);
+    else invalid.push(issue);
   }
   return output;
 }
@@ -173,17 +181,19 @@ export function parseMcpServerCollection(text: string): McpParsedServer[] {
   if (!plainObject(parsed)) return [];
   const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : null;
   const map = wrapped ?? (!looksLikeServer(parsed) && Object.values(parsed).some(plainObject) ? parsed : null);
-  const entries: Array<[string, Record<string, unknown>]> = map
-    ? Object.entries(map).filter((entry): entry is [string, Record<string, unknown>] => plainObject(entry[1]))
-    : [['', parsed]];
+  const entries: Array<[string, unknown]> = map ? Object.entries(map) : [['', parsed]];
   const total = entries.length;
-  return entries.map(([name, server]) => {
+  return entries.map(([name, value]) => {
+    const invalid: McpParseIssue[] = [];
+    const server = plainObject(value) ? value : {};
+    if (!plainObject(value)) invalid.push('serverInvalid');
     const command = typeof server.command === 'string' ? server.command : '';
     const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
     const hint = typeof server.type === 'string' ? server.type : typeof server.transport === 'string' ? server.transport : '';
     const transport: McpTransport = url || /^(http|sse|streamable)/i.test(hint) ? 'http' : 'stdio';
     const args = Array.isArray(server.args) ? server.args.filter((item): item is string => typeof item === 'string') : [];
-    return { total, name, transport, command, args, url, env: stringMap(server.env), headers: stringMap(server.headers) };
+    if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some(item => typeof item !== 'string'))) invalid.push('argsInvalid');
+    return { total, name, transport, command, args, url, env: stringMap(server.env, 'envInvalid', invalid), headers: stringMap(server.headers, 'headersInvalid', invalid), invalid: [...new Set(invalid)] };
   });
 }
 
