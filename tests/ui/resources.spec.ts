@@ -73,7 +73,7 @@ async function mockResources(page: Page) {
         if (command === 'list_native_mcp') return [];
         if (command === 'preview_mcp_targets') {
           const response = args.targets.map((target: Record<string, unknown>) =>
-            ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: 'npx' } }));
+            ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? '同名原生 MCP 未受当前资料库管理，请比较后确认' : '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: 'npx' } }));
           if ((window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview) {
             return new Promise((resolve) => { pendingPreviews.push(() => resolve(response)); });
           }
@@ -493,6 +493,72 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   await expect(page.getByRole('status').filter({ hasText: '已从 Codex 移除。' })).toBeVisible();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites);
   expect(writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })] })]);
+});
+
+test('library MCP quick write shows an unmanaged conflict diff and only writes after explicit confirmation', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpConflict = true;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const marks = page.getByRole('group', { name: 'filesystem 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'Codex · 未写入' }).click();
+  const confirmation = page.getByRole('dialog', { name: '替换同名 MCP？' });
+  await expect(confirmation).toContainText('同名原生 MCP 未受当前资料库管理，请比较后确认');
+  await expect(confirmation).toContainText('old-command');
+  await expect(confirmation).toContainText('"npx"');
+  await expect(confirmation.getByRole('table', { name: '逐行差异' })).toBeVisible();
+  await confirmation.getByRole('button', { name: '保留当前文件', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  let state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements, definitions: (window as any).__resourceMcpDefinitions }));
+  expect(state.writes).toEqual([]);
+  expect(state.places).toEqual([]);
+  expect(state.definitions[0].version).toBe(1);
+  await expect(marks.getByRole('button', { name: 'Codex · 未写入' })).toBeVisible();
+
+  await marks.getByRole('button', { name: 'Codex · 未写入' }).click();
+  await confirmation.getByRole('button', { name: '替换并写入', exact: true }).click();
+  await expect(marks.getByRole('button', { name: 'Codex · 已生效' })).toBeVisible();
+  state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes).toEqual([expect.objectContaining({ definitionId: 'mcp-1', targets: [expect.objectContaining({ baselineHash: 'hash-empty', previewToken: 'bound-token', allowReplace: true })] })]);
+  expect(state.places).toHaveLength(1);
+});
+
+test('library MCP quick write rejects an external change after preview', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'distribute_mcp') {
+        win.__resourceQuickWriteCommit = args;
+        throw new Error('MCP 候选、目标上下文或原生条目在预览后变化；请重新预览');
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpConflict = true;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const marks = page.getByRole('group', { name: 'filesystem 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'Codex · 未写入' }).click();
+  const confirmation = page.getByRole('dialog', { name: '替换同名 MCP？' });
+  await confirmation.getByRole('button', { name: '替换并写入', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '原生条目在预览后变化' })).toBeVisible();
+  await expect(marks.getByRole('button', { name: 'Codex · 未写入' })).toBeVisible();
+  const state = await page.evaluate(() => ({ commit: (window as any).__resourceQuickWriteCommit, writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.commit).toEqual(expect.objectContaining({ definitionId: 'mcp-1', targets: [expect.objectContaining({ baselineHash: 'hash-empty', previewToken: 'bound-token', allowReplace: true })] }));
+  expect(state.writes).toEqual([]);
+  expect(state.places).toEqual([]);
 });
 
 test('library MCP quick removal requires preview confirmation and preserves placement on cancel', async ({ page }) => {
