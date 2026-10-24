@@ -1056,41 +1056,53 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           const tone = sessionTone(selected);
           return <>
             <div className={styles.stageBar}>
-              <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
-              <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /></span>
-              <div className={styles.identityText}>
-                <div className={styles.identityMain}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><span className={styles.statusDot} aria-hidden="true" />{selected.running ? (tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running')) : t('sessions.ended')}</span></div>
-                  <div className={styles.identitySub}>
-                    {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
-                    <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
-                    <span className={styles.modeChip} data-mode={selected.mode}><Icon name={selected.mode === 'yolo' ? 'sparkle' : 'shield'} size={10} />{modeLabel(selected.mode)}</span>
-                    {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={11} />{elapsed}</span>}
-                    {!selected.running && selected.exitCode != null && <span className={styles.exitCode}>{t('sessions.exitCode', { code: selected.exitCode })}</span>}
+              <div className={styles.stageLead}>
+                <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
+                <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /></span>
+                <div className={styles.identityText}>
+                  <div className={styles.identityMain}>
+                    <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><span className={styles.statusDot} aria-hidden="true" />{selected.running ? (tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running')) : t('sessions.ended')}</span></div>
+                    <div className={styles.identitySub}>
+                      {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
+                      <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
+                      <span className={styles.modeChip} data-mode={selected.mode}><Icon name={selected.mode === 'yolo' ? 'sparkle' : 'shield'} size={10} />{modeLabel(selected.mode)}</span>
+                      {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={11} />{elapsed}</span>}
+                      {!selected.running && selected.exitCode != null && <span className={styles.exitCode}>{t('sessions.exitCode', { code: selected.exitCode })}</span>}
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className={styles.terminalToolbar} role="toolbar" aria-label={t('sessions.terminalMenu')} title={t('sessions.terminalInputHint')}>
-                <div className={styles.terminalActions}>
-                  <button type="button" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind}><Icon name="search" size={15} /><span>{t('sessions.findOutput')}</span></button>
-                  <button type="button" className={styles.toolButton} aria-label={t('sessions.copyOutput')} title={t('sessions.copyOutput')} onClick={() => void copyTerminalOutput(selected)}><Icon name="copy" size={15} /><span>{t('sessions.copyOutput')}</span></button>
-                  {selected.running && <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} onClick={() => toggleComposer()}><Icon name="pencil" size={15} /><span>{t('sessions.composerShort')}</span></button>}
-                  <span className={styles.toolDivider} aria-hidden="true" />
-                  {selected.running && <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.interruptShort')}</span></button>}
-                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
-                  <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={16} /></button>
+              <div className={styles.stageTail}>
+                <div className={styles.terminalToolbar} role="toolbar" aria-label={t('sessions.terminalMenu')} title={t('sessions.terminalInputHint')}>
+                  <div className={styles.terminalActions}>
+                    <button type="button" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind}><Icon name="search" size={15} /><span>{t('sessions.findOutput')}</span></button>
+                    <button type="button" className={styles.toolButton} aria-label={t('sessions.copyOutput')} title={t('sessions.copyOutput')} onClick={() => void copyTerminalOutput(selected)}><Icon name="copy" size={15} /><span>{t('sessions.copyOutput')}</span></button>
+                    {selected.running && <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} onClick={() => toggleComposer()}><Icon name="pencil" size={15} /><span>{t('sessions.composerShort')}</span></button>}
+                    <span className={styles.toolDivider} aria-hidden="true" />
+                    {selected.running && <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.interruptShort')}</span></button>}
+                    <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
+                    <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={16} /></button>
+                  </div>
                 </div>
+                <button type="button" className={styles.endBtn} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')}><Icon name="close" size={14} /><span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span></button>
               </div>
-              <button type="button" className={styles.endBtn} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')}><Icon name="close" size={14} /><span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span></button>
             </div>
 
             {!selected.running && <div className={styles.endedStrip}><span className={styles.endedGlyph}><Icon name="info" size={14} /></span><span><strong>{t('sessions.sessionEndedBanner')}</strong><span className={styles.endedDetail}>{t('sessions.endedHintShort')}</span></span><button type="button" className={styles.endedRestart} disabled={!!busy} title={t('sessions.restartHint')} onClick={() => void restartOrCloneSession(selected, true)}><Icon name="refresh" size={12} /><span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></button></div>}
 
             <div className={styles.screen}>
-              {findOpen && <div className={styles.findBar} role="search"><div className={styles.findField}><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
-                if (event.key === 'Enter') { event.preventDefault(); stepFindMatch(event.shiftKey ? -1 : 1); }
-                else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind(); }
-              }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div><span className={styles.findHint}>{t('sessions.findOutput')}</span><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)}><Icon name="arrowUp" size={14} /></button><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)}><Icon name="arrowDown" size={14} /></button><button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} title={t('common.dialog.close') + ' (Esc)'} onClick={closeFind}><Icon name="close" size={14} /></button></div>}
+              {findOpen && <div className={styles.findLayer}>
+                <div className={styles.findPanel} role="search">
+                  <div className={styles.findField}><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); stepFindMatch(event.shiftKey ? -1 : 1); }
+                    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind(); }
+                  }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div>
+                  <span className={styles.findHint}>{t('sessions.findOutput')}</span>
+                  <button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)}><Icon name="arrowUp" size={14} /></button>
+                  <button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)}><Icon name="arrowDown" size={14} /></button>
+                  <button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} title={t('common.dialog.close') + ' (Esc)'} onClick={closeFind}><Icon name="close" size={14} /></button>
+                </div>
+              </div>}
 
               <div ref={canvasRef} className={styles.canvas} data-drop={dropActive || undefined} onContextMenu={(event) => { event.preventDefault(); openTerminalMenu(selected, event.clientX, event.clientY); }}>
                 {sessions.filter((session) => session.running || session.id === selectedId || recentSessionIds.includes(session.id)).map((session) => <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={session.id === selectedId} running={session.running} fontSize={fontSize} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge} />)}
@@ -1099,6 +1111,10 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 {scrolledIds.has(selected.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(selected.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
               </div>
               {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              <div className={styles.terminalFooter}>
+                <span className={styles.terminalStatus}><span className={styles.footerDot} data-tone={tone} aria-hidden="true" />{t('sessions.localSessions')} · {toolName(selected)}</span>
+                <span className={styles.terminalKeys}><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span><span className={styles.shortcutSep} aria-hidden="true">·</span><kbd>{modLabel}</kbd><kbd>Shift</kbd><kbd>M</kbd><span>{t('sessions.composerShort')}</span></span>
+              </div>
             </div>
           </>;
         })()}

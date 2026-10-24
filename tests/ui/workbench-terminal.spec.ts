@@ -105,6 +105,20 @@ test('session actions are available from the rail card', async ({ page }) => {
   await expect(page.getByRole('tab', { name: /Codex/ })).toBeFocused();
 });
 
+test('the session rail moves through sessions with vertical arrow keys', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const codex = page.getByRole('tab', { name: /Codex/ });
+  const claude = page.getByRole('tab', { name: /Claude Code/ });
+  await codex.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(claude).toBeFocused();
+  await expect(claude).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Home');
+  await expect(codex).toBeFocused();
+  await expect(codex).toHaveAttribute('aria-selected', 'true');
+});
+
 test('Shift+Enter sends a line feed and Enter still submits', async ({ page }) => {
   await openWorkbench(page);
   await page.keyboard.type('a');
@@ -278,6 +292,30 @@ test('a replayed session with long output opens scrolled to the latest line', as
   await expect(latest).toBeVisible();
   await latest.click();
   await expect.poll(() => page.locator('.xterm-viewport:visible').evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+});
+
+test('find opens over the terminal without resizing the PTY canvas', async ({ page }) => {
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const screen = stage.locator('.xterm-screen:visible');
+  const before = await screen.boundingBox();
+  await page.keyboard.press('Control+Shift+F');
+  const search = stage.getByRole('searchbox', { name: '在终端输出中查找…' });
+  await expect(search).toBeFocused();
+  await search.fill('codex-ready');
+  await expect(stage).toContainText('1 / 1');
+  const overlay = stage.getByRole('search');
+  const overlayBox = await overlay.boundingBox();
+  expect(overlayBox!.y + overlayBox!.height).toBeGreaterThan(before!.y);
+  await expect.poll(async () => {
+    const current = await screen.boundingBox();
+    return current ? { width: current.width, height: current.height } : null;
+  }).toEqual({ width: before!.width, height: before!.height });
+  await page.keyboard.press('Escape');
+  await expect(search).toHaveCount(0);
+  const after = await screen.boundingBox();
+  expect(after!.width).toBe(before!.width);
+  expect(after!.height).toBe(before!.height);
 });
 
 test('font zoom, terminal colours, and a page that never scrolls sideways', async ({ page }) => {
