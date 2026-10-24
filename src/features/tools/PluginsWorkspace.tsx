@@ -77,6 +77,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
   const operationId = useRef(0);
+  const refreshing = useRef(false);
   const sourceInput = useRef<HTMLInputElement>(null);
   const accountLabel = useAccountLabels();
   const entries = snapshot?.entries ?? [];
@@ -120,6 +121,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
         const nextSnapshot = result.snapshot ?? latest;
         if (result.snapshot) remember(cacheKey, result.snapshot);
         setSnapshot(nextSnapshot);
+        setStale(!result.snapshot);
         const failed = result.status === 'failed_possible_side_effects';
         setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: failed ? 'failed' : 'succeeded', detail: result.detail } : item));
         if (failed) setError(`${result.detail} ${t('tools.plugins.sideEffects')}`);
@@ -127,7 +129,9 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
           setNotice(result.detail);
           if (operation.action === 'install') {
             setSource(''); setTrusted(false);
-            const installed = nextSnapshot.entries.find(item => item.id === operation.source || item.source === operation.source);
+            const previousKeys = new Set(latest.entries.map(item => `${item.scope}:${item.id}`));
+            const added = nextSnapshot.entries.filter(item => !previousKeys.has(`${item.scope}:${item.id}`));
+            const installed = nextSnapshot.entries.find(item => item.id === operation.source || item.source === operation.source) ?? (added.length === 1 ? added[0] : undefined);
             if (installed) setSelectedKey(`${installed.scope}:${installed.id}`);
             else setError(`${result.detail} ${t('tools.plugins.installedNotFound')}`);
           }
@@ -143,14 +147,19 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   }, [operations, target]);
 
   async function refresh() {
+    if (refreshing.current || busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')) return;
     const id = generation.current;
+    refreshing.current = true;
     setBusy(true); setError('');
     try {
       const value = await native.scanNativePlugins(target);
       if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); }
     } catch (value) {
       if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); }
-    } finally { if (id === generation.current) setBusy(false); }
+    } finally {
+      refreshing.current = false;
+      if (id === generation.current) setBusy(false);
+    }
   }
 
   async function operate(action: PluginAction, entry?: PluginEntry) {
@@ -174,7 +183,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   }
   function clearFilters() { setSearch(''); setFilter('all'); }
 
-  const empty = snapshot && entries.length === 0 && !busy ? <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
+  const empty = snapshot?.baseline && entries.length === 0 && !busy && !stale ? <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
     ? <button className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
     : <button className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />
     : filtered.length === 0 && entries.length > 0 ? <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>
@@ -184,7 +193,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     ariaLabel={t('tools.plugins.label')}
     title={t('tools.plugins.title')}
     description={t('tools.plugins.description')}
-    headerActions={<button disabled={busy || operations.some(operation => operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>}
+    headerActions={<button disabled={busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>}
     context={<><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></>}
     beforeList={snapshot?.capability.actions.includes('install') && <div className={styles.installBox}>
       <div className={styles.installHeading}><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
@@ -196,8 +205,8 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     toolbar={snapshot && <div className={styles.listToolbar}><SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /><select aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select><span>{snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}{filteredInstalledCount === installedCount ? t('tools.plugins.count', { count: installedCount }) : t('tools.plugins.countFiltered', { filtered: filteredInstalledCount, total: installedCount })}</span></div>}
     status={<>
       {busy && (snapshot ? <p className={styles.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p> : <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>)}
-      {stale && snapshot && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
-      {!snapshot && !busy && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+      {stale && snapshot?.baseline && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button disabled={busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
+      {!busy && (!snapshot || (stale && !snapshot.baseline)) && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
       {operations.length > 0 && <div className={styles.queue} aria-label={t('tools.plugins.queueLabel')}><div className={styles.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(operation => <div className={styles.queueRow} key={operation.id} data-state={operation.status}><span><strong>{actionLabel(operation.action)} · {operation.name}</strong>{operation.detail && <small>{operation.detail}</small>}</span><span className={styles.queueState}>{t(`tools.plugins.operationState.${operation.status}`)}</span>{operation.status === 'queued' && <button onClick={() => setOperations(current => current.filter(item => item.id !== operation.id))}>{t('tools.plugins.cancelQueued')}</button>}{operation.status === 'failed' && <button onClick={() => { setError(''); setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: 'queued', detail: undefined } : item)); }}>{t('tools.plugins.retry')}</button>}</div>)}</div>}
     </>}
     items={filtered}
@@ -222,6 +231,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
         <section className={styles.detailSection}><h4>{t('tools.plugins.resourcesSummary')}</h4>{entry.resources.length ? <ul>{entry.resources.map(resource => <li key={resource.path}><span>{resource.kind}</span><code>{displayPath(resource.path)}</code></li>)}</ul> : <p>{t('tools.plugins.noResources')}</p>}</section>
         {entryActions(entry).length > 0 && <div className={styles.detailActions}>{entryActions(entry).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
         {entry.readOnly && <p className={styles.readonlyNote}>{t('tools.plugins.readonlyDetail')}</p>}
+        {blockProjectUpdate && entryActions(entry).includes('update') && <p className={styles.readonlyNote}>{t('tools.plugins.updateProjectTitle')}</p>}
       </div>;
     }}
     footer={snapshot && <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>}

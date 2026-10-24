@@ -13,19 +13,19 @@ test('plugin search and read-only filter expose relevant actions without changin
   await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 });
 
-async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false) {
+async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false) {
   const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\sakullla-dev`;
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\sakullla-dev\agents`;
-  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, extendedPath, extendedResource }) => {
+  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
-    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: false, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0 };
+    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
     if (extended) state.entries.push({ ...entry, id: 'sakullla-dev', name: 'sakullla-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'sakullla-dev' }] });
-    const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries, baseline: state.baseline, detail: '静态列表，加载未验证' });
+    const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries.map(item => ({ ...item })), baseline: state.baseline, detail: '静态列表，加载未验证' });
     Object.assign(window, { isTauri: true, pluginsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
-      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
-      if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], login: { hint: '原生登录' } }], managedIds: ['claude_code'], preservedUnknown: [] };
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [toolId], theme: 'system' }, tools: [{ id: toolId, name: toolId === 'pi' ? 'Pi' : 'Claude Code' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: toolId, name: toolId === 'pi' ? 'Pi' : 'Claude Code', interfaceFormats: ['anthropic_messages'], login: { hint: '原生登录' } }], managedIds: [toolId], preservedUnknown: [] };
       if (command === 'list_projects') return [{ id: 'project', name: '测试项目', path: '/fixture/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
       if (['list_usage_queries', 'list_usage_cache', 'list_accounts'].includes(command)) return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
@@ -37,14 +37,18 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       if (command === 'get_registered_tool_workspace') {
         if (holdWorkspace && !args.summary) await new Promise<void>(resolve => { state.releaseWorkspace = resolve; });
-        return { probe: { tool: 'claude_code', selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [] }, profiles: [], effectiveContextId: 'ctx-fixture', binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [] };
+        return { probe: { tool: toolId, selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [] }, profiles: [], effectiveContextId: 'ctx-fixture', binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [] };
       }
       if (command === 'preview_native_plugins') {
         if (noPreview) return null;
-        if (holdFull) return { ...snapshot(args.target), baseline: '', capability: { ...snapshot(args.target).capability, actions: [] }, entries: [{ ...entry, readOnly: true, enabled: null, state: 'inventory_pending' }] };
+        if (holdFull) return { ...snapshot(args.target), baseline: '', capability: { ...snapshot(args.target).capability, actions: [] }, entries: emptyEntries ? [] : [{ ...entry, readOnly: true, enabled: null, state: 'inventory_pending' }] };
       }
       if (command === 'scan_native_plugins') {
         if (state.failScan) throw { message: '扫描暂时失败' };
+        if (state.holdNextScan) {
+          state.holdNextScan = false;
+          await new Promise<void>(resolve => { state.releaseNextScan = resolve; });
+        }
         if (holdFull) await new Promise<void>(resolve => { state.releaseFull = resolve; });
         return snapshot(args.target);
       }
@@ -53,15 +57,17 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
         if (req.target.contextId !== 'ctx-fixture' || req.baseline !== state.baseline) throw { message: '目标或基线错误' };
         state.operationCalls += 1;
         if (state.holdFirstOperation && state.operationCalls === 1) await new Promise<void>(resolve => { state.releaseOperation = resolve; });
-        if (state.fail) return { status: 'failed_possible_side_effects', detail: '原生命令失败；已重新扫描实际状态，未宣称原子回滚', transactionId: null, snapshot: snapshot(req.target) };
-        if (req.action === 'install') state.entries.push({ ...entry, id: req.source, name: req.source, source: req.source });
+        if (state.fail) return { status: 'failed_possible_side_effects', detail: '原生命令失败；已重新扫描实际状态，未宣称原子回滚', transactionId: null, snapshot: state.nullOperationSnapshot ? null : snapshot(req.target) };
+        if (req.action === 'install') state.entries.push(state.rewriteInstall
+          ? { ...entry, id: 'cursor-plugin', name: 'Cursor plugin', source: 'C:/Users/fixture/.cursor/plugins/cursor-plugin', root: 'C:/Users/fixture/.cursor/plugins/cursor-plugin' }
+          : { ...entry, id: req.source, name: req.source, source: req.source });
         if (req.action === 'disable' || req.action === 'enable') state.entries.find(item => item.id === req.source)!.enabled = req.action === 'enable';
         if (req.action === 'uninstall') state.entries = state.entries.filter(item => item.id !== req.source);
-        return { status: 'native_command_completed', detail: '原生命令已完成；现有会话未热加载。已重新扫描', transactionId: null, snapshot: snapshot(req.target) };
+        return { status: 'native_command_completed', detail: '原生命令已完成；现有会话未热加载。已重新扫描', transactionId: null, snapshot: state.nullOperationSnapshot ? null : snapshot(req.target) };
       }
       return null;
     } } });
-  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, extendedPath, extendedResource });
+  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace && !emptyEntries && !(deferFull && noPreview)) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
@@ -152,6 +158,77 @@ test('failed native operation retains rescanned state and allows explicit recove
   await expect(details.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).first().click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'scan_native_plugins').length)).toBeGreaterThan(1);
+});
+
+
+for (const failed of [false, true]) {
+  test(`${failed ? 'failed' : 'successful'} operation without a rescan snapshot retains stale entries and offers recovery`, async ({ page }) => {
+    await setup(page);
+    await page.evaluate((failed) => {
+      const state = (window as any).pluginsHarness;
+      state.fail = failed;
+      state.nullOperationSnapshot = true;
+    }, failed);
+    await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
+    await page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true }).click();
+    const stale = page.getByRole('status').filter({ has: page.getByText('列表可能已过期') });
+    await expect(stale).toBeVisible();
+    await expect(page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) })).toBeVisible();
+    await expect(page.getByLabel('插件操作队列')).toContainText(failed ? '失败' : '已完成');
+    if (failed) await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
+    await stale.getByRole('button', { name: '重新扫描' }).click();
+    await expect(page.getByText('列表可能已过期')).toHaveCount(0);
+  });
+}
+
+test('local Cursor install opens the added snapshot entry when its installed path differs', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).pluginsHarness.rewriteInstall = true; });
+  await page.getByLabel('插件来源', { exact: true }).fill('C:/fixture/downloads/cursor-plugin');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '安装插件' }).click();
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await expect(details.getByRole('heading', { name: 'Cursor plugin', exact: true })).toBeVisible();
+  await expect(details.getByText('C:/Users/fixture/.cursor/plugins/cursor-plugin', { exact: true }).first()).toBeVisible();
+});
+
+test('an empty preview followed by a failed first scan shows only the load failure', async ({ page }) => {
+  await setup(page, true, false, false, false, false, false, true, false, false, 'claude_code', true);
+  await expect(page.getByText('暂时无法读取插件', { exact: true })).toBeVisible();
+  await expect(page.getByText('还没有已安装的原生插件。')).toHaveCount(0);
+  await expect(page.locator('.empty-state')).toHaveCount(1);
+  await expect(page.getByText('列表可能已过期')).toHaveCount(0);
+});
+
+test('stale rescan is single-flight while its delayed retry is pending', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).pluginsHarness.failScan = true; });
+  await page.getByRole('button', { name: '重新扫描', exact: true }).click();
+  const stale = page.getByRole('status').filter({ has: page.getByText('列表可能已过期') });
+  await expect(stale).toBeVisible();
+  await page.evaluate(() => {
+    const state = (window as any).pluginsHarness;
+    state.failScan = false;
+    state.holdNextScan = true;
+  });
+  const retry = stale.getByRole('button', { name: '重新扫描' });
+  await retry.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await expect(retry).toBeDisabled();
+  const scans = () => page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'scan_native_plugins').length);
+  expect(await scans()).toBe(3);
+  await page.evaluate(() => (window as any).pluginsHarness.releaseNextScan());
+  await expect(page.getByText('列表可能已过期')).toHaveCount(0);
+  expect(await scans()).toBe(3);
+});
+
+test('Pi project plugin details visibly explain why update is unavailable', async ({ page }) => {
+  await setup(page, false, false, false, false, false, false, false, false, false, 'pi');
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await expect(details.getByRole('button', { name: '更新', exact: true })).toBeDisabled();
+  await expect(details.getByText('这个工具的项目插件请在原生 CLI 里更新', { exact: true })).toBeVisible();
 });
 
 test('changing plugin scope clears the previous source trust before a project operation', async ({ page }) => {
@@ -289,6 +366,11 @@ test('different plugin operations run serially and queued work uses the latest b
   await second.getByRole('button').click();
   await details.getByRole('button', { name: '禁用', exact: true }).click();
   await expect(page.getByLabel('插件操作队列')).toContainText('排队中');
+  const rescan = page.getByRole('button', { name: '重新扫描', exact: true });
+  await expect(rescan).toBeDisabled();
+  const scansBefore = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'scan_native_plugins').length);
+  await rescan.evaluate((button: HTMLButtonElement) => button.click());
+  expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'scan_native_plugins').length)).toBe(scansBefore);
   expect(await page.evaluate(() => (window as any).pluginsHarness.operationCalls)).toBe(1);
   await page.evaluate(() => { const state = (window as any).pluginsHarness; state.baseline = 'latest-baseline'; state.releaseOperation(); });
   await expect.poll(() => page.evaluate(() => (window as any).pluginsHarness.operationCalls)).toBe(2);
