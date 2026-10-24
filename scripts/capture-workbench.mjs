@@ -224,6 +224,19 @@ for (const width of widths) {
   await shot('workbench-focus-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('专注模式（隐藏侧栏）', 'Focus mode (hide sidebar)') }).click();
   });
+  if (width >= 1360) await shot('workbench-split-' + theme + '-' + width, theme, width, async (page) => {
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await stage.getByRole('button', { name: copy('分屏', 'Split view'), exact: true }).click();
+    await page.getByRole('tab', { name: /Claude Code/ }).click();
+    await page.waitForTimeout(400);
+  });
+  if (width >= 1360) await shot('workbench-slim-' + theme + '-' + width, theme, width, async (page) => {
+    await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('收起会话栏', 'Collapse session list') }).click();
+    await page.evaluate(() => window.__bell());
+  });
+  await shot('workbench-shortcuts-' + theme + '-' + width, theme, width, async (page) => {
+    await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('键盘快捷键', 'Keyboard shortcuts') }).click();
+  });
   await shot('workbench-empty-' + theme + '-' + width, theme, width, null, true);
 }
 }

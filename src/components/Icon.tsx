@@ -2,7 +2,7 @@ export type IconName = 'home' | 'connections' | 'library' | 'records' | 'setting
   | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play'
   | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
   | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link' | 'pin'
-  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square';
+  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard';
 const paths: Record<IconName, string> = {
   sidebarClose: 'M3 4h18v16H3zM9 4v16m7-11-3 3 3 3',
   sidebarOpen: 'M3 4h18v16H3zM9 4v16m4-11 3 3-3 3',
@@ -59,6 +59,8 @@ const paths: Record<IconName, string> = {
   command: 'M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6Z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   square: 'M7 7h10v10H7z',
+  columns: 'M4.5 4.5h15a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1ZM12 4.5v15',
+  keyboard: 'M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1ZM7 10h.01M10.5 10h.01M14 10h.01M17 10h.01M8 14h8',
 };
 /*
  * Icon sizes follow the type scale in style.css:
