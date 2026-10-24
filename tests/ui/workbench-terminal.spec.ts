@@ -18,6 +18,9 @@ async function installWorkbenchMock(page: Page) {
         const bytes = new TextEncoder().encode(text);
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: btoa(String.fromCharCode(...bytes)) } });
       },
+      __exit: (exitCode: number | null, sessionId = 's1') => {
+        bridge.handlers[bridge.listens['cliora:session-exit']]?.({ payload: { sessionId, exitCode } });
+      },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
@@ -94,6 +97,79 @@ async function pointForTerminalText(page: Page, text: string, last = false) {
   await expect.poll(locate).not.toBeNull();
   return (await locate())!;
 }
+
+test('live output and idle waiting keep distinct activity icons in every workbench slot', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const root = page.locator('[data-term-theme]');
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const statusIcon = root.locator('[data-activity-slot="status"]');
+  const idleBox = await statusIcon.boundingBox();
+
+  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(5);
+  await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'idle');
+  await expect(statusIcon.locator('circle')).toBeVisible();
+  await expect(stage.locator('footer')).toContainText('等待输入');
+
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('current output\r\n'));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
+  await expect(root.locator('[data-activity-icon="live"]')).toHaveCount(4);
+  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(1);
+  await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'live');
+  await expect(stage.locator('footer')).toContainText('正在输出');
+  expect(await statusIcon.boundingBox()).toEqual(idleBox);
+
+  await stage.getByRole('button', { name: '分屏', exact: true }).click();
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('split output\r\n'));
+  await expect(root.locator('[data-activity-slot="pane"][data-activity-icon="live"]')).toHaveCount(1);
+  await expect(root.locator('[data-activity-slot="pane"][data-activity-icon="idle"]')).toHaveCount(1);
+  await expect(stage.getByRole('img', { name: '正在输出', exact: true })).toBeVisible();
+  await expect(stage.getByRole('img', { name: '等待输入', exact: true })).toBeVisible();
+
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  await rail.getByRole('button', { name: '收起会话栏', exact: true }).click();
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('compact output\r\n'));
+  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toBeVisible();
+  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toBeVisible();
+  await rail.getByRole('button', { name: '展开会话栏', exact: true }).click();
+  await page.setViewportSize({ width: 640, height: 760 });
+  await expect(root).toHaveAttribute('data-narrow', 'true');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('narrow output\r\n'));
+  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toHaveCount(1);
+  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toHaveCount(1);
+  await expect(stage.locator('footer')).toContainText('正在输出');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('reduced motion output\r\n'));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
+  await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('animated output\r\n'));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
+  await expect(statusIcon.locator('svg')).not.toHaveCSS('animation-name', 'none');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
+  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
+  await expect(root).toHaveAttribute('data-term-theme', 'dark');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('dark output\r\n'));
+  await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'live');
+
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'idle');
+  await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'idle');
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id: string) => void }).__output('\u0007', 's2'));
+  await expect(page.getByRole('tab', { name: /Claude Code/ }).locator('[data-activity-icon="bell"]')).toBeVisible();
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'idle');
+  await page.evaluate(() => (window as unknown as { __exit: (code: number) => void }).__exit(1));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'error');
+  await expect(stage.locator('footer')).toContainText('异常');
+
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 's2'));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'ended');
+  await expect(stage.locator('footer')).toContainText('已结束');
+});
 
 test('session actions are available from the rail card', async ({ page }) => {
   await openWorkbench(page);

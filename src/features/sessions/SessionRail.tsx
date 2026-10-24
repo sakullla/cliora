@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent } from 'react';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
+import { SessionActivityIcon } from './SessionActivityIcon';
 import type { WorkbenchSession } from '../../types/launch';
 import styles from './SessionWorkbench.module.css';
 
@@ -50,7 +51,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
   const activityLabel = (item: RailSession) => {
     if (item.attention) return t('sessions.bellBadge');
     if (!item.session.running) return item.tone === 'error' ? t('sessions.stateError') : t('sessions.ended');
-    return item.tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running');
+    return item.tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
   };
 
   function onListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -98,7 +99,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
             onOpenMenu(session, rect.left + 24, rect.bottom - 6);
           }
         }}>
-        <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={compact ? 20 : 18} /><span className={styles.sessionStateDot} data-tone={item.tone} aria-hidden="true" /></span>
+        <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={compact ? 20 : 18} /><SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} /></span>
         <span className={styles.sessionBody}>
           <span className={styles.sessionTop}>
             {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={12} /></span>}

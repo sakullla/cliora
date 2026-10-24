@@ -20,6 +20,7 @@ import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
 import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { SessionActivityIcon } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailFilter, type RailSession, type SessionTone } from './SessionRail';
 import { WorkbenchComposer } from './WorkbenchComposer';
@@ -1158,7 +1159,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   function stateLabel(session: WorkbenchSession, tone: SessionTone): string {
     if (!session.running) return tone === 'error' ? t('sessions.stateError') : t('sessions.ended');
     if (tone === 'bell') return t('sessions.bellBadge');
-    return tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running');
+    return tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
   }
 
   const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
@@ -1191,9 +1192,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
             <header className={styles.stageBar}>
               <div className={styles.stageLead}>
                 <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
-                <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /><span className={styles.stageIconDot} data-tone={tone} aria-hidden="true" /></span>
+                <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><span className={styles.statusDot} aria-hidden="true" />{stateLabel(selected, tone)}</span></div>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} />{stateLabel(selected, tone)}</span></div>
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
                     <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
@@ -1251,7 +1252,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
-                      <span className={styles.paneDot} data-tone={sessionTone(session)} aria-hidden="true" />
+                      <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
                       <strong>{paneTitle || toolName(session)}</strong>
                       <span className={styles.panePlace}>{paneTitle ? toolName(session) + ' · ' + placeOf(session) : placeOf(session)}</span>
@@ -1272,7 +1273,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               </div>
               {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               <footer className={styles.statusBar}>
-                <span className={styles.statusState} data-tone={tone}><span className={styles.footerDot} data-tone={tone} aria-hidden="true" />{stateLabel(selected, tone)}</span>
+                <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} />{stateLabel(selected, tone)}</span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
                 {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{displayPath(selected.directory)}</span></span>}
                 <span className={styles.statusSpacer} />

@@ -140,6 +140,11 @@ async function install(page, initialTheme, empty = false) {
           return null;
         },
       },
+      __output: (sessionId, text) => {
+        const bytes = new TextEncoder().encode(text);
+        const data = btoa(String.fromCharCode(...bytes));
+        bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: data } });
+      },
       __bell: () => {
         const data = btoa('\u0007');
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's4', dataBase64: data } });
@@ -156,7 +161,7 @@ async function install(page, initialTheme, empty = false) {
 const manifest = [];
 const browser = await chromium.launch();
 async function shot(name, theme, width, run, empty = false) {
-  const page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light' });
+  const page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await install(page, theme, empty);
@@ -188,6 +193,11 @@ const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 for (const theme of themes) {
 for (const width of widths) {
   await shot('workbench-active-' + theme + '-' + width, theme, width);
+  await shot('workbench-activity-' + theme + '-' + width, theme, width, async (page) => {
+    await page.evaluate(() => window.__output('s1', 'live output contrast\r\n'));
+    await page.locator('[data-activity-slot="status"][data-activity-icon="live"]').waitFor();
+    await page.locator('[data-activity-slot="rail"][data-activity-icon="idle"]').first().waitFor();
+  });
   await shot('workbench-scrolled-' + theme + '-' + width, theme, width, async (page) => {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
     const screenBox = await stage.locator('.xterm-screen:visible').boundingBox();
@@ -228,10 +238,14 @@ for (const width of widths) {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
     await stage.getByRole('button', { name: copy('分屏', 'Split view'), exact: true }).click();
     await page.getByRole('tab', { name: /Claude Code/ }).click();
-    await page.waitForTimeout(400);
+    await page.evaluate(() => window.__output('s1', 'live split output\r\n'));
+    await page.locator('[data-activity-slot="pane"][data-activity-icon="live"]').waitFor();
+    await page.locator('[data-activity-slot="pane"][data-activity-icon="idle"]').waitFor();
   });
   if (width >= 1360) await shot('workbench-slim-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('收起会话栏', 'Collapse session list') }).click();
+    await page.evaluate(() => window.__output('s1', 'live compact output\r\n'));
+    await page.locator('[data-activity-slot="rail"][data-activity-icon="live"]').waitFor();
     await page.evaluate(() => window.__bell());
   });
   await shot('workbench-shortcuts-' + theme + '-' + width, theme, width, async (page) => {
@@ -265,7 +279,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的长标题会话栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框和空状态，覆盖浅色与深色主题以及 1360 / 900 / 640 三档宽度。',
+  '捕获工作台的长标题会话栏、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
   '',
   '执行：',
   '',
