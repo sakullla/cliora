@@ -45,11 +45,27 @@
 //!   brand roots are managed here.
 //! * **Credentials**: `credentials.toml` is the product-owned credential store
 //!   and is NEVER read or written; no managed credential port, no accounts
-//!   port, and no credential file appears in `native_files`. Agents have no
-//!   separate directory contract and stay undelivered.
+//!   port, and no credential file appears in `native_files`.
+//! * **Agents/Plugins/Rules** (delivered 2026-10-24, see `agents` and
+//!   `plugins`): official docs fetched raw with curl on 2026-10-24
+//!   (`cli/extensibility/plugins/overview.md`, `cli/subagents.md`,
+//!   `cli/extensibility/rules.md`) plus local 3000.11.205 probes — the plugin
+//!   system shipped in v2026.7.16 (changelog) and custom subagent profiles in
+//!   v2026.3.20-2, both predating the 3000.11.3 field check whose empty probe
+//!   directories led to the old "no plugin system / no directory contract"
+//!   verdict. Agents: `%APPDATA%\devin\agents` + `.devin\agents` Markdown
+//!   profiles (`devin doctor` loaded a probe profile locally). Plugins:
+//!   user-level only, ledger `%APPDATA%\devin\cli\plugins\lock.json` +
+//!   `devin plugins install/update/remove` commands. Rules: only `AGENTS.md`
+//!   is managed (one file per scope, loaded alongside project rules and
+//!   treated identically to the other four documented file names); the
+//!   `.devin/rules/*.md` triggered-rule catalog, `global_rules.md`, home-level
+//!   `~/.devin` files and external-tool rule imports stay with the product.
 
+pub(crate) mod agents;
 pub(crate) mod history;
 pub(crate) mod memory;
+pub(crate) mod plugins;
 
 use std::path::{Path, PathBuf};
 
@@ -57,7 +73,7 @@ use serde_json::{json, Value};
 
 use super::{
     file, project_root, AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchMode,
-    ManagementCapabilities, RuleSupport,
+    ManagementCapabilities,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -87,6 +103,12 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 
 impl CliAdapter for Devin {
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
+    fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
+        Some(self)
+    }
+    fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {
@@ -320,6 +342,29 @@ impl CliAdapter for Devin {
             Scope::Project => project?.join(".devin").join("skills"),
         })
     }
+    /// Thin rules delivery: only the recommended `AGENTS.md` single file per
+    /// scope (rules.md Supported File Names, lines 102-111: AGENTS.md
+    /// Recommended, AGENTS.local.md, AGENT.md, .windsurfrules, CLAUDE.md —
+    /// "All of these are treated identically", line 111). Global rules work
+    /// alongside project rules ("both are loaded and active at the same
+    /// time", line 67), so editing AGENTS.md always applies; the `.devin/`
+    /// preferred-directory triggered-rule catalog (`.devin/rules/*.md`,
+    /// `.devin/global_rules.md`, lines 127-134 — precedence over `.windsurf/`
+    /// covers only those two trees), home-level `~/.devin` rules (line 134)
+    /// and external-tool rule imports (line 167; `read_config_from` has only
+    /// the four keys agents_standard/cursor/windsurf/claude, lines 200-209)
+    /// stay with the CLI and are not managed here.
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        Some(match scope {
+            Scope::Global => config_root(home).join("AGENTS.md"),
+            Scope::Project => project?.join("AGENTS.md"),
+        })
+    }
     fn history_sources(
         &self,
         home: &Path,
@@ -408,7 +453,7 @@ impl CliAdapter for Devin {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由 %APPDATA%/devin/mcp_config.json（mcpServers，stdio/http + disabled 标记）提供；Skills 写入 %APPDATA%/devin/skills 与项目 .devin/skills（SKILL.md）。.agents/skills、.windsurf/skills、~/.agents/skills 与 ~/.codeium/<channel>/skills 由 CLI 另读，不在此代管；Agents 无独立目录契约暂不交付",
+                reason: "MCP 由 %APPDATA%/devin/mcp_config.json（mcpServers，stdio/http + disabled 标记）提供；Skills 写入 %APPDATA%/devin/skills 与项目 .devin/skills（SKILL.md）；Agents 交付 .devin/agents 与 %APPDATA%/devin/agents 的 Markdown subagent profile（config.json 为 JSONC 内容且无内联定义，不参与解析）；插件交付 %APPDATA%/devin/cli/plugins 账本 + devin plugins 命令族（仅用户级）。.agents/skills、.windsurf/skills、~/.agents/skills 与 ~/.codeium/<channel>/skills 由 CLI 另读，不在此代管",
             },
             history: Facet {
                 state: "available",
@@ -419,10 +464,12 @@ impl CliAdapter for Devin {
                 accounts: false,
                 mcp: true,
                 skills: true,
-                agents: false,
-                plugins: false,
+                agents: true,
+                plugins: true,
+                // devin plugins install only writes the user-level personal
+                // manifest (overview.md 148-151); no project plugin surface.
                 project_plugins: false,
-                rules: RuleSupport::bare(false, false),
+                rules: self.rule_support(),
                 memory: self.published_memory(),
             },
         }
@@ -670,11 +717,20 @@ mod tests {
         assert_eq!(Devin.descriptor().history.state, "available");
         assert!(Devin.supports_mcp());
         // No managed credential port, no accounts port, no configuration port.
-        // Agents stay undelivered; skills use the documented brand directories.
+        // Agents and plugins are delivered through their directory/command
+        // contracts; skills use the documented brand directories.
         assert!(Devin.configuration().is_none());
         assert!(Devin.supports_skills());
-        assert!(Devin.agents().is_none());
-        assert!(Devin.plugins().is_none());
+        let agents = Devin.agents().expect("agents 端口已交付");
+        assert!(agents.capability().supported);
+        assert_eq!(
+            Devin
+                .plugins()
+                .expect("plugins 端口已交付")
+                .capability()
+                .actions,
+            ["install", "update", "uninstall"]
+        );
         assert!(Devin.accounts().is_none());
         assert!(Devin.official_usage().is_none());
         assert!(Devin
@@ -749,12 +805,41 @@ mod tests {
         assert!(descriptor.management.mcp);
         assert!(descriptor.management.skills);
         assert!(descriptor.resources.reason.contains(".devin/skills"));
-        assert!(!descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
+        assert!(descriptor.management.agents);
+        assert!(descriptor.management.plugins);
+        assert!(!descriptor.management.project_plugins);
         assert!(!descriptor.management.accounts);
-        assert!(!descriptor.management.rules.global);
-        assert!(!descriptor.management.rules.project);
+        assert!(descriptor.management.rules.global);
+        assert!(descriptor.management.rules.project);
+        assert!(!descriptor.management.rules.catalog);
         assert!(descriptor.login.is_none());
         assert!(descriptor.configuration.is_none());
+    }
+
+    #[test]
+    fn rule_paths_deliver_the_recommended_agents_md_per_scope() {
+        let home = Path::new("/home/example");
+        let global = Devin
+            .rule_path(crate::native::adapter::Scope::Global, home, None)
+            .unwrap();
+        assert!(global
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("devin/AGENTS.md"));
+        let project = Devin
+            .rule_path(
+                crate::native::adapter::Scope::Project,
+                home,
+                Some(Path::new("/work/p")),
+            )
+            .unwrap();
+        assert!(project
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("/work/p/AGENTS.md"));
+        // rule_support() derives global+project from the delivered paths;
+        // the triggered-rule catalog (.devin/rules) stays unmanaged.
+        let support = Devin.rule_support();
+        assert!(support.global && support.project && !support.catalog);
     }
 }

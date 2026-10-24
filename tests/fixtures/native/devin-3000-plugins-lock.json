@@ -1,0 +1,88 @@
+{
+  "requirements": [
+    {
+      "spec": {
+        "source": "local",
+        "path": "/home/example/tools/demo-plugin"
+      },
+      "origin": {
+        "scope": "user"
+      },
+      "required": true
+    },
+    {
+      "spec": {
+        "source": "github",
+        "repo": "acme/unknown-shape"
+      },
+      "origin": {
+        "scope": "user"
+      },
+      "required": true
+    },
+    {
+      "spec": {
+        "source": "github",
+        "repo": "acme/org-managed-plugin"
+      },
+      "origin": {
+        "scope": "org"
+      },
+      "required": false
+    }
+  ],
+  "resolved": [
+    {
+      "name": "demo-plugin",
+      "spec": {
+        "source": "local",
+        "path": "/home/example/tools/demo-plugin"
+      },
+      "identity": "/home/example/tools/demo-plugin",
+      "resolved": {
+        "kind": "local"
+      },
+      "fetched_at": "2026-10-24T00:00:00Z",
+      "version_dir": "1.0.0",
+      "dependencies": {
+        "required": [],
+        "optional": []
+      }
+    },
+    {
+      "name": "unknown-shape",
+      "spec": {
+        "source": "github",
+        "repo": "acme/unknown-shape"
+      },
+      "identity": "acme/unknown-shape",
+      "resolved": {
+        "kind": "github"
+      },
+      "fetched_at": "2026-10-24T00:00:00Z",
+      "version_dir": "0.4.2",
+      "dependencies": {
+        "required": [],
+        "optional": []
+      }
+    },
+    {
+      "name": "org-managed-plugin",
+      "spec": {
+        "source": "github",
+        "repo": "acme/org-managed-plugin"
+      },
+      "identity": "acme/org-managed-plugin",
+      "resolved": {
+        "kind": "github"
+      },
+      "fetched_at": "2026-10-24T00:00:00Z",
+      "version_dir": "2.1.0",
+      "dependencies": {
+        "required": [],
+        "optional": []
+      }
+    }
+  ],
+  "edges": []
+}
