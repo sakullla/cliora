@@ -55,6 +55,7 @@ async function openWorkbench(page: Page) {
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await expect(page.getByTitle('拖入文件可插入路径')).toHaveCount(0);
   const input = page.locator('.xterm-helper-textarea:visible');
   await input.focus();
   return input;
@@ -159,30 +160,63 @@ test('the mouse wheel on the alternate screen never turns into arrow keys', asyn
   expect(await writes(page)).toEqual([]);
 });
 
-test('the mouse wheel scrolls the viewport when the CLI tracks the mouse in the normal buffer', async ({ page }) => {
+test('a mouse-tracking CLI receives the wheel, and Shift+wheel reads normal scrollback', async ({ page }) => {
   await openWorkbench(page);
-  // Pi-style CLI: inline normal-buffer rendering with mouse tracking enabled for clicks. It never
-  // consumes wheel reports, so the workbench must scroll the terminal itself instead of
-  // forwarding the wheel to the app.
+  // Grok enables wheel reporting and scrolls its own transcript. The unmodified wheel must
+  // reach the CLI. Moving the xterm viewport instead opens a blank gap above the TUI.
+  // Shift+wheel still reads normal-buffer scrollback for a CLI that ignores those reports.
   await page.evaluate(() => {
     const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1002h' + lines + '\r\n');
   });
   const viewport = page.locator('.xterm-viewport');
-  await expect.poll(() => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
+  const remaining = () => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  await expect.poll(remaining).toBeLessThan(3);
   const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
   const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
   const box = await screen.boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await resetWrites(page);
   const start = await scrollTop();
   await page.mouse.wheel(0, -600);
+  await expect.poll(remaining).toBeLessThan(3);
+  expect(await scrollTop()).toBe(start);
+  expect((await writes(page)).some((item) => item.includes('\u001b[M'))).toBe(true);
+  await expect(page.getByRole('button', { name: '回到最新输出' })).toHaveCount(0);
+
+  await page.keyboard.down('Shift');
+  await page.mouse.wheel(0, -600);
+  await page.keyboard.up('Shift');
   await expect.poll(scrollTop).toBeLessThan(start);
   const up = await scrollTop();
   await page.mouse.wheel(0, 600);
   await expect.poll(scrollTop).toBeGreaterThan(up);
   const down = await scrollTop();
+  await page.keyboard.down('Shift');
   await page.mouse.wheel(0, -900);
+  await page.keyboard.up('Shift');
   await expect.poll(scrollTop).toBeLessThan(down);
+});
+
+test('the wheel on a fullscreen TUI scrolls the CLI instead of the xterm viewport', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    const lines = Array.from({ length: 40 }, (_, index) => `history-${index}`).join('\r\n');
+    (window as unknown as { __output: (text: string) => void }).__output(`${lines}\r\n\u001b[?1049h\u001b[?1000h\u001b[Hgrok-transcript`);
+  });
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('grok-transcript');
+  const viewport = page.locator('.xterm-viewport:visible');
+  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const box = await screen.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await resetWrites(page);
+  const start = await scrollTop();
+  await page.mouse.wheel(0, -700);
+  await page.mouse.wheel(0, -700);
+  expect(await scrollTop()).toBe(start);
+  expect((await writes(page)).some((item) => item.includes('\u001b[M'))).toBe(true);
+  await expect(page.getByRole('button', { name: '回到最新输出' })).toHaveCount(0);
 });
 
 test('the mouse wheel scrolls the native viewport when the CLI does not track the mouse', async ({ page }) => {
@@ -385,6 +419,34 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
   await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
 });
 
+test('a live agent footer redraw does not bounce the viewport', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    const lines = Array.from({ length: 50 }, (_, index) => `history-${String(index).padStart(2, '0')}`).join('\r\n');
+    (window as unknown as { __output: (text: string) => void }).__output(`${lines}\r\n> `);
+  });
+  const viewport = page.locator('.xterm-viewport:visible');
+  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  const result = await page.evaluate(async () => {
+    const node = document.querySelector<HTMLElement>('.xterm-viewport')!;
+    const output = (window as unknown as { __output: (text: string) => void }).__output;
+    let dips = 0;
+    let previous = node.scrollTop;
+    for (let index = 0; index < 16; index += 1) {
+      output(`\u001b7\u001b[2;1Hagent ${index} running · 3m ${String(index).padStart(2, '0')}s · 56.0k\u001b8`);
+      output(`\rfooter ${String(index).padStart(2, '0')}`);
+      output(`\nexplore-${index}\r\n> `);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const top = node.scrollTop;
+      if (top + 1 < previous) dips += 1;
+      previous = top;
+    }
+    return { dips, remaining: node.scrollHeight - node.scrollTop - node.clientHeight };
+  });
+  expect(result.dips).toBe(0);
+  expect(result.remaining).toBeLessThan(3);
+});
+
 test('terminal URLs require Ctrl+left click and preserve their complete target', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await openWorkbench(page);
@@ -487,8 +549,22 @@ test('terminal link hint stays within a narrow dark viewport', async ({ page }, 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.locator('[data-term-theme]')).toHaveAttribute('data-term-theme', 'dark');
   const url = 'https://example.test/releases/v0.4.52';
-  await page.evaluate((url) => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${'x'.repeat(60)}${url}\r\n`), url);
-  const point = await pointForTerminalText(page, 'https://');
+  const marker = 'https://';
+  // Column count follows the font and the rail. A fixed 60-column pad splits the marker when the row is narrower.
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${'x'.repeat(240)}\r\n`));
+  await expect.poll(() => page.evaluate(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>('.xterm-rows > div')].filter((row) => row.getClientRects().length);
+    return Math.max(0, ...rows.map((row) => (row.textContent ?? '').match(/x+/)?.[0].length ?? 0));
+  })).toBeGreaterThan(24);
+  const cols = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>('.xterm-rows > div')].filter((row) => row.getClientRects().length);
+    return Math.max(0, ...rows.map((row) => (row.textContent ?? '').match(/x+/)?.[0].length ?? 0));
+  });
+  const lead = cols - marker.length;
+  expect((lead + 0.5) / cols).toBeGreaterThan(0.7);
+  await page.evaluate(({ lead, url }) => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${'y'.repeat(lead)}${url}\r\n`), { lead, url });
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText(url);
+  const point = await pointForTerminalText(page, marker);
   const screen = await page.locator('.xterm-screen:visible').boundingBox();
   expect(point.x).toBeGreaterThan(screen!.x + screen!.width * 0.7);
   await page.mouse.move(point.x, point.y);

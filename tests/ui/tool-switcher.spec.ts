@@ -106,5 +106,6 @@ test('the tool switcher stays one horizontal row', async ({ page }) => {
   await expect(list).not.toHaveAttribute('data-fade-end', /.*/);
   const kiro = await list.getByRole('tab', { name: 'Kiro', exact: true }).boundingBox();
   const box = await list.boundingBox();
-  expect(kiro!.x + kiro!.width).toBeLessThanOrEqual(box!.x + box!.width);
+  // The last tab sits flush with the strip; subpixel rounding can report a fraction past the edge.
+  expect(kiro!.x + kiro!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
 });

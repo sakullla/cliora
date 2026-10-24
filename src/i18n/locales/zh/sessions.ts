@@ -154,7 +154,6 @@ export default {
   composerTarget: '发送至',
   composerDraftHint: '每个会话保留独立草稿',
   terminalInputHint: '输入仅发送到当前会话',
-  terminalDropHint: '拖入文件可插入路径',
   moreActions: '更多终端操作',
   interruptShort: '中断',
   endConfirmTitle: '结束这个会话？',

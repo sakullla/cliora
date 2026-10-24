@@ -154,7 +154,6 @@ export default {
   composerTarget: 'Send to',
   composerDraftHint: 'Each session keeps its own draft',
   terminalInputHint: 'Input goes only to this session',
-  terminalDropHint: 'Drop files to insert paths',
   moreActions: 'More terminal actions',
   interruptShort: 'Interrupt',
   endConfirmTitle: 'End this session?',
