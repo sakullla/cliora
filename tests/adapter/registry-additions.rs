@@ -7,9 +7,14 @@
 //! declare exactly the evidence-gated dimensions the adapter tasks delivered:
 //! no fabricated quota, accounts or login anywhere, and per-adapter gaps
 //! (Qoder CN sessions, DeepSeek agents, action-limited plugin management;
-//! Devin/Kiro token usage, Cline/Devin credentials, Devin/Kiro Skills, Agents
-//! for five of the six, Plugins for all six) stay absent with recorded
-//! reasons instead of silent holes.
+//! Devin/Kiro token usage, Cline/Devin credentials, Kiro Skills, Agents for
+//! four of the six, Plugins for five of the six) stay absent with recorded
+//! reasons instead of silent holes. Devin's Agents/Plugins/Rules flipped to
+//! delivered on 2026-10-24 (docs.devin.ai plugins/subagents/rules pages
+//! fetched raw with curl that day plus local 3000.11.205 probes; the plugin
+//! system shipped v2026.7.16 and custom subagent profiles v2026.3.20-2, both
+//! predating the 3000.11.3 field check whose empty probe directories produced
+//! the old absence verdict).
 
 use std::path::Path;
 
@@ -456,14 +461,17 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             true
         )
         .is_empty());
-    // devin (local verified 3000.11.3): config.json JSONC editing (project
-    // .devin/config.json as the secondary role), --resume/-c, MCP
-    // (mcp_config.json), Skills (%APPDATA%/devin/skills 与项目 .devin/skills),
-    // ATIF-v1.7 transcript index with the usage dimension
-    // delivered (devin-usage 2026-10-08): per-agent-step metrics as inclusive
-    // bucket events reconciled against final_metrics on all 8 real local
-    // transcripts; credentials.toml is never touched, so no credential
-    // channel exists at all.
+    // devin (local verified 3000.11.205 + official docs fetched raw with
+    // curl 2026-10-24): config.json JSONC editing (project .devin/config.json
+    // as the secondary role), --resume/-c, MCP (mcp_config.json), Skills
+    // (%APPDATA%/devin/skills 与项目 .devin/skills), ATIF-v1.7 transcript
+    // index with the usage dimension delivered (devin-usage 2026-10-08):
+    // per-agent-step metrics as inclusive bucket events reconciled against
+    // final_metrics on all 8 real local transcripts; credentials.toml is
+    // never touched, so no credential channel exists at all. Agents (docs
+    // cli/subagents.md + local doctor probe), Plugins (cli/extensibility/
+    // plugins/overview.md + local cli/plugins ledger) and Rules
+    // (cli/extensibility/rules.md, AGENTS.md only) delivered 2026-10-24.
     let devin = registry.get("devin").unwrap();
     assert!(devin.supports_skills());
     assert!(devin
@@ -479,7 +487,65 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .replace('\\', "/")
         .ends_with("/work/p/.devin/skills"));
     assert!(devin.configuration().is_none());
-    assert!(devin.agents().is_none());
+    // Agents: markdown profiles under %APPDATA%/devin/agents and
+    // .devin/agents; the JSONC settings document never enters the scan.
+    let devin_agents = devin.agents().expect("devin agents 已交付");
+    assert!(devin_agents.capability().supported);
+    assert!(devin_agents
+        .root(crate::native::adapter::Scope::Global, home, None)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("devin"));
+    assert_eq!(
+        crate::adapters::agents::get_registered(&registry, "devin")
+            .unwrap()
+            .definition_dirs(),
+        ["agents"]
+    );
+    assert!(devin_agents
+        .config_paths(
+            home,
+            &crate::resources::plugins::PluginTarget {
+                tool_id: "devin".into(),
+                scope: crate::native::adapter::Scope::Global,
+                project_path: None,
+                context_id: None,
+            },
+            vec![std::path::PathBuf::from(
+                "/home/example/devin/cli/config.json"
+            )],
+        )
+        .unwrap()
+        .is_empty());
+    // Plugins: user-level ledger discovery plus native commands; uninstall
+    // carries -y so the stdin-null runner never meets the interactive
+    // cloud-removal confirmation (remove --help on 3000.11.205).
+    let devin_plugins = devin.plugins().expect("devin plugins 已交付");
+    assert_eq!(
+        devin_plugins.capability().actions,
+        ["install", "update", "uninstall"]
+    );
+    assert!(!devin_plugins.capability().project);
+    assert!(!devin.descriptor().management.project_plugins);
+    assert!(devin_plugins
+        .command_args("uninstall", "demo-plugin", false)
+        .unwrap()
+        .contains(&"-y".to_string()));
+    // Rules: the recommended AGENTS.md single file per scope; the triggered
+    // .devin/rules catalog stays with the product.
+    assert!(devin
+        .rule_path(crate::native::adapter::Scope::Global, home, None)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("devin/AGENTS.md"));
+    assert!(devin
+        .rule_path(crate::native::adapter::Scope::Project, home, Some(work))
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("/work/p/AGENTS.md"));
     assert!(devin.descriptor().yolo_available);
     assert!(devin
         .launch_args(Some("serene-example"), crate::adapters::LaunchMode::Normal)
