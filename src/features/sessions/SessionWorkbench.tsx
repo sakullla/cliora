@@ -1185,6 +1185,8 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
           const title = taskTitle(selected);
           const tone = sessionTone(selected);
+          const stateReserve = selected.running && (tone === 'idle' || tone === 'live')
+            ? t(tone === 'live' ? 'sessions.stateIdle' : 'sessions.stateStreaming') : null;
           const grid = grids.get(selected.id);
           const canSplit = splitRoom && sessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
@@ -1194,7 +1196,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
                 <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} />{stateLabel(selected, tone)}</span></div>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{stateLabel(selected, tone)}</span>{stateReserve && <span aria-hidden="true">{stateReserve}</span>}</span></span></div>
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
                     <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
@@ -1273,7 +1275,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               </div>
               {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               <footer className={styles.statusBar}>
-                <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} />{stateLabel(selected, tone)}</span>
+                <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{stateLabel(selected, tone)}</span>{stateReserve && <span aria-hidden="true">{stateReserve}</span>}</span></span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
                 {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{displayPath(selected.directory)}</span></span>}
                 <span className={styles.statusSpacer} />
