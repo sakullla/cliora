@@ -9,18 +9,19 @@ test('plugin search and read-only filter expose relevant actions without changin
   await page.getByLabel('插件状态筛选').selectOption('readonly');
   await expect(page.getByText('Organization plugin', { exact: true })).toBeVisible();
   await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('listitem').getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
+  await page.getByRole('listitem').getByRole('button').click();
+  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 });
 
-async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false) {
+async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false) {
   const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\sakullla-dev`;
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\sakullla-dev\agents`;
-  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, extendedPath, extendedResource }) => {
+  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
-    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture' };
+    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: false, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0 };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
     if (extended) state.entries.push({ ...entry, id: 'sakullla-dev', name: 'sakullla-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'sakullla-dev' }] });
-    const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries, baseline: 'fixture-baseline', detail: '静态列表，加载未验证' });
+    const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries, baseline: state.baseline, detail: '静态列表，加载未验证' });
     Object.assign(window, { isTauri: true, pluginsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
@@ -43,12 +44,15 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
         if (holdFull) return { ...snapshot(args.target), baseline: '', capability: { ...snapshot(args.target).capability, actions: [] }, entries: [{ ...entry, readOnly: true, enabled: null, state: 'inventory_pending' }] };
       }
       if (command === 'scan_native_plugins') {
+        if (state.failScan) throw { message: '扫描暂时失败' };
         if (holdFull) await new Promise<void>(resolve => { state.releaseFull = resolve; });
         return snapshot(args.target);
       }
       if (command === 'operate_native_plugin') {
         const req = args.request;
-        if (req.target.contextId !== 'ctx-fixture' || req.baseline !== 'fixture-baseline') throw { message: '目标或基线错误' };
+        if (req.target.contextId !== 'ctx-fixture' || req.baseline !== state.baseline) throw { message: '目标或基线错误' };
+        state.operationCalls += 1;
+        if (state.holdFirstOperation && state.operationCalls === 1) await new Promise<void>(resolve => { state.releaseOperation = resolve; });
         if (state.fail) return { status: 'failed_possible_side_effects', detail: '原生命令失败；已重新扫描实际状态，未宣称原子回滚', transactionId: null, snapshot: snapshot(req.target) };
         if (req.action === 'install') state.entries.push({ ...entry, id: req.source, name: req.source, source: req.source });
         if (req.action === 'disable' || req.action === 'enable') state.entries.find(item => item.id === req.source)!.enabled = req.action === 'enable';
@@ -57,7 +61,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       return null;
     } } });
-  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, extendedPath, extendedResource });
+  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, extendedPath, extendedResource });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace && !emptyEntries && !(deferFull && noPreview)) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
@@ -98,17 +102,24 @@ test('native plugin lifecycle retains context, policy, ownership and load distin
   await setup(page);
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(card.getByText(/原生已安装 · 加载未验证/)).toBeVisible();
-  await card.getByText('包内资源（随插件管理）').click(); await expect(card.getByText(/agents ·/)).toBeVisible();
-  await card.getByRole('button', { name: '禁用', exact: true }).click(); await expect(card.getByRole('button', { name: '启用' })).toBeVisible();
-  await card.getByRole('button', { name: '启用' }).click();
+  await card.getByRole('button').click();
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
+  await expect(details.getByText('agents', { exact: true })).toBeVisible();
+  await details.getByRole('button', { name: '禁用', exact: true }).click(); await expect(details.getByRole('button', { name: '启用' })).toBeVisible();
+  await details.getByRole('button', { name: '启用' }).click();
   const managed = page.getByRole('listitem').filter({ has: page.getByText('Organization plugin', { exact: true }) });
-  await expect(managed.getByRole('button', { name: '禁用' })).toBeDisabled(); await expect(managed.getByRole('button', { name: '卸载' })).toBeDisabled();
+  await managed.getByRole('button').click();
+  await expect(details.getByRole('button', { name: '禁用' })).toBeDisabled(); await expect(details.getByRole('button', { name: '卸载' })).toBeDisabled();
   await page.getByLabel('插件来源', { exact: true }).fill('second@market'); await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
-  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: '安装插件' }).click(); await expect(page.getByText('second@market', { exact: true })).toBeVisible();
-  await card.getByRole('button', { name: '更新' }).click();
+  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: '安装插件' }).click();
+  await expect(details.getByRole('heading', { name: 'second@market', exact: true })).toBeVisible();
+  await expect(details.getByText('版本', { exact: true })).toBeVisible();
+  await card.getByRole('button').click();
+  await details.getByRole('button', { name: '更新' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
   await page.screenshot({ path: 'test-results/native-plugins.png', fullPage: true });
-  await card.getByRole('button', { name: '卸载' }).click(); await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click(); await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
+  await details.getByRole('button', { name: '卸载' }).click(); await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click(); await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
   const actions = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'operate_native_plugin').map((c: any) => c.args.request.action));
   expect(actions).toEqual(['disable', 'enable', 'install', 'update', 'uninstall']);
 });
@@ -125,15 +136,20 @@ test('inventory appears before the slow native scan and unfinished scans are sha
   await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'scan_native_plugins').length)).toBe(1);
   await page.evaluate(() => (window as any).pluginsHarness.releaseFull());
-  await expect(page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button', { name: '禁用', exact: true })).toBeEnabled();
+  const readyCard = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
+  await readyCard.getByRole('button').click();
+  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true })).toBeEnabled();
   await expect(page.getByText('正在核对插件状态', { exact: true })).toHaveCount(0);
 });
 
 test('failed native operation retains rescanned state and allows explicit recovery scan', async ({ page }) => {
   await setup(page); await page.evaluate(() => { (window as any).pluginsHarness.fail = true; });
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
-  await card.getByRole('button', { name: '禁用' }).click(); await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
-  await expect(card.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).click();
+  await card.getByRole('button').click();
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await details.getByRole('button', { name: '禁用' }).click(); await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
+  await expect(page.getByRole('alert')).toContainText('原生命令失败；已重新扫描实际状态');
+  await expect(details.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).first().click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'scan_native_plugins').length)).toBeGreaterThan(1);
 });
@@ -171,10 +187,12 @@ test('windows extended plugin paths are shown as ordinary paths', async ({ page 
   const drive = 'C:\\Users\\fixture\\.grok\\plugins\\sakullla-dev';
   await expect(card.getByText(`${drive} · 全局`)).toBeVisible();
   await expect(card).not.toContainText('\\\\?\\');
-  await card.getByText('安装位置').click();
-  await expect(card.getByText(drive, { exact: true })).toBeVisible();
-  await card.getByText('包内资源（随插件管理）').click();
-  await expect(card.getByText('agents · \\\\server\\share\\plugins\\sakullla-dev\\agents')).toBeVisible();
+  await card.getByRole('button').click();
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await expect(details.getByText('安装位置', { exact: true })).toBeVisible();
+  await expect(details.getByText(drive, { exact: true }).first()).toBeVisible();
+  await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
+  await expect(details.getByText('\\\\server\\share\\plugins\\sakullla-dev\\agents', { exact: true })).toBeVisible();
   const market = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(market.getByText('fixture@market · 全局')).toBeVisible();
 });
@@ -183,9 +201,7 @@ test('uninstalled catalog rows stay out of the installed plugin count', async ({
   await setup(page, false, false, false, true);
   await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
   await expect(page.getByText('2 个插件')).toBeVisible();
-  const summary = page.getByText('未安装（1，当前不会加载）');
-  await expect(summary).toBeVisible();
-  await summary.click();
+  await expect(page.locator('.empty-state')).toHaveCount(0);
   const lark = page.getByRole('listitem').filter({ has: page.getByText('Lark', { exact: true }) });
   await expect(lark).toBeVisible();
   await expect(lark.getByText('未安装，当前不会加载').first()).toBeVisible();
@@ -226,3 +242,126 @@ test('empty plugin workspace without install capability offers a rescan instead'
   await expect.poll(scans).toBe(before + 1);
   await expect(emptyState.getByRole('button', { name: '安装插件' })).toHaveCount(0);
 });
+
+
+test('update-only capability does not render an install form', async ({ page }) => {
+  await setup(page, false, false, false, false, false, false, false, false, true);
+  await expect(page.getByLabel('插件来源', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '安装插件' })).toHaveCount(0);
+  await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
+  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '更新', exact: true })).toBeVisible();
+});
+
+test('invalid install source explains the problem and cannot be submitted', async ({ page }) => {
+  await setup(page);
+  await page.getByLabel('插件来源', { exact: true }).fill('-unsafe');
+  await page.getByRole('checkbox').check();
+  await expect(page.getByText('来源不能以连字符开头。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin'))).toEqual([]);
+});
+
+test('failed manual rescan keeps the previous list stale until recovery', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).pluginsHarness.failScan = true; });
+  await page.getByRole('button', { name: '重新扫描', exact: true }).click();
+  await expect(page.getByText('列表可能已过期')).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) })).toBeVisible();
+  await page.evaluate(() => { (window as any).pluginsHarness.failScan = false; });
+  await page.getByRole('status').filter({ has: page.getByText('列表可能已过期') }).getByRole('button', { name: '重新扫描' }).click();
+  await expect(page.getByText('列表可能已过期')).toHaveCount(0);
+  await expect(page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) })).toBeVisible();
+});
+
+test('different plugin operations run serially and queued work uses the latest baseline', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const state = (window as any).pluginsHarness;
+    state.holdFirstOperation = true;
+    state.entries.push({ ...state.entries[0], id: 'second@market', name: 'Second plugin', source: 'second@market' });
+  });
+  const fixture = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
+  const second = page.getByRole('listitem').filter({ has: page.getByText('Second plugin', { exact: true }) });
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await fixture.getByRole('button').click();
+  await details.getByRole('button', { name: '禁用', exact: true }).click();
+  await expect(details.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
+  await second.getByRole('button').click();
+  await details.getByRole('button', { name: '禁用', exact: true }).click();
+  await expect(page.getByLabel('插件操作队列')).toContainText('排队中');
+  expect(await page.evaluate(() => (window as any).pluginsHarness.operationCalls)).toBe(1);
+  await page.evaluate(() => { const state = (window as any).pluginsHarness; state.baseline = 'latest-baseline'; state.releaseOperation(); });
+  await expect.poll(() => page.evaluate(() => (window as any).pluginsHarness.operationCalls)).toBe(2);
+  await expect(page.getByLabel('插件操作队列')).toContainText('已完成');
+  const requests = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin').map((call: any) => call.args.request));
+  expect(requests.map((request: any) => request.baseline)).toEqual(['fixture-baseline', 'latest-baseline']);
+});
+
+test('changing context cancels queued plugin operations and ignores the running result', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const state = (window as any).pluginsHarness;
+    state.holdFirstOperation = true;
+    state.entries.push({ ...state.entries[0], id: 'second@market', name: 'Second plugin', source: 'second@market' });
+  });
+  const details = page.getByRole('complementary', { name: '插件详情' });
+  await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
+  await details.getByRole('button', { name: '禁用', exact: true }).click();
+  await page.getByRole('listitem').filter({ has: page.getByText('Second plugin', { exact: true }) }).getByRole('button').click();
+  await details.getByRole('button', { name: '禁用', exact: true }).click();
+  await expect(page.getByLabel('插件操作队列')).toContainText('排队中');
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  await page.evaluate(() => (window as any).pluginsHarness.releaseOperation());
+  await expect(page.getByLabel('插件操作队列')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).pluginsHarness.operationCalls)).toBe(1);
+});
+
+test('catalog-only and filtered-empty states stay distinct', async ({ page }) => {
+  await setup(page, false, false, false, true, false, false, true);
+  await expect(page.getByRole('listitem').filter({ has: page.getByText('Lark', { exact: true }) })).toBeVisible();
+  await expect(page.locator('.empty-state')).toHaveCount(0);
+  await expect(page.getByText('0 个插件')).toBeVisible();
+  await page.getByLabel('搜索插件').fill('no-match');
+  await expect(page.getByText('没有匹配的插件。')).toBeVisible();
+  await expect(page.locator('.empty-state')).toHaveCount(0);
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(page.getByRole('listitem')).toHaveCount(1);
+});
+
+test('resource list supports keyboard selection and narrow details close with Escape', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 800 });
+  await setup(page);
+  const first = page.locator('[data-resource-select]').first();
+  await first.focus();
+  await first.press('ArrowDown');
+  await expect(page.locator('[data-resource-select]').nth(1)).toBeFocused();
+  await page.locator('[data-resource-select]').nth(1).press('Enter');
+  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Organization plugin', exact: true }).first()).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('[data-resource-select]').nth(1)).toBeFocused();
+});
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`plugin workspace stays within the viewport at target widths in ${colorScheme} theme`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme });
+    await setup(page);
+    for (const width of [1360, 900, 640]) {
+      await page.setViewportSize({ width, height: 800 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      if (width <= 760 && await page.locator('[data-resource-select]').first().getAttribute('aria-pressed') === 'true') {
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('dialog')).toHaveCount(0);
+      }
+      await page.locator('[data-resource-select]').first().click();
+      if (width > 760) await expect(page.getByRole('complementary', { name: '插件详情' })).toBeVisible();
+      else {
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await page.keyboard.press('Escape');
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+  });
+}
