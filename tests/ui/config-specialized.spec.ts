@@ -9,9 +9,11 @@ import path from 'node:path';
 let harness: string;
 test.beforeAll(async () => {
   const entry = 'virtual:configuration-editor-test';
+  const i18nEntry = path.resolve('src/i18n/index.ts');
   const source = `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
+    import ${JSON.stringify(i18nEntry)};
     import { CodexConfigurationEditor } from ${JSON.stringify(path.resolve('src/adapters/codex/ConfigurationEditor.tsx'))};
     import { ClaudeConfigurationEditor } from ${JSON.stringify(path.resolve('src/adapters/claude/ConfigurationEditor.tsx'))};
     const tool = new URL(location.href).searchParams.get('tool');
