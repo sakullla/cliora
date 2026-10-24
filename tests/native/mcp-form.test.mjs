@@ -27,6 +27,11 @@ test('paste import accepts mcpServers, servers, name maps, snippets and bare ser
   assert.deepEqual(snippet.env, { ROOT: '/tmp' });
   assert.deepEqual(snippet.invalid, ['envInvalid']);
 
+  const stdioBare = mcp.parseMcpServerJson(JSON.stringify({ command: 'npx', args: ['-y', 'pkg'], env: { ROOT: '/tmp' } }));
+  assert.equal(stdioBare.name, '');
+  assert.equal(stdioBare.command, 'npx');
+  assert.deepEqual(stdioBare.args, ['-y', 'pkg']);
+
   const bare = mcp.parseMcpServerJson(JSON.stringify({ url: 'https://x.test/sse', type: 'sse' }));
   assert.equal(bare.name, '');
   assert.equal(bare.transport, 'http');
@@ -91,6 +96,21 @@ test('bare maps preserve every entry name and diagnostic without a bare-server f
   assert.deepEqual(mixed[0].invalid, []);
   assert.deepEqual(mixed[1].invalid, ['serverInvalid']);
   assert.deepEqual(mixed[2].invalid, ['serverInvalid']);
+});
+
+test('server-like fields do not turn maps with unsupported keys into bare servers', () => {
+  const nonObjects = mcp.parseMcpServerCollection(JSON.stringify({ command: 'not-a-server', other: 42 }));
+  assert.equal(nonObjects.length, 2);
+  assert.deepEqual(nonObjects.map(item => item.name), ['command', 'other']);
+  assert.deepEqual(nonObjects.map(item => item.total), [2, 2]);
+  assert.ok(nonObjects.every(item => item.invalid.includes('serverInvalid')));
+
+  const mixed = mcp.parseMcpServerCollection(JSON.stringify({ valid: { command: 'npx' }, url: 'not-a-server' }));
+  assert.equal(mixed.length, 2);
+  assert.deepEqual(mixed.map(item => item.name), ['valid', 'url']);
+  assert.deepEqual(mixed[0].invalid, []);
+  assert.equal(mixed[0].command, 'npx');
+  assert.deepEqual(mixed[1].invalid, ['serverInvalid']);
 });
 
 test('draft issues mirror the backend validation', () => {

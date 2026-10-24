@@ -160,8 +160,12 @@ function plainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+const MCP_SERVER_FIELDS = new Set(['command', 'args', 'env', 'url', 'serverUrl', 'headers', 'type', 'transport']);
+
 function looksLikeServer(value: unknown): value is Record<string, unknown> {
-  return plainObject(value) && (typeof value.command === 'string' || typeof value.url === 'string' || typeof value.serverUrl === 'string');
+  return plainObject(value)
+    && Object.keys(value).every(key => MCP_SERVER_FIELDS.has(key))
+    && (typeof value.command === 'string' || typeof value.url === 'string' || typeof value.serverUrl === 'string');
 }
 
 // A `"name": { ... }` snippet copied out of an mcpServers block is not valid
