@@ -107,7 +107,13 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
               </span>
             </span>
           </button>
-          {!session.running && <button type="button" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)}><Icon name="close" size={12} /></button>}
+          <div className={styles.rowActions}>
+            <button type="button" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              onOpenMenu(session, rect.left, rect.bottom + 5);
+            }}><Icon name="more" size={15} /></button>
+            {!session.running && <button type="button" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)}><Icon name="close" size={12} /></button>}
+          </div>
         </div>;
       })}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.ghostButton} onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</button></div>}

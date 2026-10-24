@@ -65,12 +65,12 @@ function buildExtendedAnsi(mode: TerminalTheme): string[] {
 }
 
 const DARK_THEME: ITheme = {
-  background: '#0d1210',
-  foreground: '#e6ece8',
-  cursor: '#82e6ae',
-  cursorAccent: '#0d1210',
-  selectionBackground: '#82e6ae40',
-  selectionInactiveBackground: '#82e6ae24',
+  background: '#0c1110',
+  foreground: '#e7ede9',
+  cursor: '#7ce3a8',
+  cursorAccent: '#0c1110',
+  selectionBackground: '#7ce3a840',
+  selectionInactiveBackground: '#7ce3a824',
   black: '#18201c',
   red: '#f38a84',
   green: '#82dba8',
@@ -93,11 +93,11 @@ const DARK_THEME: ITheme = {
 /** Light palette: "white" and extended 256-colour slots stay readable on a warm light canvas. */
 const LIGHT_THEME: ITheme = {
   background: '#fbfcfa',
-  foreground: '#243029',
-  cursor: '#1d7b4d',
+  foreground: '#202824',
+  cursor: '#16784c',
   cursorAccent: '#fbfcfa',
-  selectionBackground: '#1d7b4d2e',
-  selectionInactiveBackground: '#1d7b4d18',
+  selectionBackground: '#16784c2e',
+  selectionInactiveBackground: '#16784c18',
   black: '#202923',
   red: '#b93127',
   green: '#146c43',
