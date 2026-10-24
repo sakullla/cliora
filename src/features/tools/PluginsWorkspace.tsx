@@ -12,6 +12,7 @@ import { useFeedback } from '../../lib/toast';
 import { SearchField } from '../../components/SearchField';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
+import { ResourceWorkspace } from '../../components/resource/ResourceWorkspace';
 import i18n from '../../i18n';
 
 function actionLabel(action: PluginAction) { return i18n.t(`tools.plugins.action.${action}`); }
@@ -24,20 +25,26 @@ function statusLabel(entry: PluginEntry) {
   if (entry.enabled === null) return i18n.t('tools.plugins.stateUnknown');
   return entry.enabled ? i18n.t('tools.plugins.enabled') : i18n.t('tools.plugins.disabled');
 }
-function PluginCard({ entry, baseline, actions, busy, blockProjectUpdate, operate }: {
-  entry: PluginEntry; baseline: boolean; actions: string[]; busy: boolean; blockProjectUpdate: boolean;
-  operate: (action: PluginAction, entry?: PluginEntry) => void;
-}) {
-  const absent = entry.state === 'not_installed';
-  const rowActions = (absent ? [] : ['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => actions.includes(action));
-  return <li>
-    <div className={styles.resourceBody}><div className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{baseline ? i18n.t('tools.plugins.readonly') : i18n.t('tools.plugins.pendingReview')}</span>}<span className={styles.resourceMeta}>{entry.version ?? i18n.t('tools.plugins.versionMissing')}</span></div><p>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</p><p>{stateLabel(entry.state)}</p></div>
-    {rowActions.length > 0 && <div className={styles.actions}>{rowActions.map(action => <button key={action} className={action === 'uninstall' ? styles.danger : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? i18n.t('tools.plugins.updateProjectTitle') : undefined} disabled={busy || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
-    <details><summary>{i18n.t('tools.plugins.policySummary')}</summary><p>{policyLabel(entry.policy)}{entry.readOnly ? i18n.t('tools.plugins.readonlySuffix') : ''}</p></details>
-    {entry.root && <details><summary>{i18n.t('tools.plugins.locationSummary')}</summary><p>{displayPath(entry.root)}</p></details>}
-    {!!entry.resources.length && <details><summary>{i18n.t('tools.plugins.resourcesSummary')}</summary><ul>{entry.resources.map(resource => <li key={resource.path}>{resource.kind} · {displayPath(resource.path)}</li>)}</ul></details>}
-  </li>;
+function sourceProblem(source: string) {
+  if (!source) return 'sourceRequired';
+  if (source.startsWith('-')) return 'sourceDash';
+  if (/[\u0000-\u001f\u007f]/.test(source)) return 'sourceControl';
+  if (source.length > 2048) return 'sourceTooLong';
+  return null;
 }
+
+type Operation = {
+  id: number;
+  generation: number;
+  entryId: string | null;
+  name: string;
+  action: PluginAction;
+  source: string;
+  trusted: boolean;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  detail?: string;
+};
+
 const remembered = new Map<string, { snapshot: PluginSnapshot; at: number }>();
 const pending = new Map<string, Promise<PluginSnapshot>>();
 function scanOnce(target: PluginTarget) {
@@ -62,65 +69,161 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [operations, setOperations] = useState<Operation[]>([]);
   const { setError, setNotice } = useFeedback();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
+  const operationId = useRef(0);
   const sourceInput = useRef<HTMLInputElement>(null);
   const accountLabel = useAccountLabels();
   const entries = snapshot?.entries ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
-  const active = filtered.filter(entry => entry.state !== 'not_installed');
-  const catalog = filtered.filter(entry => entry.state === 'not_installed');
   const installedCount = entries.filter(entry => entry.state !== 'not_installed').length;
-  useEffect(() => { const id = ++generation.current; setSnapshot(null); setError(''); setNotice(''); setBusy(true);
+  const filteredInstalledCount = filtered.filter(entry => entry.state !== 'not_installed').length;
+  const sourceIssue = sourceProblem(source.trim());
+  const canInstall = !!snapshot?.baseline && snapshot.capability.actions.includes('install');
+  const blockProjectUpdate = uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project';
+
+  useEffect(() => {
+    const id = ++generation.current;
+    setSnapshot(null); setError(''); setNotice(''); setBusy(true); setStale(false); setSelectedKey(null); setOperations([]); setTrusted(false);
     const cached = remembered.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     let completed = false;
     void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
-    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
+    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [target]);
-  async function refresh() { const id = ++generation.current; setBusy(true); setError('');
-    try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }
-    catch (value) { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); setSnapshot(null); } }
-    finally { if (id === generation.current) setBusy(false); }
+
+  useEffect(() => {
+    if (operations.some(operation => operation.status === 'running')) return;
+    const operation = operations.find(item => item.status === 'queued');
+    if (!operation || operation.generation !== generation.current) return;
+    const id = generation.current;
+    setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: 'running' } : item));
+    void (async () => {
+      try {
+        const latest = await native.scanNativePlugins(target);
+        if (id !== generation.current) return;
+        remember(cacheKey, latest);
+        setSnapshot(latest); setStale(false);
+        if (!latest.baseline || !latest.capability.actions.includes(operation.action)) throw new Error(t('tools.plugins.operationUnavailable'));
+        const entry = operation.entryId ? latest.entries.find(item => item.id === operation.entryId) : null;
+        if (operation.action !== 'install' && (!entry || entry.state === 'not_installed')) throw new Error(t('tools.plugins.operationEntryChanged'));
+        if (entry?.readOnly || (operation.action === 'update' && blockProjectUpdate)) throw new Error(t('tools.plugins.operationUnavailable'));
+        const result = await native.operateNativePlugin({ target, action: operation.action, source: operation.source, baseline: latest.baseline, trusted: operation.trusted });
+        if (id !== generation.current) return;
+        remembered.delete(cacheKey);
+        const nextSnapshot = result.snapshot ?? latest;
+        if (result.snapshot) remember(cacheKey, result.snapshot);
+        setSnapshot(nextSnapshot);
+        const failed = result.status === 'failed_possible_side_effects';
+        setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: failed ? 'failed' : 'succeeded', detail: result.detail } : item));
+        if (failed) setError(`${result.detail} ${t('tools.plugins.sideEffects')}`);
+        else {
+          setNotice(result.detail);
+          if (operation.action === 'install') {
+            setSource(''); setTrusted(false);
+            const installed = nextSnapshot.entries.find(item => item.id === operation.source || item.source === operation.source);
+            if (installed) setSelectedKey(`${installed.scope}:${installed.id}`);
+            else setError(`${result.detail} ${t('tools.plugins.installedNotFound')}`);
+          }
+          if (operation.action === 'uninstall') setSelectedKey(null);
+        }
+      } catch (value) {
+        if (id !== generation.current) return;
+        const detail = message(value);
+        setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: 'failed', detail } : item));
+        setStale(true); setError(detail);
+      }
+    })();
+  }, [operations, target]);
+
+  async function refresh() {
+    const id = generation.current;
+    setBusy(true); setError('');
+    try {
+      const value = await native.scanNativePlugins(target);
+      if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); }
+    } catch (value) {
+      if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); }
+    } finally { if (id === generation.current) setBusy(false); }
   }
+
   async function operate(action: PluginAction, entry?: PluginEntry) {
-    if (!snapshot?.baseline || busy) return;
+    if (!snapshot?.baseline) return;
+    const operationSource = entry?.id ?? source.trim();
+    if (action === 'install' && (!trusted || sourceIssue || !canInstall)) return;
+    if (operations.some(operation => ['queued', 'running'].includes(operation.status) && (operation.entryId === entry?.id || (action === 'install' && operation.action === 'install' && operation.source === operationSource)))) return;
     const id = generation.current;
     if (action === 'uninstall' && !await confirmAction(t('tools.plugins.confirmUninstall', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.uninstallTitle'), confirmLabel: actionLabel('uninstall') })) return;
     if (action === 'update' && !await confirmAction(t('tools.plugins.confirmUpdate', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.updateTitle'), confirmLabel: actionLabel('update') })) return;
     if (id !== generation.current) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
-      const result = await native.operateNativePlugin({ target, action, source: entry?.id ?? source.trim(), baseline: snapshot.baseline, trusted: action === 'update' || trusted });
-      if (id !== generation.current) return;
-      remembered.delete(cacheKey);
-      if (result.snapshot) remember(cacheKey, result.snapshot);
-      setSnapshot(result.snapshot); setNotice(result.detail);
-      if (result.status === 'failed_possible_side_effects') setError(t('tools.plugins.sideEffects'));
-      else if (action === 'install') { setSource(''); setTrusted(false); }
-    } catch (value) { if (id === generation.current) setError(message(value)); }
-    finally { if (id === generation.current) setBusy(false); }
+    setError(''); setNotice('');
+    const operation: Operation = { id: ++operationId.current, generation: id, entryId: entry?.id ?? null, name: entry?.name ?? operationSource, action, source: operationSource, trusted: action === 'update' || trusted, status: 'queued' };
+    setOperations(current => [...current.filter(item => item.status === 'queued' || item.status === 'running' || item.entryId !== operation.entryId), operation]);
   }
-  return <section className={styles.panel} aria-label={t('tools.plugins.label')}>
-    <div className={styles.header}><div><h2>{t('tools.plugins.title')}</h2><p>{t('tools.plugins.description')}</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div></div>
-    <div className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></div>
-    {busy && (snapshot ? <p role="status">{snapshot.baseline ? t('tools.plugins.operating') : t('tools.plugins.verifying')}</p> : <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>)}
-    {snapshot && <>
-      {snapshot.capability.actions.some(action => action === 'install' || action === 'update') && <div className={styles.installBox}><div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} /></label>
-        <button className={styles.primary} disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
-      <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} disabled={busy} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
-      <p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div>}
-      <div className={styles.listToolbar}><SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /><select aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select><span>{snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}{active.length === installedCount ? t('tools.plugins.count', { count: active.length }) : t('tools.plugins.countFiltered', { filtered: active.length, total: installedCount })}</span></div>
-      {!installedCount && !!snapshot.baseline && <EmptyState title={t('tools.plugins.emptyTitle')} detail={snapshot.capability.actions.includes('install') ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={snapshot.capability.actions.includes('install')
-        ? <button className="button primary" disabled={busy} onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
-        : <button className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
-      {active.length > 0 && <ul className={styles.resourceList}>{active.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul>}
-      {catalog.length > 0 && <details className={styles.compatibility}><summary>{t('tools.plugins.catalogSummary', { count: catalog.length })}</summary><ul className={styles.resourceList}>{catalog.map(entry => <PluginCard key={`${entry.scope}:${entry.id}`} entry={entry} baseline={!!snapshot.baseline} actions={snapshot.capability.actions} busy={busy} blockProjectUpdate={uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project'} operate={(action, item) => void operate(action, item)} />)}</ul></details>}
-      {entries.length > 0 && filtered.length === 0 && <p className={styles.empty}>{t('tools.plugins.noMatch')}<button onClick={() => { setSearch(''); setFilter('all'); }}>{t('tools.plugins.clearFilter')}</button></p>}
-      <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>
+
+  function operationFor(entry: PluginEntry) { return operations.find(operation => operation.entryId === entry.id && (operation.status === 'queued' || operation.status === 'running')); }
+  function entryActions(entry: PluginEntry) {
+    if (entry.state === 'not_installed') return [];
+    return (['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => snapshot?.capability.actions.includes(action));
+  }
+  function clearFilters() { setSearch(''); setFilter('all'); }
+
+  const empty = snapshot && entries.length === 0 && !busy ? <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
+    ? <button className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
+    : <button className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />
+    : filtered.length === 0 && entries.length > 0 ? <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>
+    : undefined;
+
+  return <ResourceWorkspace<PluginEntry>
+    ariaLabel={t('tools.plugins.label')}
+    title={t('tools.plugins.title')}
+    description={t('tools.plugins.description')}
+    headerActions={<button disabled={busy || operations.some(operation => operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>}
+    context={<><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></>}
+    beforeList={snapshot?.capability.actions.includes('install') && <div className={styles.installBox}>
+      <div className={styles.installHeading}><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
+      <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
+        <button className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
+      <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
+      {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
+    </div>}
+    toolbar={snapshot && <div className={styles.listToolbar}><SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /><select aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select><span>{snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}{filteredInstalledCount === installedCount ? t('tools.plugins.count', { count: installedCount }) : t('tools.plugins.countFiltered', { filtered: filteredInstalledCount, total: installedCount })}</span></div>}
+    status={<>
+      {busy && (snapshot ? <p className={styles.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p> : <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>)}
+      {stale && snapshot && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
+      {!snapshot && !busy && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+      {operations.length > 0 && <div className={styles.queue} aria-label={t('tools.plugins.queueLabel')}><div className={styles.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(operation => <div className={styles.queueRow} key={operation.id} data-state={operation.status}><span><strong>{actionLabel(operation.action)} · {operation.name}</strong>{operation.detail && <small>{operation.detail}</small>}</span><span className={styles.queueState}>{t(`tools.plugins.operationState.${operation.status}`)}</span>{operation.status === 'queued' && <button onClick={() => setOperations(current => current.filter(item => item.id !== operation.id))}>{t('tools.plugins.cancelQueued')}</button>}{operation.status === 'failed' && <button onClick={() => { setError(''); setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: 'queued', detail: undefined } : item)); }}>{t('tools.plugins.retry')}</button>}</div>)}</div>}
     </>}
-  </section>;
+    items={filtered}
+    getItemKey={entry => `${entry.scope}:${entry.id}`}
+    getItemLabel={entry => entry.name}
+    selectedKey={selectedKey}
+    onSelect={entry => setSelectedKey(`${entry.scope}:${entry.id}`)}
+    onCloseDetails={() => setSelectedKey(null)}
+    detailsLabel={t('tools.plugins.detailsLabel')}
+    closeDetailsLabel={t('tools.plugins.closeDetails')}
+    empty={empty}
+    renderItem={entry => {
+      const operation = operationFor(entry);
+      return <span className={styles.resourceBody}><span className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}{operation && <span className={styles.badge} data-state="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}</span><span className={styles.resourceMeta}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span><span className={styles.resourceVersion}>{entry.version ?? t('tools.plugins.versionMissing')}</span><span className={styles.resourceVersion}>{stateLabel(entry.state)}</span></span>;
+    }}
+    renderDetails={entry => {
+      const operation = operationFor(entry);
+      return <div className={styles.pluginDetails}>
+        <p className={styles.detailState}>{stateLabel(entry.state)}</p>
+        <dl className={styles.detailGrid}><div><dt>{t('tools.plugins.version')}</dt><dd>{entry.version ?? t('tools.plugins.versionMissing')}</dd></div><div><dt>{t('tools.plugins.source')}</dt><dd>{displayPath(entry.source)}</dd></div><div><dt>{t('tools.plugins.scopeLabel')}</dt><dd>{scopeLabel(entry.scope)}</dd></div><div><dt>{t('tools.plugins.locationSummary')}</dt><dd>{entry.root ? displayPath(entry.root) : t('tools.plugins.notProvided')}</dd></div></dl>
+        <section className={styles.detailSection}><h4>{t('tools.plugins.policySummary')}</h4><p>{policyLabel(entry.policy)}{entry.readOnly ? t('tools.plugins.readonlySuffix') : ''}</p></section>
+        <section className={styles.detailSection}><h4>{t('tools.plugins.resourcesSummary')}</h4>{entry.resources.length ? <ul>{entry.resources.map(resource => <li key={resource.path}><span>{resource.kind}</span><code>{displayPath(resource.path)}</code></li>)}</ul> : <p>{t('tools.plugins.noResources')}</p>}</section>
+        {entryActions(entry).length > 0 && <div className={styles.detailActions}>{entryActions(entry).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
+        {entry.readOnly && <p className={styles.readonlyNote}>{t('tools.plugins.readonlyDetail')}</p>}
+      </div>;
+    }}
+    footer={snapshot && <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>}
+  />;
 }
