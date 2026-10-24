@@ -96,6 +96,24 @@
   border: 0;
 }
 
+.activity {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--line-strong);
+  line-height: 0;
+}
+.activity > svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: center; }
+.activity[data-tone='live'],
+.activity[data-tone='idle'] { color: var(--success); }
+.activity[data-tone='bell'] { color: var(--warning); }
+.activity[data-tone='error'] { color: var(--danger); }
+.activity[data-tone='live'] > svg { animation: wbActivity 1.8s var(--ease) infinite; }
+.activity[data-tone='bell'] > svg { animation: wbPulse 1.8s var(--ease) infinite; }
+
 .layout {
   --rail-w: 272px;
   display: grid;
@@ -380,13 +398,13 @@
   background: var(--surface);
 }
 .session[aria-selected='true'] .sessionIconWrap { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
-.sessionStateDot { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--line-strong); }
-.session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); }
-.sessionStateDot[data-tone='live'] { background: var(--success); box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent); animation: wbPulse 1.8s var(--ease) infinite; }
-.sessionStateDot[data-tone='idle'] { background: var(--success); }
-.sessionStateDot[data-tone='ended'] { background: var(--line-strong); }
-.sessionStateDot[data-tone='error'] { background: var(--danger); }
-.sessionStateDot[data-tone='bell'] { background: var(--warning); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 20%, transparent); animation: wbPulse 1.6s var(--ease) infinite; }
+.sessionStateDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--wb-rail-bg); }
+.session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); background: var(--wb-row-selected); }
+.sessionStateDot[data-tone='live'],
+.sessionStateDot[data-tone='idle'] { color: var(--success); }
+.sessionStateDot[data-tone='ended'] { color: var(--line-strong); }
+.sessionStateDot[data-tone='error'] { color: var(--danger); }
+.sessionStateDot[data-tone='bell'] { color: var(--warning); }
 .sessionBody { display: grid; gap: 2px; min-width: 0; }
 .sessionTop,
 .sessionSub { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -496,11 +514,11 @@
   border-radius: 10px;
   background: var(--term-raise);
 }
-.stageIconDot { position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border: 2px solid var(--term-chrome); border-radius: 50%; background: var(--term-text-3); }
-.stageIconDot[data-tone='live'] { background: var(--term-success); animation: wbPulse 1.8s var(--ease) infinite; }
-.stageIconDot[data-tone='idle'] { background: var(--term-success); }
-.stageIconDot[data-tone='bell'] { background: var(--term-warning); }
-.stageIconDot[data-tone='error'] { background: var(--term-danger); }
+.stageIconDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--term-chrome); border-radius: 50%; background: var(--term-chrome); color: var(--term-text-3); }
+.stageIconDot[data-tone='live'],
+.stageIconDot[data-tone='idle'] { color: var(--term-success); }
+.stageIconDot[data-tone='bell'] { color: var(--term-warning); }
+.stageIconDot[data-tone='error'] { color: var(--term-danger); }
 .identityText { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
 .identityTitleRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .identityTitleRow > h2 {
@@ -537,8 +555,7 @@
 .statusChip[data-tone='idle'] { background: color-mix(in srgb, var(--term-success) 9%, transparent); color: var(--term-success); }
 .statusChip[data-tone='bell'] { background: color-mix(in srgb, var(--term-warning) 16%, transparent); color: var(--term-warning); }
 .statusChip[data-tone='error'] { background: color-mix(in srgb, var(--term-danger) 15%, transparent); color: var(--term-danger); }
-.statusDot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.statusChip[data-tone='live'] .statusDot { animation: wbPulse 1.6s var(--ease) infinite; }
+.statusDot { width: 10px; height: 10px; color: inherit; }
 .pathChip {
   display: inline-flex;
   align-items: center;
@@ -855,11 +872,11 @@
 .paneHead strong { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--term-text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .terminalInstance[data-focused] .paneHead strong { color: var(--term-fg); }
 .panePlace { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.paneDot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--term-text-3); }
+.paneDot { width: 10px; height: 10px; color: var(--term-text-3); }
 .paneDot[data-tone='live'],
-.paneDot[data-tone='idle'] { background: var(--term-success); }
-.paneDot[data-tone='bell'] { background: var(--term-warning); }
-.paneDot[data-tone='error'] { background: var(--term-danger); }
+.paneDot[data-tone='idle'] { color: var(--term-success); }
+.paneDot[data-tone='bell'] { color: var(--term-warning); }
+.paneDot[data-tone='error'] { color: var(--term-danger); }
 .paneFocus { flex: none; padding: 0 6px; border-radius: 5px; background: color-mix(in srgb, var(--term-accent) 14%, transparent); color: var(--term-accent); line-height: 18px; }
 .paneClose { display: grid; flex: none; place-items: center; width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--term-text-3); box-shadow: none; }
 .paneClose:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
@@ -969,11 +986,11 @@
 .statusItem > :global(svg),
 .statusItem > :global(img) { flex: none; }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
-.footerDot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--term-text-3); }
-.footerDot[data-tone='live'] { background: var(--term-success); animation: wbPulse 1.8s var(--ease) infinite; }
-.footerDot[data-tone='idle'] { background: var(--term-success); }
-.footerDot[data-tone='bell'] { background: var(--term-warning); }
-.footerDot[data-tone='error'] { background: var(--term-danger); }
+.footerDot { width: 10px; height: 10px; color: var(--term-text-3); }
+.footerDot[data-tone='live'],
+.footerDot[data-tone='idle'] { color: var(--term-success); }
+.footerDot[data-tone='bell'] { color: var(--term-warning); }
+.footerDot[data-tone='error'] { color: var(--term-danger); }
 .statusButton { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 24px; min-height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--term-text-3); font-size: var(--fs-micro); box-shadow: none; }
 .statusButton:hover:not(:disabled),
 .statusButton[aria-expanded='true'] { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
@@ -1199,6 +1216,7 @@
 .loading p { margin: 0; }
 .loadingMark { width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: wbSpin .8s linear infinite; }
 
+@keyframes wbActivity { 0%, 100% { opacity: .72; transform: scaleY(.72); } 50% { opacity: 1; transform: scaleY(1); } }
 @keyframes wbPulse { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
 @keyframes wbBlink { 0%, 55% { opacity: .85; } 56%, 100% { opacity: 0; } }
 @keyframes wbDrop { from { opacity: 0; transform: translateY(-4px) scale(.99); } to { opacity: 1; transform: none; } }
@@ -1210,17 +1228,14 @@
 @keyframes wbSpin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .sessionStateDot,
-  .stageIconDot,
-  .statusDot,
+  .activity > svg,
   .appearancePanel,
   .shortcutsPanel,
   .toastPill,
   .findPanel,
   .jumpLatest,
   .composerDock,
-  .emptyGlyphCursor,
-  .footerDot { animation: none; }
+  .emptyGlyphCursor { animation: none; }
   .toolChip,
   .toolChipAction,
   .recentAction,
