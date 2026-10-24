@@ -15,17 +15,19 @@ export function WorkbenchEmpty({ tools, projects, onNewSession, onOpenHome }: {
   const { t } = useTranslation();
   const quickTools = tools.slice(0, 6);
   return <div className={styles.empty}>
-    <div className={styles.emptyIntro}>
-      <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="terminal" size={28} /><span className={styles.emptyGlyphCursor} /></span>
-      <span className={styles.emptyEyebrow}>{t('sessions.workspaceEyebrow')}</span>
-      <h2>{t('sessions.emptyTitle')}</h2>
-      <p>{t('sessions.emptyDetail')}</p>
+    <header className={styles.emptyHero}>
+      <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="terminal" size={26} /><span className={styles.emptyGlyphCursor} /></span>
+      <div className={styles.emptyIntro}>
+        <span className={styles.emptyEyebrow}>{t('sessions.workspaceEyebrow')}</span>
+        <h2>{t('sessions.emptyTitle')}</h2>
+        <p>{t('sessions.emptyDetail')}</p>
+        <div className={styles.emptyPromise}><span><Icon name="check" size={12} />{t('sessions.emptyPromiseSessions')}</span><span><Icon name="check" size={12} />{t('sessions.emptyPromiseInput')}</span></div>
+      </div>
       <div className={styles.emptyActions}>
         {tools.length > 0 && <button type="button" className="button primary" onClick={() => onNewSession()}><Icon name="plus" size={15} /><span>{t('sessions.newSession')}</span></button>}
         <button type="button" className={tools.length > 0 ? 'button' : 'button primary'} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></button>
       </div>
-      <div className={styles.emptyPromise}><span><Icon name="check" size={12} />{t('sessions.emptyPromiseSessions')}</span><span><Icon name="check" size={12} />{t('sessions.emptyPromiseInput')}</span></div>
-    </div>
+    </header>
     {tools.length > 0 && <div className={styles.launchpad}>
       <section className={styles.launchSection} aria-label={t('sessions.quickTools')}>
         <div className={styles.launchSectionHead}><span><Icon name="terminal" size={14} />{t('sessions.quickTools')}</span><small>{t('sessions.quickToolsHint')}</small></div>

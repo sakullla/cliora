@@ -32,16 +32,13 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
     return () => observer.disconnect();
   }, [draft, inputRef]);
   return <section className={styles.composerDock} aria-label={t('sessions.composerTitle')}>
-    <div className={styles.composerHead}>
-      <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={15} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>· {place}</span></span>
-      <button type="button" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose}><Icon name="close" size={14} /></button>
-    </div>
     {prompts.length > 0 && <div className={styles.composerPrompts}>
       <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
       <div className={styles.composerPromptList}>{prompts.map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => onChange(draft ? draft + '\n' + prompt.body : prompt.body)}><Icon name="plus" size={10} />{prompt.title}</button>)}</div>
     </div>}
     <div className={styles.composerInputRow}>
-      <textarea ref={inputRef} rows={2} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => {
+      <span className={styles.promptMark} aria-hidden="true">›</span>
+      <textarea ref={inputRef} rows={1} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => {
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
           event.preventDefault();
           onSubmit();
@@ -51,7 +48,11 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
         }
       }} />
       <button type="button" className={`button primary ${styles.sendBtn}`} onClick={onSubmit}><Icon name="arrowUp" size={15} /><span>{t('sessions.sendInput')}</span></button>
+      <button type="button" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose}><Icon name="close" size={14} /></button>
     </div>
-    <div className={styles.composerFoot}><span>{t('sessions.composerDraftHint')}</span><span className={styles.composerHint}>{t('sessions.composerHint')}</span></div>
+    <div className={styles.composerFoot}>
+      <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={13} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>· {place}</span><span className={styles.composerScope}>· {t('sessions.terminalInputHint')}</span></span>
+      <span className={styles.composerHint} title={t('sessions.composerDraftHint')}>{t('sessions.composerHint')}</span>
+    </div>
   </section>;
 }
