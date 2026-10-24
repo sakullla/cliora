@@ -141,6 +141,18 @@ async function startLibraryMcp(page: Page) {
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
 }
 
+async function openMcpPasteReview(page: Page, surface: 'library' | 'current CLI', source: string) {
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: surface === 'library' ? '资料库' : '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: surface === 'library' ? '新建 MCP' : '添加 MCP', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '名称' }).fill('keep-draft');
+  await dialog.getByRole('button', { name: '粘贴导入' }).click();
+  await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(source);
+  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  return page.getByRole('dialog', { name: '审查 MCP 导入' });
+}
+
 test('MCP argument and environment fields edit with row controls, support Enter key row navigation, and keep literal values', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
@@ -290,6 +302,61 @@ test('paste review returns to the original source for duplicate and semantic cor
 });
 
 for (const surface of ['library', 'current CLI'] as const) {
+  test(`${surface} paste review restores the original source after backend validation rejects control characters`, async ({ page }) => {
+    await mockResources(page);
+    await page.addInitScript(() => {
+      const win = window as any;
+      const invoke = win.__TAURI_INTERNALS__.invoke;
+      win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+        if (command === 'preview_mcp_draft' && Object.values({ ...args.draft.env, ...args.draft.headers }).some(value => /[\u0000-\u001f\u007f]/.test(String(value)))) {
+          throw new Error('env/headers 不能包含控制字符');
+        }
+        return invoke(command, args);
+      };
+    });
+    await page.goto('/');
+    const source = JSON.stringify({ mcpServers: { rejected: surface === 'library'
+      ? { command: 'npx', env: { BAD: 'line\nbreak' } }
+      : { url: 'https://example.test/mcp', headers: { 'X-Test': 'bad\r\nvalue' } } } });
+    const review = await openMcpPasteReview(page, surface, source);
+    await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+    await expect(review.getByRole('alert')).toContainText('env/headers 不能包含控制字符');
+    await review.getByRole('button', { name: '返回', exact: true }).click();
+    const editor = page.getByRole('dialog');
+    const paste = editor.getByRole('textbox', { name: '粘贴 MCP JSON' });
+    await expect(paste).toBeVisible();
+    await expect(paste).toHaveValue(source);
+    await paste.fill(JSON.stringify({ mcpServers: { corrected: { command: 'uvx' } } }));
+    await editor.getByRole('button', { name: '解析并填入' }).click();
+    await expect(review.getByRole('checkbox', { name: '选择导入 corrected' })).toBeChecked();
+  });
+
+  for (const closeMethod of ['Escape', 'close button'] as const) {
+    test(`${surface} batch review ${closeMethod} cancels discard without losing import state`, async ({ page }) => {
+      await mockResources(page);
+      await page.goto('/');
+      const source = JSON.stringify({ mcpServers: { imported: { command: 'npx' } } });
+      const review = await openMcpPasteReview(page, surface, source);
+      const close = async () => {
+        if (closeMethod === 'Escape') await review.press('Escape');
+        else await review.getByRole('button', { name: '关闭' }).click();
+      };
+      await close();
+      const confirmation = page.getByRole('dialog', { name: '放弃未保存修改？' });
+      await expect(confirmation).toBeVisible();
+      await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(review).toBeVisible();
+      await review.getByRole('button', { name: '返回', exact: true }).click();
+      const editor = page.getByRole('dialog');
+      await expect(editor.getByRole('textbox', { name: '名称' })).toHaveValue('keep-draft');
+      await expect(editor.getByRole('textbox', { name: '粘贴 MCP JSON' })).toHaveValue(source);
+      await editor.getByRole('button', { name: '解析并填入' }).click();
+      await close();
+      await confirmation.getByRole('button', { name: '放弃修改', exact: true }).click();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    });
+  }
+
   test(`${surface} paste review rejects non-string maps and preserves bare entry names`, async ({ page }) => {
     await mockResources(page);
     await page.goto('/');
