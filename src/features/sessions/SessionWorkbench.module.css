@@ -618,6 +618,8 @@
 .toolButton:active:not(:disabled) { background: var(--term-press); }
 .toolButton[aria-pressed='true'],
 .toolButton[aria-expanded='true'] { background: color-mix(in srgb, var(--term-accent) 15%, transparent); color: var(--term-accent); }
+.runningActions { display: inline-flex; flex: none; align-items: center; gap: inherit; }
+.runningActions:not([data-running]) { visibility: hidden; }
 .composerTrigger { color: var(--term-accent); }
 .interruptBtn:hover:not(:disabled) { background: color-mix(in srgb, var(--term-danger) 14%, transparent); color: var(--term-danger); }
 .toolButton:focus-visible,
@@ -649,7 +651,8 @@
   white-space: nowrap;
   box-shadow: none;
 }
-.endBtn[data-running] > :global(svg) { color: var(--term-danger); }
+.endIcon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 14px; height: 14px; }
+.endBtn[data-running] .endIcon { color: var(--term-danger); }
 .endBtn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-danger) 45%, var(--term-frame)); background: color-mix(in srgb, var(--term-danger) 12%, var(--term-raise)); color: var(--term-danger); box-shadow: none; }
 
 /* Popovers ---------------------------------------------------------- */
@@ -1268,6 +1271,7 @@
 .root[data-narrow] .session { gap: 8px; padding: 6px 8px !important; }
 .root[data-narrow] .sessionIconWrap { width: 28px; height: 28px; border-radius: 8px; }
 .root[data-narrow] .sessionTop strong { font-size: var(--fs-caption); }
+.root[data-narrow] .sessionSub { min-height: 17px; }
 .root[data-narrow] .sessionTime { display: none; }
 .root[data-narrow] .session[aria-selected='true']::before { top: auto; right: 12px; bottom: -1px; left: 12px; width: auto; height: 2px; border-radius: 99px; }
 .root[data-narrow] .rowActions { display: none; }
@@ -1297,7 +1301,7 @@
 .root[data-compact] .toolButton { width: 27px; }
 .root[data-compact] .toolDivider { margin: 0 2px; }
 .root[data-compact] .endBtn { width: 32px; height: 32px; min-height: 32px; padding: 0; }
-.root[data-compact] .endBtn > span { display: none; }
+.root[data-compact] .endBtn > .statusLabel { display: none; }
 .root[data-compact] .canvas { padding: 0 6px; }
 .root[data-compact] .terminalBody { padding: 10px 6px 4px 11px; }
 .root[data-compact] .findLayer { top: 8px; right: 14px; left: 14px; }
