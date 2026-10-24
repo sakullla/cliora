@@ -248,6 +248,8 @@ pub fn run() {
             commands::operate_native_plugin,
             commands::get_managed_mcp_enabled,
             commands::preview_mcp_targets,
+            commands::preview_mcp_draft,
+            commands::commit_mcp_draft,
             commands::distribute_mcp,
             commands::preview_rule_targets,
             commands::apply_rule_targets,
