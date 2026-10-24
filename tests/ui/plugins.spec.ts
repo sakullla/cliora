@@ -181,6 +181,35 @@ for (const failed of [false, true]) {
   });
 }
 
+test('editing a failed install source requires new trust and retries only the current source', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).pluginsHarness.fail = true; });
+  await page.getByLabel('插件来源', { exact: true }).fill('first@market');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '安装插件', exact: true }).click();
+  const queue = page.getByLabel('插件操作队列');
+  await expect(queue).toContainText('安装 · first@market');
+  await expect(queue).toContainText('失败');
+  const retry = queue.getByRole('button', { name: '重试', exact: true });
+  await expect(retry).toBeEnabled();
+
+  await page.getByLabel('插件来源', { exact: true }).fill('second@market');
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await expect(retry).toBeDisabled();
+  await page.evaluate(() => { (window as any).pluginsHarness.fail = false; });
+  await page.getByRole('checkbox').check();
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(queue).toContainText('安装 · second@market');
+  await expect(queue).toContainText('已完成');
+  await expect(queue).not.toContainText('安装 · first@market');
+
+  const requests = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin').map((call: any) => call.args.request));
+  expect(requests).toHaveLength(2);
+  expect(requests.map((request: any) => request.source)).toEqual(['first@market', 'second@market']);
+  expect(requests.map((request: any) => request.trusted)).toEqual([true, true]);
+});
+
 test('local Cursor install opens the added snapshot entry when its installed path differs', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => { (window as any).pluginsHarness.rewriteInstall = true; });
