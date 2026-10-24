@@ -78,8 +78,9 @@ type LibrarySection = LibraryKind | 'mcp' | 'skill';
 
 /** Locate request emitted by the command palette; consumed once per token. */
 export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
+export type LibraryMcpSpotlight = { id: string; token: number; source: 'connections' };
 
-export function LibraryPage({ managedTools = [], active = true, spotlight = null, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function LibraryPage({ managedTools = [], active = true, spotlight = null, mcpSpotlight = null, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null; mcpSpotlight?: LibraryMcpSpotlight | null; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
@@ -167,6 +168,13 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     document.querySelector<HTMLElement>(`[data-library-id="${CSS.escape(spotlight.id)}"]`)?.scrollIntoView({ block: 'center' });
     void choose(item);
   }, [spotlight?.id, spotlight?.kind, spotlight?.token, active, section, search, projectFilter, categoryFilter, items]);
+
+  const revealedMcpSpotlight = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !mcpSpotlight || revealedMcpSpotlight.current === mcpSpotlight.token) return;
+    if (section !== 'mcp') { void openSection('mcp'); return; }
+    revealedMcpSpotlight.current = mcpSpotlight.token;
+  }, [active, mcpSpotlight?.token, section]);
 
   const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
@@ -347,7 +355,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
       </div>
       <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
     </div>
-    {section === 'mcp' && <LibraryMcp active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
+    {section === 'mcp' && <LibraryMcp active={active} tools={managedTools} projects={projects} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
     {section === 'skill' && <LibraryResources active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>

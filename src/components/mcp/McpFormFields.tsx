@@ -1,10 +1,11 @@
 import { useEffect, useId, useState, type ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { mcpCommandLine, mcpDraftIssues, parseMcpServerJson, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { mcpCommandLine, mcpDraftIssues, parseMcpServerCollection, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { writeClipboard } from '../../lib/clipboard';
 import type { McpDraft, McpTransport } from '../../types/resources';
 import { Icon } from '../Icon';
 import { KeyValueRows } from './KeyValueRows';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import styles from './McpFormFields.module.css';
 
 const transports: Array<{ value: McpTransport; label: string; icon: 'terminal' | 'globe' }> = [
@@ -23,7 +24,7 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   /** Reveals empty-field issues after a save attempt; malformed names show while typing. */
   showIssues?: boolean;
   /** Enables JSON paste import (toggle box and pasting JSON into the name field). */
-  onImport?: (parsed: McpParsedServer) => void;
+  onImport?: (parsed: McpParsedServer[]) => void;
   initialPasteOpen?: boolean;
   title?: string;
 }) {
@@ -51,13 +52,13 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   const urlIssue = showIssues || (urlBlurred && draft.url.trim()) ? issues.url : undefined;
   const preview = draft.transport === 'stdio' ? mcpCommandLine(draft.command, draft.args) : '';
 
-  function imported(parsed: McpParsedServer) {
+  function imported(parsed: McpParsedServer[]) {
     onImport?.(parsed);
-    setPasteNotice(parsed.total > 1 ? t('tools.mcp.pastedMore', { name: parsed.name, count: parsed.total - 1 }) : t('tools.mcp.pasted'));
+    setPasteNotice(t('tools.mcp.pasted'));
   }
   function applyPaste() {
-    const parsed = parseMcpServerJson(pasteText);
-    if (!parsed) { setPasteError(t('library.resources.pasteImportError')); return; }
+    const parsed = parseMcpServerCollection(pasteText);
+    if (!parsed.length) { setPasteError(t('library.resources.pasteImportError')); return; }
     imported(parsed);
     setPasteText('');
     setPasteError('');
@@ -67,8 +68,8 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
     if (!onImport) return;
     const text = event.clipboardData.getData('text/plain');
     if (!/[{:]/.test(text)) return;
-    const parsed = parseMcpServerJson(text);
-    if (!parsed) return;
+    const parsed = parseMcpServerCollection(text);
+    if (!parsed.length) return;
     event.preventDefault();
     imported(parsed);
   }
@@ -90,7 +91,7 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
       {nameIssue && <small id={`${id}-name`} className={styles.fieldError}>{t(`tools.mcp.issue.${nameIssue}`)}</small>}
     </label>
     <div className={styles.typeField}><span>{t('tools.mcp.type')}</span>
-      <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{transports.map((item) => <button key={item.value} type="button" aria-pressed={draft.transport === item.value} aria-label={item.label} aria-describedby={`${id}-${item.value}`} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value })}>
+      <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')} onKeyDown={navigateChoices}>{transports.map((item) => <button key={item.value} type="button" role="radio" aria-checked={draft.transport === item.value} tabIndex={draft.transport === item.value ? 0 : -1} aria-label={item.label} aria-describedby={`${id}-${item.value}`} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value })}>
         <span className={styles.typeIcon}><Icon name={item.icon} size={16} /></span>
         <span className={styles.typeText}><strong>{t(`tools.mcp.transportCard.${item.value}.title`)}<code>{item.label}</code></strong><small id={`${id}-${item.value}`}>{t(`tools.mcp.transportCard.${item.value}.detail`)}</small></span>
         <span className={styles.typeCheck} aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span>

@@ -166,34 +166,25 @@ function parseLenient(text: string): unknown {
   try { return JSON.parse(`{${trimmed.replace(/,\s*$/, '')}}`); } catch { return null; }
 }
 
-// Accepts an mcpServers / servers wrapper, a `name: server` map, or a bare
-// server object; returns null when the text is not recognizable MCP JSON so
-// callers keep the form untouched. Only the first server is used; `total`
-// lets callers say how many were skipped.
-export function parseMcpServerJson(text: string): McpParsedServer | null {
+// Accepts mcpServers / servers wrappers, name maps, snippets and bare servers.
+// Collection parsing keeps every entry so import review never silently drops servers.
+export function parseMcpServerCollection(text: string): McpParsedServer[] {
   const parsed = parseLenient(text);
-  if (!plainObject(parsed)) return null;
-  let name = '';
-  let total = 1;
-  let server = parsed;
+  if (!plainObject(parsed)) return [];
   const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : null;
-  const map = wrapped ?? (!looksLikeServer(parsed) && Object.values(parsed).some(looksLikeServer) ? parsed : null);
-  if (map) {
-    const entries = Object.entries(map).filter(([, value]) => plainObject(value));
-    const first = entries[0];
-    if (!first) return null;
-    [name] = first;
-    server = first[1] as Record<string, unknown>;
-    total = entries.length;
-  }
-  const command = typeof server.command === 'string' ? server.command : '';
-  const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
-  const hint = typeof server.type === 'string' ? server.type : typeof server.transport === 'string' ? server.transport : '';
-  const transport: McpTransport = url || /^(http|sse|streamable)/i.test(hint) ? 'http' : 'stdio';
-  if (transport === 'http' && !url) return null;
-  if (transport === 'stdio' && !command) return null;
-  const args = Array.isArray(server.args) ? server.args.filter((item): item is string => typeof item === 'string') : [];
-  return { total, name, transport, command, args, url, env: stringMap(server.env), headers: stringMap(server.headers) };
+  const map = wrapped ?? (!looksLikeServer(parsed) && Object.values(parsed).some(plainObject) ? parsed : null);
+  const entries: Array<[string, Record<string, unknown>]> = map
+    ? Object.entries(map).filter((entry): entry is [string, Record<string, unknown>] => plainObject(entry[1]))
+    : [['', parsed]];
+  const total = entries.length;
+  return entries.map(([name, server]) => {
+    const command = typeof server.command === 'string' ? server.command : '';
+    const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
+    const hint = typeof server.type === 'string' ? server.type : typeof server.transport === 'string' ? server.transport : '';
+    const transport: McpTransport = url || /^(http|sse|streamable)/i.test(hint) ? 'http' : 'stdio';
+    const args = Array.isArray(server.args) ? server.args.filter((item): item is string => typeof item === 'string') : [];
+    return { total, name, transport, command, args, url, env: stringMap(server.env), headers: stringMap(server.headers) };
+  });
 }
 
 export function applyParsedServer(draft: McpDraft, parsed: McpParsedServer): { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] } {
@@ -202,4 +193,11 @@ export function applyParsedServer(draft: McpDraft, parsed: McpParsedServer): { d
     envRows: editableRowsOf(parsed.env),
     headerRows: editableRowsOf(parsed.headers),
   };
+}
+
+// Single-item compatibility helper for paste targets that intentionally fill one draft.
+export function parseMcpServerJson(text: string): McpParsedServer | null {
+  const first = parseMcpServerCollection(text)[0];
+  if (!first || (first.transport === 'http' ? !first.url : !first.command)) return null;
+  return first;
 }

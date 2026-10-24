@@ -35,6 +35,19 @@ test('paste import accepts mcpServers, servers, name maps, snippets and bare ser
   assert.equal(mcp.parseMcpServerJson('[]'), null);
 });
 
+test('collection paste keeps every server, including entries needing field validation', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    first: { command: 'npx', args: ['first'] },
+    second: { url: 'https://example.test/mcp', headers: { Authorization: 'Bearer token' } },
+    broken: { args: [] },
+  } }));
+  assert.equal(parsed.length, 3);
+  assert.deepEqual(parsed.map(item => item.name), ['first', 'second', 'broken']);
+  assert.equal(parsed[1].transport, 'http');
+  assert.equal(mcp.mcpDraftIssues(parsed[2]).command, 'commandEmpty');
+  assert.deepEqual(mcp.parseMcpServerCollection('not json'), []);
+});
+
 test('draft issues mirror the backend validation', () => {
   const base = { name: 'filesystem', transport: 'stdio', command: 'npx', url: '' };
   assert.deepEqual(mcp.mcpDraftIssues(base), {});

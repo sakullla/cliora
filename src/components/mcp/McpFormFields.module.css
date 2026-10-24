@@ -34,17 +34,17 @@
   white-space: normal;
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.typeSwitch button:hover:not(:disabled):not([aria-pressed='true']) { border-color: var(--line-strong); background: var(--surface-2); box-shadow: none; }
-.typeSwitch button[aria-pressed='true'], .typeSwitch button[aria-pressed='true']:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.typeSwitch button:hover:not(:disabled):not([aria-checked='true']) { border-color: var(--line-strong); background: var(--surface-2); box-shadow: none; }
+.typeSwitch button[aria-checked='true'], .typeSwitch button[aria-checked='true']:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
 .typeIcon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-3); color: var(--text-2); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
-.typeSwitch button[aria-pressed='true'] .typeIcon { background: var(--accent); color: var(--on-accent); }
+.typeSwitch button[aria-checked='true'] .typeIcon { background: var(--accent); color: var(--on-accent); }
 .typeText { display: grid; gap: 2px; min-width: 0; }
 .typeText strong { display: flex; align-items: center; gap: 7px; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .typeText code { padding: 0 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 17px; }
-.typeSwitch button[aria-pressed='true'] .typeText code { background: var(--surface); color: var(--accent); }
+.typeSwitch button[aria-checked='true'] .typeText code { background: var(--surface); color: var(--accent); }
 .typeText small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; }
 .typeCheck { position: absolute; top: 9px; right: 9px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--on-accent); opacity: 0; transform: scale(.6); transition: opacity var(--fast) var(--ease), transform var(--medium) var(--ease); }
-.typeSwitch button[aria-pressed='true'] .typeCheck { opacity: 1; transform: none; }
+.typeSwitch button[aria-checked='true'] .typeCheck { opacity: 1; transform: none; }
 
 /* What the CLI will actually execute: a quiet, theme-native command line. */
 .preview {
