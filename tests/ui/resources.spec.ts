@@ -81,8 +81,11 @@ async function mockResources(page: Page) {
         }
         if (command === 'preview_mcp_draft') {
           const definition = { ...args.draft, id: args.draft.id ?? 'candidate-' + (definitions.length + 1), version: (args.draft.expectedVersion ?? 0) + 1 };
-          const targets = args.targets.map((target: Record<string, unknown>) =>
-            ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: args.draft.command || args.draft.url } }));
+          const targets = args.targets.map((target: Record<string, any>) => {
+            const operation = target.operation ?? 'write';
+            const conflict = (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict;
+            return { ...target, operation, status: conflict ? 'conflict' : 'ready', detail: operation === 'remove' ? '将移除当前受管理的原生条目' : '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: operation === 'remove' ? 'hash-remove' : 'hash-empty', previewToken: operation === 'remove' ? 'bound-remove-token' : 'bound-token', existing: operation === 'remove' ? { command: 'npx' } : conflict ? { command: 'old-command' } : null, proposed: operation === 'remove' ? null : { command: args.draft.command || args.draft.url } };
+          });
           const response = { draft: args.draft, definition, targets };
           if ((window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview) {
             return new Promise((resolve) => { pendingPreviews.push(() => resolve(response)); });
@@ -96,13 +99,19 @@ async function mockResources(page: Page) {
         }
         if (command === 'distribute_mcp') {
           for (const target of args.targets) {
-            managed[`${args.definitionId}:${target.toolId}:${target.scope}:${target.projectPath}`] = target.enabled;
-            const row = { definitionId: args.definitionId, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath ?? null, enabled: target.enabled };
-            const index = placements.findIndex((item) => item.definitionId === row.definitionId && item.toolId === row.toolId && item.scope === row.scope && item.projectPath === row.projectPath);
-            if (index < 0) placements.push(row); else placements[index] = row;
+            const key = `${args.definitionId}:${target.toolId}:${target.scope}:${target.projectPath}`;
+            const row = { definitionId: args.definitionId, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath ?? null, contextId: target.contextId ?? null, enabled: target.enabled };
+            const index = placements.findIndex((item) => item.definitionId === row.definitionId && item.toolId === row.toolId && item.scope === row.scope && item.projectPath === row.projectPath && (item.contextId ?? null) === row.contextId);
+            if (target.operation === 'remove') {
+              delete managed[key];
+              if (index >= 0) placements.splice(index, 1);
+            } else {
+              managed[key] = target.enabled;
+              if (index < 0) placements.push(row); else placements[index] = row;
+            }
           }
           writes.push(args);
-          return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
+          return args.targets.map((target: Record<string, any>) => ({ ...target, status: target.operation === 'remove' ? 'removed' : 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
         }
         if (command === 'set_skill_in_library') {
           const found = skillPackages.find((item) => item.id === args.id);
@@ -416,7 +425,53 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: '已从 Codex 移除。' })).toBeVisible();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites);
-  expect(writes).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
+  expect(writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })] })]);
+});
+
+test('MCP removal rejects an external change after preview without deleting the placement', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'preview_mcp_draft') {
+        win.__resourceRemovePreview = args;
+        return invoke(command, args);
+      }
+      if (command === 'commit_mcp_draft') {
+        win.__resourceRemoveCommit = args;
+        throw new Error('MCP 候选、目标上下文或原生条目在预览后变化；请重新预览');
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByText('可移除', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '确认并分发', exact: true }).click();
+  await expect(page.getByRole('region', { name: '写入到 CLI' }).getByRole('alert')).toContainText('原生条目在预览后变化');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  const state = await page.evaluate(() => ({
+    preview: (window as any).__resourceRemovePreview,
+    commit: (window as any).__resourceRemoveCommit,
+    writes: (window as any).__resourceWrites,
+    places: (window as any).__resourceMcpPlacements,
+    definitions: (window as any).__resourceMcpDefinitions,
+  }));
+  expect(state.preview.targets).toEqual([expect.objectContaining({ operation: 'remove', enabled: true })]);
+  expect(state.commit.targets).toEqual([expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })]);
+  expect(state.writes).toEqual([]);
+  expect(state.places).toHaveLength(1);
+  expect(state.definitions[0].version).toBe(1);
 });
 
 test('MCP removal notice expires after four seconds', async ({ page }) => {
@@ -439,7 +494,7 @@ test('MCP removal notice expires after four seconds', async ({ page }) => {
   await page.getByRole('button', { name: '保存并分发' }).click();
   await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites)).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
+  expect(await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites)).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', previewToken: 'bound-remove-token' })] })]);
   const status = page.getByRole('status').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
   // A hovered toast pauses by design; the save button can sit where the toast appears.
@@ -633,7 +688,7 @@ test('OAuth MCP uncheck passes its exact context with one account', async ({ pag
   await page.getByRole('button', { name: '保存并分发' }).click();
   await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'remove_native_mcp', args: { name: 'filesystem', target: expect.objectContaining({ contextId: 'ctx-a' }) } }]);
+  expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([expect.objectContaining({ definitionId: 'mcp-1', targets: [expect.objectContaining({ operation: 'remove', contextId: 'ctx-a', previewToken: 'bound-remove-token' })] })]);
 });
 
 test('A and B MCP placements stay distinct and unchecking B preserves A', async ({ page }) => {
@@ -650,7 +705,7 @@ test('A and B MCP placements stay distinct and unchecking B preserves A', async 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
   expect(state.writes).toHaveLength(1);
-  expect(state.writes[0].args.target.contextId).toBe('ctx-b');
+  expect(state.writes[0].targets[0].contextId).toBe('ctx-b');
   expect(state.places.map((item: any) => item.contextId)).toEqual(['ctx-a']);
 });
 
@@ -740,7 +795,7 @@ test('MCP isolates failed historical projects and bindings while default global 
   await page.getByRole('button', { name: '确认并分发', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
-  expect(state.writes[1]).toMatchObject({ command: 'remove_native_mcp', args: { target: { toolId: 'codex', scope: 'global', contextId: null } } });
+  expect(state.writes[1]).toMatchObject({ definitionId: 'mcp-broken', targets: [{ toolId: 'codex', scope: 'global', contextId: null, operation: 'remove', previewToken: 'bound-remove-token' }] });
   expect(state.places).toEqual([expect.objectContaining({ scope: 'project', projectPath: '/tmp/deleted-project' })]);
 });
 

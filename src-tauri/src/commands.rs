@@ -820,7 +820,7 @@ pub async fn preview_mcp_targets(
 pub async fn preview_mcp_draft(
     app: AppHandle,
     draft: resources::mcp::McpDraft,
-    targets: Vec<resources::mcp::McpTargetRequest>,
+    targets: Vec<resources::mcp::McpDraftTargetRequest>,
 ) -> Result<resources::mcp::McpDraftPreview, ApiError> {
     blocking(move || {
         let home = home()?;
@@ -841,7 +841,7 @@ pub async fn preview_mcp_draft(
 pub async fn commit_mcp_draft(
     app: AppHandle,
     draft: resources::mcp::McpDraft,
-    targets: Vec<resources::mcp::McpTargetRequest>,
+    targets: Vec<resources::mcp::McpDraftTargetRequest>,
 ) -> Result<resources::mcp::McpCommitResult, ApiError> {
     blocking(move || {
         let home = home()?;

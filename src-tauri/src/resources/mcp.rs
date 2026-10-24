@@ -93,9 +93,27 @@ pub struct McpTargetRequest {
     pub preview_token: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTargetOperation {
+    #[default]
+    Write,
+    Remove,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDraftTargetRequest {
+    #[serde(flatten)]
+    pub target: McpTargetRequest,
+    #[serde(default)]
+    pub operation: McpTargetOperation,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetResult {
+    pub operation: McpTargetOperation,
     pub context_id: Option<String>,
     pub tool_id: String,
     pub scope: Scope,
@@ -501,6 +519,7 @@ fn entry_hash(value: Option<&Value>) -> Result<String, String> {
 
 fn preview_token(
     definition: &McpDefinition,
+    operation: McpTargetOperation,
     target: &McpTargetRequest,
     location: &McpLocation,
     scope_key: &str,
@@ -511,6 +530,7 @@ fn preview_token(
     content.updated_at = None;
     let bound = serde_json::to_vec(&(
         content,
+        operation,
         target.tool_id.as_str(),
         scope_key,
         location.path.to_string_lossy(),
@@ -660,7 +680,7 @@ pub fn preview_targets(
     targets: Vec<McpTargetRequest>,
 ) -> Vec<McpTargetResult> {
     let definition = get_definition(db, definition_id);
-    preview_definition(db, registry, home, &definition, targets)
+    preview_definition(db, registry, home, &definition, targets.into_iter().map(|target| McpDraftTargetRequest { target, operation: McpTargetOperation::Write }).collect())
 }
 
 fn preview_definition(
@@ -668,13 +688,15 @@ fn preview_definition(
     registry: &Registry,
     home: &Path,
     definition: &Result<McpDefinition, String>,
-    targets: Vec<McpTargetRequest>,
+    targets: Vec<McpDraftTargetRequest>,
 ) -> Vec<McpTargetResult> {
-    targets.into_iter().map(|mut target| {
+    targets.into_iter().map(|request| {
+        let operation = request.operation;
+        let mut target = request.target;
         if target.context_id.is_none() {
             if let Ok(Some((_,context)))=crate::accounts::selection::bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new),false) {target.context_id=Some(context.id);}
         }
-        let mut result = McpTargetResult { context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
+        let mut result = McpTargetResult { operation, context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         match target_location(db, registry, &target, home) {
             Ok((location, scope_key)) => {
@@ -687,9 +709,13 @@ fn preview_definition(
                     let existing = entries.get(&definition.name);
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, &definition.id, &target.tool_id, &scope_key)?;
-                    let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
+                    let proposal = match operation {
+                        McpTargetOperation::Write => adapter.mcp_document_at(definition, target.enabled, existing, &location)?,
+                        McpTargetOperation::Remove => None,
+                    };
                     let redact = adapter.mcp_redacts_secrets();
-                    Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing, redact), visible_entry(proposal.as_ref(), redact), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
+                    let token = preview_token(definition, operation, &target, &location, &scope_key, &actual)?;
+                    Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing, redact), visible_entry(proposal.as_ref(), redact), token))
                 })();
                 match inspected {
                     Ok((exists, actual, owned, before, after, token)) => {
@@ -698,9 +724,20 @@ fn preview_definition(
                         result.existing = before;
                         result.proposed = after;
                         result.status = if exists && owned.as_deref() != Some(&actual) { "conflict" } else { "ready" };
-                        result.detail = if result.status == "conflict" { "同名原生条目未由当前定义管理，或已被外部修改；确认替换前请检查原生内容".into() }
-                            else if exists { "将更新当前受管理的原生条目".into() } else { "将创建 CLI 原生条目".into() };
-                        if !target.enabled {
+                        result.detail = if result.status == "conflict" {
+                            match operation {
+                                McpTargetOperation::Write => "同名原生条目未由当前定义管理，或已被外部修改；确认替换前请检查原生内容",
+                                McpTargetOperation::Remove => "同名原生条目未由当前定义管理，或已被外部修改；确认移除前请检查原生内容",
+                            }.into()
+                        } else {
+                            match (operation, exists) {
+                                (McpTargetOperation::Remove, true) => "将移除当前受管理的原生条目".into(),
+                                (McpTargetOperation::Remove, false) => "原生条目已不存在；确认后清理管理记录".into(),
+                                (McpTargetOperation::Write, true) => "将更新当前受管理的原生条目".into(),
+                                (McpTargetOperation::Write, false) => "将创建 CLI 原生条目".into(),
+                            }
+                        };
+                        if operation == McpTargetOperation::Write && !target.enabled {
                             if let Some(description) = registry.get(&target.tool_id).and_then(|adapter| adapter.mcp_disabled_description()) {
                                 result.detail.push('；');
                                 result.detail.push_str(description);
@@ -721,7 +758,7 @@ pub fn preview_draft(
     registry: &Registry,
     home: &Path,
     mut draft: McpDraft,
-    targets: Vec<McpTargetRequest>,
+    targets: Vec<McpDraftTargetRequest>,
 ) -> Result<McpDraftPreview, String> {
     let definition = candidate_definition(&draft)?;
     draft.id = Some(definition.id.clone());
@@ -735,7 +772,7 @@ pub fn commit_draft(
     registry: &Registry,
     home: &Path,
     draft: McpDraft,
-    targets: Vec<McpTargetRequest>,
+    targets: Vec<McpDraftTargetRequest>,
 ) -> Result<McpCommitResult, String> {
     if draft.id.is_none() {
         return Err("MCP 候选预览已失效，请重新预览".into());
@@ -743,6 +780,7 @@ pub fn commit_draft(
     let candidate = candidate_definition(&draft)?;
     let inspected = preview_definition(db, registry, home, &Ok(candidate), targets.clone());
     for (request, current) in targets.iter().zip(&inspected) {
+        let request = &request.target;
         let preview_matches = request.preview_token == current.preview_token
             && request.baseline_hash == current.baseline_hash;
         if matches!(current.status, "ready" | "conflict") {
@@ -757,8 +795,9 @@ pub fn commit_draft(
     // Saving is deliberately separate from native writes: later per-target
     // failures are reported alongside the saved definition, not fake a rollback.
     let definition = save_definition(db, draft)?;
-    let mut results = distribute(db, credentials, registry, home, &definition.id, targets.clone());
+    let mut results = commit_targets(db, credentials, registry, home, &definition.id, targets.clone());
     for ((result, current), request) in results.iter_mut().zip(inspected).zip(&targets) {
+        let request = &request.target;
         if current.status == "unsupported"
             || (current.status == "conflict" && !request.allow_replace)
         {
@@ -779,9 +818,22 @@ pub fn distribute(
     definition_id: &str,
     targets: Vec<McpTargetRequest>,
 ) -> Vec<McpTargetResult> {
+    commit_targets(db, credentials, registry, home, definition_id, targets.into_iter().map(|target| McpDraftTargetRequest { target, operation: McpTargetOperation::Write }).collect())
+}
+
+fn commit_targets(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    definition_id: &str,
+    targets: Vec<McpDraftTargetRequest>,
+) -> Vec<McpTargetResult> {
     let definition = get_definition(db, definition_id);
-    targets.into_iter().map(|target| {
-        let mut result = McpTargetResult { context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
+    targets.into_iter().map(|request| {
+        let operation = request.operation;
+        let target = request.target;
+        let mut result = McpTargetResult { operation, context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         let attempt = (|| {
             let definition = definition.as_ref().map_err(Clone::clone)?;
@@ -793,15 +845,35 @@ pub fn distribute(
             let existing = entries.get(&definition.name);
             let actual_hash = entry_hash(existing)?;
             result.baseline_hash = Some(actual_hash.clone());
-            let token = preview_token(definition, &target, &location, &scope_key, &actual_hash)?;
+            let token = preview_token(definition, operation, &target, &location, &scope_key, &actual_hash)?;
             if target.preview_token.as_deref() != Some(token.as_str()) || target.baseline_hash.as_deref() != Some(actual_hash.as_str()) {
                 return Err("MCP 定义、目标范围或原生条目在预览后变化；请重新预览".into());
             }
             let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
             if existing.is_some() && owned.as_deref() != Some(&actual_hash)
                 && !target.allow_replace {
-                    return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
+                    return Err(match operation {
+                    McpTargetOperation::Write => "同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into(),
+                    McpTargetOperation::Remove => "同名原生条目未受当前定义管理或已被外部修改；请预览后确认移除".into(),
+                });
                 }
+            if operation == McpTargetOperation::Remove {
+                let commit = |tx: &rusqlite::Transaction<'_>| {
+                    let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
+                    if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
+                    tx.execute("DELETE FROM mcp_targets WHERE definition_id = ?1 AND tool = ?2 AND scope_key = ?3", params![definition.id, target.tool_id, scope_key]).map(|_| ()).map_err(|error| error.to_string())
+                };
+                let outcome = if existing.is_some() {
+                    let change = adapter.mcp_change(&parsed, &location, &definition.name, None)?;
+                    transaction::apply(db, credentials, &[transaction::FilePatch {
+                        path: location.path, kind: location.kind, baseline,
+                        changes: vec![change], sensitive: false, force_restrict: false,
+                    }], commit)?
+                } else {
+                    transaction::commit_matching(db, &[(location.path, baseline)], commit)?
+                };
+                return Ok(("removed", outcome.status.to_owned()));
+            }
             let retained_id = if adapter.mcp_redacts_secrets() {
                 Some(retained_mcp_secret_id(&target.tool_id, &scope_key, &definition.name)?)
             } else {
@@ -868,12 +940,12 @@ pub fn distribute(
                 document.as_ref().filter(|_| target.enabled),
                 definition,
             )?;
-            Ok(outcome.status.to_owned())
+            Ok(("written", outcome.status.to_owned()))
         })();
         match attempt {
-            Ok(status) => {
-                result.status = "written";
-                result.detail = status;
+            Ok((status, detail)) => {
+                result.status = status;
+                result.detail = detail;
             }
             Err(error) => result.detail = error,
         }

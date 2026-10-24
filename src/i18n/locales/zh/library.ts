@@ -240,10 +240,12 @@ export default {
     conflictHint: '比较后可以选择替换，或保留当前文件。',
     statusConflict: '同名冲突',
     statusReady: '可写入',
+    statusReadyRemove: '可移除',
     statusBlocked: '不可写入',
     writtenMcp: '写入后 MCP',
     resultEntry: '{{tool}}：{{result}}',
     resultWritten: '已写入',
+    resultRemoved: '已移除',
   },
   skillDist: {
     confirmRemove: '从{{tool}}移除「{{name}}」？资料库里的包会保留。',
