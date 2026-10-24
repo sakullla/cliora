@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import type { ITheme } from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
 import { native, nativeAvailable } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
-import { navigateChoices } from '../../lib/choiceNavigation';
+import { confirmAction } from '../../lib/confirm';
 import { modLabel } from '../../lib/shortcut';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -23,6 +19,12 @@ import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, 
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
+import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
+import { SessionRail, type RailFilter, type RailSession, type SessionTone } from './SessionRail';
+import { WorkbenchComposer } from './WorkbenchComposer';
+import { TerminalAppearance } from './TerminalAppearance';
+import { WorkbenchEmpty } from './WorkbenchEmpty';
 import styles from './SessionWorkbench.module.css';
 
 export type WorkbenchRetry =
@@ -30,31 +32,6 @@ export type WorkbenchRetry =
   | { kind: 'resume'; id: string; mode: LaunchMode };
 
 export type WorkbenchFailure = { detail: string; retry: WorkbenchRetry };
-
-type TerminalMatch = { row: number; col: number; length: number };
-
-type TerminalHandle = {
-  focus: () => void;
-  clear: () => void;
-  scrollToBottom: () => void;
-  selectAll: () => void;
-  hasSelection: () => boolean;
-  copySelection: () => boolean;
-  paste: (text: string) => void;
-  readOutput: () => string;
-  findMatches: (query: string) => TerminalMatch[];
-  revealMatch: (match: TerminalMatch | null) => void;
-};
-
-type RailFilter = 'all' | 'running' | 'ended';
-
-const DEFAULT_RAIL_WIDTH = 292;
-const MIN_RAIL_WIDTH = 236;
-const MAX_RAIL_WIDTH = 404;
-const DEFAULT_FONT_SIZE = 14;
-const MIN_FONT_SIZE = 12;
-const MAX_FONT_SIZE = 20;
-const QUICK_TOOL_LIMIT = 6;
 
 export function workbenchSessionId(result: LaunchResult): string | null {
   return result.status === 'session_started' && result.sessionId ? result.sessionId : null;
@@ -67,638 +44,19 @@ export async function failedInWorkbench(desktop = false): Promise<boolean> {
   catch { return false; }
 }
 
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-  return btoa(binary);
-}
-
-function decodeBase64(value: string): Uint8Array {
-  if (!value) return new Uint8Array();
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    merged.set(part, offset);
-    offset += part.length;
-  }
-  return merged;
-}
-
-/** Bytes from output events that the replay snapshot does not already contain. */
-function queuedAfterSnapshot(snapshot: Uint8Array, queue: Uint8Array): Uint8Array {
-  if (snapshot.length > queue.length) return new Uint8Array();
-  for (let index = 0; index < snapshot.length; index += 1) {
-    if (queue[index] !== snapshot[index]) return queue;
-  }
-  return queue.subarray(snapshot.length);
-}
-
-export type TerminalTheme = 'dark' | 'light';
-export type TerminalThemePreference = 'auto' | TerminalTheme;
-
-function hexPair(n: number): string {
-  return Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
-}
-
-function rgbHex(r: number, g: number, b: number): string {
-  return `#${hexPair(r)}${hexPair(g)}${hexPair(b)}`;
-}
-
-function relLuminance(r: number, g: number, b: number): number {
-  const lin = (c: number) => {
-    const v = c / 255;
-    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-/**
- * 240-colour extended ANSI table (indices 16..255).
- * Dark-first TUIs paint prompt blocks with ANSI 232..238 dark-grey fills and bright 6x6x6 cube accents.
- * Remapping the dark-grey ramp to soft sage surfaces in light mode avoids harsh black highlight bars.
- */
-function buildExtendedAnsi(mode: TerminalTheme): string[] {
-  const cubeSteps = [0, 95, 135, 175, 215, 255];
-  const out: string[] = [];
-  for (let rIdx = 0; rIdx < 6; rIdx += 1) {
-    for (let gIdx = 0; gIdx < 6; gIdx += 1) {
-      for (let bIdx = 0; bIdx < 6; bIdx += 1) {
-        let r = cubeSteps[rIdx];
-        let g = cubeSteps[gIdx];
-        let b = cubeSteps[bIdx];
-        if (mode === 'light') {
-          const lum = relLuminance(r, g, b);
-          if (rIdx === gIdx && gIdx === bIdx && r < 80) {
-            r = 228; g = 235; b = 226;
-          } else if (lum > 0.34) {
-            const scale = Math.min(0.72, (0.34 / lum) ** 0.52);
-            r *= scale;
-            g *= scale;
-            b *= scale;
-          }
-        }
-        out.push(rgbHex(r, g, b));
-      }
-    }
-  }
-  if (mode === 'light') {
-    out.push(
-      '#eef3ec', '#e9efe7', '#e4ebe2', '#dfe7dd', '#dae3d7', '#d4ded1', '#ced9cb', '#c6d2c3',
-      '#76847b', '#6d7b72', '#647269', '#5c6960', '#536057', '#4b574f', '#434f47', '#3b463f',
-      '#343e38', '#2e3731', '#28312b', '#232b26', '#1f2621', '#1b221e', '#181e1a', '#141a17',
-    );
-  } else {
-    out.push(
-      '#111714', '#151c18', '#19221d', '#1e2822', '#232e27', '#28352d', '#2e3c33', '#35443a',
-      '#425247', '#4e5f53', '#5a6c60', '#67796d', '#74867a', '#829488', '#90a296', '#9eb0a4',
-      '#acbeb2', '#b8cabe', '#c4d6ca', '#d0e1d5', '#dcebe0', '#e6f3ea', '#f0f8f2', '#f8fcf9',
-    );
-  }
-  return out;
-}
-
-const DARK_THEME: ITheme = {
-  background: '#0b100d',
-  foreground: '#e5eee8',
-  cursor: '#7be3a7',
-  cursorAccent: '#0b100d',
-  selectionBackground: '#7be3a745',
-  selectionInactiveBackground: '#7be3a722',
-  black: '#18211c',
-  red: '#ff7b72',
-  green: '#7ee2a8',
-  yellow: '#ecc97e',
-  blue: '#79b8ff',
-  magenta: '#d2a8ff',
-  cyan: '#76d9c8',
-  white: '#d5ded8',
-  brightBlack: '#68786e',
-  brightRed: '#ffa198',
-  brightGreen: '#a8f0c8',
-  brightYellow: '#f5da98',
-  brightBlue: '#a8d1ff',
-  brightMagenta: '#e3c6ff',
-  brightCyan: '#a6ecdf',
-  brightWhite: '#ffffff',
-  extendedAnsi: buildExtendedAnsi('dark'),
-};
-
-/** Light palette: "white" and extended 256-colour slots stay readable on a warm light canvas. */
-const LIGHT_THEME: ITheme = {
-  background: '#f9fbf8',
-  foreground: '#18211b',
-  cursor: '#0e6b43',
-  cursorAccent: '#f9fbf8',
-  selectionBackground: '#0e6b432e',
-  selectionInactiveBackground: '#0e6b4318',
-  black: '#1b231e',
-  red: '#b93127',
-  green: '#146c43',
-  yellow: '#8a5700',
-  blue: '#1b5dab',
-  magenta: '#8238a0',
-  cyan: '#0a7169',
-  white: '#54625a',
-  brightBlack: '#5c6b62',
-  brightRed: '#cf3f34',
-  brightGreen: '#198252',
-  brightYellow: '#9c6300',
-  brightBlue: '#2870c4',
-  brightMagenta: '#964ab6',
-  brightCyan: '#0f857d',
-  brightWhite: '#2b352f',
-  extendedAnsi: buildExtendedAnsi('light'),
-};
-
-export function terminalTheme(mode: TerminalTheme): ITheme {
-  return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
-}
-
-/** Light canvases get a contrast floor so pale true-colour output (syntax, dim hints) stays legible. */
-function contrastFloor(mode: TerminalTheme): number {
-  return mode === 'light' ? 4.5 : 1.2;
-}
-
-/** xterm only disables its own reflow for ConPTY when it knows the Windows build. */
-let windowsPtyInfo: { backend: 'conpty'; buildNumber: number } | null | undefined;
-async function resolveWindowsPty(): Promise<{ backend: 'conpty'; buildNumber: number } | null> {
-  if (windowsPtyInfo !== undefined) return windowsPtyInfo;
-  if (!/Windows/i.test(navigator.userAgent)) { windowsPtyInfo = null; return null; }
-  let buildNumber = 19045;
-  try {
-    const data = (navigator as Navigator & { userAgentData?: { getHighEntropyValues?: (hints: string[]) => Promise<{ platformVersion?: string }> } }).userAgentData;
-    const version = await data?.getHighEntropyValues?.(['platformVersion']);
-    const major = Number((version?.platformVersion ?? '').split('.')[0]);
-    if (Number.isFinite(major) && major >= 13) buildNumber = 22621;
-  } catch { /* Windows 10 behaviour is the safe default. */ }
-  windowsPtyInfo = { backend: 'conpty', buildNumber };
-  return windowsPtyInfo;
-}
-
-/** Drag-and-drop and context-menu inserts: quote paths that the shell would split. */
-export function quoteDroppedPaths(paths: string[]): string {
-  return paths
-    .filter((path) => path.trim())
-    .map((path) => (/[\s"'&()^;|<>]/.test(path) ? `"${path.replace(/"/g, '\\"')}"` : path))
-    .join(' ');
-}
-
-type ShortcutAction = 'find' | 'composer' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
-
-/**
- * Keys the workbench owns before xterm sees them. Returns the action, or null to let xterm encode the key.
- * Kept pure so its mapping can be unit-tested without a terminal.
- */
-export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>, options: { hasSelection: boolean; canSwitch: boolean; mac: boolean }):
-  | { kind: 'send'; data: string }
-  | { kind: 'paste' }
-  | { kind: 'copy' }
-  | { kind: 'shortcut'; action: ShortcutAction }
-  | null {
-  const { key, ctrlKey, shiftKey, altKey, metaKey } = event;
-  const mod = options.mac ? metaKey : ctrlKey;
-  const lower = key.length === 1 ? key.toLowerCase() : key;
-  // Shift+Enter → LF (Ctrl+J): the newline key Codex, Claude Code and pi all accept, and ConPTY passes through intact.
-  if (key === 'Enter' && shiftKey && !ctrlKey && !altKey && !metaKey) return { kind: 'send', data: '\n' };
-  // Paste: let the browser raise a real paste event so xterm applies bracketed paste.
-  if ((mod && !altKey && lower === 'v') || (shiftKey && !ctrlKey && !altKey && key === 'Insert')) return { kind: 'paste' };
-  // Copy: Ctrl+C copies only when text is selected; otherwise it stays an interrupt.
-  if (mod && !altKey && lower === 'c' && (shiftKey || options.mac || options.hasSelection)) return { kind: 'copy' };
-  if (ctrlKey && !shiftKey && !altKey && key === 'Insert') return { kind: 'copy' };
-  if (mod && shiftKey && !altKey && lower === 'f') return { kind: 'shortcut', action: 'find' };
-  if (mod && shiftKey && !altKey && lower === 'm') return { kind: 'shortcut', action: 'composer' };
-  if (mod && !altKey && (key === '=' || key === '+')) return { kind: 'shortcut', action: 'zoomIn' };
-  if (mod && !altKey && !shiftKey && (key === '-' || key === '_')) return { kind: 'shortcut', action: 'zoomOut' };
-  if (mod && !altKey && !shiftKey && key === '0') return { kind: 'shortcut', action: 'zoomReset' };
-  if (altKey && !ctrlKey && !metaKey && !shiftKey) {
-    if (lower === 'n') return { kind: 'shortcut', action: 'newSession' };
-    if (options.canSwitch && key === 'ArrowUp') return { kind: 'shortcut', action: 'prevSession' };
-    if (options.canSwitch && key === 'ArrowDown') return { kind: 'shortcut', action: 'nextSession' };
-  }
-  return null;
-}
-
+const DEFAULT_RAIL_WIDTH = 284;
+const MIN_RAIL_WIDTH = 240;
+const MAX_RAIL_WIDTH = 392;
+const DEFAULT_FONT_SIZE = 14;
+const MIN_FONT_SIZE = 12;
+const MAX_FONT_SIZE = 20;
 const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
-
-type TerminalBridge = {
-  writeError: (error: unknown) => void;
-  bell: (sessionId: string) => void;
-  title: (sessionId: string, title: string) => void;
-  outputActive: (sessionId: string, active: boolean) => void;
-  shortcut: (action: ShortcutAction) => void;
-  canSwitch: () => boolean;
-  scrolled: (sessionId: string, awayFromBottom: boolean) => void;
-  copied: () => void;
-};
-
-function SessionTerminal({ sessionId, label, active, running, fontSize, theme, cursorBlink, writers, pending, handles, bridge }: {
-  sessionId: string;
-  label: string;
-  active: boolean;
-  running: boolean;
-  fontSize: number;
-  theme: TerminalTheme;
-  cursorBlink: boolean;
-  writers: MutableRefObject<Map<string, (data: string) => void>>;
-  pending: MutableRefObject<Map<string, string[]>>;
-  handles: MutableRefObject<Map<string, TerminalHandle>>;
-  bridge: MutableRefObject<TerminalBridge>;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
-  const activeRef = useRef(active);
-  const runningRef = useRef(running);
-  const fontSizeRef = useRef(fontSize);
-  const themeRef = useRef(theme);
-  const wasActiveRef = useRef(active);
-  activeRef.current = active;
-  runningRef.current = running;
-  fontSizeRef.current = fontSize;
-  themeRef.current = theme;
-
-  useEffect(() => {
-    const node = host.current;
-    if (!node) return;
-    const term = new Terminal({
-      fontFamily: monoFont(),
-      fontSize: fontSizeRef.current,
-      lineHeight: 1.35,
-      letterSpacing: 0.1,
-      cursorBlink: true,
-      cursorStyle: 'bar',
-      cursorWidth: 2,
-      cursorInactiveStyle: 'outline',
-      scrollback: 10000,
-      scrollOnUserInput: true,
-      smoothScrollDuration: 0,
-      fastScrollModifier: 'alt',
-      fastScrollSensitivity: 5,
-      macOptionIsMeta: true,
-      allowProposedApi: true,
-      screenReaderMode: true,
-      rescaleOverlappingGlyphs: true,
-      minimumContrastRatio: contrastFloor(themeRef.current),
-      theme: terminalTheme(themeRef.current),
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(node);
-    termRef.current = term;
-    fitRef.current = fit;
-    let disposed = false;
-    let acceptLive = false;
-    let liveStreaming = false;
-    let liveTimer = 0;
-    const queued: string[] = [];
-    void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
-
-    // Coalesce PTY bursts into one write per animation frame: TUIs redraw in several chunks and
-    // rendering half a frame shows up as flicker. A microtask fallback keeps hidden tabs moving.
-    const frameChunks: Uint8Array[] = [];
-    let flushScheduled = false;
-    let flushFrame = 0;
-    let flushTimer = 0;
-    const flushWrites = () => {
-      flushScheduled = false;
-      cancelAnimationFrame(flushFrame);
-      window.clearTimeout(flushTimer);
-      if (disposed || !frameChunks.length) return;
-      const merged = frameChunks.length === 1 ? frameChunks[0] : concatBytes(frameChunks);
-      frameChunks.length = 0;
-      try { term.write(merged); }
-      catch { /* Malformed bytes stay out of the terminal. */ }
-    };
-    const scheduleWriteBytes = (bytes: Uint8Array) => {
-      if (!bytes.length || disposed) return;
-      frameChunks.push(bytes);
-      if (flushScheduled) return;
-      flushScheduled = true;
-      if (document.visibilityState === 'visible' && activeRef.current) {
-        flushFrame = requestAnimationFrame(flushWrites);
-        flushTimer = window.setTimeout(flushWrites, 50);
-      } else {
-        queueMicrotask(flushWrites);
-      }
-    };
-    const markLiveOutput = () => {
-      if (disposed || !runningRef.current) return;
-      if (!liveStreaming) {
-        liveStreaming = true;
-        bridge.current.outputActive(sessionId, true);
-      }
-      window.clearTimeout(liveTimer);
-      liveTimer = window.setTimeout(() => {
-        liveStreaming = false;
-        if (!disposed) bridge.current.outputActive(sessionId, false);
-      }, 1500);
-    };
-    const writeEncoded = (encoded: string, isLive = false) => {
-      if (!encoded || disposed) return;
-      try {
-        const decoded = decodeBase64(encoded);
-        if (isLive && decoded.length > 0) markLiveOutput();
-        scheduleWriteBytes(decoded);
-      } catch { /* Malformed bytes stay out of the terminal. */ }
-    };
-    const publish = (encoded: string) => {
-      if (acceptLive) writeEncoded(encoded, true);
-      else queued.push(encoded);
-    };
-    writers.current.set(sessionId, publish);
-
-    const sendToPty = (data: string) => {
-      if (!activeRef.current || !runningRef.current || !data) return;
-      if (data.includes('\r') || data.includes('\n')) markLiveOutput();
-      void native.writeWorkbenchSession(sessionId, encodeBase64(new TextEncoder().encode(data))).catch((error) => bridge.current.writeError(error));
-    };
-
-    const copySelection = () => {
-      const selected = term.getSelection();
-      if (!selected) return false;
-      void writeClipboard(selected).then((ok) => { if (ok) bridge.current.copied(); });
-      term.clearSelection();
-      return true;
-    };
-
-    term.attachCustomKeyEventHandler((event) => {
-      if (event.isComposing || event.keyCode === 229) return true;
-      const action = terminalKeyAction(event, { hasSelection: term.hasSelection(), canSwitch: bridge.current.canSwitch(), mac: MAC });
-      if (!action) return true;
-      // Returning false for keypress/keyup too keeps xterm from encoding the same key a second time.
-      if (event.type !== 'keydown') return false;
-      if (action.kind === 'paste') return false; // No preventDefault: the browser fires `paste` on xterm's textarea.
-      event.preventDefault();
-      event.stopPropagation();
-      if (action.kind === 'send') sendToPty(action.data);
-      else if (action.kind === 'copy') copySelection();
-      else bridge.current.shortcut(action.action);
-      return false;
-    });
-
-    // Wheel policy by buffer type:
-    // - Normal buffer with mouse tracking off: xterm's native scrollback scrolling applies.
-    // - Normal buffer with mouse tracking on (agent CLIs such as Pi render inline and enable
-    //   tracking for clicks but ignore wheel reports): forwarding the wheel to the app makes
-    //   scrolling look dead, so scroll the terminal viewport here instead.
-    // - Alternate screen: forward to apps that asked for mouse events (vim/less handle wheel);
-    //   otherwise swallow, because xterm would turn the wheel into ↑/↓ keys and move the CLI's
-    //   input caret or history.
-    const wheelScrollViewport = (event: WheelEvent) => {
-      if (event.deltaY === 0 || event.shiftKey) return;
-      const viewport = node.querySelector<HTMLElement>('.xterm-viewport');
-      if (!viewport) return;
-      let amount = event.deltaY;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        amount *= viewport.clientHeight / Math.max(1, term.rows);
-      } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        amount *= viewport.clientHeight;
-      }
-      if (event.altKey) amount *= 5; // parity with fastScrollModifier: 'alt'
-      viewport.scrollTop = Math.max(0, Math.min(viewport.scrollTop + amount, viewport.scrollHeight));
-      event.preventDefault();
-    };
-    term.attachCustomWheelEventHandler((event) => {
-      if (term.buffer.active.type !== 'alternate') {
-        if (term.modes.mouseTrackingMode === 'none') return true;
-        wheelScrollViewport(event);
-        return false;
-      }
-      if (term.modes.mouseTrackingMode !== 'none') return true;
-      event.preventDefault();
-      return false;
-    });
-
-    // Clipboard without text (a screenshot): pass Ctrl+V through like Windows Terminal so the CLI can read the image.
-    const onPaste = (event: ClipboardEvent) => {
-      const data = event.clipboardData;
-      if (!data) return;
-      const text = data.getData('text/plain');
-      if (text) return;
-      const hasImage = [...data.items].some((item) => item.kind === 'file');
-      if (!hasImage) return;
-      event.preventDefault();
-      event.stopPropagation();
-      sendToPty('\x16');
-    };
-    node.addEventListener('paste', onPaste, true);
-
-    // IME composition moves xterm's hidden textarea to the caret; the browser then scrolls every
-    // ancestor to reveal it, sliding the whole window sideways. None of these ancestors should scroll.
-    const resetAncestorScroll = (event: Event) => {
-      if (!activeRef.current || !node.isConnected || node.offsetParent === null) return;
-      const target = event.target === document ? document.scrollingElement : event.target;
-      if (!(target instanceof Element) || target === node || !target.contains(node)) return;
-      if (target.scrollLeft) target.scrollLeft = 0;
-      if (target.scrollTop) target.scrollTop = 0;
-    };
-    document.addEventListener('scroll', resetAncestorScroll, true);
-
-    const bellSub = term.onBell(() => {
-      if (!disposed) bridge.current.bell(sessionId);
-    });
-    // OSC 0/2: CLIs such as Codex and Claude Code name the current task in the window title.
-    const titleSub = term.onTitleChange((title) => {
-      if (!disposed) bridge.current.title(sessionId, title);
-    });
-    let awayFromBottom = false;
-    const reportScroll = () => {
-      if (disposed) return;
-      const buffer = term.buffer.active;
-      const away = buffer.type === 'normal' && buffer.viewportY < buffer.baseY - 1;
-      if (away === awayFromBottom) return;
-      awayFromBottom = away;
-      bridge.current.scrolled(sessionId, away);
-    };
-    const scrollSub = term.onScroll(reportScroll);
-    const parsedSub = term.onWriteParsed(reportScroll);
-
-    const handle: TerminalHandle = {
-      focus: () => { if (!disposed) term.focus(); },
-      clear: () => { if (!disposed) term.clear(); },
-      scrollToBottom: () => { if (!disposed) { term.scrollToBottom(); reportScroll(); } },
-      selectAll: () => { if (!disposed) term.selectAll(); },
-      hasSelection: () => !disposed && term.hasSelection(),
-      copySelection: () => !disposed && copySelection(),
-      paste: (text: string) => { if (!disposed && runningRef.current && text) term.paste(text); },
-      readOutput: () => {
-        if (disposed) return '';
-        if (term.hasSelection()) {
-          const selected = term.getSelection().trim();
-          if (selected) return selected;
-        }
-        const buffer = term.buffer.active;
-        const lines: string[] = [];
-        for (let row = 0; row < buffer.length; row += 1) {
-          const line = buffer.getLine(row);
-          if (line) lines.push(line.translateToString(true));
-        }
-        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-        return lines.join('\n');
-      },
-      findMatches: (query: string) => {
-        const needle = query.trim().toLowerCase();
-        if (disposed || !needle) return [];
-        const buffer = term.buffer.active;
-        const found: TerminalMatch[] = [];
-        for (let row = 0; row < buffer.length; row += 1) {
-          const line = buffer.getLine(row);
-          if (!line) continue;
-          const text = line.translateToString(true).toLowerCase();
-          let start = 0;
-          while (start <= text.length - needle.length) {
-            const index = text.indexOf(needle, start);
-            if (index < 0) break;
-            found.push({ row, col: index, length: needle.length });
-            start = index + Math.max(1, needle.length);
-          }
-        }
-        return found;
-      },
-      revealMatch: (match: TerminalMatch | null) => {
-        if (disposed) return;
-        if (!match) {
-          term.clearSelection();
-          return;
-        }
-        try {
-          term.select(match.col, match.row, match.length);
-          term.scrollToLine(Math.max(0, match.row - 3));
-        } catch { /* ignore out-of-bounds buffer selection */ }
-      },
-    };
-    handles.current.set(sessionId, handle);
-
-    const subscription = term.onData((data) => sendToPty(data));
-    const fitNow = () => {
-      if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
-      try { fit.fit(); } catch { return; }
-      if (term.cols < 2 || term.rows < 1) return;
-      if (!runningRef.current) return;
-      void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
-    };
-    let resizeFrame = 0;
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(resizeFrame);
-      resizeFrame = requestAnimationFrame(fitNow);
-    });
-    observer.observe(node);
-    void native.replayWorkbenchSession(sessionId).then((encoded) => {
-      if (disposed) return;
-      let snapshot = new Uint8Array(0);
-      try { snapshot = Uint8Array.from(decodeBase64(typeof encoded === 'string' ? encoded : '')); }
-      catch { snapshot = new Uint8Array(0); }
-      const earlier = (pending.current.get(sessionId) ?? []).splice(0);
-      pending.current.delete(sessionId);
-      const arrived = queued.splice(0);
-      const queuedBytes = concatBytes([...earlier, ...arrived].flatMap((part) => {
-        try { return [decodeBase64(part)]; }
-        catch { return []; }
-      }));
-      const suffix = queuedAfterSnapshot(snapshot, queuedBytes);
-      acceptLive = true;
-      try {
-        if (snapshot.length) term.write(snapshot);
-        if (suffix.length) term.write(suffix);
-      } catch { /* Malformed bytes stay out of the terminal. */ }
-      requestAnimationFrame(() => {
-        fitNow();
-        // The replayed snapshot must not leave the viewport parked at the top of the buffer.
-        term.scrollToBottom();
-      });
-    }).catch(() => {
-      acceptLive = true;
-      queued.splice(0).forEach((item) => writeEncoded(item));
-      (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeEncoded(item));
-      pending.current.delete(sessionId);
-    });
-    return () => {
-      disposed = true;
-      window.clearTimeout(liveTimer);
-      flushWrites();
-      cancelAnimationFrame(resizeFrame);
-      if (writers.current.get(sessionId) === publish) writers.current.delete(sessionId);
-      if (handles.current.get(sessionId) === handle) handles.current.delete(sessionId);
-      node.removeEventListener('paste', onPaste, true);
-      document.removeEventListener('scroll', resetAncestorScroll, true);
-      bellSub.dispose();
-      titleSub.dispose();
-      scrollSub.dispose();
-      parsedSub.dispose();
-      subscription.dispose();
-      observer.disconnect();
-      // xterm 5.5 schedules `setTimeout(syncScrollArea)` while opening; disposing in the same tick
-      // makes that timer read a torn-down renderer. Dispose after it has run.
-      window.setTimeout(() => term.dispose(), 0);
-      termRef.current = null;
-      fitRef.current = null;
-    };
-  }, [sessionId, writers, pending, handles, bridge]);
-
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.theme = terminalTheme(theme);
-    term.options.minimumContrastRatio = contrastFloor(theme);
-  }, [theme]);
-
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.disableStdin = !active || !running;
-    term.options.cursorBlink = cursorBlink && active && running;
-    term.options.fontSize = fontSize;
-    // A hidden terminal's viewport can reset to the top of the scrollback (observed in
-    // WebView2); always land on the latest output when a session becomes visible.
-    const becameActive = active && !wasActiveRef.current;
-    wasActiveRef.current = active;
-    if (!active) return;
-    const frame = requestAnimationFrame(() => {
-      const fit = fitRef.current;
-      const node = host.current;
-      if (!fit || !node || node.clientWidth < 8) return;
-      try { fit.fit(); } catch { return; }
-      if (becameActive) term.scrollToBottom();
-      if (term.cols >= 2 && term.rows >= 1 && running) {
-        void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
-      }
-      if (running && !document.querySelector('dialog[open]')) term.focus();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [active, running, fontSize, cursorBlink, sessionId, bridge]);
-
-  return <div ref={host} className={styles.terminalHost} hidden={!active} aria-label={label} data-blink={cursorBlink || undefined} />;
-}
-
-const TITLE_LIMIT = 80;
-
-/** CLIs put spinners and status glyphs in front of the task title; keep only the words. */
-export function cleanTerminalTitle(raw: string): string {
-  const text = raw
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .replace(/^[\s\u2800-\u28ff\u2700-\u27bf\u2600-\u26ff\u00b7\u2022\u25cf\u25cb\u25d0-\u25d3*\-\u2010-\u2015\u2731-\u273d]+/u, '')
-    .trim();
-  return text.length > TITLE_LIMIT ? text.slice(0, TITLE_LIMIT - 1).trimEnd() + '\u2026' : text;
-}
-
-function monoFont(): string {
-  const stack = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
-  return stack || 'Consolas, monospace';
-}
 
 function readStoredFontSize(): number {
   try {
     const raw = Number(localStorage.getItem('cliora:workbench-font-size'));
     if (Number.isInteger(raw) && raw >= MIN_FONT_SIZE && raw <= MAX_FONT_SIZE) return raw;
-  } catch { /* ignore */ }
+  } catch { /* Storage is optional. */ }
   return DEFAULT_FONT_SIZE;
 }
 
@@ -706,16 +64,54 @@ function readStoredRailWidth(): number {
   try {
     const raw = Number(localStorage.getItem('cliora:workbench-rail-width'));
     if (Number.isFinite(raw) && raw >= MIN_RAIL_WIDTH && raw <= MAX_RAIL_WIDTH) return Math.round(raw);
-  } catch { /* ignore */ }
+  } catch { /* Storage is optional. */ }
   return DEFAULT_RAIL_WIDTH;
 }
 
 function readStoredSoundEnabled(): boolean {
+  try { return localStorage.getItem('cliora:workbench-sound') !== 'false'; }
+  catch { return true; }
+}
+
+function readStoredTerminalTheme(): TerminalThemePreference {
   try {
-    return localStorage.getItem('cliora:workbench-sound') !== 'false';
-  } catch {
-    return true;
-  }
+    const raw = localStorage.getItem('cliora:workbench-terminal-theme');
+    if (raw === 'dark' || raw === 'light' || raw === 'auto') return raw;
+  } catch { /* Storage is optional. */ }
+  return 'auto';
+}
+
+function readStoredCursorBlink(): boolean {
+  try { return localStorage.getItem('cliora:workbench-cursor-blink') !== 'false'; }
+  catch { return true; }
+}
+
+type RailArrangement = { pinned: string[]; order: string[] };
+const RAIL_ARRANGE_KEY = 'cliora:workbench-rail-arrange';
+
+function readRailArrangement(): RailArrangement {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RAIL_ARRANGE_KEY) ?? '') as Partial<RailArrangement> | null;
+    if (raw && Array.isArray(raw.pinned) && Array.isArray(raw.order)) {
+      return { pinned: raw.pinned.filter((id) => typeof id === 'string'), order: raw.order.filter((id) => typeof id === 'string') };
+    }
+  } catch { /* Storage is optional. */ }
+  return { pinned: [], order: [] };
+}
+
+function currentAppTheme(): TerminalTheme {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function formatDuration(startedAt: number | undefined, now: number): string {
+  if (!startedAt || startedAt <= 0 || now < startedAt) return '';
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
 let sharedAudioCtx: AudioContext | null = null;
@@ -735,11 +131,11 @@ function playWorkbenchChime(kind: 'bell' | 'exit') {
     const gain = sharedAudioCtx.createGain();
     osc.type = 'sine';
     if (kind === 'bell') {
-      osc.frequency.setValueAtTime(587.33, t0); // D5
-      osc.frequency.exponentialRampToValueAtTime(880, t0 + 0.09); // A5
+      osc.frequency.setValueAtTime(587.33, t0);
+      osc.frequency.exponentialRampToValueAtTime(880, t0 + 0.09);
     } else {
-      osc.frequency.setValueAtTime(523.25, t0); // C5
-      osc.frequency.exponentialRampToValueAtTime(659.25, t0 + 0.11); // E5
+      osc.frequency.setValueAtTime(523.25, t0);
+      osc.frequency.exponentialRampToValueAtTime(659.25, t0 + 0.11);
     }
     gain.gain.setValueAtTime(0.0001, t0);
     gain.gain.exponentialRampToValueAtTime(0.06, t0 + 0.015);
@@ -748,50 +144,7 @@ function playWorkbenchChime(kind: 'bell' | 'exit') {
     gain.connect(sharedAudioCtx.destination);
     osc.start(t0);
     osc.stop(t0 + 0.23);
-  } catch { /* Audio unavailable in headless or restricted context */ }
-}
-
-function formatDuration(startedAt: number | undefined, now: number): string {
-  if (!startedAt || startedAt <= 0 || now < startedAt) return '';
-  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-}
-
-function readStoredTerminalTheme(): TerminalThemePreference {
-  try {
-    const raw = localStorage.getItem('cliora:workbench-terminal-theme');
-    if (raw === 'dark' || raw === 'light' || raw === 'auto') return raw;
-  } catch { /* ignore */ }
-  return 'auto';
-}
-
-function readStoredCursorBlink(): boolean {
-  try { return localStorage.getItem('cliora:workbench-cursor-blink') !== 'false'; }
-  catch { return true; }
-}
-
-/** User arrangement of the session rail: pinned ids on top, then the preferred order of the rest. */
-type RailArrangement = { pinned: string[]; order: string[] };
-
-const RAIL_ARRANGE_KEY = 'cliora:workbench-rail-arrange';
-
-function readRailArrangement(): RailArrangement {
-  try {
-    const raw = JSON.parse(localStorage.getItem(RAIL_ARRANGE_KEY) ?? '') as Partial<RailArrangement> | null;
-    if (raw && Array.isArray(raw.pinned) && Array.isArray(raw.order)) {
-      return { pinned: raw.pinned.filter((id) => typeof id === 'string'), order: raw.order.filter((id) => typeof id === 'string') };
-    }
-  } catch { /* ignore */ }
-  return { pinned: [], order: [] };
-}
-
-function currentAppTheme(): TerminalTheme {
-  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  } catch { /* Audio is unavailable in restricted contexts. */ }
 }
 
 type MenuState =
@@ -826,8 +179,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [railFilter, setRailFilter] = useState<RailFilter>('all');
   const [railSearch, setRailSearch] = useState('');
   const [arrangement, setArrangement] = useState<RailArrangement>(readRailArrangement);
-  const [drag, setDrag] = useState<{ id: string } | null>(null);
-  const [dropMark, setDropMark] = useState<{ id: string; before: boolean } | null>(null);
   const [fontSize, setFontSize] = useState<number>(readStoredFontSize);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(readStoredSoundEnabled);
   const [themePreference, setThemePreference] = useState<TerminalThemePreference>(readStoredTerminalTheme);
@@ -840,6 +191,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
   const [titles, setTitles] = useState<Map<string, string>>(() => new Map());
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [dropActive, setDropActive] = useState(false);
@@ -847,23 +199,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const rootRef = useRef<HTMLDivElement>(null);
   const [narrowFrame, setNarrowFrame] = useState(false);
   const [compactFrame, setCompactFrame] = useState(false);
-
-  // Width breakpoints drive the responsive layout. A ResizeObserver is used instead of CSS
-  // container queries: WebView2 has been seen evaluating the workbench container query against
-  // a stale width, collapsing the rail to the top strip inside a wide window.
-  useEffect(() => {
-    const node = rootRef.current;
-    if (!node) return;
-    const update = () => {
-      const width = node.clientWidth;
-      setNarrowFrame((prev) => (prev === width <= 720 ? prev : width <= 720));
-      setCompactFrame((prev) => (prev === width <= 660 ? prev : width <= 660));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [launchToolId, setLaunchToolId] = useState('');
@@ -879,17 +214,20 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [findQuery, setFindQuery] = useState('');
   const [findMatches, setFindMatches] = useState<TerminalMatch[]>([]);
   const [findIndex, setFindIndex] = useState(0);
+  const [findRevision, setFindRevision] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const findIndexRef = useRef(0);
+  const findKeyRef = useRef('');
+  const findRefreshTimer = useRef(0);
 
   const [composerOpen, setComposerOpen] = useState(false);
-  const [composerText, setComposerText] = useState('');
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const [copiedState, setCopiedState] = useState<'path' | 'output' | 'selection' | 'empty' | null>(null);
   const copyTimerRef = useRef<number>(0);
 
   const firstSeenAt = useRef(new Map<string, number>());
   const [clock, setClock] = useState(() => Date.now());
-
   const writers = useRef(new Map<string, (data: string) => void>());
   const pending = useRef(new Map<string, string[]>());
   const handles = useRef(new Map<string, TerminalHandle>());
@@ -898,84 +236,107 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   soundEnabledRef.current = soundEnabled;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const findOpenRef = useRef(findOpen);
+  findOpenRef.current = findOpen;
+  const findQueryRef = useRef(findQuery);
+  findQueryRef.current = findQuery;
+
+  // WebView2 can resolve a stale container query width; observe the actual workbench instead.
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const update = () => {
+      const width = node.clientWidth;
+      setNarrowFrame((current) => current === width <= 720 ? current : width <= 720);
+      setCompactFrame((current) => current === width <= 620 ? current : width <= 620);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const terminalTools = useMemo(
     () => tools.filter((item) => item.launchForm !== 'desktop' && item.launch?.state !== 'unsupported'),
     [tools],
   );
   const effectiveLaunchToolId = useMemo(
-    () => (terminalTools.some((item) => item.id === launchToolId) ? launchToolId : terminalTools[0]?.id ?? ''),
+    () => terminalTools.some((item) => item.id === launchToolId) ? launchToolId : terminalTools[0]?.id ?? '',
     [terminalTools, launchToolId],
   );
   const selectedLaunchTool = useMemo(
     () => terminalTools.find((item) => item.id === effectiveLaunchToolId) ?? null,
     [terminalTools, effectiveLaunchToolId],
   );
+  const selected = sessions.find((item) => item.id === selectedId) ?? null;
+  const showEmpty = !loading && !sessions.length;
+  const runningCount = sessions.filter((item) => item.running).length;
+  const endedCount = sessions.length - runningCount;
 
   function flashCopied(state: 'path' | 'output' | 'selection' | 'empty') {
     window.clearTimeout(copyTimerRef.current);
     setCopiedState(state);
-    copyTimerRef.current = window.setTimeout(() => setCopiedState(null), 1600);
+    copyTimerRef.current = window.setTimeout(() => setCopiedState(null), 1800);
   }
 
   const updateFontSize = useCallback((nextSize: number) => {
     const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, nextSize));
     setFontSize(clamped);
-    try { localStorage.setItem('cliora:workbench-font-size', String(clamped)); } catch { /* ignore */ }
+    try { localStorage.setItem('cliora:workbench-font-size', String(clamped)); } catch { /* Storage is optional. */ }
   }, []);
 
   function openFind() {
+    setAppearanceOpen(false);
     setFindOpen(true);
     requestAnimationFrame(() => { findInputRef.current?.focus(); findInputRef.current?.select(); });
   }
 
   function toggleComposer(target?: boolean) {
     const next = target ?? !composerOpen;
+    setAppearanceOpen(false);
     setComposerOpen(next);
     if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
     else if (selectedId) handles.current.get(selectedId)?.focus();
   }
 
-  // One bridge object for every terminal; refreshed each render so callbacks see current state.
+  const closeAppearance = useCallback(() => setAppearanceOpen(false), []);
+
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
   bridge.current = {
     writeError: (error) => setActionError(formatFailure(error, t('sessions.writeFailed'), t('sessions.retry'))),
     bell: (id) => {
       if (soundEnabledRef.current) playWorkbenchChime('bell');
       if (id === selectedIdRef.current && document.hasFocus()) return;
-      setAttentionIds((prev) => {
-        if (prev.has(id)) return prev;
-        const next = new Set(prev);
+      setAttentionIds((current) => {
+        if (current.has(id)) return current;
+        const next = new Set(current);
         next.add(id);
         return next;
       });
     },
     title: (id, raw) => {
       const title = cleanTerminalTitle(raw);
-      setTitles((prev) => {
-        if ((prev.get(id) ?? '') === title) return prev;
-        const next = new Map(prev);
-        if (title) next.set(id, title);
-        else next.delete(id);
+      setTitles((current) => {
+        if ((current.get(id) ?? '') === title) return current;
+        const next = new Map(current);
+        if (title) next.set(id, title); else next.delete(id);
         return next;
       });
     },
-    outputActive: (id, isActive) => {
-      setActiveOutputIds((prev) => {
-        if (prev.has(id) === isActive) return prev;
-        const next = new Set(prev);
-        if (isActive) next.add(id);
-        else next.delete(id);
-        return next;
-      });
-      if (!isActive && id !== selectedIdRef.current) {
-        setAttentionIds((prev) => {
-          if (prev.has(id)) return prev;
-          const next = new Set(prev);
-          next.add(id);
-          return next;
-        });
-      }
+    outputActive: (id, isActive) => setActiveOutputIds((current) => {
+      if (current.has(id) === isActive) return current;
+      const next = new Set(current);
+      if (isActive) next.add(id); else next.delete(id);
+      return next;
+    }),
+    outputWritten: (id) => {
+      if (id !== selectedIdRef.current || !findOpenRef.current || !findQueryRef.current.trim() || findRefreshTimer.current) return;
+      findRefreshTimer.current = window.setTimeout(() => {
+        findRefreshTimer.current = 0;
+        setFindRevision((current) => current + 1);
+      }, 140);
     },
     shortcut: (action) => {
       if (action === 'find') openFind();
@@ -987,24 +348,22 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       else stepSession(action === 'nextSession' ? 1 : -1);
     },
     canSwitch: () => filteredSessions.length > 1,
-    scrolled: (id, away) => setScrolledIds((prev) => {
-      if (prev.has(id) === away) return prev;
-      const next = new Set(prev);
+    scrolled: (id, away) => setScrolledIds((current) => {
+      if (current.has(id) === away) return current;
+      const next = new Set(current);
       if (away) next.add(id); else next.delete(id);
       return next;
     }),
     copied: () => flashCopied('selection'),
   };
 
-  useEffect(() => {
-    if (focusSessionId) setSelectedId(focusSessionId);
-  }, [focusSessionId, focusToken]);
+  useEffect(() => { if (focusSessionId) setSelectedId(focusSessionId); }, [focusSessionId, focusToken]);
 
   useEffect(() => {
     if (!selectedId) return;
-    setAttentionIds((prev) => {
-      if (!prev.has(selectedId)) return prev;
-      const next = new Set(prev);
+    setAttentionIds((current) => {
+      if (!current.has(selectedId)) return current;
+      const next = new Set(current);
       next.delete(selectedId);
       return next;
     });
@@ -1016,7 +375,10 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => () => { window.clearTimeout(copyTimerRef.current); }, []);
+  useEffect(() => () => {
+    window.clearTimeout(copyTimerRef.current);
+    window.clearTimeout(findRefreshTimer.current);
+  }, []);
 
   useEffect(() => {
     if (!active || !sessions.some((item) => item.running)) return;
@@ -1044,9 +406,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     void listen<{ sessionId: string; exitCode: number | null }>('cliora:session-exit', (event) => {
       if (!alive) return;
       if (soundEnabledRef.current) playWorkbenchChime('exit');
-      setActiveOutputIds((prev) => {
-        if (!prev.has(event.payload.sessionId)) return prev;
-        const next = new Set(prev);
+      setActiveOutputIds((current) => {
+        if (!current.has(event.payload.sessionId)) return current;
+        const next = new Set(current);
         next.delete(event.payload.sessionId);
         return next;
       });
@@ -1068,9 +430,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (!alive) return;
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
-      for (const item of next) {
-        if (!firstSeenAt.current.has(item.id)) firstSeenAt.current.set(item.id, item.startedAt ?? now);
-      }
+      for (const item of next) if (!firstSeenAt.current.has(item.id)) firstSeenAt.current.set(item.id, item.startedAt ?? now);
       setSessions(next);
       setProjects(Array.isArray(listedProjects) ? listedProjects : []);
       setLibraryPrompts(Array.isArray(prompts) ? prompts : []);
@@ -1104,43 +464,49 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     if (!findOpen || !selectedId || !findQuery.trim()) {
       setFindMatches([]);
       setFindIndex(0);
+      findIndexRef.current = 0;
+      findKeyRef.current = '';
       if (selectedId) handles.current.get(selectedId)?.revealMatch(null);
       return;
     }
     const handle = handles.current.get(selectedId);
     if (!handle) return;
     const matches = handle.findMatches(findQuery);
+    const key = selectedId + '\n' + findQuery;
+    const nextIndex = key === findKeyRef.current ? Math.min(findIndexRef.current, Math.max(0, matches.length - 1)) : 0;
+    findKeyRef.current = key;
+    findIndexRef.current = nextIndex;
     setFindMatches(matches);
-    setFindIndex(0);
-    handle.revealMatch(matches[0] ?? null);
-  }, [findOpen, findQuery, selectedId]);
+    setFindIndex(nextIndex);
+    handle.revealMatch(matches[nextIndex] ?? null);
+  }, [findOpen, findQuery, selectedId, findRevision]);
 
   const toggleSound = useCallback(() => {
-    setSoundEnabled((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('cliora:workbench-sound', String(next)); } catch { /* ignore */ }
+    setSoundEnabled((current) => {
+      const next = !current;
+      try { localStorage.setItem('cliora:workbench-sound', String(next)); } catch { /* Storage is optional. */ }
       if (next) playWorkbenchChime('bell');
       return next;
     });
   }, []);
 
   const toggleCursorBlink = useCallback(() => {
-    setCursorBlink((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('cliora:workbench-cursor-blink', String(next)); } catch { /* ignore */ }
+    setCursorBlink((current) => {
+      const next = !current;
+      try { localStorage.setItem('cliora:workbench-cursor-blink', String(next)); } catch { /* Storage is optional. */ }
       return next;
     });
   }, []);
 
   const setTerminalTheme = useCallback((next: TerminalThemePreference) => {
     setThemePreference(next);
-    try { localStorage.setItem('cliora:workbench-terminal-theme', next); } catch { /* ignore */ }
+    try { localStorage.setItem('cliora:workbench-terminal-theme', next); } catch { /* Storage is optional. */ }
   }, []);
 
   const updateRailWidth = useCallback((nextWidth: number) => {
     const clamped = Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, Math.round(nextWidth)));
     setRailWidth(clamped);
-    try { localStorage.setItem('cliora:workbench-rail-width', String(clamped)); } catch { /* ignore */ }
+    try { localStorage.setItem('cliora:workbench-rail-width', String(clamped)); } catch { /* Storage is optional. */ }
   }, []);
 
   function startRailResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1169,7 +535,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return tools.find((item) => item.id === session.toolId)?.name ?? session.toolId;
   }
 
-  /** The task title the CLI reported, unless it only repeats the tool name. */
   function taskTitle(session: WorkbenchSession): string {
     const title = titles.get(session.id) ?? '';
     const name = toolName(session);
@@ -1180,30 +545,43 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return mode === 'yolo' ? t('sessions.modeYolo') : t('sessions.modeNormal');
   }
 
-  function forgetSession(id: string) {
-    firstSeenAt.current.delete(id);
-    setTitles((prev) => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
-    setActiveOutputIds((prev) => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
-    setScrolledIds((prev) => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
-  }
-
-  function sessionTone(session: WorkbenchSession): 'live' | 'idle' | 'bell' | 'error' | 'ended' {
-    if (!session.running) {
-      return session.exitCode != null && session.exitCode !== 0 ? 'error' : 'ended';
-    }
+  function sessionTone(session: WorkbenchSession): SessionTone {
+    if (!session.running) return session.exitCode != null && session.exitCode !== 0 ? 'error' : 'ended';
     if (attentionIds.has(session.id)) return 'bell';
     if (activeOutputIds.has(session.id)) return 'live';
     return 'idle';
   }
 
+  function forgetSession(id: string) {
+    firstSeenAt.current.delete(id);
+    setTitles((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setActiveOutputIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
+    setScrolledIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
+    setAttentionIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
+    setComposerDrafts((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
   async function endSession(session: WorkbenchSession) {
     if (busy) return;
+    if (session.running) {
+      const accepted = await confirmAction(
+        t('sessions.endConfirmMessage', { tool: toolName(session), place: placeOf(session) }),
+        () => sessionsRef.current.some((item) => item.id === session.id && item.running),
+        { title: t('sessions.endConfirmTitle'), confirmLabel: t('sessions.endConfirmAction'), destructive: true },
+      );
+      if (!accepted || busy) return;
+    }
     setBusy(session.id);
     setActionError('');
     try {
       await native.closeWorkbenchSession(session.id);
       forgetSession(session.id);
-      const rest = sessions.filter((item) => item.id !== session.id);
+      const rest = sessionsRef.current.filter((item) => item.id !== session.id);
       setSessions(rest);
       setSelectedId((current) => current === session.id ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
@@ -1226,7 +604,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       const rest = sessions.filter((item) => !closedIds.has(item.id));
       setSessions(rest);
       if (railFilter === 'ended') setRailFilter('all');
-      setSelectedId((current) => (current && closedIds.has(current)) ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
+      setSelectedId((current) => current && closedIds.has(current) ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext')));
     } finally { setBusy(''); }
@@ -1238,9 +616,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     setNotice('');
     setActionError('');
     try {
-      const result = failure.retry.kind === 'launch'
-        ? await native.launchCli(failure.retry.request)
-        : await native.resumeHistorySession(failure.retry.id, failure.retry.mode);
+      const result = failure.retry.kind === 'launch' ? await native.launchCli(failure.retry.request) : await native.resumeHistorySession(failure.retry.id, failure.retry.mode);
       const opened = workbenchSessionId(result);
       if (opened) {
         onFailure(null);
@@ -1258,15 +634,18 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }) {
     setDialogError('');
+    let nextToolId = effectiveLaunchToolId;
     if (prefill?.projectId) {
       const project = projects.find((item) => item.id === prefill.projectId);
       setWorkspaceValue('project:' + prefill.projectId);
-      if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) {
-        setLaunchToolId(project.preferredTool);
-      }
+      if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) nextToolId = project.preferredTool;
     }
-    if (prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId)) setLaunchToolId(prefill.toolId);
-    if (prefill) setLaunchMode(preferredLaunchMode(launchSettings, prefill.projectId ? 'project' : 'cli', !!selectedLaunchTool?.yoloAvailable));
+    if (prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId)) nextToolId = prefill.toolId;
+    if (prefill) {
+      setLaunchToolId(nextToolId);
+      const nextTool = terminalTools.find((item) => item.id === nextToolId);
+      setLaunchMode(preferredLaunchMode(launchSettings, prefill.projectId ? 'project' : 'cli', !!nextTool?.yoloAvailable));
+    }
     setNewDialogOpen(true);
   }
 
@@ -1278,7 +657,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         setCustomFolderPath(clean);
         setWorkspaceValue(`custom:${clean}`);
       }
-    } catch { /* ignore dialog cancellation */ }
+    } catch { /* Folder dialog cancellation needs no feedback. */ }
   }
 
   async function launchFromDialog() {
@@ -1320,9 +699,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally {
-      setLaunchingNew(false);
-    }
+    } finally { setLaunchingNew(false); }
   }
 
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean) {
@@ -1335,14 +712,13 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
         if (updated) setLaunchSettings(updated);
       }
-      const request: LaunchRequest = {
+      const result = await native.launchCli({
         toolId: session.toolId,
         projectId: session.projectId,
         sessionId: null,
         mode: session.mode,
         directory: session.directory || null,
-      };
-      const result = await native.launchCli(request);
+      });
       const opened = workbenchSessionId(result);
       if (opened) {
         if (replaceEnded && !session.running) {
@@ -1358,37 +734,38 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally {
-      setBusy('');
-    }
+    } finally { setBusy(''); }
   }
 
-  async function sendToSession(session: WorkbenchSession, rawText: string) {
-    if (!session.running || !rawText) return;
+  async function sendToSession(session: WorkbenchSession, rawText: string): Promise<boolean> {
+    if (!session.running || !rawText) return false;
     setActionError('');
     try {
       await native.writeWorkbenchSession(session.id, encodeBase64(new TextEncoder().encode(rawText)));
-      handles.current.get(session.id)?.focus();
+      if (selectedIdRef.current === session.id) handles.current.get(session.id)?.focus();
+      return true;
     } catch (error) {
       bridge.current.writeError(error);
+      return false;
     }
   }
 
   async function submitComposer() {
     if (!selected || !selected.running) return;
-    const text = composerText.trim();
-    if (!text) {
-      await sendToSession(selected, '\r');
-      return;
-    }
-    setComposerText('');
-    await sendToSession(selected, `${text}\r`);
+    const text = composerDrafts[selected.id] ?? '';
+    if (!await sendToSession(selected, text ? `${text}\r` : '\r')) return;
+    if (text) setComposerDrafts((current) => current[selected.id] === text ? { ...current, [selected.id]: '' } : current);
+    if (selectedIdRef.current === selected.id) requestAnimationFrame(() => composerInputRef.current?.focus());
+  }
+
+  function updateComposerDraft(text: string) {
+    if (!selectedId) return;
+    setComposerDrafts((current) => ({ ...current, [selectedId]: text }));
   }
 
   async function copySessionPath(session: WorkbenchSession) {
     const value = session.directory ? displayPath(session.directory) : '';
-    if (!value) return;
-    if (await writeClipboard(value)) flashCopied('path');
+    if (value && await writeClipboard(value)) flashCopied('path');
   }
 
   async function copyTerminalOutput(session: WorkbenchSession) {
@@ -1412,7 +789,8 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   function stepFindMatch(delta: -1 | 1) {
     if (!findMatches.length || !selectedId) return;
-    const next = (findIndex + delta + findMatches.length) % findMatches.length;
+    const next = (findIndexRef.current + delta + findMatches.length) % findMatches.length;
+    findIndexRef.current = next;
     setFindIndex(next);
     handles.current.get(selectedId)?.revealMatch(findMatches[next] ?? null);
   }
@@ -1422,27 +800,19 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     if (selectedId) handles.current.get(selectedId)?.focus();
   }
 
-  const selected = sessions.find((item) => item.id === selectedId) ?? null;
-  const showEmpty = !loading && !sessions.length;
-  const runningCount = sessions.filter((item) => item.running).length;
-  const endedCount = sessions.length - runningCount;
-
   const filteredSessions = useMemo(() => {
     const query = railSearch.trim().toLowerCase();
     return sessions.filter((session) => {
       if (railFilter === 'running' && !session.running) return false;
       if (railFilter === 'ended' && session.running) return false;
       if (!query) return true;
-      const name = toolName(session).toLowerCase();
-      const title = (titles.get(session.id) ?? '').toLowerCase();
-      const place = placeOf(session).toLowerCase();
-      const dir = (session.directory ?? '').toLowerCase();
-      return name.includes(query) || title.includes(query) || place.includes(query) || dir.includes(query);
+      return toolName(session).toLowerCase().includes(query)
+        || (titles.get(session.id) ?? '').toLowerCase().includes(query)
+        || placeOf(session).toLowerCase().includes(query)
+        || (session.directory ?? '').toLowerCase().includes(query);
     });
   }, [sessions, railFilter, railSearch, projects, tools, titles]);
 
-  // Pinned sessions stay on top of the rail; the rest follow the user's drag order
-  // (sessions without a stored position keep the backend order and appear first).
   const arrangedSessions = useMemo(() => {
     const present = new Set(filteredSessions.map((session) => session.id));
     const pinned = arrangement.pinned.filter((id) => present.has(id));
@@ -1462,18 +832,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   }, [filteredSessions, arrangement]);
 
   useEffect(() => {
-    try { localStorage.setItem(RAIL_ARRANGE_KEY, JSON.stringify(arrangement)); } catch { /* ignore */ }
+    try { localStorage.setItem(RAIL_ARRANGE_KEY, JSON.stringify(arrangement)); } catch { /* Storage is optional. */ }
   }, [arrangement]);
 
   const pinnedIds = useMemo(() => new Set(arrangement.pinned), [arrangement]);
 
   function togglePinSession(id: string) {
-    setArrangement((prev) => (prev.pinned.includes(id)
-      ? { pinned: prev.pinned.filter((item) => item !== id), order: prev.order }
-      : { pinned: [...prev.pinned, id], order: prev.order.filter((item) => item !== id) }));
+    setArrangement((current) => current.pinned.includes(id)
+      ? { pinned: current.pinned.filter((item) => item !== id), order: current.order }
+      : { pinned: [...current.pinned, id], order: current.order.filter((item) => item !== id) });
   }
 
-  /** Move a session relative to a rail target (or to the end when targetId is null). Pin state never changes here. */
   function moveSession(dragId: string, targetId: string | null, before: boolean) {
     const dragWasPinned = pinnedIds.has(dragId);
     const targetPinned = targetId ? pinnedIds.has(targetId) : false;
@@ -1482,23 +851,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (targetId && targetPinned) {
         const at = group.indexOf(targetId);
         group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
-      } else {
-        group.push(dragId);
-      }
-      setArrangement((prev) => ({ pinned: group, order: prev.order }));
+      } else group.push(dragId);
+      setArrangement((current) => ({ pinned: group, order: current.order }));
       return;
     }
-    // Derive the full new sequence from the current display order so every id keeps a rank.
     const group = arrangedSessions.filter((session) => !pinnedIds.has(session.id)).map((session) => session.id).filter((id) => id !== dragId);
-    if (targetId === null) {
-      group.push(dragId);
-    } else if (!targetPinned) {
+    if (targetId === null) group.push(dragId);
+    else if (!targetPinned) {
       const at = group.indexOf(targetId);
       group.splice(at < 0 ? group.length : at + (before ? 0 : 1), 0, dragId);
-    } else {
-      group.unshift(dragId);
-    }
-    setArrangement((prev) => ({ pinned: prev.pinned, order: group }));
+    } else group.unshift(dragId);
+    setArrangement((current) => ({ pinned: current.pinned, order: group }));
   }
 
   function stepSession(step: 1 | -1) {
@@ -1509,7 +872,6 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     });
   }
 
-  // Context menus (session row and terminal surface): placed at the pointer, kept inside the window.
   useEffect(() => { if (!menu) setMenuBox(null); }, [menu]);
   useLayoutEffect(() => {
     if (!menu) return;
@@ -1520,6 +882,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     setMenuBox({ top, left });
     node.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
   }, [menu]);
+
   useEffect(() => {
     if (!menu) return;
     const dismiss = (event: Event) => {
@@ -1551,7 +914,13 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   function openRowMenu(session: WorkbenchSession, x: number, y: number) {
     setSelectedId(session.id);
+    setAppearanceOpen(false);
     setMenu({ kind: 'session', sessionId: session.id, x, y });
+  }
+
+  function openTerminalMenu(session: WorkbenchSession, x: number, y: number) {
+    setAppearanceOpen(false);
+    setMenu({ kind: 'terminal', sessionId: session.id, x, y, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
   }
 
   function menuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -1567,25 +936,24 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   const availableProjects = useMemo(() => projects.filter((item) => item.available && item.path), [projects]);
 
-  // Alt+↑/↓ and Alt+N outside the terminal (the terminal routes them through its key handler).
   useEffect(() => {
     if (!active || newDialogOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if ((MAC ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f' && selectedIdRef.current) {
+      if (event.defaultPrevented || event.repeat) return;
+      const mod = MAC ? event.metaKey : event.ctrlKey;
+      if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f' && selectedIdRef.current) {
         event.preventDefault();
         openFind();
         return;
       }
-      if ((MAC ? event.metaKey : event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selectedIdRef.current) {
+      if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selected?.running) {
         event.preventDefault();
         toggleComposer();
         return;
       }
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-      if (editing) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
       if (step) {
         if (filteredSessions.length < 2) return;
@@ -1600,9 +968,8 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [active, newDialogOpen, filteredSessions, terminalTools]);
+  }, [active, newDialogOpen, filteredSessions, terminalTools, selected?.running]);
 
-  // Files dropped on the terminal become quoted paths, the same text a terminal would insert.
   const dropTargetRef = useRef<{ id: string | null; running: boolean }>({ id: null, running: false });
   dropTargetRef.current = { id: selected?.id ?? null, running: !!selected?.running };
   useEffect(() => {
@@ -1632,586 +999,108 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           if (text && handle) { handle.paste(text); handle.focus(); }
         }
       }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
-    } catch { /* Not running inside a Tauri webview. */ }
+    } catch { /* Browser previews have no native drag events. */ }
     return () => { alive = false; stop?.(); setDropActive(false); };
   }, [active]);
 
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
-
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
-      ...availableProjects.map((project) => ({
-        value: `project:${project.id}`,
-        label: project.name,
-        detail: project.path ? shortPath(displayPath(project.path)) : undefined,
-        icon: <Icon name="folder" size={14} />,
-      })),
+      ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ];
-    if (customFolderPath) {
-      list.push({
-        value: `custom:${customFolderPath}`,
-        label: shortPath(displayPath(customFolderPath)),
-        detail: displayPath(customFolderPath),
-        icon: <Icon name="folder" size={14} />,
-      });
-    }
+    if (customFolderPath) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
   }, [availableProjects, customFolderPath, t]);
 
+  const railSessions: RailSession[] = arrangedSessions.map((session) => ({
+    session,
+    name: toolName(session),
+    title: taskTitle(session),
+    place: placeOf(session),
+    directory: session.directory ? displayPath(session.directory) : '',
+    elapsed: formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock),
+    tone: sessionTone(session),
+    pinned: pinnedIds.has(session.id),
+    attention: attentionIds.has(session.id),
+  }));
+
+  const copiedMessage = copiedState === 'path' ? t('sessions.pathCopied')
+    : copiedState === 'output' ? t('sessions.outputCopied')
+      : copiedState === 'selection' ? t('sessions.selectionCopied') : t('sessions.outputEmpty');
+
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined}>
-    {listError && <div className={styles.banner} role="alert">
-      <div className={styles.bannerCopy}>
-        <strong>{t('sessions.listFailed')}</strong>
-        <p>{listError}</p>
-      </div>
-      <button type="button" className={styles.ghostButton} onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button>
-    </div>}
+    {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
+    {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><button type="button" className={styles.ghostButton} onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button></div>}
 
-    <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as React.CSSProperties}>
-      <aside className={styles.rail} aria-label={t('sessions.listLabel')}>
-        <div className={styles.railHead}>
-          <div className={styles.railTitleRow}>
-            <span className={styles.railTitle}>{t('sessions.listLabel')}</span>
-            <span className={styles.railCountBadge} data-live={runningCount > 0 || undefined}>
-              <span className={styles.liveDot} data-live={runningCount > 0 || undefined} aria-hidden="true" />
-              {runningCount > 0 ? t('sessions.runningCount', { count: runningCount }) : t('sessions.totalCount', { count: sessions.length })}
-            </span>
-            {terminalTools.length > 0 && <button
-              type="button"
-              className={styles.newSessionBtn}
-              aria-label={t('sessions.newSession')}
-              title={t('sessions.newSession') + ' (Alt+N)'}
-              onClick={() => openNewSessionDialog()}
-            >
-              <Icon name="plus" size={14} />
-              <span>{t('sessions.newSessionShort')}</span>
-            </button>}
-          </div>
-
-          {sessions.length > 1 && <div className={styles.railSearchField}>
-            <Icon name="search" size={13} />
-            <input
-              type="search"
-              value={railSearch}
-              placeholder={t('sessions.searchPlaceholder')}
-              aria-label={t('sessions.searchPlaceholder')}
-              onChange={(event) => setRailSearch(event.target.value)}
-            />
-            {railSearch && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => setRailSearch('')}>
-              <Icon name="close" size={11} />
-            </button>}
-          </div>}
-
-          {sessions.length > 1 && <div className={styles.segmented} role="group" aria-label={t('sessions.filterLabel')}>
-            <button type="button" aria-pressed={railFilter === 'all'} onClick={() => setRailFilter('all')}>
-              <span>{t('sessions.filterAll')}</span><em>{sessions.length}</em>
-            </button>
-            <button type="button" aria-pressed={railFilter === 'running'} onClick={() => setRailFilter('running')}>
-              <span>{t('sessions.filterRunning')}</span><em>{runningCount}</em>
-            </button>
-            {endedCount > 0 && <button type="button" aria-pressed={railFilter === 'ended'} onClick={() => setRailFilter('ended')}>
-              <span>{t('sessions.filterEnded')}</span><em>{endedCount}</em>
-            </button>}
-          </div>}
-        </div>
-
-        <div
-          className={styles.list}
-          role="tablist"
-          aria-label={t('sessions.listLabel')}
-          title={t('sessions.shortcutsHint')}
-          onKeyDown={navigateChoices}
-          onDragOver={(event) => { if (drag && event.target === event.currentTarget) event.preventDefault(); }}
-          onDrop={(event) => {
-            if (!drag || event.target !== event.currentTarget) return;
-            event.preventDefault();
-            moveSession(drag.id, null, false);
-            setDrag(null);
-            setDropMark(null);
-          }}
-        >
-          {arrangedSessions.map((session) => {
-            const name = toolName(session);
-            const title = taskTitle(session);
-            const place = placeOf(session);
-            const isSelected = session.id === selectedId;
-            const isPinned = pinnedIds.has(session.id);
-            const hasBell = attentionIds.has(session.id);
-            const tone = sessionTone(session);
-            const elapsed = formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock);
-            return <div
-              key={session.id}
-              className={styles.row}
-              data-running={session.running || undefined}
-              data-attention={hasBell || undefined}
-              data-selected={isSelected || undefined}
-              data-dragging={drag?.id === session.id || undefined}
-              data-drop={dropMark?.id === session.id ? (dropMark.before ? 'before' : 'after') : undefined}
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.setData('text/plain', session.id);
-                event.dataTransfer.effectAllowed = 'move';
-                setDrag({ id: session.id });
-              }}
-              onDragEnd={() => { setDrag(null); setDropMark(null); }}
-              onDragOver={(event) => {
-                if (!drag || drag.id === session.id) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-                const rect = event.currentTarget.getBoundingClientRect();
-                // The rail is a horizontal strip in narrow mode, vertical otherwise.
-                const before = narrowFrame
-                  ? event.clientX < rect.left + rect.width / 2
-                  : event.clientY < rect.top + rect.height / 2;
-                setDropMark((prev) => (prev && prev.id === session.id && prev.before === before ? prev : { id: session.id, before }));
-              }}
-              onDrop={(event) => {
-                if (!drag || drag.id === session.id) return;
-                event.preventDefault();
-                const rect = event.currentTarget.getBoundingClientRect();
-                const before = narrowFrame
-                  ? event.clientX < rect.left + rect.width / 2
-                  : event.clientY < rect.top + rect.height / 2;
-                moveSession(drag.id, session.id, before);
-                setDrag(null);
-                setDropMark(null);
-              }}
-            >
-              <button
-                type="button"
-                role="tab"
-                data-session-id={session.id}
-                className={styles.session}
-                aria-selected={isSelected}
-                aria-haspopup="menu"
-                title={[title, displayPath(session.directory || place)].filter(Boolean).join('\n')}
-                onClick={() => setSelectedId(session.id)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  openRowMenu(session, event.clientX, event.clientY);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-                    event.preventDefault();
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    openRowMenu(session, rect.left + 24, rect.bottom - 6);
-                  }
-                }}
-              >
-                <span className={styles.sessionIconWrap}>
-                  <ToolIcon toolId={session.toolId} size={20} />
-                  <span className={styles.sessionStateDot} data-tone={tone} aria-hidden="true" />
-                </span>
-                <span className={styles.sessionBody}>
-                  <span className={styles.sessionTop}>
-                    {isPinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={11} /></span>}
-                    <strong>{title || name}</strong>
-                    <span className={styles.sessionTime} data-tone={tone}>
-                      {session.running ? (elapsed || t('sessions.running')) : t('sessions.ended')}
-                    </span>
-                  </span>
-                  <span className={styles.sessionSub}>
-                    <span className={styles.sessionPlace}>{title ? name + ' \u00b7 ' + place : place}</span>
-                    <span className={styles.sessionBadges}>
-                      {hasBell && <span className={styles.attentionTag}>
-                        <span className={styles.attentionDot} aria-hidden="true" />
-                        {t('sessions.bellBadge')}
-                      </span>}
-                      {!session.running && session.exitCode != null && session.exitCode !== 0 && <span className={styles.exitTag}>
-                        {t('sessions.exitCode', { code: session.exitCode })}
-                      </span>}
-                      <span className={styles.modeTag} data-mode={session.mode}>{modeLabel(session.mode)}</span>
-                    </span>
-                  </span>
-                </span>
-              </button>
-              {!session.running && <button
-                type="button"
-                tabIndex={-1}
-                className={styles.rowRemove}
-                aria-label={t('sessions.removeSession') + '：' + name}
-                title={t('sessions.removeSession')}
-                disabled={!!busy}
-                onClick={() => void endSession(session)}
-              >
-                <Icon name="close" size={12} />
-              </button>}
-            </div>;
-          })}
-          {sessions.length > 0 && filteredSessions.length === 0 && <div className={styles.railNoMatch}>
-            <p>{t('sessions.noFilterMatch')}</p>
-            <button type="button" className={styles.ghostButton} onClick={() => { setRailFilter('all'); setRailSearch(''); }}>
-              {t('sessions.clearFilter')}
-            </button>
-          </div>}
-        </div>
-
-        {sessions.length > 0 && <div className={styles.railFoot}>
-          <span className={styles.railSummary}>
-            <span className={styles.summaryDot} data-live={runningCount > 0 || undefined} aria-hidden="true" />
-            {t('sessions.summary', { running: runningCount, ended: endedCount })}
-          </span>
-          {endedCount > 0 && <button
-            type="button"
-            className={styles.clearEndedBtn}
-            disabled={!!busy}
-            title={t('sessions.clearEndedTitle')}
-            onClick={() => void clearEndedSessions()}
-          >
-            <Icon name="trash" size={12} />
-            <span>{t('sessions.clearEnded')}</span>
-          </button>}
-        </div>}
-      </aside>
-
-      <div
-        className={styles.resizer}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('sessions.resizeRail')}
-        title={t('sessions.resizeRail')}
-        tabIndex={0}
-        onPointerDown={startRailResize}
-        onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)}
-        onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
-          if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
-          if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }
-        }}
-      />
+    <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as CSSProperties}>
+      <SessionRail sessions={railSessions} total={sessions.length} running={runningCount} ended={endedCount} filter={railFilter} search={railSearch} selectedId={selectedId} narrow={narrowFrame} busy={!!busy} canLaunch={terminalTools.length > 0}
+        onFilter={setRailFilter} onSearch={setRailSearch} onSelect={setSelectedId} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onMove={moveSession} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} />
+      <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
+        if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }
+      }} />
 
       <section className={styles.stage} aria-label={t('sessions.stageLabel')}>
-        {failure && <div className={styles.banner} role="alert">
-          <div className={styles.bannerCopy}>
-            <strong>{t('sessions.launchFailed')}</strong>
-            <p>{failure.detail}</p>
-            <p>{t('sessions.failureHint')}</p>
-          </div>
-          <div className={styles.bannerActions}>
-            <button type="button" className="button primary" onClick={() => void retry()} disabled={retrying}>
-              <Icon name="refresh" size={14} />
-              <span>{retrying ? t('sessions.loading') : t('sessions.retry')}</span>
-            </button>
-            <button type="button" className={styles.ghostButton} onClick={() => onFailure(null)}>
-              {t('sessions.dismissBanner')}
-            </button>
-          </div>
-        </div>}
-
-        {actionError && <div className={styles.banner} role="alert">
-          <div className={styles.bannerCopy}><p>{actionError}</p></div>
-          <button type="button" className={styles.ghostButton} onClick={() => setActionError('')} aria-label={t('common.dismissError')}>
-            <Icon name="close" size={14} />
-          </button>
-        </div>}
-
-        {notice && <div className={styles.banner} data-tone="status" role="status">
-          <div className={styles.bannerCopy}><p>{notice}</p></div>
-          <button type="button" className={styles.ghostButton} onClick={() => setNotice('')} aria-label={t('common.dismissError')}>
-            <Icon name="close" size={14} />
-          </button>
-        </div>}
+        {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><button type="button" className="button primary" onClick={() => void retry()} disabled={retrying}><Icon name="refresh" size={14} /><span>{retrying ? t('sessions.loading') : t('sessions.retry')}</span></button><button type="button" className={styles.ghostButton} onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</button></div></div>}
+        {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><button type="button" className={styles.ghostButton} onClick={() => setActionError('')} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button></div>}
+        {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><button type="button" className={styles.ghostButton} onClick={() => setNotice('')} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button></div>}
 
         {selected && (() => {
           const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
           const title = taskTitle(selected);
           const tone = sessionTone(selected);
-          const isOutputting = activeOutputIds.has(selected.id);
-          return <div className={styles.stageBar}>
-            <button
-              type="button"
-              className={styles.focusBtn}
-              aria-pressed={focusMode}
-              aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
-              title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')}
-              onClick={() => setFocusMode((current) => !current)}
-            >
-              <Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} />
-            </button>
-
-            <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /></span>
-
-            <div className={styles.identityText}>
-              <span className={styles.identityMain}>
-                <strong title={title ? toolName(selected) + ' \u00b7 ' + title : undefined}>
-                  {title ? <>{toolName(selected)}<span className={styles.identityTitle}>{title}</span></> : toolName(selected)}
-                </strong>
-              </span>
-              <span className={styles.identityMeta}>
-                <span className={styles.statusChip} data-tone={tone}>
-                  <span className={styles.statusDot} aria-hidden="true" />
-                  {selected.running
-                    ? (isOutputting
-                      ? (elapsed ? t('sessions.stateWorking') + ' · ' + elapsed : t('sessions.stateWorking'))
-                      : (elapsed ? t('sessions.stateIdle') + ' · ' + elapsed : t('sessions.stateIdle')))
-                    : t('sessions.ended') + (selected.exitCode != null ? ' · ' + t('sessions.exitCode', { code: selected.exitCode }) : '')}
-                </span>
-                <span className={styles.modeChip} data-mode={selected.mode}>{modeLabel(selected.mode)}</span>
-                <button
-                  type="button"
-                  className={styles.pathChip}
-                  title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)}
-                  onClick={() => void copySessionPath(selected)}
-                >
-                  <Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} />
-                  <span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span>
-                </button>
-              </span>
+          return <>
+            <div className={styles.stageBar}>
+              <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button>
+              <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={19} /></span>
+              <div className={styles.identityText}>
+                <div className={styles.identityMain}>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><span className={styles.statusDot} aria-hidden="true" />{selected.running ? (tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running')) : t('sessions.ended')}</span></div>
+                  <div className={styles.identitySub}>
+                    {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
+                    <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
+                    <span className={styles.modeChip} data-mode={selected.mode}><Icon name={selected.mode === 'yolo' ? 'sparkle' : 'shield'} size={10} />{modeLabel(selected.mode)}</span>
+                    {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={11} />{elapsed}</span>}
+                    {!selected.running && selected.exitCode != null && <span className={styles.exitCode}>{t('sessions.exitCode', { code: selected.exitCode })}</span>}
+                  </div>
+                </div>
+              </div>
+              <button type="button" className={styles.endBtn} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')}><Icon name="close" size={14} /><span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span></button>
             </div>
 
-            <button
-              type="button"
-              className={styles.endBtn}
-              onClick={() => void endSession(selected)}
-              disabled={!!busy}
-              aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')}
-              title={selected.running ? t('sessions.end') : t('sessions.closeTab')}
-            >
-              <Icon name="close" size={13} />
-              <span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span>
-            </button>
-          </div>;
+            {!selected.running && <div className={styles.endedStrip}><span className={styles.endedGlyph}><Icon name="info" size={14} /></span><span><strong>{t('sessions.sessionEndedBanner')}</strong> · {t('sessions.endedHintShort')}</span><button type="button" className={styles.endedRestart} disabled={!!busy} title={t('sessions.restartHint')} onClick={() => void restartOrCloneSession(selected, true)}><Icon name="refresh" size={12} /><span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></button></div>}
+
+            <div className={styles.terminalToolbar} role="toolbar" aria-label={t('sessions.terminalMenu')}>
+              <span className={styles.terminalContext} title={t('sessions.terminalDropHint')}><Icon name="terminal" size={13} /><span>{t('sessions.terminalInputHint')}</span></span>
+              <div className={styles.terminalActions}>
+                <button type="button" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind}><Icon name="search" size={15} /><span>{t('sessions.findOutput')}</span></button>
+                <button type="button" className={styles.toolButton} aria-label={t('sessions.copyOutput')} title={t('sessions.copyOutput')} onClick={() => void copyTerminalOutput(selected)}><Icon name="copy" size={15} /><span>{t('sessions.copyOutput')}</span></button>
+                {selected.running && <button type="button" className={styles.toolButton} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} onClick={() => toggleComposer()}><Icon name="pencil" size={15} /><span>{t('sessions.composerShort')}</span></button>}
+                <span className={styles.toolDivider} aria-hidden="true" />
+                {selected.running && <button type="button" className={styles.toolButton} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.interruptShort')}</span></button>}
+                {scrolledIds.has(selected.id) && <button type="button" className={styles.toolButton} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(selected.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={15} /><span>{t('sessions.jumpToBottom')}</span></button>}
+                <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
+                <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={18} /></button>
+              </div>
+            </div>
+
+            {findOpen && <div className={styles.findBar} role="search"><div className={styles.findField}><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
+              if (event.key === 'Enter') { event.preventDefault(); stepFindMatch(event.shiftKey ? -1 : 1); }
+              else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind(); }
+            }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div><span className={styles.findHint}>{t('sessions.findOutput')}</span><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)}><Icon name="arrowUp" size={14} /></button><button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)}><Icon name="arrowDown" size={14} /></button><button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} title={t('common.dialog.close') + ' (Esc)'} onClick={closeFind}><Icon name="close" size={14} /></button></div>}
+
+            <div ref={canvasRef} className={styles.canvas} data-drop={dropActive || undefined} onContextMenu={(event) => { event.preventDefault(); openTerminalMenu(selected, event.clientX, event.clientY); }}>
+              {sessions.map((session) => <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={session.id === selectedId} running={session.running} fontSize={fontSize} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge} />)}
+              {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={13} /><span>{copiedMessage}</span></div>}
+              {dropActive && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><Icon name="upload" size={22} /><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(selected) })}</span></div></div>}
+            </div>
+            {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+          </>;
         })()}
 
-        {selected && !selected.running && <div className={styles.endedStrip}>
-          <Icon name="lock" size={12} />
-          <span><strong>{t('sessions.sessionEndedBanner')}</strong> · {t('sessions.endedHintShort')}</span>
-          <button
-            type="button"
-            className={styles.endedRestart}
-            disabled={!!busy}
-            title={t('sessions.restartSession')}
-            onClick={() => void restartOrCloneSession(selected, true)}
-          >
-            <Icon name="refresh" size={12} />
-            <span>{busy === 'restart:' + selected.id ? t('sessions.restarting') : t('sessions.restartSession')}</span>
-          </button>
-        </div>}
-
-        <div
-          ref={canvasRef}
-          className={styles.canvas}
-          hidden={!sessions.length}
-          data-drop={dropActive || undefined}
-          onContextMenu={(event) => {
-            if (!selected) return;
-            event.preventDefault();
-            const handle = handles.current.get(selected.id);
-            setMenu({ kind: 'terminal', sessionId: selected.id, x: event.clientX, y: event.clientY, hasSelection: !!handle?.hasSelection() });
-          }}
-        >
-          {sessions.map((session) => (
-            <SessionTerminal
-              key={session.id}
-              sessionId={session.id}
-              label={t('sessions.terminalLabel', { tool: toolName(session) })}
-              active={session.id === selectedId}
-              running={session.running}
-              fontSize={fontSize}
-              theme={terminalMode}
-              cursorBlink={cursorBlink}
-              writers={writers}
-              pending={pending}
-              handles={handles}
-              bridge={bridge}
-            />
-          ))}
-
-          {selected && findOpen && <div className={styles.findBar} role="search">
-            <div className={styles.findField}>
-              <Icon name="search" size={13} />
-              <input
-                ref={findInputRef}
-                type="search"
-                value={findQuery}
-                placeholder={t('sessions.findPlaceholder')}
-                aria-label={t('sessions.findPlaceholder')}
-                onChange={(event) => setFindQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    stepFindMatch(event.shiftKey ? -1 : 1);
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    closeFind();
-                  }
-                }}
-              />
-              <span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>
-                {!findQuery.trim()
-                  ? ''
-                  : findMatches.length > 0
-                    ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length })
-                    : t('sessions.findNoMatch')}
-              </span>
-            </div>
-            <button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)}>
-              <Icon name="chevronLeft" size={14} />
-            </button>
-            <button type="button" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)}>
-              <Icon name="chevronRight" size={14} />
-            </button>
-            <button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} title={t('common.dialog.close') + ' (Esc)'} onClick={closeFind}>
-              <Icon name="close" size={14} />
-            </button>
-          </div>}
-
-          {selected && scrolledIds.has(selected.id) && <button
-            type="button"
-            className={styles.jumpBottom}
-            onClick={() => { const handle = handles.current.get(selected.id); handle?.scrollToBottom(); handle?.focus(); }}
-          >
-            <Icon name="arrowDown" size={13} />
-            <span>{t('sessions.jumpToBottom')}</span>
-          </button>}
-
-          {copiedState === 'selection' && <div className={styles.toastPill} role="status">
-            <Icon name="check" size={13} /><span>{t('sessions.selectionCopied')}</span>
-          </div>}
-
-          {dropActive && selected && <div className={styles.dropOverlay} aria-hidden="true">
-            <div className={styles.dropCard}>
-              <Icon name="upload" size={22} />
-              <strong>{t('sessions.dropHint')}</strong>
-              <span>{t('sessions.dropHintDetail', { tool: toolName(selected) })}</span>
-            </div>
-          </div>}
-
-          {selected && selected.running && composerOpen && <div className={styles.composerFloat} aria-label={t('sessions.composerTitle')}>
-            <div className={styles.composerHead}>
-              <span className={styles.composerTitle}><Icon name="pencil" size={12} />{t('sessions.composerTitle')}</span>
-              <span className={styles.composerHint}>{t('sessions.composerHint')}</span>
-              <button
-                type="button"
-                className={styles.composerClose}
-                aria-label={t('sessions.composerClose')}
-                title={t('sessions.composerClose') + ' (Esc)'}
-                onClick={() => toggleComposer(false)}
-              >
-                <Icon name="close" size={13} />
-              </button>
-            </div>
-            {libraryPrompts.length > 0 && <div className={styles.composerPrompts}>
-              <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
-              <div className={styles.composerPromptList}>
-                {libraryPrompts.map((prompt) => (
-                  <button
-                    key={prompt.id}
-                    type="button"
-                    className={styles.promptPill}
-                    title={prompt.body}
-                    onClick={() => setComposerText((prev) => prev ? prev + '\n' + prompt.body : prompt.body)}
-                  >
-                    {prompt.title}
-                  </button>
-                ))}
-              </div>
-            </div>}
-            <div className={styles.composerInputRow}>
-              <textarea
-                ref={composerInputRef}
-                rows={2}
-                className={styles.composerTextarea}
-                value={composerText}
-                placeholder={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
-                aria-label={t('sessions.composerPlaceholder', { tool: toolName(selected) })}
-                onChange={(event) => setComposerText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    void submitComposer();
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault();
-                    toggleComposer(false);
-                  }
-                }}
-              />
-              <button type="button" className={`button primary ${styles.sendBtn}`} onClick={() => void submitComposer()}>
-                <Icon name="arrowRight" size={14} />
-                <span>{t('sessions.sendInput')}</span>
-              </button>
-            </div>
-          </div>}
-        </div>
-
-        {loading && !sessions.length && <p className={styles.loading}>{t('sessions.loading')}</p>}
-
-        {showEmpty && !listError && <div className={styles.empty}>
-          <div className={styles.emptyHero}>
-            <span className={styles.emptyGlyph} aria-hidden="true">
-              <span className={styles.emptyGlyphDots}><i /><i /><i /></span>
-              <Icon name="terminal" size={26} />
-            </span>
-            <h2>{t('sessions.emptyTitle')}</h2>
-            <p>{t('sessions.emptyDetail')}</p>
-            <div className={styles.emptyActions}>
-              {terminalTools.length > 0 && <button type="button" className="button primary" onClick={() => openNewSessionDialog()}>
-                <Icon name="plus" size={14} />
-                <span>{t('sessions.newSession')}</span>
-              </button>}
-              <button type="button" className={terminalTools.length > 0 ? 'button' : 'button primary'} onClick={onOpenHome}>
-                <span>{t('sessions.openHome')}</span>
-                <Icon name="arrowRight" size={14} />
-              </button>
-            </div>
-          </div>
-
-          {terminalTools.length > 0 && <div className={styles.emptyRecents}>
-            <span className={styles.emptySectionLabel}>{t('sessions.quickTools')}</span>
-            <div className={styles.toolGrid}>
-              {terminalTools.slice(0, QUICK_TOOL_LIMIT).map((tool) => <button
-                key={tool.id}
-                type="button"
-                className={styles.toolChip}
-                title={t('sessions.quickToolTitle', { name: tool.name })}
-                onClick={() => openNewSessionDialog({ toolId: tool.id })}
-              >
-                <ToolIcon toolId={tool.id} size={20} />
-                <span className={styles.toolChipName}>{tool.name}</span>
-                <Icon name="play" size={11} />
-              </button>)}
-              {terminalTools.length > QUICK_TOOL_LIMIT && <button
-                type="button"
-                className={styles.toolChip}
-                data-more
-                onClick={() => openNewSessionDialog()}
-              >
-                <span className={styles.toolChipName}>{t('sessions.moreTools', { count: terminalTools.length - QUICK_TOOL_LIMIT })}</span>
-              </button>}
-            </div>
-          </div>}
-
-          {availableProjects.length > 0 && terminalTools.length > 0 && <div className={styles.emptyRecents}>
-            <span className={styles.emptySectionLabel}>{t('sessions.recentProjects')}</span>
-            <div className={styles.recentsGrid}>
-              {availableProjects.slice(0, 4).map((project) => {
-                const toolId = project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
-                  ? project.preferredTool
-                  : terminalTools[0]?.id;
-                return <button
-                  key={project.id}
-                  type="button"
-                  className={styles.recentCard}
-                  onClick={() => openNewSessionDialog({ projectId: project.id, toolId: project.preferredTool ?? undefined })}
-                >
-                  {toolId ? <ToolIcon toolId={toolId} size={22} /> : <Icon name="folder" size={18} />}
-                  <span className={styles.recentCopy}>
-                    <strong>{project.name}</strong>
-                    <small>{project.path ? shortPath(displayPath(project.path)) : t('sessions.placeUnknown')}</small>
-                  </span>
-                  <span className={styles.recentAction} aria-hidden="true"><Icon name="play" size={12} /></span>
-                </button>;
-              })}
-            </div>
-          </div>}
-
-          <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}>
-            <kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span>
-            <span className={styles.shortcutSep} aria-hidden="true">·</span>
-            <kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span>
-          </span>
-        </div>}
+        {loading && !sessions.length && <div className={styles.loading}><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
+        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
 
@@ -2220,261 +1109,61 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (!session) return null;
       const name = toolName(session);
       const handle = handles.current.get(session.id);
-      return createPortal(<div
-        ref={menuRef}
-        className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`}
-        role="menu"
-        aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')}
-        style={menuBox ?? { top: 0, left: -10000 }}
-        onKeyDown={menuNavigate}
-        onContextMenu={(event) => event.preventDefault()}
-        onClick={() => setMenu(null)}
-      >
+      return createPortal(<div ref={menuRef} className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`} role="menu" aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')} style={menuBox ?? { top: 0, left: -10000 }} onKeyDown={menuNavigate} onContextMenu={(event) => event.preventDefault()} onClick={() => setMenu(null)}>
         {menu.kind === 'terminal' ? <>
-          <button role="menuitem" disabled={!menu.hasSelection} onClick={() => { handle?.copySelection(); handle?.focus(); }}>
-            <Icon name="copy" size={14} /><span>{t('sessions.copySelection')}</span><kbd>{modLabel}+C</kbd>
-          </button>
-          <button role="menuitem" disabled={!session.running} onClick={() => void pasteIntoSession(session)}>
-            <Icon name="clipboard" size={14} /><span>{t('sessions.pasteClipboard')}</span><kbd>{modLabel}+V</kbd>
-          </button>
-          <button role="menuitem" onClick={() => handle?.selectAll()}>
-            <Icon name="check" size={14} /><span>{t('sessions.selectAll')}</span>
-          </button>
+          <button role="menuitem" disabled={!menu.hasSelection} onClick={() => { handle?.copySelection(); handle?.focus(); }}><Icon name="copy" size={14} /><span>{t('sessions.copySelection')}</span><kbd>{modLabel}+C</kbd></button>
+          <button role="menuitem" disabled={!session.running} onClick={() => void pasteIntoSession(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.pasteClipboard')}</span><kbd>{modLabel}+V</kbd></button>
+          <button role="menuitem" onClick={() => handle?.selectAll()}><Icon name="check" size={14} /><span>{t('sessions.selectAll')}</span></button>
           <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => toggleComposer(true)}>
-            <Icon name="pencil" size={14} /><span>{t('sessions.composerShort')}</span><kbd>{modLabel}+Shift+M</kbd>
-          </button>}
-          <button role="menuitem" onClick={openFind}>
-            <Icon name="search" size={14} /><span>{t('sessions.findOutput')}</span><kbd>{modLabel}+Shift+F</kbd>
-          </button>
-          <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>
-            <Icon name="clipboard" size={14} /><span>{t('sessions.copyOutput')}</span>
-          </button>
-          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>
-            <Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span>
-          </button>}
-          {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>
-            <Icon name="arrowRight" size={14} /><span>{t('sessions.openFolder')}</span>
-          </button>}
-          <button role="menuitem" onClick={() => { handle?.clear(); handle?.focus(); }}>
-            <Icon name="trash" size={14} /><span>{t('sessions.clearScreen')}</span>
-          </button>
+          {session.running && <button role="menuitem" onClick={() => toggleComposer(true)}><Icon name="pencil" size={14} /><span>{t('sessions.composerShort')}</span><kbd>{modLabel}+Shift+M</kbd></button>}
+          <button role="menuitem" onClick={openFind}><Icon name="search" size={14} /><span>{t('sessions.findOutput')}</span><kbd>{modLabel}+Shift+F</kbd></button>
+          <button role="menuitem" onClick={() => void copyTerminalOutput(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.copyOutput')}</span></button>
+          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
+          {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
+          <button role="menuitem" title={t('sessions.clearViewHint')} onClick={() => { handle?.clear(); handle?.focus(); }}><Icon name="trash" size={14} /><span>{t('sessions.clearView')}</span></button>
           <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>
-            <Icon name="alert" size={14} /><span>{t('sessions.sendInterrupt')}</span>
-          </button>}
-          <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}>
-            <Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span>
-          </button>
+          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.sendInterrupt')}</span></button>}
+          <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
+          <button role="menuitem" onClick={() => setAppearanceOpen(true)}><Icon name="sliders" size={14} /><span>{t('sessions.displaySettings')}</span></button>
           <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" disabled={fontSize <= MIN_FONT_SIZE} onClick={() => updateFontSize(fontSize - 1)}>
-            <span aria-hidden="true" className={styles.menuGlyph}>A−</span><span>{t('sessions.fontSizeDown')}</span><kbd>{modLabel}+-</kbd>
-          </button>
-          <button role="menuitem" onClick={() => updateFontSize(DEFAULT_FONT_SIZE)}>
-            <Icon name="refresh" size={14} /><span>{t('sessions.fontSizeReset', { size: DEFAULT_FONT_SIZE })}</span><kbd>{modLabel}+0</kbd>
-          </button>
-          <button role="menuitem" disabled={fontSize >= MAX_FONT_SIZE} onClick={() => updateFontSize(fontSize + 1)}>
-            <Icon name="plus" size={14} /><span>{t('sessions.fontSizeUp')}</span><kbd>{modLabel}+=</kbd>
-          </button>
-          <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" aria-pressed={themePreference === 'auto'} onClick={() => setTerminalTheme('auto')}>
-            <Icon name="monitor" size={14} /><span>{t('sessions.termThemeAuto')}</span>{themePreference === 'auto' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
-          <button role="menuitem" aria-pressed={themePreference === 'dark'} onClick={() => setTerminalTheme('dark')}>
-            <Icon name="moon" size={14} /><span>{t('sessions.termThemeDark')}</span>{themePreference === 'dark' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
-          <button role="menuitem" aria-pressed={themePreference === 'light'} onClick={() => setTerminalTheme('light')}>
-            <Icon name="sun" size={14} /><span>{t('sessions.termThemeLight')}</span>{themePreference === 'light' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
-          <button role="menuitem" aria-pressed={cursorBlink} onClick={toggleCursorBlink}>
-            <Icon name="terminal" size={14} /><span>{t('sessions.cursorBlink')}</span>{cursorBlink && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
-          <button role="menuitem" aria-pressed={soundEnabled} onClick={toggleSound}>
-            <Icon name="info" size={14} /><span>{t('sessions.sound')}</span>{soundEnabled && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
-          <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>
-            <Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span>
-          </button>
+          <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
-          <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}>
-            <Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>
-            {pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}
-          </button>
+          <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}><Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>{pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
           <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>
-            {t('sessions.sendInterrupt')}
-          </button>}
-          <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}>
-            {session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}
-          </button>
-          <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>
-            {t('sessions.copyOutput')}
-          </button>
-          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>
-            {t('sessions.copyPath')}
-          </button>}
-          {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>
-            {t('sessions.openFolder')}
-          </button>}
-          <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>
-            {session.running ? t('sessions.end') : t('sessions.removeSession')}
-          </button>
+          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}>{t('sessions.sendInterrupt')}</button>}
+          <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</button>
+          <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>{t('sessions.copyOutput')}</button>
+          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>{t('sessions.copyPath')}</button>}
+          {session.projectId && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>{t('sessions.openFolder')}</button>}
+          <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>{session.running ? t('sessions.end') : t('sessions.removeSession')}</button>
         </>}
       </div>, document.body);
     })()}
 
-    <GuideDialog
-      open={newDialogOpen}
-      title={t('sessions.newSessionDialogTitle')}
-      hint={t('sessions.newSessionDialogHint')}
-      onClose={() => setNewDialogOpen(false)}
-    >
+    <GuideDialog open={newDialogOpen} title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
       <div className={styles.dialogForm}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
-
-        <div className={styles.dialogField}>
-          <span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span>
-          <FilterSelect
-            label={t('sessions.pickToolLabel')}
-            value={effectiveLaunchToolId}
-            options={cliSelectOptions}
-            placeholder={t('home.launcher.pickTool')}
-            searchLabel={t('sessions.searchCliTool')}
-            onChange={(value) => {
-              setLaunchToolId(value);
-              const nextTool = terminalTools.find((item) => item.id === value);
-              const nextMode = preferredLaunchMode(
-                launchSettings,
-                workspaceValue.startsWith('project:') ? 'project' : 'cli',
-                !!nextTool?.yoloAvailable,
-              );
-              setLaunchMode(nextMode);
-            }}
-          />
+        <div className={styles.dialogPrimaryGrid}>
+          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={(value) => {
+            setLaunchToolId(value);
+            const nextTool = terminalTools.find((item) => item.id === value);
+            setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
+          }} /></div>
+          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
+            setWorkspaceValue(value);
+            if (value.startsWith('project:')) {
+              const project = availableProjects.find((item) => 'project:' + item.id === value);
+              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
+            }
+          }} /></div>
         </div>
-
-        <div className={styles.dialogField}>
-          <span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span>
-          <FilterSelect
-            label={t('sessions.pickWorkspaceLabel')}
-            value={workspaceValue}
-            options={workspaceSelectOptions}
-            searchable
-            searchLabel={t('sessions.searchWorkspace')}
-            onPickFolder={() => void pickCustomWorkspaceFolder()}
-            pickFolderLabel={t('sessions.pickFolder')}
-            onChange={(value) => {
-              setWorkspaceValue(value);
-              if (value.startsWith('project:')) {
-                const projId = value.slice('project:'.length);
-                const proj = availableProjects.find((item) => item.id === projId);
-                if (proj?.preferredTool && terminalTools.some((item) => item.id === proj.preferredTool)) {
-                  setLaunchToolId(proj.preferredTool);
-                }
-              }
-            }}
-          />
-        </div>
-
-        <div className={styles.dialogField}>
-          <span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span>
-          <div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={launchMode === 'normal'}
-              className={styles.modeCard}
-              onClick={() => setLaunchMode('normal')}
-            >
-              <span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={15} /></span>
-              <span className={styles.modeCardCopy}>
-                <strong>{t('sessions.modeNormal')}</strong>
-                <small>{t('sessions.modeNormalDesc')}</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={launchMode === 'yolo'}
-              disabled={!selectedLaunchTool?.yoloAvailable}
-              title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined}
-              className={styles.modeCard}
-              onClick={() => setLaunchMode('yolo')}
-            >
-              <span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={15} /></span>
-              <span className={styles.modeCardCopy}>
-                <strong>{t('sessions.modeYolo')}</strong>
-                <small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small>
-              </span>
-            </button>
-          </div>
-          {selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}>
-            <input
-              type="checkbox"
-              checked={resumeLatest}
-              onChange={(event) => setResumeLatest(event.target.checked)}
-            />
-            <span>{t('sessions.resumeLatest')}</span>
-          </label>}
-        </div>
-
-        <div className={styles.dialogField}>
-          <span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span>
-          <textarea
-            rows={3}
-            className={styles.dialogTextarea}
-            value={initialPrompt}
-            placeholder={t('sessions.initialPromptPlaceholder')}
-            aria-label={t('sessions.initialPromptLabel')}
-            onChange={(event) => setInitialPrompt(event.target.value)}
-          />
-          {libraryPrompts.length > 0 && <div className={styles.dialogPrompts}>
-            <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
-            {libraryPrompts.slice(0, 6).map((prompt) => (
-              <button
-                key={prompt.id}
-                type="button"
-                className={styles.promptPill}
-                title={prompt.body}
-                onClick={() => setInitialPrompt(prompt.body)}
-              >
-                {prompt.title}
-              </button>
-            ))}
-          </div>}
-        </div>
-
-        <div className={styles.dialogSummary}>
-          {effectiveLaunchToolId && <ToolIcon toolId={effectiveLaunchToolId} size={20} />}
-          <span>
-            {t('sessions.launchSummary', {
-              tool: selectedLaunchTool?.name ?? '',
-              place: workspaceValue.startsWith('project:')
-                ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome')
-                : workspaceValue.startsWith('custom:')
-                  ? shortPath(displayPath(workspaceValue.slice('custom:'.length)))
-                  : t('sessions.workspaceHome'),
-              mode: modeLabel(launchMode),
-            })}
-          </span>
-        </div>
-
-        <div className={styles.dialogActions}>
-          <button type="button" className="button" onClick={() => setNewDialogOpen(false)}>
-            {t('common.dialog.cancel')}
-          </button>
-          <button
-            type="button"
-            className="button primary"
-            data-dialog-save
-            disabled={launchingNew || !effectiveLaunchToolId}
-            onClick={() => void launchFromDialog()}
-          >
-            <Icon name="play" size={14} />
-            <span>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</span>
-          </button>
-        </div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
+          <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+        </div>{selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} />{libraryPrompts.length > 0 && <div className={styles.dialogPrompts}><span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>{libraryPrompts.slice(0, 6).map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => setInitialPrompt(prompt.body)}>{prompt.title}</button>)}</div>}</div>
+        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
+        <div className={styles.dialogActions}><button type="button" className="button" onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</button><button type="button" className="button primary" data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()}><Icon name="play" size={14} /><span>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</span></button></div>
       </div>
     </GuideDialog>
   </div>;

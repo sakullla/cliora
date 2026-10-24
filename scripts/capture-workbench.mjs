@@ -145,7 +145,12 @@ async function install(page, initialTheme, empty = false) {
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's4', dataBase64: data } });
       },
     });
-  }, { theme: initialTheme, transcripts: { s1: b64(transcript), s2: b64(claudeTranscript), s3: b64(finished), s4: b64(openCodeTranscript) }, blank: empty, language: english ? 'en' : 'zh' });
+  }, { theme: initialTheme, transcripts: {
+    s1: b64(Array.from({ length: 70 }, (_, index) => '  \u001b[2m历史输出 ' + String(index + 1).padStart(2, '0') + ' · session replay preserved\u001b[0m').join('\r\n') + '\r\n\u001b]0;重构终端工作区与多会话交互体验\u0007' + transcript),
+    s2: b64('\u001b]0;实现文章目录与移动端折叠\u0007' + claudeTranscript),
+    s3: b64(finished),
+    s4: b64(openCodeTranscript),
+  }, blank: empty, language: english ? 'en' : 'zh' });
 }
 
 const manifest = [];
@@ -183,6 +188,19 @@ const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 for (const theme of themes) {
 for (const width of widths) {
   await shot('workbench-active-' + theme + '-' + width, theme, width);
+  await shot('workbench-scrolled-' + theme + '-' + width, theme, width, async (page) => {
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    const screenBox = await stage.locator('.xterm-screen:visible').boundingBox();
+    await page.mouse.move(screenBox.x + screenBox.width / 2, screenBox.y + screenBox.height / 2);
+    await page.mouse.wheel(0, -480);
+    await stage.getByRole('button', { name: copy('回到最新输出', 'Jump to latest output'), exact: true }).waitFor({ state: 'visible' });
+    const box = await stage.locator('.xterm-viewport:visible').boundingBox();
+    await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
+  });
+  await shot('workbench-appearance-' + theme + '-' + width, theme, width, async (page) => {
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await stage.getByRole('button', { name: copy('终端显示', 'Terminal appearance'), exact: true }).click();
+  });
   await shot('workbench-composer-' + theme + '-' + width, theme, width, async (page) => {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
     const screen = stage.locator('.xterm-screen:visible');
@@ -234,7 +252,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的会话栏、终端画布、快捷输入与查找、已结束提示、新建会话对话框和空状态，覆盖浅色与深色主题以及 1360 / 900 / 640 三档宽度。',
+  '捕获工作台的长标题会话栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框和空状态，覆盖浅色与深色主题以及 1360 / 900 / 640 三档宽度。',
   '',
   '执行：',
   '',
