@@ -172,7 +172,7 @@ async function openEditMcp(page: Page, language: 'zh' | 'en') {
   await page.getByRole('button', { name: text.edit, exact: true }).click();
   const dialog = page.getByRole('dialog', { name: text.dialog });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'stdio', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('radio', { name: 'stdio', exact: true })).toHaveAttribute('aria-checked', 'true');
   await dialog.getByRole('textbox', { name: text.nameAria, exact: true }).fill(nameValue);
   await dialog.getByRole('textbox', { name: text.argRow, exact: true }).fill(argValue);
   await dialog.locator('.guide-dialog-body').evaluate((node) => { node.scrollTop = 0; });
@@ -420,7 +420,7 @@ for (const theme of ['light', 'dark'] as const) {
     const page = await context.newPage();
     await installLibrary(page, theme, 'zh');
     const dialog = await openEditMcp(page, 'zh');
-    const http = dialog.getByRole('button', { name: 'HTTP', exact: true });
+    const http = dialog.getByRole('radio', { name: 'HTTP', exact: true });
     const input = dialog.getByRole('textbox', { name: copy.zh.nameAria, exact: true });
     const save = dialog.locator('[data-dialog-save]');
     const background = (locator: typeof http) => locator.evaluate((el) => getComputedStyle(el).backgroundColor);

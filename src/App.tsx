@@ -24,6 +24,7 @@ const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((mo
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
+import type { LibraryMcpSpotlight } from './features/library/LibraryPage';
 import { SessionWorkbench, failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from './features/sessions/SessionWorkbench';
 import sessionStyles from './features/sessions/SessionWorkbench.module.css';
 import { applyStoredLanguage, readStoredLanguage } from './i18n';
@@ -44,7 +45,8 @@ type SettingsTab = 'general' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
   | { target: 'project'; id: string; token: number }
-  | { target: 'library'; kind: LibraryKind; id: string; token: number };
+  | { target: 'library'; kind: LibraryKind; id: string; token: number }
+  | ({ target: 'mcp' } & LibraryMcpSpotlight);
 
 const pages: { id: Page; glyph: IconName }[] = [
   { id: 'home', glyph: 'home' },
@@ -103,6 +105,7 @@ export default function App() {
   const activePage = useRef<Page>(page);
   activePage.current = page;
   const workspaceDirty = useRef(false);
+  const mcpIntentToken = useRef(0);
   const pendingCatalog = useRef<AdapterCatalog | null>(null);
   const refreshSequence = useRef(0);
   const onWorkspaceDirtyChange = useCallback((dirty: boolean) => {
@@ -333,6 +336,10 @@ export default function App() {
     if (await go('library')) setSpotlight({ target: 'library', kind, id, token: Date.now() });
   }
 
+  async function openMcpLibrary(definitionId: string) {
+    if (await go('library')) setSpotlight({ target: 'mcp', id: definitionId, token: ++mcpIntentToken.current, source: 'connections' });
+  }
+
   // Same command and confirmation flow as the Records list, with Records' default mode.
   function openWorkbenchSession(sessionId: string) {
     setWorkbenchFailure(null);
@@ -529,9 +536,9 @@ export default function App() {
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
         </div>}
-        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
+        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <SessionWorkbench active={page === 'sessions'} tools={visibleDescriptors} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} />}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}

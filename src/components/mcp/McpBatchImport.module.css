@@ -1,0 +1,23 @@
+.batch { display: grid; gap: 14px; min-width: 0; }
+.intro, .hint { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.55; }
+.list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.item { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.item[data-state='written'] { border-color: color-mix(in srgb, var(--success) 45%, var(--line)); }
+.item[data-state='failed'] { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
+.rowHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.choose { display: flex; align-items: flex-start; gap: 10px; min-width: 0; cursor: pointer; }
+.choose input { flex: none; margin-top: 3px; }
+.choose > span { display: grid; gap: 3px; min-width: 0; }
+.choose strong { color: var(--text); overflow-wrap: anywhere; }
+.choose small { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.state { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.error { margin: 9px 0 0; color: var(--danger); font-size: var(--fs-caption); line-height: 1.5; white-space: pre-wrap; }
+.conflicts { display: grid; gap: 10px; margin-top: 12px; }
+.diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.replace { display: flex; align-items: center; gap: 8px; color: var(--warning); font-size: var(--fs-body); }
+.results { display: grid; gap: 5px; margin-top: 10px; padding: 9px 11px; border-radius: var(--radius); background: var(--surface-2); }
+.results p { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--text-2); font-size: var(--fs-caption); white-space: pre-wrap; }
+.results p:first-child { color: var(--success); }
+.results p[data-status='failed'] { color: var(--danger); }
+.primary, .primary:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent); }
+@media (max-width: 680px) { .diff { grid-template-columns: minmax(0, 1fr); } .rowHead { display: grid; } .state { padding-left: 27px; } }

@@ -6,8 +6,9 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
-import { applyParsedServer, blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
+import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
 import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
@@ -29,7 +30,7 @@ function filledKeys(record: Record<string, string> | null | undefined) {
 type EditorState = { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] };
 const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, state.draft.transport, state.draft.command, keptMcpArgs(state.draft.args), state.draft.url, recordOfRows(state.envRows), recordOfRows(state.headerRows)]);
 
-export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void }) {
+export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
@@ -50,6 +51,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const { setError, setNotice } = useFeedback();
   const [dialogError, setDialogError] = useState('');
   const [search, setSearch] = useState('');
+  const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -98,12 +100,16 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     editMcp();
   }, [createSignal]);
 
-  function importJson(parsed: McpParsedServer) {
-    if (!draft) return;
-    const next = applyParsedServer(draft, parsed);
-    setDraft(next.draft);
-    setEnvRows(next.envRows);
-    setHeaderRows(next.headerRows);
+  function importJson(parsed: McpParsedServer[]) {
+    const seen = new Set<string>();
+    setBatchItems(parsed.map((server, index): McpBatchItem => {
+      const name = server.name.trim() || (parsed.length === 1 ? draft?.name.trim() ?? '' : '');
+      const duplicate = !!name && (seen.has(name) || definitions.some(item => item.name === name));
+      seen.add(name);
+      return { key: index + ':' + name, blocked: duplicate ? t('tools.mcp.batchDuplicate', { name }) : undefined,
+        draft: { ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, url: server.url,
+          env: server.env, headers: server.headers, inLibrary: true } };
+    }));
     setDialogError('');
   }
 
@@ -200,7 +206,19 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const library = definitions.filter((item) => item.inLibrary !== false);
   const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
 
+  const handledSpotlight = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !spotlight || handledSpotlight.current === spotlight.token) return;
+    if (search) { setSearch(''); return; }
+    const item = definitions.find(entry => entry.id === spotlight.id && entry.inLibrary !== false);
+    if (!item) return;
+    handledSpotlight.current = spotlight.token;
+    document.querySelector<HTMLElement>('[data-mcp-id="' + CSS.escape(item.id) + '"]')?.scrollIntoView({ block: 'center' });
+    editMcp(item);
+  }, [active, spotlight?.id, spotlight?.token, definitions, search]);
+
   return <div className={styles.layout}>
+    {onOpenConnections && <button type="button" className={styles.editButton} onClick={onOpenConnections}><Icon name="arrowLeft" size={14} />{t('tools.mcp.returnConnections')}</button>}
     <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
     <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
       {shown.length ? shown.map((item) => {
@@ -211,7 +229,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         const headerCount = headerKeys.length;
         const summary = mcpSummary(item);
         const keyList = [...envKeys, ...headerKeys].join('\n');
-        return <article className={styles.row} data-placed={places.length > 0 || undefined} key={item.id}>
+        return <article className={styles.row} data-mcp-id={item.id} data-placed={places.length > 0 || undefined} key={item.id}>
           <span className={styles.rowIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={17} /></span>
           <div className={styles.rowMain}>
             <div className={styles.rowTitle}>
@@ -250,7 +268,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           </div>
         </div> : null}
     </div>
-    <GuideDialog wide open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => void closeEditor()}>
+    <GuideDialog wide open={!!draft && !batchItems} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => void closeEditor()}>
       {draft && <>
         <div className={styles.editor}>
           <div className={styles.editorForm}>
@@ -267,6 +285,12 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button>
         </div>
       </>}
+    </GuideDialog>
+    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchLibraryHint')} onClose={() => setBatchItems(null)}>
+      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)}
+        onPreview={value => native.previewMcpDraft(value, [])}
+        onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: true, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
+        onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); setNotice(t('library.resources.saved')); }} />}
     </GuideDialog>
   </div>;
 }
