@@ -56,6 +56,8 @@ export default {
   summary: '{{running}} running · {{ended}} ended',
   quickTools: 'Start a CLI',
   quickToolTitle: 'New {{name}} session in the workbench',
+  launchpadTitle: 'Choose a starting point',
+  launchpadHint: 'Start from a CLI or recent project',
   moreTools: 'All tools ({{count}} more)',
   recentProjects: 'Start from a recent project',
   shortcutsHint: 'Alt ↑ ↓ switches sessions · Alt N starts a new one',

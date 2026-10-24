@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
+import type { KeyboardEvent } from 'react';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
-import { navigateChoices } from '../../lib/choiceNavigation';
 import type { WorkbenchSession } from '../../types/launch';
 import styles from './SessionWorkbench.module.css';
 
@@ -47,6 +47,76 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
     return item.tone === 'live' ? t('sessions.stateStreaming') : t('sessions.running');
   };
 
+  function onListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)')];
+    const current = tabs.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? tabs.length - 1
+        : (current + (event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    const target = tabs[next];
+    const sessionId = target.dataset.sessionId;
+    if (sessionId) onSelect(sessionId);
+    target.focus();
+    // The activated terminal focuses itself after render. Keep keyboard navigation on the rail.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (target.isConnected) target.focus({ preventScroll: true });
+    }));
+  }
+
+  const pinnedSessions = sessions.filter((item) => item.pinned);
+  const runningSessions = sessions.filter((item) => !item.pinned && item.session.running);
+  const endedSessions = sessions.filter((item) => !item.pinned && !item.session.running);
+  const groups = [
+    { key: 'pinned', label: t('sessions.pinSession'), items: pinnedSessions },
+    { key: 'running', label: t('sessions.running'), items: runningSessions },
+    { key: 'ended', label: t('sessions.ended'), items: endedSessions },
+  ].filter((group) => group.items.length > 0);
+
+  const renderSession = (item: RailSession) => {
+    const { session } = item;
+    const selected = session.id === selectedId;
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined}>
+      <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={[item.title, item.directory || item.place].filter(Boolean).join('\n')}
+        onClick={() => onSelect(session.id)}
+        onContextMenu={(event) => { event.preventDefault(); onOpenMenu(session, event.clientX, event.clientY); }}
+        onKeyDown={(event) => {
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenMenu(session, rect.left + 24, rect.bottom - 6);
+          }
+        }}>
+        <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={20} /><span className={styles.sessionStateDot} data-tone={item.tone} aria-hidden="true" /></span>
+        <span className={styles.sessionBody}>
+          <span className={styles.sessionTop}>
+            {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={11} /></span>}
+            <strong>{item.title || item.name}</strong>
+            <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
+          </span>
+          <span className={styles.sessionSub}><span className={styles.sessionPlace}>{item.title ? item.name + ' · ' + item.place : item.place}</span></span>
+          <span className={styles.sessionFoot}>
+            <span className={styles.sessionActivity} data-tone={item.tone}>{activityLabel(item)}</span>
+            <span className={styles.sessionBadges}>
+              {!session.running && session.exitCode != null && session.exitCode !== 0 && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
+              <span className={styles.modeTag} data-mode={session.mode}>{session.mode === 'yolo' ? <Icon name="sparkle" size={10} /> : <Icon name="shield" size={10} />}{t(session.mode === 'yolo' ? 'sessions.modeYolo' : 'sessions.modeNormal')}</span>
+            </span>
+          </span>
+        </span>
+      </button>
+      <div className={styles.rowActions}>
+        <button type="button" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          onOpenMenu(session, rect.left, rect.bottom + 5);
+        }}><Icon name="more" size={15} /></button>
+        {!session.running && <button type="button" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)}><Icon name="close" size={12} /></button>}
+      </div>
+    </div>;
+  };
+
   return <aside className={styles.rail} aria-label={t('sessions.listLabel')}>
     <div className={styles.railHead}>
       <div className={styles.railTitleRow}>
@@ -75,47 +145,11 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
       </div>}
     </div>
 
-    <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={navigateChoices}>
-      {sessions.map((item) => {
-        const { session } = item;
-        const selected = session.id === selectedId;
-        return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined}>
-          <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={[item.title, item.directory || item.place].filter(Boolean).join('\n')}
-            onClick={() => onSelect(session.id)}
-            onContextMenu={(event) => { event.preventDefault(); onOpenMenu(session, event.clientX, event.clientY); }}
-            onKeyDown={(event) => {
-              if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-                event.preventDefault();
-                const rect = event.currentTarget.getBoundingClientRect();
-                onOpenMenu(session, rect.left + 24, rect.bottom - 6);
-              }
-            }}>
-            <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={20} /><span className={styles.sessionStateDot} data-tone={item.tone} aria-hidden="true" /></span>
-            <span className={styles.sessionBody}>
-              <span className={styles.sessionTop}>
-                {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={11} /></span>}
-                <strong>{item.title || item.name}</strong>
-                <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
-              </span>
-              <span className={styles.sessionSub}><span className={styles.sessionPlace}>{item.title ? item.name + ' · ' + item.place : item.place}</span></span>
-              <span className={styles.sessionFoot}>
-                <span className={styles.sessionActivity} data-tone={item.tone}>{activityLabel(item)}</span>
-                <span className={styles.sessionBadges}>
-                  {!session.running && session.exitCode != null && session.exitCode !== 0 && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
-                  <span className={styles.modeTag} data-mode={session.mode}>{session.mode === 'yolo' ? <Icon name="sparkle" size={10} /> : <Icon name="shield" size={10} />}{t(session.mode === 'yolo' ? 'sessions.modeYolo' : 'sessions.modeNormal')}</span>
-                </span>
-              </span>
-            </span>
-          </button>
-          <div className={styles.rowActions}>
-            <button type="button" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              onOpenMenu(session, rect.left, rect.bottom + 5);
-            }}><Icon name="more" size={15} /></button>
-            {!session.running && <button type="button" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)}><Icon name="close" size={12} /></button>}
-          </div>
-        </div>;
-      })}
+    <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} title={t('sessions.shortcutsHint')} onKeyDown={onListKeyDown}>
+      {groups.map((group) => <div key={group.key} className={styles.sessionGroup} role="presentation">
+        <div className={styles.groupLabel} role="presentation"><span>{group.label}</span><span className={styles.groupCount}>{group.items.length}</span></div>
+        {group.items.map(renderSession)}
+      </div>)}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.ghostButton} onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</button></div>}
     </div>
 

@@ -56,6 +56,8 @@ export default {
   summary: '{{running}} 运行中 · {{ended}} 已结束',
   quickTools: '直接启动 CLI',
   quickToolTitle: '在工作台新建 {{name}} 会话',
+  launchpadTitle: '选择起点',
+  launchpadHint: '从 CLI 或最近项目开始',
   moreTools: '全部工具（还有 {{count}} 个）',
   recentProjects: '从最近项目开始',
   shortcutsHint: 'Alt ↑ ↓ 切换会话 · Alt N 新建会话',
