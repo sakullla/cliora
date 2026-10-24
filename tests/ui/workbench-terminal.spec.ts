@@ -53,10 +53,10 @@ async function installWorkbenchMock(page: Page) {
   });
 }
 
-async function openWorkbench(page: Page) {
+async function openWorkbench(page: Page, english = false) {
   await installWorkbenchMock(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('navigation', { name: english ? 'Pages' : '页面' }).getByRole('button', { name: english ? 'Workbench' : '工作台', exact: true }).click();
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
   await expect(page.getByTitle('拖入文件可插入路径')).toHaveCount(0);
   const input = page.locator('.xterm-helper-textarea:visible');
@@ -169,6 +169,51 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 's2'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'ended');
   await expect(stage.locator('footer')).toContainText('已结束');
+});
+
+test('English idle live idle transitions preserve status, title, and footer geometry', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page, true);
+  const root = page.locator('[data-term-theme]');
+  const stage = page.getByRole('region', { name: 'Current session' });
+  const statusIcon = root.locator('[data-activity-slot="status"]');
+  const title = stage.getByRole('heading', { level: 2 });
+  const longTitle = 'A deliberately long session title that must remain truncated while output activity changes';
+  const readLayout = () => page.evaluate(() => {
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    };
+    const chip = document.querySelector('[data-activity-slot="status"]')!.parentElement!;
+    const footerState = document.querySelector('[data-activity-slot="footer"]')!.parentElement!;
+    return {
+      chip: box(chip),
+      title: box(chip.parentElement!.querySelector('h2')!),
+      footerNext: box(footerState.nextElementSibling!),
+    };
+  });
+
+  await page.evaluate((value) => (window as unknown as { __output: (text: string) => void }).__output('\u001b]2;' + value + '\u0007'), longTitle);
+  await expect(title).toContainText('A deliberately long session title');
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'idle');
+  expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  const idleLayout = await readLayout();
+
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('current output\r\n'));
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
+  expect(await readLayout()).toEqual(idleLayout);
+
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'idle');
+  expect(await readLayout()).toEqual(idleLayout);
+
+  for (const width of [900, 640, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    if (width <= 720) await expect(root).toHaveAttribute('data-narrow', 'true');
+    if (width <= 620) await expect(root).toHaveAttribute('data-compact', 'true');
+    await expect(stage.locator('footer')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
 });
 
 test('session actions are available from the rail card', async ({ page }) => {

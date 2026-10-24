@@ -555,6 +555,9 @@
 .statusChip[data-tone='idle'] { background: color-mix(in srgb, var(--term-success) 9%, transparent); color: var(--term-success); }
 .statusChip[data-tone='bell'] { background: color-mix(in srgb, var(--term-warning) 16%, transparent); color: var(--term-warning); }
 .statusChip[data-tone='error'] { background: color-mix(in srgb, var(--term-danger) 15%, transparent); color: var(--term-danger); }
+.statusLabel { display: inline-grid; }
+.statusLabel > span { grid-area: 1 / 1; }
+.statusLabel > span[aria-hidden='true'] { visibility: hidden; }
 .statusDot { width: 10px; height: 10px; color: inherit; }
 .pathChip {
   display: inline-flex;
