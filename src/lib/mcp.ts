@@ -151,7 +151,6 @@ function stringMap(value: unknown, issue: McpParseIssue, invalid: McpParseIssue[
   }
   for (const [key, item] of Object.entries(value)) {
     if (typeof item === 'string') output[key] = item;
-    else if (typeof item === 'number' || typeof item === 'boolean') output[key] = String(item);
     else invalid.push(issue);
   }
   return output;
@@ -180,7 +179,7 @@ export function parseMcpServerCollection(text: string): McpParsedServer[] {
   const parsed = parseLenient(text);
   if (!plainObject(parsed)) return [];
   const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : null;
-  const map = wrapped ?? (!looksLikeServer(parsed) && Object.values(parsed).some(plainObject) ? parsed : null);
+  const map = wrapped ?? (!looksLikeServer(parsed) ? parsed : null);
   const entries: Array<[string, unknown]> = map ? Object.entries(map) : [['', parsed]];
   const total = entries.length;
   return entries.map(([name, value]) => {

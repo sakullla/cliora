@@ -276,6 +276,41 @@ test('paste review returns to the original source for duplicate and semantic cor
   await expect(review.getByRole('checkbox', { name: '选择导入 corrected' })).toBeChecked();
 });
 
+for (const surface of ['library', 'current CLI'] as const) {
+  test(`${surface} paste review rejects non-string maps and preserves bare entry names`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    if (surface === 'library') {
+      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+      await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+      await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
+    } else {
+      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+      await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+      await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
+    }
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: '粘贴导入' }).click();
+    await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(JSON.stringify({
+      local: { command: 'npx', env: { ROOT: '/tmp', PORT: 3000, ENABLED: true } },
+      remote: { url: 'https://example.test/mcp', headers: { Authorization: 'Bearer token', 'X-Retry': 2 } },
+      broken: 7,
+    }));
+    await dialog.getByRole('button', { name: '解析并填入' }).click();
+    const review = page.getByRole('dialog', { name: '审查 MCP 导入' });
+    await expect(review.getByText('local', { exact: true })).toBeVisible();
+    await expect(review.getByText('remote', { exact: true })).toBeVisible();
+    await expect(review.getByText('broken', { exact: true })).toBeVisible();
+    await expect(review).toContainText('env 必须是对象，值只能是字符串。');
+    await expect(review).toContainText('headers 必须是对象，值只能是字符串。');
+    await expect(review).toContainText('服务器条目必须是 JSON 对象。');
+    await expect(review.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(review.getByRole('button', { name: '预览选中的 0 项' })).toBeDisabled();
+    expect(await page.evaluate(() => (window as any).__resourceMcpDefinitions)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([]);
+  });
+}
+
 test('MCP card duplicates a definition under a distinct backend-valid name', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
