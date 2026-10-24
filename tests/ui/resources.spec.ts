@@ -84,7 +84,7 @@ async function mockResources(page: Page) {
           const targets = args.targets.map((target: Record<string, any>) => {
             const operation = target.operation ?? 'write';
             const conflict = (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict;
-            return { ...target, operation, status: conflict ? 'conflict' : 'ready', detail: operation === 'remove' ? '将移除当前受管理的原生条目' : '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: operation === 'remove' ? 'hash-remove' : 'hash-empty', previewToken: operation === 'remove' ? 'bound-remove-token' : 'bound-token', existing: operation === 'remove' ? { command: 'npx' } : conflict ? { command: 'old-command' } : null, proposed: operation === 'remove' ? null : { command: args.draft.command || args.draft.url } };
+            return { ...target, operation, status: conflict ? 'conflict' : 'ready', detail: operation === 'remove' ? conflict ? '原生条目已被外部修改，请比较后确认' : '将移除当前受管理的原生条目' : '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: operation === 'remove' ? 'hash-remove' : 'hash-empty', previewToken: operation === 'remove' ? 'bound-remove-token' : 'bound-token', existing: operation === 'remove' ? { command: conflict ? 'old-command' : 'npx' } : conflict ? { command: 'old-command' } : null, proposed: operation === 'remove' ? null : { command: args.draft.command || args.draft.url } };
           });
           const response = { draft: args.draft, definition, targets };
           if ((window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview) {
@@ -520,6 +520,40 @@ test('library MCP quick removal requires preview confirmation and preserves plac
   await expect(marks.getByRole('button', { name: 'Codex · 未写入' })).toBeVisible();
   state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
   expect(state.writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token' })] })]);
+  expect(state.places).toEqual([]);
+});
+
+test('library MCP quick removal shows an external change conflict and only deletes after explicit confirmation', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__resourceMcpConflict = true;
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const marks = page.getByRole('group', { name: 'filesystem 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'Codex · 已生效' }).click();
+  const confirmation = page.getByRole('dialog', { name: '从 CLI 移除 MCP' });
+  await expect(confirmation).toContainText('原生条目已被外部修改，请比较后确认');
+  await expect(confirmation).toContainText('old-command');
+  await expect(confirmation).toContainText('null');
+  await expect(confirmation.getByRole('table', { name: '逐行差异' })).toBeVisible();
+  await confirmation.getByRole('button', { name: '保留当前文件', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  let state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements, definitions: (window as any).__resourceMcpDefinitions }));
+  expect(state.writes).toEqual([]);
+  expect(state.places).toHaveLength(1);
+  expect(state.definitions[0].version).toBe(1);
+  await expect(marks.getByRole('button', { name: 'Codex · 已生效' })).toBeVisible();
+
+  await marks.getByRole('button', { name: 'Codex · 已生效' }).click();
+  await confirmation.getByRole('button', { name: '移除', exact: true }).click();
+  await expect(marks.getByRole('button', { name: 'Codex · 未写入' })).toBeVisible();
+  state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ operation: 'remove', baselineHash: 'hash-remove', previewToken: 'bound-remove-token', allowReplace: true })] })]);
   expect(state.places).toEqual([]);
 });
 
