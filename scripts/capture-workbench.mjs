@@ -5,6 +5,8 @@ import { chromium } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
+const acceptanceNote = 'Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
+const acceptance = { kind: 'playwright-synthetic-ipc', nativePlatform: 'unverified', webview2: 'unverified', desktopThemeFocusKeyboard: 'unverified', nativeCliAndFileWrites: 'unverified', note: acceptanceNote };
 const locale = process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN';
 const english = locale.toLowerCase().startsWith('en');
 const copy = (zh, en) => english ? en : zh;
@@ -257,7 +259,7 @@ for (const width of widths) {
 
 await browser.close();
 const failed = manifest.filter((item) => item.pageErrors.length || item.overflow);
-fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), previewUrl, shots: manifest }, null, 2));
+fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, shots: manifest }, null, 2));
 
 const cards = manifest.map((item) => '    <figure><a href="' + item.name + '.png"><img src="' + item.name + '.png" loading="lazy" alt="' + item.name + '"></a><figcaption>' + item.name + '</figcaption></figure>').join('\n');
 fs.writeFileSync(out + '/index.html', [
@@ -268,7 +270,7 @@ fs.writeFileSync(out + '/index.html', [
   '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}',
   'figure{margin:0;background:#161f19;border:1px solid #26332a;border-radius:12px;overflow:hidden}',
   'img{display:block;width:100%;height:auto}figcaption{padding:8px 10px;font-family:Consolas,monospace;font-size:11px;color:#9aa89f}',
-  '</style></head><body><h1>Cliora 工作台捕获</h1><p>合成 IPC 数据，仅用于界面检查，不构成原生平台验收。共 ' + manifest.length + ' 张。</p><div class="grid">',
+  '</style></head><body><h1>Cliora 工作台捕获</h1><p>合成 IPC 数据，仅用于界面检查，不构成原生平台验收。共 ' + manifest.length + ' 张。</p><p>' + acceptanceNote + '</p><div class="grid">',
   cards,
   '</div></body></html>',
 ].join('\n'));
@@ -289,11 +291,11 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '`--theme all|light|dark` 与 `--size all|1360,900,640` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。',
   '',
-  '终端文本、项目与提示词均为合成数据，仅用于界面检查，不构成真实登录、计费或原生平台验收。',
+  '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',
   '| 图片 | 主题 | 宽度 | 页面错误 | 溢出 |',
   '| --- | --- | --- | --- | --- |',
   rows,
   '',
 ].join('\n'));
-console.log(JSON.stringify({ shots: manifest.length, failed }, null, 2));
+console.log(JSON.stringify({ shots: manifest.length, failed, acceptance }, null, 2));
