@@ -753,7 +753,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
           if (command === 'resize_workbench_session') return null;
           if (command === 'close_workbench_session') { closed.push(args.sessionId); const index = sessions.findIndex((item) => item.id === args.sessionId); if (index >= 0) sessions.splice(index, 1); return null; }
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: args.theme }, tools: [] };
-          if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [] }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+          if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
           if (command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_rule_placements' || command === 'list_portable_items' || command === 'list_native_mcp' || command === 'scan_native_skills') return [];
           if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
           if (command === 'get_usage_report') return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', previous: null, timeline: [], totals: { requests: 0, usageRecords: 0, unknownRequestRecords: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 }, byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
@@ -889,6 +889,8 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
     await button.click();
     if (await discard.isVisible()) await discard.getByRole('button', { name: '放弃修改' }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+    // Stay until the tools workspace paints. Leaving earlier skips the probe render.
+    if (name === '工具与连接') await expect(page.getByText('安装与更新', { exact: true }).first()).toBeVisible();
   };
   for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) await openPage(name);
   await openPage('工作台');
