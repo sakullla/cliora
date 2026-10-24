@@ -32,13 +32,20 @@ async function installLibrary(page: Page, definitions: Array<Record<string, unkn
         if (command === 'list_mcp_placements') return placements;
         if (command === 'list_native_mcp') return [];
         if (command === 'preview_mcp_targets') return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: null, proposed: { command: 'npx' } }));
+        if (command === 'preview_mcp_draft') return { draft: args.draft, targets: args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'ready', detail: '将移除当前受管理的原生条目', path: '/tmp/config.toml', baselineHash: 'hash-remove', previewToken: 'bound-remove-token', existing: { command: 'npx' }, proposed: null })) };
+        if (command === 'commit_mcp_draft') {
+          const definition = await (window as any).__TAURI_INTERNALS__.invoke('save_mcp_definition', { draft: args.draft });
+          const targets = await (window as any).__TAURI_INTERNALS__.invoke('distribute_mcp', { definitionId: definition.id, targets: args.targets });
+          return { definition, targets };
+        }
         if (command === 'distribute_mcp') {
           for (const target of args.targets) {
             const row = { definitionId: args.definitionId, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath ?? null, enabled: target.enabled !== false, contextId: target.contextId ?? null };
             const index = placements.findIndex((item) => item.definitionId === row.definitionId && item.toolId === row.toolId && item.scope === row.scope && item.projectPath === row.projectPath);
-            if (index < 0) placements.push(row); else placements[index] = row;
+            if (target.operation === 'remove') { if (index >= 0) placements.splice(index, 1); }
+            else if (index < 0) placements.push(row); else placements[index] = row;
           }
-          return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
+          return args.targets.map((target: Record<string, any>) => ({ ...target, status: target.operation === 'remove' ? 'removed' : 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
         }
         if (command === 'remove_native_mcp') {
           const index = placements.findIndex((item) => item.toolId === args.target.toolId && item.scope === args.target.scope && (item.projectPath ?? null) === (args.target.projectPath ?? null));
@@ -139,6 +146,8 @@ test('library MCP details keep long text and all CLI targets without horizontal 
   await expect(marks.getByRole('button', { name: 'CLI Extra · 已生效' })).toBeVisible();
   await expect(row.getByText('已写入 19 处')).toBeVisible();
   await marks.getByRole('button', { name: 'CLI Extra · 已生效' }).click();
+  const removalConfirm = page.getByRole('dialog', { name: '从 CLI 移除 MCP' });
+  await removalConfirm.getByRole('button', { name: '移除', exact: true }).click();
   await expect(marks.getByRole('button', { name: 'CLI Extra · 未写入' })).toBeVisible();
   await expect(row.getByText('已写入 18 处')).toBeVisible();
 

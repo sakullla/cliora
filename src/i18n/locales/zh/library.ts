@@ -198,6 +198,8 @@ export default {
     notPlaced: '尚未写入 CLI',
     pasteCreate: '粘贴 JSON 导入',
     confirmDiscard: 'MCP 有未保存的修改，关闭后会丢失。',
+    confirmRemoveMcpPlacement: '从 {{tool}} 移除「{{name}}」？资料库里的定义会保留，其他 CLI 不受影响。',
+    removeMcpPlacementTitle: '从 CLI 移除 MCP',
     connectionTitle: '连接',
     edit: '修改',
   },
