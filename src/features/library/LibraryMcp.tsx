@@ -58,6 +58,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
   const [importSource, setImportSource] = useState('');
   const [removalConflict, setRemovalConflict] = useState<{ draft: McpDraft; target: McpDraftTargetRequest; result: McpTargetResult } | null>(null);
+  const [writeConflict, setWriteConflict] = useState<{ definitionId: string; name: string; target: McpTargetRequest; result: McpTargetResult } | null>(null);
 
   async function reload() {
     const request = ++loadRequest.current;
@@ -254,6 +255,24 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     finally { setBusy(false); }
   }
 
+  async function confirmWriteConflict() {
+    const current = writeConflict;
+    if (!current || busy) return;
+    const { result } = current;
+    const toolName = tools.find((tool) => tool.id === result.toolId)?.name ?? result.toolId;
+    const where = result.scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(result.scope, result.projectPath, projects) }) : '';
+    setWriteConflict(null);
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const results = await native.distributeMcp(current.definitionId, [{ ...current.target, contextId: result.contextId, baselineHash: result.baselineHash, previewToken: result.previewToken, allowReplace: true }]);
+      const failed = results.find(target => target.status !== 'written');
+      if (failed) setError(failed.detail || t('library.resources.cannotWrite', { tool: toolName }));
+      else setNotice(t('library.page.written', { where, tool: toolName }));
+      await refreshPlacements();
+    } catch (value) { setError(failure(value)); }
+    finally { setBusy(false); }
+  }
+
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
@@ -281,8 +300,11 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         const preview = await native.previewMcpTargets(item.id, [target]);
         const first = preview[0];
         if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
-        if (first.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction') })) return;
-        const results = await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        if (first.status === 'conflict') {
+          setWriteConflict({ definitionId: item.id, name: item.name, target, result: first });
+          return;
+        }
+        const results = await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken }]);
         const failed = results.find(result => result.status !== 'written');
         if (failed) setError(failed.detail || t('library.resources.cannotWrite', { tool: toolName }));
         else setNotice(t('library.page.written', { where, tool: toolName }));
@@ -362,6 +384,26 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </McpDetails>;
       }}
     />
+    <GuideDialog wide open={!!writeConflict} title={t('library.resources.replaceMcpTitle')} hint={writeConflict ? t('library.resources.confirmReplace', { name: writeConflict.name, tool: tools.find(tool => tool.id === writeConflict.result.toolId)?.name ?? writeConflict.result.toolId }) : undefined} onClose={() => setWriteConflict(null)}>
+      {writeConflict && <>
+        <ConflictCompare
+          title={tools.find(tool => tool.id === writeConflict.result.toolId)?.name ?? writeConflict.result.toolId}
+          banner={writeConflict.result.detail}
+          currentContent={JSON.stringify(writeConflict.result.existing, null, 2)}
+          nextContent={JSON.stringify(writeConflict.result.proposed, null, 2)}
+          format="json"
+          busy={busy}
+          actions={false}
+          onUseNext={() => undefined}
+          onKeepCurrent={() => undefined}
+        />
+        <div className="dialog-footer">
+          <button type="button" disabled={busy} onClick={() => setWriteConflict(null)}>{t('common.conflict.keepCurrent')}</button>
+          <span className="dialog-footer-gap" />
+          <button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmWriteConflict()}>{t('library.page.replaceAction')}</button>
+        </div>
+      </>}
+    </GuideDialog>
     <GuideDialog wide open={!!removalConflict} title={t('library.resources.removeMcpPlacementTitle')} hint={removalConflict ? t('library.resources.confirmRemoveMcpPlacement', { name: removalConflict.draft.name, tool: tools.find(tool => tool.id === removalConflict.result.toolId)?.name ?? removalConflict.result.toolId }) : undefined} onClose={() => setRemovalConflict(null)}>
       {removalConflict && <>
         <ConflictCompare
