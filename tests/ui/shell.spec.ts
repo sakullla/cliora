@@ -776,22 +776,23 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(claude).toContainText('YOLO');
   await expect(claude).toContainText('beta-work');
 
-  // Drag to reorder the rail: drop Claude Code above Codex.
-  // Playwright's dragAndDrop does not drive HTML5 draggable, so dispatch the drag events.
+  // Cards only switch sessions; drag gestures and synthetic drag events never reorder them.
   const railList = page.getByRole('tablist', { name: '会话列表' });
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
+  await expect(railList.locator('[draggable="true"]')).toHaveCount(0);
+  await claude.dragTo(codex);
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
   await page.evaluate(() => {
-    const row = document.querySelector('[data-session-id="s2"]')!.closest('[draggable]')!;
-    row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }));
-  });
-  await page.evaluate(() => {
-    const row = document.querySelector('[data-session-id="s1"]')!.closest('[draggable]')!;
-    const rect = row.getBoundingClientRect();
+    const source = document.querySelector('[data-session-id="s2"]')!.parentElement!;
+    const target = document.querySelector('[data-session-id="s1"]')!.parentElement!;
+    const dataTransfer = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }));
+    const rect = target.getBoundingClientRect();
     for (const type of ['dragover', 'drop']) {
-      row.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), clientX: rect.left + 12, clientY: rect.top + 8 }));
+      target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientX: rect.left + 12, clientY: rect.top + 8 }));
     }
   });
-  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
   const codexOutput = page.locator('.xterm-accessibility-tree').first();
   await expect(codexOutput).toContainText('codex-ready');
   await expect(codexOutput).not.toContainText('codex-readyready');
@@ -816,12 +817,14 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(rowMenu).toBeVisible();
   await page.mouse.click(5, 5);
   await expect(rowMenu).toHaveCount(0);
-  // Pin Codex to the top; the pin badge shows and the arrangement persists.
-  await codex.click({ button: 'right' });
-  await page.getByRole('menu', { name: 'Codex 会话操作' }).getByRole('menuitem', { name: '置顶' }).click();
-  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
-  await expect(codex.locator('[title="取消置顶"]')).toBeVisible();
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange') ?? '{}'))).toMatchObject({ pinned: ['s1'] });
+  // Pinning remains available without drag sorting and moves Claude Code to the top.
+  await claude.click({ button: 'right' });
+  await page.getByRole('menu', { name: 'Claude Code 会话操作' }).getByRole('menuitem', { name: '置顶' }).click();
+  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  await expect(claude.locator('[title="取消置顶"]')).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange') ?? '{}'))).toMatchObject({ pinned: ['s2'] });
+  await codex.click();
+  await expect(codex).toHaveAttribute('aria-selected', 'true');
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('Alpha');
   await expect(stage).toContainText('普通');
