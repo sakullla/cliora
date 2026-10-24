@@ -65,10 +65,12 @@ test('a capability without enable or disable only offers update and uninstall pe
   await setup(page);
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
-  await expect(card.getByRole('button', { name: '更新', exact: true })).toBeVisible();
-  await expect(card.getByRole('button', { name: '卸载', exact: true })).toBeVisible();
-  await expect(card.getByRole('button', { name: '启用', exact: true })).toHaveCount(0);
-  await expect(card.getByRole('button', { name: '禁用', exact: true })).toHaveCount(0);
+  await card.getByRole('button').click();
+  const details = page.getByLabel('插件详情', { exact: true });
+  await expect(details.getByRole('button', { name: '更新', exact: true })).toBeVisible();
+  await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeVisible();
+  await expect(details.getByRole('button', { name: '启用', exact: true })).toHaveCount(0);
+  await expect(details.getByRole('button', { name: '禁用', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '安装插件' })).toBeVisible();
 });
 
@@ -76,7 +78,14 @@ test('plugin resources render rules, hooks, and both mcp layout entries', async 
   await setup(page);
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
-  await card.getByText('包内资源（随插件管理）').click();
+  await card.getByRole('button').click();
+  const details = page.getByLabel('插件详情', { exact: true });
   const root = '/fixture/plugins/fixture';
-  for (const line of [`rules · ${root}/rules`, `rules · ${root}/AGENTS.md`, `hooks · ${root}/hooks.json`, `mcp · ${root}/.mcp.json`, `mcp · ${root}/mcp.json`]) await expect(card.getByText(line, { exact: true })).toBeVisible();
+  await expect(details.locator('li')).toHaveCount(5);
+  const resources = details.locator('li');
+  const expected = [['rules', 'rules'], ['rules', 'AGENTS.md'], ['hooks', 'hooks.json'], ['mcp', '.mcp.json'], ['mcp', 'mcp.json']] as const;
+  for (const [index, [kind, suffix]] of expected.entries()) {
+    await expect(resources.nth(index).getByText(kind, { exact: true })).toBeVisible();
+    await expect(resources.nth(index).getByText(`${root}/${suffix}`, { exact: true })).toBeVisible();
+  }
 });
