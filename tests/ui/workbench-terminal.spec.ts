@@ -194,6 +194,23 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
   await expect.poll(scrollTop).toBeGreaterThan(up);
 });
 
+test('mouse-tracking terminal clicks are forwarded to the CLI', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1000hclick-target'));
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('click-target');
+  const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const box = await screen.boundingBox();
+  await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await expect.poll(async () => (await writes(page)).some((item) => item.includes('\u001b[M'))).toBe(true);
+});
+
+test('terminal cursor-position replies are forwarded through the binary input channel', async ({ page }) => {
+  await openWorkbench(page);
+  await resetWrites(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[6n'));
+  await expect.poll(async () => (await writes(page)).some((item) => /\u001b\[\d+;\d+R/.test(item))).toBe(true);
+});
+
 test('a replayed session with long output opens scrolled to the latest line', async ({ page }) => {
   await installWorkbenchMock(page);
   const lines = Array.from({ length: 300 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
@@ -335,9 +352,11 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
   await scrollbar.focus();
   await page.keyboard.press('Home');
   await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBe(0);
+  await expect.poll(() => page.locator('[data-scroll-away]').count()).toBe(1);
   await expect(latest).toBeVisible();
   await page.keyboard.press('End');
   await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  await expect(page.locator('[data-scroll-away]')).toHaveCount(0);
   const initialScroll = await viewport.evaluate((node) => node.scrollTop);
   expect(initialScroll).toBeGreaterThan(0);
   const screen = await page.locator('.xterm-screen:visible').boundingBox();

@@ -483,6 +483,7 @@
 .terminalHost[data-blink] :global(.xterm-rows .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar) { animation: wbCursorBar 1.2s ease-in-out infinite !important; }
 .terminalHost[data-blink] :global(.xterm-rows .xterm-cursor.xterm-cursor-blink.xterm-cursor-block) { animation: wbCursorBlock 1.2s ease-in-out infinite !important; }
 .terminalHost[data-blink] :global(.xterm-rows .xterm-cursor.xterm-cursor-blink.xterm-cursor-underline) { animation: wbCursorUnderline 1.2s ease-in-out infinite !important; }
+.terminalHost[data-scroll-away] :global(.xterm-cursor) { visibility: hidden !important; animation: none !important; }
 .toastPill { position: absolute; z-index: 6; bottom: 14px; left: 50%; display: inline-flex; align-items: center; gap: 6px; height: 32px; min-height: 32px; padding: 0 12px; border: 1px solid var(--term-float-line); border-radius: 8px; background: var(--term-float); color: var(--term-fg); font-size: 11px; box-shadow: 0 8px 24px -10px rgb(0 0 0 / 30%); pointer-events: none; transform: translateX(-50%); animation: wbFadeRise 150ms var(--ease); }
 .toastPill > :global(svg) { color: var(--term-accent); }
 .dropOverlay { position: absolute; z-index: 8; inset: 10px; display: grid; place-items: center; border: 1px dashed var(--term-accent); border-radius: 12px; background: color-mix(in srgb, var(--term-bg) 84%, transparent); backdrop-filter: blur(3px); pointer-events: none; }

@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import type { Terminal } from '@xterm/xterm';
 import styles from './SessionWorkbench.module.css';
 
-export function TerminalScrollbar({ terminal, viewport }: {
+export function TerminalScrollbar({ terminal, viewport, onUserScroll }: {
   terminal: Terminal | null;
   viewport: HTMLElement | null;
+  onUserScroll?: () => void;
 }) {
   const { t } = useTranslation();
   const dragPointer = useRef<number | null>(null);
@@ -29,6 +30,7 @@ export function TerminalScrollbar({ terminal, viewport }: {
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
+    onUserScroll?.();
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.focus({ preventScroll: true });
@@ -62,6 +64,7 @@ export function TerminalScrollbar({ terminal, viewport }: {
     else if (event.key === 'PageUp') viewport.scrollTop -= viewport.clientHeight;
     else if (event.key === 'PageDown') viewport.scrollTop += viewport.clientHeight;
     else return;
+    onUserScroll?.();
     event.preventDefault();
     event.stopPropagation();
   }
