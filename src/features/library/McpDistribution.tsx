@@ -1,4 +1,4 @@
-import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
+import { useResourceContexts, useAccountLabels } from './resourceContexts';
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CodeEditor } from '../../components/CodeEditor';
@@ -7,7 +7,7 @@ import { native } from '../../lib/native';
 import { shortPath } from '../../lib/paths';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -64,7 +64,6 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   if (epochRef.current.context !== context) epochRef.current = { context, epoch: epochRef.current.epoch + 1 };
   const requestRef = useRef(0);
   const preview = previewState?.epoch === epochRef.current.epoch ? previewState.items : null;
-  const dropRef = useRef<string[]>([]);
   const stampRef = useRef(formStamp);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -106,16 +105,23 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const where = nextScope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(nextScope, nextPath, projects) }) : '';
     return `${where}${toolName(toolId)}`;
   }
-  function noticeFor(written: McpTargetResult[], removedIds: string[]) {
+  function noticeFor(written: McpTargetResult[], removed: McpTargetResult[]) {
     const parts: string[] = [];
     if (written.length) parts.push(t('library.distribute.written', { targets: written.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、') }));
-    if (removedIds.length) parts.push(t('library.distribute.removed', { where: scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, activePath, projects) }) : '', names: removedIds.map(toolName).join('、') }));
+    if (removed.length) parts.push(t('library.distribute.removed', { where: scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, activePath, projects) }) : '', names: removed.map((item) => toolName(item.toolId)).join('、') }));
     return parts.join('');
   }
   function targets(ids = selected): McpTargetRequest[] {
     const current = ids.filter((id) => contexts.ready(targetFor(id))).map((toolId) => ({ toolId, scope, projectPath: activePath, contextId: contexts.context({ toolId, scope, projectPath: activePath }), enabled }));
     const outside = outsidePlacements().map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: contexts.context(item), enabled: item.enabled }));
     return [...current, ...outside];
+  }
+  function removalTargets(ids: string[]): McpDraftTargetRequest[] {
+    return ids.map((toolId) => {
+      const place = placedFor(scope, activePath).find((entry) => entry.toolId === toolId);
+      if (!place) throw new Error(t('library.distribute.changedError'));
+      return { toolId, scope, projectPath: activePath, contextId: contexts.context(place), enabled: place.enabled, operation: 'remove' };
+    });
   }
   function choose(ids: string[], nextScope = scope, nextPath = activePath) {
     setSelected(ids);
@@ -133,41 +139,21 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     setEnabled(placed.length === 0 || placed.some((item) => item.enabled));
     choose(ids, nextScope, nextScope === 'project' ? nextPath : null);
   }
-  async function removeDropped(saved: McpDefinition, ids: string[]) {
-    const failed: string[] = [];
-    for (const toolId of ids) {
-      try {
-        const place = placedFor(scope, activePath).find((entry) => entry.toolId === toolId);
-        if (!place) throw new Error(t('library.distribute.changedError'));
-        await native.removeNativeMcp({ toolId, scope, projectPath: activePath, contextId: await removalContext(place), enabled }, saved.name);
-      } catch (value) {
-        failed.push(`${toolName(toolId)}：${text(value)}`);
-      }
-    }
-    return failed;
-  }
-  async function finish(saved: McpDefinition, written: McpTargetResult[], removed: string[]): Promise<McpDistributeOutcome> {
-    setResults(written);
-    const failedWrites = written.filter((item) => item.status !== 'written');
-    if (failedWrites.length) {
-      const message = failedWrites.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
-      setError(message);
-      return { status: 'failed', message, definition: saved };
-    }
-    const failedRemoves = await removeDropped(saved, removed);
-    if (!mounted.current) return { status: 'stale' };
-    if (failedRemoves.length) {
-      const message = failedRemoves.join(t('tools.quota.errorSeparator'));
+  async function finish(saved: McpDefinition, committed: McpTargetResult[]): Promise<McpDistributeOutcome> {
+    setResults(committed);
+    const failed = committed.filter((item) => item.status !== 'written' && item.status !== 'removed');
+    if (failed.length) {
+      const message = failed.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
       setError(message);
       return { status: 'failed', message, definition: saved };
     }
     onConfirmationChange('none');
-    return { status: 'written', notice: noticeFor(written, removed), definition: saved };
+    return { status: 'written', notice: noticeFor(committed.filter((item) => item.status === 'written'), committed.filter((item) => item.status === 'removed')), definition: saved };
   }
   async function inspect(draft: McpDraft): Promise<McpDistributeOutcome> {
     const ids = selected.filter((id) => contexts.ready(targetFor(id)));
     const removed = droppedIds(ids);
-    const requested = targets(ids);
+    const requested: McpDraftTargetRequest[] = [...targets(ids), ...removalTargets(removed)];
     if (!requested.length && !removed.length) return { status: 'failed', message: t('library.distribute.noneSelected') };
     if (scope === 'project' && !projectPath && ids.length) { const message = t('tools.mcp.pickProject'); setError(message); return { status: 'failed', message }; }
     const epoch = epochRef.current.epoch;
@@ -179,12 +165,11 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       const items = candidate.targets;
       const writable = items.filter((item) => item.status === 'ready' || item.status === 'conflict');
-      if (!writable.length && !removed.length) {
+      if (!writable.length) {
         const message = items.map((item) => item.detail).filter(Boolean).join(t('tools.quota.errorSeparator')) || t('library.distribute.noWritable');
         setError(message);
         return { status: 'failed', message };
       }
-      dropRef.current = removed;
       stampRef.current = formStamp;
       setPreview({ epoch, draft: candidate.draft, items });
       const hasConflict = items.some((item) => item.status === 'conflict');
@@ -203,18 +188,17 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
     const active = current.filter((item) => item.status === 'ready' || item.status === 'conflict');
-    const removed = dropRef.current;
     setError('');
     try {
-      const committed = await native.commitMcpDraft(candidate.draft, active.map((item): McpTargetRequest => {
+      const committed = await native.commitMcpDraft(candidate.draft, active.map((item): McpDraftTargetRequest => {
         const inView = item.scope === scope && (scope === 'global' || samePath(item.projectPath, activePath));
         const placed = placements.find((entry) => entry.definitionId === definition.id && entry.toolId === item.toolId && entry.scope === item.scope && (item.scope === 'project' || (entry.contextId ?? null) === (item.contextId ?? null)) && samePath(entry.projectPath, item.projectPath));
-        return { toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: inView ? enabled : placed?.enabled ?? enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' };
+        return { toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: item.operation === 'remove' ? placed?.enabled ?? false : inView ? enabled : placed?.enabled ?? enabled, operation: item.operation, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' };
       }));
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       setPreview(null);
       onConfirmationChange('none');
-      return finish(committed.definition, committed.targets, removed);
+      return finish(committed.definition, committed.targets);
     } catch (value) {
       const message = text(value);
       if (request === requestRef.current && epoch === epochRef.current.epoch) {
@@ -295,7 +279,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       {contexts.issues.some((issue) => !inView(issue)) && <div className={styles.notes} data-tone="warning">
         {contexts.issues.filter((issue) => !inView(issue)).map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
       </div>}
-      {results && <div className={styles.notes} role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.detail })}</p>)}</div>}
+      {results && <div className={styles.notes} role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.status === 'removed' ? t('library.distribute.resultRemoved') : item.detail })}</p>)}</div>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </section>
     {preview && <div className={styles.conflict} data-conflict={preview.some(item => item.status === 'conflict') || undefined} role="group" aria-label={t('tools.mcp.previewLabel')}>
@@ -304,7 +288,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
         <div className={styles.conflictTarget}>
           <ToolIcon toolId={item.toolId} size={18} />
           <strong>{toolName(item.toolId)}</strong>
-          <span className={styles.conflictState} data-state={item.status}>{item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t('library.distribute.statusReady') : t('library.distribute.statusBlocked')}</span>
+          <span className={styles.conflictState} data-state={item.status}>{item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t(item.operation === 'remove' ? 'library.distribute.statusReadyRemove' : 'library.distribute.statusReady') : t('library.distribute.statusBlocked')}</span>
           {item.path && <code title={item.path}>{item.path}</code>}
         </div>
         {item.detail && <p>{item.detail}</p>}

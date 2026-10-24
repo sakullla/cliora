@@ -15,8 +15,10 @@ fn draft() -> McpDraft {
     }
 }
 
-fn target(tool: &str) -> McpTargetRequest {
-    McpTargetRequest {
+fn target(tool: &str) -> McpDraftTargetRequest {
+    McpDraftTargetRequest {
+        operation: McpTargetOperation::Write,
+        target: McpTargetRequest {
         context_id: None,
         tool_id: tool.into(),
         scope: Scope::Global,
@@ -25,20 +27,24 @@ fn target(tool: &str) -> McpTargetRequest {
         baseline_hash: None,
         allow_replace: false,
         preview_token: None,
+        },
     }
 }
 
 fn confirmed(
-    requests: &[McpTargetRequest],
+    requests: &[McpDraftTargetRequest],
     preview: &[McpTargetResult],
-) -> Vec<McpTargetRequest> {
+) -> Vec<McpDraftTargetRequest> {
     requests
         .iter()
         .zip(preview)
-        .map(|(request, inspected)| McpTargetRequest {
-            baseline_hash: inspected.baseline_hash.clone(),
-            preview_token: inspected.preview_token.clone(),
-            context_id: inspected.context_id.clone(),
+        .map(|(request, inspected)| McpDraftTargetRequest {
+            target: McpTargetRequest {
+                baseline_hash: inspected.baseline_hash.clone(),
+                preview_token: inspected.preview_token.clone(),
+                context_id: inspected.context_id.clone(),
+                ..request.target.clone()
+            },
             ..request.clone()
         })
         .collect()
@@ -47,6 +53,13 @@ fn confirmed(
 fn write_parent(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
+}
+
+struct WorkingStore;
+impl CredentialStore for WorkingStore {
+    fn put(&self, _id: &str, _secret: &str) -> Result<(), String> { Ok(()) }
+    fn get(&self, _id: &str) -> Result<String, String> { Ok("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()) }
+    fn delete(&self, _id: &str) -> Result<(), String> { Ok(()) }
 }
 
 struct FailingStore;
@@ -125,7 +138,7 @@ fn draft_commit_rejects_changed_candidate_baseline_and_context_before_any_write(
     .is_err());
 
     let mut stale = requests.clone();
-    stale[0].baseline_hash = Some("stale".into());
+    stale[0].target.baseline_hash = Some("stale".into());
     assert!(commit_draft(
         &db,
         &FailingStore,
@@ -137,7 +150,7 @@ fn draft_commit_rejects_changed_candidate_baseline_and_context_before_any_write(
     .is_err());
 
     let mut wrong_context = requests.clone();
-    wrong_context[0].context_id = Some("changed-context".into());
+    wrong_context[0].target.context_id = Some("changed-context".into());
     assert!(commit_draft(
         &db,
         &FailingStore,
@@ -255,4 +268,49 @@ fn draft_commit_returns_saved_definition_and_truthful_per_target_results() {
     assert!(std::fs::read_to_string(pi_path).unwrap().contains("example-mcp"));
     assert_eq!(std::fs::read_to_string(cursor_path).unwrap(), "{\"mcpServers\":{}}");
     assert_eq!(std::fs::read_to_string(codex_path).unwrap(), codex_original);
+}
+
+#[test]
+fn draft_remove_rejects_external_changes_then_requires_a_fresh_confirmation() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let path = temp.path().join(".pi/agent/mcp.json");
+    write_parent(&path, "{\"mcpServers\":{}}");
+    let existing = save_definition(&db, draft()).unwrap();
+    let mut write = target("pi").target;
+    let inspected = preview_targets(&db, &registry, temp.path(), &existing.id, vec![write.clone()]);
+    write.baseline_hash = inspected[0].baseline_hash.clone();
+    write.preview_token = inspected[0].preview_token.clone();
+    assert_eq!(distribute(&db, &WorkingStore, &registry, temp.path(), &existing.id, vec![write])[0].status, "written");
+    assert_eq!(list_placements(&db).unwrap().len(), 1);
+
+    let mut editing = draft();
+    editing.id = Some(existing.id.clone());
+    editing.expected_version = Some(existing.version);
+    let mut removal = target("pi");
+    removal.operation = McpTargetOperation::Remove;
+    let preview = preview_draft(&db, &registry, temp.path(), editing.clone(), vec![removal.clone()]).unwrap();
+    assert_eq!(preview.targets[0].operation, McpTargetOperation::Remove);
+    assert_eq!(preview.targets[0].status, "ready");
+    assert!(preview.targets[0].existing.is_some());
+    assert!(preview.targets[0].proposed.is_none());
+    let requests = confirmed(&[removal.clone()], &preview.targets);
+
+    let externally_changed = "{\"mcpServers\":{\"example\":{\"command\":\"outside\",\"args\":[]}}}";
+    std::fs::write(&path, externally_changed).unwrap();
+    let error = commit_draft(&db, &WorkingStore, &registry, temp.path(), preview.draft, requests).unwrap_err();
+    assert!(error.contains("预览后变化"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), externally_changed);
+    assert_eq!(get_definition(&db, &existing.id).unwrap().version, 1);
+    assert_eq!(list_placements(&db).unwrap().len(), 1);
+
+    let fresh = preview_draft(&db, &registry, temp.path(), editing, vec![removal.clone()]).unwrap();
+    assert_eq!(fresh.targets[0].status, "conflict");
+    let mut confirmed_removal = confirmed(&[removal], &fresh.targets);
+    confirmed_removal[0].target.allow_replace = true;
+    let committed = commit_draft(&db, &WorkingStore, &registry, temp.path(), fresh.draft, confirmed_removal).unwrap();
+    assert_eq!(committed.targets[0].status, "removed", "{:?}", committed.targets[0]);
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("example"));
+    assert!(list_placements(&db).unwrap().is_empty());
 }
