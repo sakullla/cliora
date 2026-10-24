@@ -248,6 +248,34 @@ test('paste import fills an HTTP MCP and rejects unrecognizable content without 
   await expect(dialog.getByRole('textbox', { name: '命令' })).toHaveValue('');
 });
 
+test('paste review returns to the original source for duplicate and semantic corrections', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    (window as any).__resourceMcpDefinitions.push({ id: 'mcp-existing', name: 'existing', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
+  const source = JSON.stringify({ mcpServers: { existing: { command: 'npx' }, broken: { args: [] }, badArgs: { command: 'npx', args: ['ok', 3] } } });
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '粘贴导入' }).click();
+  await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(source);
+  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  const review = page.getByRole('dialog', { name: '审查 MCP 导入' });
+  await expect(review).toContainText('重复或已存在');
+  await expect(review).toContainText('请填写要运行的命令');
+  await expect(review).toContainText('args 必须是仅包含字符串的数组');
+  await expect(review.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await review.getByRole('button', { name: '返回', exact: true }).click();
+  const paste = dialog.getByRole('textbox', { name: '粘贴 MCP JSON' });
+  await expect(paste).toBeVisible();
+  await expect(paste).toHaveValue(source);
+  await paste.fill(JSON.stringify({ mcpServers: { corrected: { command: 'uvx' } } }));
+  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  await expect(review.getByRole('checkbox', { name: '选择导入 corrected' })).toBeChecked();
+});
+
 test('MCP card duplicates a definition under a distinct backend-valid name', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
@@ -838,6 +866,51 @@ test('current MCP details reveal secrets explicitly and library navigation retur
   await expect(row).toBeVisible();
 });
 
+test('current MCP details reset revealed secrets when selecting another entry', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    const entries = ['native-one', 'native-two'].map((name, index) => ({ name, transport: 'stdio', command: 'npx', args: [], url: '', env: { API_TOKEN: `secret-${index + 1}` }, headers: {}, enabled: true, protectedValues: false }));
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command === 'list_native_mcp' ? entries : invoke(command, args);
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: /native-one/ }).click();
+  const details = page.getByRole('complementary', { name: 'MCP 详情' });
+  await details.getByRole('button', { name: '显示 API_TOKEN 的值' }).click();
+  await expect(details).toContainText('secret-1');
+  await page.getByRole('button', { name: /native-two/ }).click();
+  await expect(details).not.toContainText('secret-1');
+  await expect(details).not.toContainText('secret-2');
+  await expect(details).toContainText('••••');
+  await details.getByRole('button', { name: '显示 API_TOKEN 的值' }).click();
+  await expect(details).toContainText('secret-2');
+});
+
+test('current MCP paste import preserves disabled and library choices', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('checkbox', { name: '启用', exact: true }).uncheck();
+  await dialog.getByRole('checkbox', { name: '同时放进资料库' }).check();
+  await dialog.getByRole('button', { name: '粘贴导入' }).click();
+  await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(JSON.stringify({ mcpServers: { filesystem: { command: 'npx' } } }));
+  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  const review = page.getByRole('dialog', { name: '审查 MCP 导入' });
+  await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+  await review.getByRole('button', { name: '确认导入 1 项' }).click();
+  await expect(review.getByText('已保存 filesystem')).toBeVisible();
+  const saved = await page.evaluate(() => (window as any).__resourceMcpDefinitions[0]);
+  const writes = await page.evaluate(() => (window as any).__resourceWrites);
+  expect(saved.inLibrary).toBe(true);
+  expect(writes[0].targets[0].enabled).toBe(false);
+});
+
 test('canceling a current MCP candidate leaves definitions and native writes untouched', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
@@ -885,6 +958,38 @@ test('current MCP refresh failure keeps stale entries and can be retried', async
   await page.evaluate(() => { (window as any).__failNativeRefresh = false; });
   await page.getByRole('button', { name: '重新扫描' }).first().click();
   await expect(page.getByText('最近一次读取失败，以下列表可能已过期。')).toHaveCount(0);
+});
+
+test('batch import keeps mixed target results partial and retries the remaining write', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__mixedCommitAttempts = 0;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      const result = await invoke(command, args);
+      if (command === 'commit_mcp_draft' && ++win.__mixedCommitAttempts === 1) {
+        return { ...result, targets: [{ status: 'written', detail: 'committed' }, { status: 'failed', detail: 'second target failed' }] };
+      }
+      return result;
+    };
+  });
+  await page.goto('/');
+  await startLibraryMcp(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '粘贴导入' }).click();
+  await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(JSON.stringify({ mcpServers: { mixed: { command: 'npx' } } }));
+  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  const review = page.getByRole('dialog', { name: '审查 MCP 导入' });
+  await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+  await review.getByRole('button', { name: '确认导入 1 项' }).click();
+  await expect(review.getByText('部分完成，可重试')).toBeVisible();
+  await expect(review.getByText('second target failed')).toBeVisible();
+  await expect(review.getByRole('button', { name: '预览选中的 1 项' })).toBeEnabled();
+  await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+  await review.getByRole('button', { name: '确认导入 1 项' }).click();
+  await expect(review.getByText('已完成', { exact: true })).toBeVisible();
+  await expect(review.getByText('部分完成，可重试')).toHaveCount(0);
 });
 
 test('batch import keeps per-item failures visible while later items commit', async ({ page }) => {

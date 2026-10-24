@@ -56,6 +56,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [allowReplace, setAllowReplace] = useState(false);
   const [commitResults, setCommitResults] = useState<McpCommitResult | null>(null);
   const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
+  const [importSource, setImportSource] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -111,7 +112,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   function resetForm(next: McpDraft, nextEnv: KeyValueRow[], nextHeaders: KeyValueRow[], nextEnabled: boolean, nextSync = false) {
     setDraft(next); setEnvRows(nextEnv); setHeaderRows(nextHeaders); setEnabled(nextEnabled); setSyncLibrary(nextSync);
     setSavedFingerprint(JSON.stringify([next, nextEnv, nextHeaders, nextEnabled, nextSync]));
-    setShowIssues(false); setPreview(null); setAllowReplace(false); setCommitResults(null); setFormKey(value => value + 1);
+    setShowIssues(false); setPreview(null); setAllowReplace(false); setCommitResults(null); setImportSource(''); setFormKey(value => value + 1);
   }
   async function canReplace() {
     const started = currentFingerprint;
@@ -174,17 +175,20 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     } catch (value) { if (mounted.current) setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
-  function importJson(parsed: McpParsedServer[]) {
+  function importJson(parsed: McpParsedServer[], source: string) {
     const seen = new Set<string>();
     const items = parsed.map((server, index): McpBatchItem => {
       const name = server.name.trim() || (parsed.length === 1 ? draft.name.trim() : '');
       const found = definitions.find(item => item.name === name);
       const duplicate = !!name && seen.has(name); seen.add(name);
-      return { key: index + ':' + name, blocked: duplicate ? t('tools.mcp.batchDuplicate', { name }) : undefined,
+      const blocked = [duplicate ? t('tools.mcp.batchDuplicate', { name }) : '', ...server.invalid.map(issue => t('tools.mcp.parseIssue.' + issue))].filter(Boolean).join(' ');
+      return { key: index + ':' + name, blocked: blocked || undefined,
         draft: { id: found?.id ?? null, name, transport: server.transport, command: server.command, args: server.args, url: server.url,
-          env: server.env, headers: server.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null } };
+          env: server.env, headers: server.headers, inLibrary: found?.inLibrary === true || syncLibrary, expectedVersion: found?.version ?? null } };
     });
-    setBatchItems(items); setError('');
+    const needsCorrection = items.some(item => item.blocked || hasMcpIssues(mcpDraftIssues(item.draft)));
+    setBatchItems(items); setImportSource(needsCorrection ? source : ''); setError('');
+    return needsCorrection;
   }
   async function removeNative(item: NativeMcpEntry) {
     const found = definitions.find(definition => definition.name === item.name);
@@ -224,7 +228,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       <div className={styles.panel}>
         {linkedInLibrary && <p className={styles.linkedNote}><Icon name="info" size={14} />{t('tools.mcp.linkedNote', { name: linked?.name ?? draft.name })}</p>}
         <fieldset className={styles.formFields} disabled={busy || !!preview}>
-          <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} />
+          <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteText={importSource} />
         </fieldset>
         <div className={styles.options}>
           <div className={styles.option}><label><input type="checkbox" checked={enabled} disabled={busy || !!preview} aria-describedby={id + '-enabled'} onChange={event => setEnabled(event.target.checked)} />{t('tools.mcp.enabledLabel')}</label><small id={id + '-enabled'}>{t('tools.mcp.enabledHint')}</small></div>
@@ -247,8 +251,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       </div>
     </GuideDialog>
     <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => { if (!busy) setBatchItems(null); }}>
-      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(value, [{ ...target, enabled: true }])}
-        onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled: true, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
+      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(value, [{ ...target, enabled }])}
+        onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
         onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); void refreshNative(); }} />}
     </GuideDialog>
   </>;

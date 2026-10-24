@@ -506,6 +506,7 @@ export default {
     batchUnnamed: '未命名服务器 {{index}}',
     batchPending: '处理中',
     batchDone: '已完成',
+    batchPartial: '部分完成，可重试',
     batchFailed: '失败，可重试',
     batchNeedsInput: '需修正',
     batchReady: '已预览',
@@ -519,6 +520,12 @@ export default {
     batchPreview: '预览选中的 {{count}} 项',
     batchConfirm: '确认导入 {{count}} 项',
     batchDuplicate: '名称「{{name}}」重复或已存在，未自动覆盖。',
+    parseIssue: {
+      serverInvalid: '服务器条目必须是 JSON 对象。',
+      argsInvalid: 'args 必须是仅包含字符串的数组。',
+      envInvalid: 'env 必须是对象，值只能是字符串、数字或布尔值。',
+      headersInvalid: 'headers 必须是对象，值只能是字符串、数字或布尔值。',
+    },
   },
   skills: {
     pickProjectFirst: '请先在工具页打开项目目录。',

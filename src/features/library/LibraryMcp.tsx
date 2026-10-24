@@ -52,6 +52,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [dialogError, setDialogError] = useState('');
   const [search, setSearch] = useState('');
   const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
+  const [importSource, setImportSource] = useState('');
 
   useEffect(() => {
     if (!active) return;
@@ -80,6 +81,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setWillDistribute(false);
     setConflict(false);
     setPasteFirst(paste);
+    setImportSource('');
     setFormKey((value) => value + 1);
   }
   const formKeyRef = useRef(formKey); formKeyRef.current = formKey;
@@ -100,17 +102,22 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     editMcp();
   }, [createSignal]);
 
-  function importJson(parsed: McpParsedServer[]) {
+  function importJson(parsed: McpParsedServer[], source: string) {
     const seen = new Set<string>();
-    setBatchItems(parsed.map((server, index): McpBatchItem => {
+    const items = parsed.map((server, index): McpBatchItem => {
       const name = server.name.trim() || (parsed.length === 1 ? draft?.name.trim() ?? '' : '');
       const duplicate = !!name && (seen.has(name) || definitions.some(item => item.name === name));
       seen.add(name);
-      return { key: index + ':' + name, blocked: duplicate ? t('tools.mcp.batchDuplicate', { name }) : undefined,
+      const blocked = [duplicate ? t('tools.mcp.batchDuplicate', { name }) : '', ...server.invalid.map(issue => t('tools.mcp.parseIssue.' + issue))].filter(Boolean).join(' ');
+      return { key: index + ':' + name, blocked: blocked || undefined,
         draft: { ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, url: server.url,
           env: server.env, headers: server.headers, inLibrary: true } };
-    }));
+    });
+    const needsCorrection = items.some(item => item.blocked || hasMcpIssues(mcpDraftIssues(item.draft)));
+    setBatchItems(items);
+    setImportSource(needsCorrection ? source : '');
     setDialogError('');
+    return needsCorrection;
   }
 
   async function remove(item: McpDefinition) {
@@ -272,7 +279,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       {draft && <>
         <div className={styles.editor}>
           <div className={styles.editorForm}>
-            <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} />
+            <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
           </div>
           <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
         </div>

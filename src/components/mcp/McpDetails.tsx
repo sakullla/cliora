@@ -37,8 +37,8 @@ export function McpDetails({ item, actions, children }: { item: McpDefinition | 
         <div><dt>{t('tools.mcp.args')}</dt><dd>{item.args.length ? <ol className={styles.args}>{item.args.map((arg, index) => <li key={index}><code>{arg}</code></li>)}</ol> : '—'}</dd></div>
       </> : <div><dt>{t('tools.mcp.urlAria')}</dt><dd><code>{item.url || '—'}</code></dd></div>}
     </dl>
-    {item.transport === 'stdio' ? <section className={styles.group}><h4>{t('tools.mcp.env')}</h4><Values label={t('tools.mcp.env')} values={item.env} /></section>
-      : <section className={styles.group}><h4>{t('tools.mcp.headers')}</h4><Values label={t('tools.mcp.headers')} values={item.headers} /></section>}
+    {item.transport === 'stdio' ? <section className={styles.group}><h4>{t('tools.mcp.env')}</h4><Values key={`${'id' in item ? item.id : item.name}:env`} label={t('tools.mcp.env')} values={item.env} /></section>
+      : <section className={styles.group}><h4>{t('tools.mcp.headers')}</h4><Values key={`${'id' in item ? item.id : item.name}:headers`} label={t('tools.mcp.headers')} values={item.headers} /></section>}
     {children}
     {actions && <div className={styles.actions}>{actions}</div>}
   </div>;

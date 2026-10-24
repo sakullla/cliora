@@ -48,6 +48,24 @@ test('collection paste keeps every server, including entries needing field valid
   assert.deepEqual(mcp.parseMcpServerCollection('not json'), []);
 });
 
+test('collection paste diagnoses invalid entries instead of silently dropping data', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    scalar: 'not-a-server',
+    badArgs: { command: 'npx', args: ['-y', 42, null] },
+    badEnv: { command: 'npx', env: { VALID: 'yes', INVALID: null } },
+    badHeaders: { url: 'https://example.test/mcp', headers: ['Authorization'] },
+  } }));
+  assert.equal(parsed.length, 4);
+  assert.deepEqual(parsed.map(item => item.name), ['scalar', 'badArgs', 'badEnv', 'badHeaders']);
+  assert.deepEqual(parsed[0].invalid, ['serverInvalid']);
+  assert.deepEqual(parsed[1].invalid, ['argsInvalid']);
+  assert.deepEqual(parsed[1].args, ['-y']);
+  assert.deepEqual(parsed[2].invalid, ['envInvalid']);
+  assert.deepEqual(parsed[2].env, { VALID: 'yes' });
+  assert.deepEqual(parsed[3].invalid, ['headersInvalid']);
+  assert.equal(mcp.parseMcpServerJson(JSON.stringify({ command: 'npx', args: [false] })).invalid.includes('argsInvalid'), true);
+});
+
 test('draft issues mirror the backend validation', () => {
   const base = { name: 'filesystem', transport: 'stdio', command: 'npx', url: '' };
   assert.deepEqual(mcp.mcpDraftIssues(base), {});

@@ -20,6 +20,10 @@ type Row = McpBatchItem & {
   pending: boolean;
 };
 
+function isComplete(row: Pick<Row, 'result'>) {
+  return !!row.result && row.result.targets.every(target => target.status === 'written');
+}
+
 export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinitionSaved }: {
   items: McpBatchItem[];
   onPreview: (draft: McpDraft) => Promise<McpDraftPreview>;
@@ -31,8 +35,8 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
   const [rows, setRows] = useState<Row[]>(() => items.map(item => ({ ...item, selected: !item.blocked && !hasMcpIssues(mcpDraftIssues(item.draft)), preview: null, replace: false, result: null, error: '', pending: false })));
   const [busy, setBusy] = useState(false);
   const [reviewed, setReviewed] = useState(false);
-  const selectedCount = rows.filter(row => row.selected && !row.result).length;
-  const confirmable = useMemo(() => rows.filter(row => row.selected && !row.result && row.preview && !row.error && row.preview.targets.every(target =>
+  const selectedCount = rows.filter(row => row.selected && !isComplete(row)).length;
+  const confirmable = useMemo(() => rows.filter(row => row.selected && !isComplete(row) && row.preview && !row.error && row.preview.targets.every(target =>
     target.status === 'ready' || target.status === 'conflict' && row.replace)), [rows]);
 
   function patch(key: string, value: Partial<Row>) {
@@ -40,7 +44,7 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
   }
   async function preview() {
     setBusy(true); setReviewed(true);
-    for (const row of rows.filter(item => item.selected && !item.result)) {
+    for (const row of rows.filter(item => item.selected && !isComplete(item))) {
       patch(row.key, { pending: true, error: '', preview: null, replace: false });
       try {
         const value = await onPreview({ ...row.draft, name: row.draft.name.trim(), args: keptMcpArgs(row.draft.args) });
@@ -68,7 +72,7 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
     setBusy(false);
   }
   const canConfirm = reviewed && confirmable.length > 0 && confirmable.length === selectedCount;
-  const needsPreview = rows.some(row => row.selected && !row.result?.targets.every(target => target.status === 'written') &&
+  const needsPreview = rows.some(row => row.selected && !isComplete(row) &&
     (!row.preview || !!row.error || row.preview.targets.some(target => target.status === 'failed' || target.status === 'unsupported')));
 
   return <div className={styles.batch}>
@@ -79,13 +83,15 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
       const issue = row.blocked || (invalid ? Object.values(issues).map(value => t('tools.mcp.issue.' + value)).join(' ') : '');
       const conflicts = row.preview?.targets.filter(target => target.status === 'conflict') ?? [];
       const unavailable = row.preview?.targets.filter(target => target.status === 'unsupported' || target.status === 'failed') ?? [];
-      return <li className={styles.item} key={row.key} data-state={row.result ? 'written' : row.error ? 'failed' : row.pending ? 'pending' : undefined}>
+      const complete = isComplete(row);
+      const partial = !!row.result && !complete && row.result.targets.some(target => target.status === 'written');
+      return <li className={styles.item} key={row.key} data-state={complete ? 'written' : row.error ? 'failed' : row.pending ? 'pending' : undefined}>
         <div className={styles.rowHead}>
           <label className={styles.choose}>
-            <input type="checkbox" aria-label={t('tools.mcp.batchSelect', { name: row.draft.name || index + 1 })} checked={row.selected} disabled={busy || !!issue || !!row.result} onChange={event => patch(row.key, { selected: event.target.checked, preview: null, error: '', replace: false })} />
+            <input type="checkbox" aria-label={t('tools.mcp.batchSelect', { name: row.draft.name || index + 1 })} checked={row.selected} disabled={busy || !!issue || complete} onChange={event => patch(row.key, { selected: event.target.checked, preview: null, error: '', replace: false })} />
             <span><strong>{row.draft.name || t('tools.mcp.batchUnnamed', { index: index + 1 })}</strong><small>{row.draft.transport === 'http' ? 'HTTP' : 'stdio'} · {mcpSummary(row.draft) || '—'}</small></span>
           </label>
-          <span className={styles.state}>{row.pending ? t('tools.mcp.batchPending') : row.result ? t('tools.mcp.batchDone') : row.error ? t('tools.mcp.batchFailed') : issue ? t('tools.mcp.batchNeedsInput') : row.preview ? t('tools.mcp.batchReady') : t('tools.mcp.batchWaiting')}</span>
+          <span className={styles.state}>{row.pending ? t('tools.mcp.batchPending') : complete ? t('tools.mcp.batchDone') : partial ? t('tools.mcp.batchPartial') : row.error ? t('tools.mcp.batchFailed') : issue ? t('tools.mcp.batchNeedsInput') : row.preview ? t('tools.mcp.batchReady') : t('tools.mcp.batchWaiting')}</span>
         </div>
         {issue && <p className={styles.error}>{issue}</p>}
         {row.error && <p className={styles.error} role="alert">{row.error}</p>}
