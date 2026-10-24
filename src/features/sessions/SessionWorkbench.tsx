@@ -1185,8 +1185,17 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
           const title = taskTitle(selected);
           const tone = sessionTone(selected);
-          const stateReserve = selected.running && (tone === 'idle' || tone === 'live')
-            ? t(tone === 'live' ? 'sessions.stateIdle' : 'sessions.stateStreaming') : null;
+          const currentStateLabel = stateLabel(selected, tone);
+          const stateReserves = [
+            t('sessions.stateIdle'),
+            t('sessions.stateStreaming'),
+            t('sessions.bellBadge'),
+            t('sessions.stateError'),
+            t('sessions.ended'),
+          ].filter((label) => label !== currentStateLabel);
+          const endLabel = busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort');
+          const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
+            .filter((label) => label !== endLabel);
           const grid = grids.get(selected.id);
           const canSplit = splitRoom && sessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
@@ -1196,7 +1205,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
                 <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{stateLabel(selected, tone)}</span>{stateReserve && <span aria-hidden="true">{stateReserve}</span>}</span></span></div>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span></div>
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
                     <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
@@ -1210,14 +1219,16 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 <div className={styles.terminalActions} role="toolbar" aria-label={t('sessions.terminalMenu')}>
                   <button type="button" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind}><Icon name="search" size={16} /><span>{t('sessions.findOutput')}</span></button>
                   <button type="button" className={styles.toolButton} aria-label={t('sessions.copyOutput')} title={t('sessions.copyOutput')} onClick={() => void copyTerminalOutput(selected)}><Icon name="copy" size={16} /><span>{t('sessions.copyOutput')}</span></button>
-                  {selected.running && <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} onClick={() => toggleComposer()}><Icon name="pencil" size={16} /><span>{t('sessions.composerShort')}</span></button>}
-                  {selected.running && <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={14} /><span>{t('sessions.interruptShort')}</span></button>}
+                  <span className={styles.runningActions} data-running={selected.running || undefined} aria-hidden={selected.running ? undefined : true}>
+                    <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!selected.running} onClick={() => toggleComposer()}><Icon name="pencil" size={16} /><span>{t('sessions.composerShort')}</span></button>
+                    <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!selected.running} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={14} /><span>{t('sessions.interruptShort')}</span></button>
+                  </span>
                   <span className={styles.toolDivider} aria-hidden="true" />
                   {splitRoom && <button type="button" className={styles.toolButton} aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit}><Icon name="columns" size={16} /><span>{splitLabel}</span></button>}
                   <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
                   <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={16} /></button>
                 </div>
-                <button type="button" className={styles.endBtn} data-running={selected.running || undefined} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')}><Icon name={selected.running ? 'square' : 'close'} size={selected.running ? 12 : 14} /><span>{busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort')}</span></button>
+                <button type="button" className={styles.endBtn} data-running={selected.running || undefined} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')}><span className={styles.endIcon}><Icon name={selected.running ? 'square' : 'close'} size={selected.running ? 12 : 14} /></span><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></button>
               </div>
             </header>
 
@@ -1275,7 +1286,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               </div>
               {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               <footer className={styles.statusBar}>
-                <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{stateLabel(selected, tone)}</span>{stateReserve && <span aria-hidden="true">{stateReserve}</span>}</span></span>
+                <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
                 {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{displayPath(selected.directory)}</span></span>}
                 <span className={styles.statusSpacer} />
