@@ -523,8 +523,8 @@ export default {
     parseIssue: {
       serverInvalid: '服务器条目必须是 JSON 对象。',
       argsInvalid: 'args 必须是仅包含字符串的数组。',
-      envInvalid: 'env 必须是对象，值只能是字符串、数字或布尔值。',
-      headersInvalid: 'headers 必须是对象，值只能是字符串、数字或布尔值。',
+      envInvalid: 'env 必须是对象，值只能是字符串。',
+      headersInvalid: 'headers 必须是对象，值只能是字符串。',
     },
   },
   skills: {

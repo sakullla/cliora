@@ -24,7 +24,8 @@ test('paste import accepts mcpServers, servers, name maps, snippets and bare ser
 
   const snippet = mcp.parseMcpServerJson('"filesystem": { "command": "npx", "env": { "ROOT": "/tmp", "PORT": 3000 } },');
   assert.equal(snippet.name, 'filesystem');
-  assert.deepEqual(snippet.env, { ROOT: '/tmp', PORT: '3000' });
+  assert.deepEqual(snippet.env, { ROOT: '/tmp' });
+  assert.deepEqual(snippet.invalid, ['envInvalid']);
 
   const bare = mcp.parseMcpServerJson(JSON.stringify({ url: 'https://x.test/sse', type: 'sse' }));
   assert.equal(bare.name, '');
@@ -64,6 +65,32 @@ test('collection paste diagnoses invalid entries instead of silently dropping da
   assert.deepEqual(parsed[2].env, { VALID: 'yes' });
   assert.deepEqual(parsed[3].invalid, ['headersInvalid']);
   assert.equal(mcp.parseMcpServerJson(JSON.stringify({ command: 'npx', args: [false] })).invalid.includes('argsInvalid'), true);
+});
+
+test('collection paste rejects every non-string env and header value without coercion', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    local: { command: 'npx', env: { VALID: 'yes', NUMBER: 3000, BOOLEAN: false, NULL: null, ARRAY: ['x'], OBJECT: { value: 'x' } } },
+    remote: { url: 'https://example.test/mcp', headers: { Authorization: 'Bearer token', NUMBER: 2, BOOLEAN: true, NULL: null, ARRAY: ['x'], OBJECT: { value: 'x' } } },
+  } }));
+  assert.deepEqual(parsed[0].env, { VALID: 'yes' });
+  assert.deepEqual(parsed[0].invalid, ['envInvalid']);
+  assert.deepEqual(parsed[1].headers, { Authorization: 'Bearer token' });
+  assert.deepEqual(parsed[1].invalid, ['headersInvalid']);
+});
+
+test('bare maps preserve every entry name and diagnostic without a bare-server feature', () => {
+  const allInvalid = mcp.parseMcpServerCollection(JSON.stringify({ text: 'not-a-server', number: 42, nil: null, bool: false }));
+  assert.equal(allInvalid.length, 4);
+  assert.deepEqual(allInvalid.map(item => item.name), ['text', 'number', 'nil', 'bool']);
+  assert.deepEqual(allInvalid.map(item => item.total), [4, 4, 4, 4]);
+  assert.ok(allInvalid.every(item => item.invalid.includes('serverInvalid')));
+
+  const mixed = mcp.parseMcpServerCollection(JSON.stringify({ valid: { command: 'npx' }, broken: 'not-a-server', count: 3 }));
+  assert.equal(mixed.length, 3);
+  assert.deepEqual(mixed.map(item => item.name), ['valid', 'broken', 'count']);
+  assert.deepEqual(mixed[0].invalid, []);
+  assert.deepEqual(mixed[1].invalid, ['serverInvalid']);
+  assert.deepEqual(mixed[2].invalid, ['serverInvalid']);
 });
 
 test('draft issues mirror the backend validation', () => {
