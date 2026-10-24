@@ -94,6 +94,16 @@ async function pointForTerminalText(page: Page, text: string, last = false) {
   return (await locate())!;
 }
 
+test('session actions are available from the rail card', async ({ page }) => {
+  await openWorkbench(page);
+  await page.getByRole('button', { name: 'Codex 会话操作', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Codex 会话操作', exact: true });
+  await expect(menu.getByRole('menuitem', { name: '置顶', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /Codex/ })).toBeFocused();
+});
+
 test('Shift+Enter sends a line feed and Enter still submits', async ({ page }) => {
   await openWorkbench(page);
   await page.keyboard.type('a');
