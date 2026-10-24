@@ -2,6 +2,7 @@ import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GuideDialog } from '../../components/GuideDialog';
+import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
@@ -18,7 +19,7 @@ import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
 import { McpDistribution, type McpConfirmation, type McpDistributeHandle } from './McpDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
@@ -56,6 +57,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [search, setSearch] = useState('');
   const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
   const [importSource, setImportSource] = useState('');
+  const [removalConflict, setRemovalConflict] = useState<{ draft: McpDraft; target: McpDraftTargetRequest; result: McpTargetResult } | null>(null);
 
   async function reload() {
     const request = ++loadRequest.current;
@@ -233,6 +235,25 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     finally { setBusy(false); }
   }
 
+  async function confirmRemovalConflict() {
+    const current = removalConflict;
+    if (!current || busy) return;
+    const { result } = current;
+    const toolName = tools.find((tool) => tool.id === result.toolId)?.name ?? result.toolId;
+    const where = result.scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(result.scope, result.projectPath, projects) }) : '';
+    setRemovalConflict(null);
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const committed = await native.commitMcpDraft(current.draft, [{ ...current.target, contextId: result.contextId, baselineHash: result.baselineHash, previewToken: result.previewToken, allowReplace: true }]);
+      keepDefinition(committed.definition);
+      const failed = committed.targets.find(target => target.status !== 'removed');
+      if (failed) setError(failed.detail || t('library.resources.cannotWrite', { tool: toolName }));
+      else setNotice(t('library.page.removed', { where, tool: toolName }));
+      await refreshPlacements();
+    } catch (value) { setError(failure(value)); }
+    finally { setBusy(false); }
+  }
+
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
@@ -245,8 +266,12 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         const candidate = await native.previewMcpDraft(mcpDraftOf(item), [target]);
         const first = candidate.targets[0];
         if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
+        if (first.status === 'conflict') {
+          setRemovalConflict({ draft: candidate.draft, target, result: first });
+          return;
+        }
         if (!await confirmAction(t('library.resources.confirmRemoveMcpPlacement', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.removeMcpPlacementTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
-        const committed = await native.commitMcpDraft(candidate.draft, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        const committed = await native.commitMcpDraft(candidate.draft, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken }]);
         keepDefinition(committed.definition);
         const failed = committed.targets.find(result => result.status !== 'removed');
         if (failed) setError(failed.detail || t('library.resources.cannotWrite', { tool: toolName }));
@@ -337,6 +362,26 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </McpDetails>;
       }}
     />
+    <GuideDialog wide open={!!removalConflict} title={t('library.resources.removeMcpPlacementTitle')} hint={removalConflict ? t('library.resources.confirmRemoveMcpPlacement', { name: removalConflict.draft.name, tool: tools.find(tool => tool.id === removalConflict.result.toolId)?.name ?? removalConflict.result.toolId }) : undefined} onClose={() => setRemovalConflict(null)}>
+      {removalConflict && <>
+        <ConflictCompare
+          title={tools.find(tool => tool.id === removalConflict.result.toolId)?.name ?? removalConflict.result.toolId}
+          banner={removalConflict.result.detail}
+          currentContent={JSON.stringify(removalConflict.result.existing, null, 2)}
+          nextContent={JSON.stringify(removalConflict.result.proposed, null, 2)}
+          format="json"
+          busy={busy}
+          actions={false}
+          onUseNext={() => undefined}
+          onKeepCurrent={() => undefined}
+        />
+        <div className="dialog-footer">
+          <button type="button" disabled={busy} onClick={() => setRemovalConflict(null)}>{t('common.conflict.keepCurrent')}</button>
+          <span className="dialog-footer-gap" />
+          <button type="button" className={styles.danger} disabled={busy} onClick={() => void confirmRemovalConflict()}>{t('library.skillDist.removeAction')}</button>
+        </div>
+      </>}
+    </GuideDialog>
     <GuideDialog wide open={!!draft && !batchItems} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => void closeEditor()}>
       {draft && <>
         <div className={styles.editor}>
