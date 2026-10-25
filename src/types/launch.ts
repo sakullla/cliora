@@ -39,3 +39,5 @@ export type TrayRepairTarget = {
   profileId: string | null;
   sequence: number;
 };
+
+export type RemoteSessionIndexEntry = { remoteSessionId: string; projectId: string; targetId: string; toolId: string; directory: string; mode: LaunchMode; startedAt: number; lastSeenAt: number };

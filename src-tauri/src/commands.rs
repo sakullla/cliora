@@ -3300,6 +3300,11 @@ pub fn list_workbench_sessions() -> Vec<crate::session_host::SessionSnapshot> {
 }
 
 #[tauri::command]
+pub async fn list_remote_sessions(app: AppHandle) -> Result<Vec<crate::launch::RemoteSessionIndexEntry>, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| launch::list_remote_sessions(db).map_err(native_error))).await
+}
+
+#[tauri::command]
 pub async fn replay_workbench_session(session_id: String) -> Result<String, ApiError> {
     blocking(move || crate::session_host::replay(&session_id).map_err(native_error)).await
 }
@@ -3376,6 +3381,8 @@ pub(crate) fn launch_now_with_stage(
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
     let project_id = request.project_id.clone();
+    let launch_tool_id = request.tool_id.clone();
+    let launch_mode = request.mode;
     let project = project_id
         .as_deref()
         .map(|id| {
@@ -3435,6 +3442,12 @@ pub(crate) fn launch_now_with_stage(
         .map_err(|error| LaunchFailure::new(LaunchStage::Terminal, error))?;
     let result = launch::spawn(&db, plan)
         .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
+    if let (Some(project_id), Some(remote_session_id)) = (project_id.as_deref(), result.remote_session_id.as_deref()) {
+        if project_id.starts_with("remote:") {
+            launch::remember_remote_session(&db, project_id, &launch_tool_id, launch_mode, remote_session_id)
+                .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
+        }
+    }
     if let Some(project_id) = &project_id {
         if let Err(error) = app.state::<AppState>().with_database(app, |db| {
             projects::touch(db, project_id).map_err(native_error)

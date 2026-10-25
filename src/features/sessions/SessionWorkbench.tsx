@@ -510,9 +510,10 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       native.listWorkbenchSessions(),
       native.listProjects().catch(() => [] as Project[]),
       native.listRemoteProjects().catch(() => [] as Array<{ id: string; preferredTool?: string | null }>),
+      native.listRemoteSessions().catch(() => []),
       native.listLibraryItems('prompt', null, '').catch(() => [] as LibraryItem[]),
       native.getLaunchSettings().catch(() => null),
-    ]).then(([listed, listedProjects, remoteProjects, prompts, settings]) => {
+    ]).then(([listed, listedProjects, remoteProjects, remoteSessions, prompts, settings]) => {
       if (!alive) return;
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
@@ -521,20 +522,24 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       setProjects(Array.isArray(listedProjects) ? listedProjects : []);
       setLibraryPrompts(Array.isArray(prompts) ? prompts : []);
       if (settings) setLaunchSettings(settings);
-      if (!next.length && !autoRemoteReattachAttempted.current && Array.isArray(remoteProjects)) {
-        const candidate = remoteProjects.find((item) => item?.id && item.preferredTool);
-        if (candidate?.preferredTool) {
-          autoRemoteReattachAttempted.current = true;
-          void native.launchCli({
-            toolId: candidate.preferredTool,
-            projectId: `remote:${candidate.id}`,
-            sessionId: '__remote_reattach__',
-            mode: 'normal',
-            directory: null,
-            initialPrompt: null,
-            resumeLatest: false,
-          }).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
-        }
+      if (!next.length && !autoRemoteReattachAttempted.current) {
+        autoRemoteReattachAttempted.current = true;
+        const indexed = Array.isArray(remoteSessions) ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId) : [];
+        const requests = indexed.length
+          ? indexed.map((item) => native.launchCli({
+              toolId: item.toolId,
+              projectId: `remote:${item.projectId}`,
+              sessionId: `__remote_reattach__:${item.remoteSessionId}`,
+              mode: item.mode ?? 'normal',
+              directory: item.directory ?? null,
+              initialPrompt: null,
+              resumeLatest: false,
+            }))
+          : (() => {
+              const candidate = Array.isArray(remoteProjects) ? remoteProjects.find((item) => item?.id && item.preferredTool) : null;
+              return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
+            })();
+        if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
       }
       setListError('');
       setSelectedId((current) => {

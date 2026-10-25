@@ -303,6 +303,7 @@ pub fn run() {
             commands::set_default_launch_mode,
             commands::launch_cli,
             commands::list_workbench_sessions,
+            commands::list_remote_sessions,
             commands::replay_workbench_session,
             commands::write_workbench_session,
             commands::resize_workbench_session,

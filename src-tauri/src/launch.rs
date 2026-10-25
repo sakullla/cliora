@@ -1,6 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use rusqlite::{params, OptionalExtension};
@@ -191,6 +192,71 @@ pub struct LaunchPlan {
     pub remote_end_args: Option<Vec<String>>,
 }
 
+/// Durable metadata for remote sessions.  The SSH attachment is ephemeral,
+/// while this index survives app restarts so the workbench can discover and
+/// reattach every remote agent independently.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSessionIndexEntry {
+    pub remote_session_id: String,
+    pub project_id: String,
+    pub target_id: String,
+    pub tool_id: String,
+    pub directory: String,
+    pub mode: LaunchMode,
+    pub started_at: u64,
+    pub last_seen_at: u64,
+}
+
+const REMOTE_SESSION_INDEX_KEY: &str = "remote_session_index_v1";
+const REMOTE_REATTACH_PREFIX: &str = "__remote_reattach__:";
+
+fn read_remote_session_index(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
+    let raw = read_setting(db, REMOTE_SESSION_INDEX_KEY)?;
+    Ok(raw
+        .and_then(|value| serde_json::from_str::<Vec<RemoteSessionIndexEntry>>(&value).ok())
+        .unwrap_or_default())
+}
+
+fn write_remote_session_index(db: &Database, entries: &[RemoteSessionIndexEntry]) -> Result<(), String> {
+    let value = serde_json::to_string(entries).map_err(|error| error.to_string())?;
+    write_setting(db, REMOTE_SESSION_INDEX_KEY, &value)
+}
+
+pub fn list_remote_sessions(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
+    let mut entries = read_remote_session_index(db)?;
+    entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+    Ok(entries)
+}
+
+pub fn forget_remote_session(db: &Database, remote_session_id: &str) -> Result<(), String> {
+    let entries = read_remote_session_index(db)?
+        .into_iter()
+        .filter(|entry| entry.remote_session_id != remote_session_id)
+        .collect::<Vec<_>>();
+    write_remote_session_index(db, &entries)
+}
+
+pub fn remember_remote_session(
+    db: &Database,
+    project_id: &str,
+    tool_id: &str,
+    mode: LaunchMode,
+    remote_session_id: &str,
+) -> Result<(), String> {
+    let project_key = project_id.strip_prefix("remote:").unwrap_or(project_id);
+    let project = crate::remote::list_projects(db, None).map_err(|error| error.to_string())?.into_iter().find(|item| item.id == project_key)
+        .ok_or_else(|| "远程项目不存在".to_owned())?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
+    let mut entries = read_remote_session_index(db)?;
+    if let Some(existing) = entries.iter_mut().find(|entry| entry.remote_session_id == remote_session_id) {
+        existing.last_seen_at = now;
+    } else {
+        entries.push(RemoteSessionIndexEntry { remote_session_id: remote_session_id.to_owned(), project_id: project_key.to_owned(), target_id: project.target_id, tool_id: tool_id.to_owned(), directory: project.path, mode, started_at: now, last_seen_at: now });
+    }
+    write_remote_session_index(db, &entries)
+}
+
 fn remote_project_key(project_id: Option<&str>) -> Option<&str> {
     project_id.and_then(|value| value.strip_prefix("remote:"))
 }
@@ -199,7 +265,7 @@ fn remote_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn remote_session_name(project_id: &str) -> String {
+fn remote_session_name(project_id: &str, suffix: Option<&str>) -> String {
     let mut name = String::from("cliora-");
     for ch in project_id.chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
@@ -208,6 +274,10 @@ fn remote_session_name(project_id: &str) -> String {
     }
     name.truncate(48);
     if name == "cliora-" { name.push_str("session"); }
+    if let Some(suffix) = suffix.filter(|value| !value.is_empty()) {
+        name.push('-');
+        name.push_str(suffix);
+    }
     name
 }
 
@@ -306,13 +376,15 @@ fn remote_launch_plan(
         args.extend(["-F".into(), config.into()]);
     }
     args.push(format!("{}@{}", target.user, target.host));
-    let session = remote_session_name(project_key);
+    let requested_session = request.session_id.as_deref().and_then(|value| value.strip_prefix(REMOTE_REATTACH_PREFIX));
+    let session_suffix = requested_session.map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_owned());
+    let session = remote_session_name(project_key, Some(&session_suffix));
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         launch_args.push(prompt.to_owned());
     }
     // Remote project reattach requests use the reserved session marker so the
     // existing IPC contract stays backwards compatible with native resume IDs.
-    let remote_command = if request.session_id.as_deref() == Some("__remote_reattach__") {
+    let remote_command = if requested_session.is_some() {
         remote_reattach_command(&session)
     } else {
         remote_persistent_command(path, adapter.command(), &launch_args, &session)
