@@ -12,6 +12,7 @@ import { useFeedback } from '../../lib/toast';
 import { SearchField } from '../../components/SearchField';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
+import { Icon } from '../../components/Icon';
 import { ResourceWorkspace } from '../../components/resource/ResourceWorkspace';
 import i18n from '../../i18n';
 
@@ -196,11 +197,13 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     headerActions={<button disabled={busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>}
     context={<><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></>}
     beforeList={snapshot?.capability.actions.includes('install') && <div className={styles.installBox}>
-      <div className={styles.installHeading}><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
-      <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
-        <button className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
-      <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
-      {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
+      <div className={styles.installHeading}><span className={styles.installGlyph} aria-hidden="true"><Icon name="package" size={17} /></span><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
+      <div className={styles.installControls}>
+        <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
+          <button className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
+        <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
+        {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
+      </div>
     </div>}
     toolbar={snapshot && <div className={styles.listToolbar}><SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /><select aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select><span>{snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}{filteredInstalledCount === installedCount ? t('tools.plugins.count', { count: installedCount }) : t('tools.plugins.countFiltered', { filtered: filteredInstalledCount, total: installedCount })}</span></div>}
     status={<>
@@ -218,18 +221,34 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     detailsLabel={t('tools.plugins.detailsLabel')}
     closeDetailsLabel={t('tools.plugins.closeDetails')}
     empty={empty}
+    detailsActions={(() => {
+      const entry = filtered.find(item => `${item.scope}:${item.id}` === selectedKey);
+      if (!entry) return undefined;
+      const operation = operationFor(entry);
+      return entryActions(entry).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, entry)}>{actionLabel(action)}</button>);
+    })()}
     renderItem={entry => {
       const operation = operationFor(entry);
-      return <span className={styles.resourceBody}><span className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}{operation && <span className={styles.badge} data-state="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}</span><span className={styles.resourceMeta}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span><span className={styles.resourceVersion}>{entry.version ?? t('tools.plugins.versionMissing')}</span><span className={styles.resourceVersion}>{stateLabel(entry.state)}</span></span>;
+      return <span className={styles.resourceBody}>
+        <span className={styles.resourceGlyph} data-state={entry.enabled ? 'on' : 'off'} aria-hidden="true"><Icon name="package" size={17} /></span>
+        <span className={styles.resourceMain}>
+          <span className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}{operation && <span className={styles.badge} data-state="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}</span>
+          <span className={styles.resourceMeta}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span>
+        </span>
+        <span className={styles.resourceSide}><span className={styles.resourceVersion}>{entry.version ?? t('tools.plugins.versionMissing')}</span><span className={styles.resourceState}>{stateLabel(entry.state)}</span></span>
+      </span>;
     }}
     renderDetails={entry => {
       const operation = operationFor(entry);
       return <div className={styles.pluginDetails}>
-        <p className={styles.detailState}>{stateLabel(entry.state)}</p>
+        <div className={styles.detailHero}>
+          <span className={styles.detailStateBadge} data-state={entry.enabled ? 'on' : 'off'}>{stateLabel(entry.state)}</span>
+          {entry.readOnly && <span className={styles.detailFlag}>{t('tools.plugins.readonly')}</span>}
+          {operation && <span className={styles.detailFlag} data-tone="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}
+        </div>
         <dl className={styles.detailGrid}><div><dt>{t('tools.plugins.version')}</dt><dd>{entry.version ?? t('tools.plugins.versionMissing')}</dd></div><div><dt>{t('tools.plugins.source')}</dt><dd>{displayPath(entry.source)}</dd></div><div><dt>{t('tools.plugins.scopeLabel')}</dt><dd>{scopeLabel(entry.scope)}</dd></div><div><dt>{t('tools.plugins.locationSummary')}</dt><dd>{entry.root ? displayPath(entry.root) : t('tools.plugins.notProvided')}</dd></div></dl>
         <section className={styles.detailSection}><h4>{t('tools.plugins.policySummary')}</h4><p>{policyLabel(entry.policy)}{entry.readOnly ? t('tools.plugins.readonlySuffix') : ''}</p></section>
         <section className={styles.detailSection}><h4>{t('tools.plugins.resourcesSummary')}</h4>{entry.resources.length ? <ul>{entry.resources.map(resource => <li key={resource.path}><span>{resource.kind}</span><code>{displayPath(resource.path)}</code></li>)}</ul> : <p>{t('tools.plugins.noResources')}</p>}</section>
-        {entryActions(entry).length > 0 && <div className={styles.detailActions}>{entryActions(entry).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, entry)}>{actionLabel(action)}</button>)}</div>}
         {entry.readOnly && <p className={styles.readonlyNote}>{t('tools.plugins.readonlyDetail')}</p>}
         {blockProjectUpdate && entryActions(entry).includes('update') && <p className={styles.readonlyNote}>{t('tools.plugins.updateProjectTitle')}</p>}
       </div>;

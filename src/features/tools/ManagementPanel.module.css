@@ -45,11 +45,15 @@
 .empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); }
 
 /* Plugin workspace: the shared shell owns list/detail layout; these are domain surfaces. */
-.installBox { display: grid; gap: 13px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
-.installHeading h3 { margin: 0 0 4px; font-size: var(--fs-body); }
+.installBox { display: grid; grid-template-columns: minmax(220px, .48fr) minmax(0, 1fr); align-items: center; gap: 10px 20px; padding: 14px 17px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(180deg, var(--surface) 0%, color-mix(in srgb, var(--surface-2) 34%, var(--surface)) 100%); box-shadow: var(--shadow-xs); }
+.installHeading { display: flex; align-items: flex-start; gap: 11px; }
+.installGlyph { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+.installHeading h3 { margin: 0 0 3px; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .installHeading p, .fieldError { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.6; }
-.installBox .create { padding: 0; border: 0; background: transparent; }
-.installBox .create label { flex-basis: 320px; }
+.installControls { display: grid; gap: 8px; min-width: 0; }
+.installBox .create { padding: 0; border: 0; background: transparent; gap: 8px; flex-wrap: nowrap; }
+.installBox .create label { flex: 1 1 220px; }
+.installBox .create > button { flex: none; }
 .fieldError { color: var(--danger); }
 .listToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .listToolbar:focus-within:has(input:focus) { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
@@ -58,12 +62,24 @@
 .listToolbar input:focus, .listToolbar input:focus-visible { outline: none; box-shadow: none; }
 .listToolbar select { flex: 0 1 140px; }
 .listToolbar > span { color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; margin-left: auto; }
-.resourceBody { display: grid; gap: 7px; min-width: 0; }
-.resourceTitle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.resourceTitle > strong { overflow-wrap: anywhere; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.resourceBody { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; min-width: 0; }
+.resourceGlyph { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--text-3); }
+.resourceGlyph[data-state="on"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.resourceMain { display: grid; gap: 5px; min-width: 0; }
+.resourceTitle { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.resourceTitle > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: anywhere; font-size: var(--fs-body); font-weight: var(--fw-semibold); line-height: 1.4; }
 .resourceMeta, .resourceVersion { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
-.resourceVersion { color: var(--text-3); }
+.resourceMeta { min-width: 0; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+.resourceSide { display: grid; justify-items: end; gap: 3px; min-width: 0; }
+.resourceVersion { color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.resourceState { max-width: 150px; overflow: hidden; padding: 1px 7px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .pluginDetails { display: grid; gap: 18px; min-width: 0; }
+.detailHero { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.detailStateBadge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.detailStateBadge[data-state="on"] { border-color: color-mix(in srgb, var(--success) 26%, var(--line)); background: var(--success-soft); color: var(--success); }
+.detailStateBadge[data-state="on"]::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.detailFlag { padding: 2px 9px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); }
+.detailFlag[data-tone="pending"] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .detailState { margin: 0; color: var(--text-2); font-size: var(--fs-body); }
 .detailGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0; }
 .detailGrid > div { display: grid; gap: 5px; min-width: 0; }
@@ -92,5 +108,6 @@
 .queueRow[data-state="queued"] .queueState, .queueRow[data-state="running"] .queueState { color: var(--warning); }
 .noMatch { display: grid; justify-items: center; gap: 8px; padding: 32px 20px; border: 1px dashed var(--line); border-radius: var(--radius-lg); text-align: center; }
 .noMatch p { margin: 0; color: var(--text-2); }
-@media (max-width: 760px) { .panel { padding: 16px 0; } .create { align-items: stretch; } .create > button { flex: 1 1 auto; align-self: flex-end; } .list > li { padding: 14px; } .listToolbar > span { margin-left: 0; } .detailGrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .installBox { grid-template-columns: minmax(0, 1fr); align-items: start; } }
+@media (max-width: 760px) { .panel { padding: 16px 0; } .create { align-items: stretch; } .create > button { flex: 1 1 auto; align-self: flex-end; } .installBox .create { flex-wrap: wrap; } .list > li { padding: 14px; } .listToolbar > span { margin-left: 0; } .detailGrid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .list > li { transition: none; } }

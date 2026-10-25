@@ -373,6 +373,7 @@ export default {
     title: 'MCP servers',
     description: 'MCP servers active on this CLI. Edits are written only to this CLI; distribute to multiple CLIs from the library.',
     add: 'Add MCP',
+    doubleClickHint: 'Double-click a row to edit',
     blocked: 'The current tool cannot accept a submittable MCP. See the reason above.',
     emptyTitle: 'No active MCP on this CLI yet',
     emptyDetail: 'Added entries are written only to this CLI. To use them elsewhere, enable quick sync and distribute from the library.',
