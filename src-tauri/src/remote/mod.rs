@@ -475,7 +475,11 @@ pub fn read_file(target: &RemoteTarget, remote_path: &str) -> Result<Vec<u8>, Re
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stage = classify_ssh_failure(&stderr, output.status.code());
         return Err(RemoteError::Transport {
-            stage: if stage == "connect" { "sftp" } else { stage },
+            stage: if matches!(stage, "connect" | "remote_command") {
+                "sftp"
+            } else {
+                stage
+            },
             detail: stderr.trim().chars().take(500).collect(),
         });
     }
