@@ -83,7 +83,7 @@ export type MemoryAggregate = {
 };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type RemoteFacet = { state: 'supported' | 'unsupported'; reason: string };
-export type RemoteCapabilities = { configuration: RemoteFacet; accounts: RemoteFacet; resources: RemoteFacet; history: RemoteFacet; usage: RemoteFacet };
+export type RemoteCapabilities = { probe: RemoteFacet; configuration: RemoteFacet; accounts: RemoteFacet; resources: RemoteFacet; history: RemoteFacet; usage: RemoteFacet };
 /** Parent/child association. Omitted when the CLI does not provide usage records. */
 export type AssociationFacet = { state: 'available' | 'unavailable'; reason: string };
 export type AdapterDescriptor = {
