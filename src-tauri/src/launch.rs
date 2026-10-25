@@ -310,7 +310,13 @@ fn remote_launch_plan(
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         launch_args.push(prompt.to_owned());
     }
-    let remote_command = remote_persistent_command(path, adapter.command(), &launch_args, &session);
+    // Remote project reattach requests use the reserved session marker so the
+    // existing IPC contract stays backwards compatible with native resume IDs.
+    let remote_command = if request.session_id.as_deref() == Some("__remote_reattach__") {
+        remote_reattach_command(&session)
+    } else {
+        remote_persistent_command(path, adapter.command(), &launch_args, &session)
+    };
     let mut remote_end_args = args.clone();
     remote_end_args.push(format!("tmux kill-session -t {} 2>/dev/null || screen -S {} -X quit 2>/dev/null || true", remote_shell_quote(&session), remote_shell_quote(&session)));
     args.push(remote_command);
