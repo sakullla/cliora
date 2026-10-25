@@ -467,6 +467,11 @@ pub trait CliAdapter: Sync {
     fn remote_accounts_command(&self, args: &[&str]) -> Result<String, String> {
         self.remote_port_command(RemoteCapability::Accounts, args)
     }
+    /// Validate adapter-specific account protocol output before a consumer
+    /// marks the result as complete. The default keeps the port unavailable.
+    fn parse_remote_accounts(&self, _stdout: &str) -> Result<(), String> {
+        Err("此 CLI 未声明远程账号结果解析器".into())
+    }
     fn remote_resources_command(&self, args: &[&str]) -> Result<String, String> {
         self.remote_port_command(RemoteCapability::Resources, args)
     }
@@ -522,7 +527,11 @@ pub trait CliAdapter: Sync {
         Ok(RemoteOperationResult {
             capability: capability.key(),
             source: format!("ssh:{}", result.target_id),
-            integrity: if result.exit_code == 0 { "verified" } else { "unverified" },
+            integrity: if result.exit_code == 0 {
+                "transport_verified"
+            } else {
+                "unverified"
+            },
             command: result,
         })
     }
