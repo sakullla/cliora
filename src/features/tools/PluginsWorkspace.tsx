@@ -13,7 +13,7 @@ import { SearchField } from '../../components/SearchField';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
-import { ResourceWorkspace } from '../../components/resource/ResourceWorkspace';
+import { DocumentHeader, DocumentWorkspace, documentStyles as doc } from './DocumentWorkspace';
 import i18n from '../../i18n';
 
 function actionLabel(action: PluginAction) { return i18n.t(`tools.plugins.action.${action}`); }
@@ -80,6 +80,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const operationId = useRef(0);
   const refreshing = useRef(false);
   const sourceInput = useRef<HTMLInputElement>(null);
+  const restoreFocus = useRef<string | null>(null);
   const accountLabel = useAccountLabels();
   const entries = snapshot?.entries ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
@@ -183,76 +184,90 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     return (['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => snapshot?.capability.actions.includes(action));
   }
   function clearFilters() { setSearch(''); setFilter('all'); }
+  function closeDetails() { restoreFocus.current = selectedKey; setSelectedKey(null); }
+  const pluginKey = (entry: PluginEntry) => `${entry.scope}:${entry.id}`;
+  const opened = filtered.find(entry => pluginKey(entry) === selectedKey) ?? null;
+  useEffect(() => {
+    if (selectedKey || !restoreFocus.current) return;
+    const key = restoreFocus.current;
+    restoreFocus.current = null;
+    document.querySelector<HTMLButtonElement>(`[data-plugin-key="${CSS.escape(key)}"]`)?.focus();
+  }, [selectedKey]);
 
-  const empty = snapshot?.baseline && entries.length === 0 && !busy && !stale ? <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
-    ? <button className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
-    : <button className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />
-    : filtered.length === 0 && entries.length > 0 ? <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>
-    : undefined;
+  const showFailed = !busy && (!snapshot || (stale && !snapshot.baseline));
+  const showEmpty = !!snapshot?.baseline && entries.length === 0 && !busy && !stale;
+  const countText = snapshot ? `${snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}${filteredInstalledCount === installedCount ? t('tools.plugins.count', { count: installedCount }) : t('tools.plugins.countFiltered', { filtered: filteredInstalledCount, total: installedCount })}` : undefined;
+  const install = snapshot?.capability.actions.includes('install') ? <div className={styles.installBox}>
+    <div className={styles.installHeading}><span className={styles.installGlyph} aria-hidden="true"><Icon name="package" size={17} /></span><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
+    <div className={styles.installControls}>
+      <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
+        <button type="button" className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
+      <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
+      {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
+    </div>
+  </div> : null;
+  const operation = opened ? operationFor(opened) : undefined;
 
-  return <ResourceWorkspace<PluginEntry>
-    ariaLabel={t('tools.plugins.label')}
-    title={t('tools.plugins.title')}
-    description={t('tools.plugins.description')}
-    headerActions={<button disabled={busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>}
-    context={<><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></>}
-    beforeList={snapshot?.capability.actions.includes('install') && <div className={styles.installBox}>
-      <div className={styles.installHeading}><span className={styles.installGlyph} aria-hidden="true"><Icon name="package" size={17} /></span><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
-      <div className={styles.installControls}>
-        <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
-          <button className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
-        <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
-        {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
-      </div>
-    </div>}
-    toolbar={snapshot && <div className={styles.listToolbar}><SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /><select aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select><span>{snapshot.baseline ? '' : t('tools.plugins.discoveredPrefix')}{filteredInstalledCount === installedCount ? t('tools.plugins.count', { count: installedCount }) : t('tools.plugins.countFiltered', { filtered: filteredInstalledCount, total: installedCount })}</span></div>}
-    status={<>
-      {busy && (snapshot ? <p className={styles.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p> : <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>)}
-      {stale && snapshot?.baseline && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button disabled={busy || operations.some(operation => operation.status === 'queued' || operation.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
-      {!busy && (!snapshot || (stale && !snapshot.baseline)) && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
-      {operations.length > 0 && <div className={styles.queue} aria-label={t('tools.plugins.queueLabel')}><div className={styles.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(operation => <div className={styles.queueRow} key={operation.id} data-state={operation.status}><span><strong>{actionLabel(operation.action)} · {operation.name}</strong>{operation.detail && <small>{operation.detail}</small>}</span><span className={styles.queueState}>{t(`tools.plugins.operationState.${operation.status}`)}</span>{operation.status === 'queued' && <button onClick={() => setOperations(current => current.filter(item => item.id !== operation.id))}>{t('tools.plugins.cancelQueued')}</button>}{operation.status === 'failed' && <button disabled={operation.action === 'install' && (!source.trim() || !trusted || !!sourceIssue || !canInstall)} onClick={() => { if (operation.action === 'install') { void operate('install'); return; } setError(''); setOperations(current => current.map(item => item.id === operation.id ? { ...item, status: 'queued', detail: undefined } : item)); }}>{t('tools.plugins.retry')}</button>}</div>)}</div>}
+  return <DocumentWorkspace label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.label')} backLabel={t('common.dialog.back')} onBack={closeDetails}
+    heading={t('tools.plugins.title')}
+    count={countText}
+    actions={<button type="button" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()}><Icon name="refresh" size={15} /></button>}
+    search={snapshot ? <SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
+    filters={snapshot ? <select className={styles.filter} aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select> : undefined}
+    notices={<>
+      {busy && snapshot && <p className={styles.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p>}
+      {stale && snapshot?.baseline && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button type="button" disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
+      {operations.length > 0 && <div className={styles.queue} aria-label={t('tools.plugins.queueLabel')}><div className={styles.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(item => <div className={styles.queueRow} key={item.id} data-state={item.status}><span><strong>{actionLabel(item.action)} · {item.name}</strong>{item.detail && <small>{item.detail}</small>}</span><span className={styles.queueState}>{t(`tools.plugins.operationState.${item.status}`)}</span>{item.status === 'queued' && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.cancelQueued')}</button>}{item.status === 'failed' && <button type="button" disabled={item.action === 'install' && (!source.trim() || !trusted || !!sourceIssue || !canInstall)} onClick={() => { if (item.action === 'install') { void operate('install'); return; } setError(''); setOperations(current => current.map(entry => entry.id === item.id ? { ...entry, status: 'queued', detail: undefined } : entry)); }}>{t('tools.plugins.retry')}</button>}</div>)}</div>}
     </>}
-    items={filtered}
-    getItemKey={entry => `${entry.scope}:${entry.id}`}
-    getItemLabel={entry => entry.name}
-    selectedKey={selectedKey}
-    onSelect={entry => setSelectedKey(`${entry.scope}:${entry.id}`)}
-    onCloseDetails={() => setSelectedKey(null)}
-    detailsLabel={t('tools.plugins.detailsLabel')}
-    closeDetailsLabel={t('tools.plugins.closeDetails')}
-    empty={empty}
-    detailsActions={(() => {
-      const entry = filtered.find(item => `${item.scope}:${item.id}` === selectedKey);
-      if (!entry) return undefined;
-      const operation = operationFor(entry);
-      return entryActions(entry).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || entry.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, entry)}>{actionLabel(action)}</button>);
-    })()}
-    renderItem={entry => {
-      const operation = operationFor(entry);
-      return <span className={styles.resourceBody}>
-        <span className={styles.resourceGlyph} data-state={entry.enabled ? 'on' : 'off'} aria-hidden="true"><Icon name="package" size={17} /></span>
-        <span className={styles.resourceMain}>
-          <span className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{statusLabel(entry)}</span>{entry.readOnly && <span className={styles.badge}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}{operation && <span className={styles.badge} data-state="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}</span>
-          <span className={styles.resourceMeta}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span>
-        </span>
-        <span className={styles.resourceSide}><span className={styles.resourceVersion}>{entry.version ?? t('tools.plugins.versionMissing')}</span><span className={styles.resourceState}>{stateLabel(entry.state)}</span></span>
-      </span>;
-    }}
-    renderDetails={entry => {
-      const operation = operationFor(entry);
-      return <div className={styles.pluginDetails}>
-        <div className={styles.detailHero}>
-          <span className={styles.detailStateBadge} data-state={entry.enabled ? 'on' : 'off'}>{stateLabel(entry.state)}</span>
-          {entry.readOnly && <span className={styles.detailFlag}>{t('tools.plugins.readonly')}</span>}
-          {operation && <span className={styles.detailFlag} data-tone="pending">{t(`tools.plugins.operationState.${operation.status}`)}</span>}
-        </div>
-        <dl className={styles.detailGrid}><div><dt>{t('tools.plugins.version')}</dt><dd>{entry.version ?? t('tools.plugins.versionMissing')}</dd></div><div><dt>{t('tools.plugins.source')}</dt><dd>{displayPath(entry.source)}</dd></div><div><dt>{t('tools.plugins.scopeLabel')}</dt><dd>{scopeLabel(entry.scope)}</dd></div><div><dt>{t('tools.plugins.locationSummary')}</dt><dd>{entry.root ? displayPath(entry.root) : t('tools.plugins.notProvided')}</dd></div></dl>
-        <section className={styles.detailSection}><h4>{t('tools.plugins.policySummary')}</h4><p>{policyLabel(entry.policy)}{entry.readOnly ? t('tools.plugins.readonlySuffix') : ''}</p></section>
-        <section className={styles.detailSection}><h4>{t('tools.plugins.resourcesSummary')}</h4>{entry.resources.length ? <ul>{entry.resources.map(resource => <li key={resource.path}><span>{resource.kind}</span><code>{displayPath(resource.path)}</code></li>)}</ul> : <p>{t('tools.plugins.noResources')}</p>}</section>
-        {entry.readOnly && <p className={styles.readonlyNote}>{t('tools.plugins.readonlyDetail')}</p>}
-        {blockProjectUpdate && entryActions(entry).includes('update') && <p className={styles.readonlyNote}>{t('tools.plugins.updateProjectTitle')}</p>}
-      </div>;
-    }}
-    footer={snapshot && <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>}
+    listFooterLabel={t('tools.plugins.compatSummary')}
+    listFooter={snapshot ? <>
+      <span className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></span>
+      <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>
+    </> : undefined}
+    list={<div className={styles.listWrap}>
+      {install}
+      {busy && !snapshot && <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>}
+      {showFailed && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button type="button" className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+      {showEmpty && <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
+        ? <button type="button" className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
+        : <button type="button" className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+      {!showFailed && !showEmpty && filtered.length === 0 && entries.length > 0 && <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button type="button" onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>}
+      {filtered.length > 0 && <ul className={doc.rows} aria-label={t('tools.plugins.title')}>{filtered.map(entry => {
+        const key = pluginKey(entry);
+        const pending = operationFor(entry);
+        return <li key={key}><button type="button" className={doc.row} data-plugin-key={key} aria-current={opened && pluginKey(opened) === key ? 'true' : undefined} onClick={() => setSelectedKey(key)}>
+          <span className={doc.rowTitle}><strong>{entry.name}</strong></span>
+          <span className={doc.rowSummary}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span>
+          <span className={doc.rowMeta}>
+            <span className={doc.chip} data-tone={entry.enabled ? 'on' : 'muted'}>{statusLabel(entry)}</span>
+            <span className={doc.chip}>{stateLabel(entry.state)}</span>
+            {entry.readOnly && <span className={doc.chip}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}
+            {pending && <span className={doc.chip} data-tone="warn">{t(`tools.plugins.operationState.${pending.status}`)}</span>}
+          </span>
+        </button></li>;
+      })}</ul>}
+    </div>}
+    placeholder={snapshot && entries.length > 0 && !opened ? <div className={doc.placeholder}><span className={doc.placeholderIcon} aria-hidden="true"><Icon name="package" size={22} /></span><strong>{t('tools.plugins.selectHint')}</strong><p>{t('tools.plugins.selectDetail')}</p></div> : null}
+    document={opened ? <article className={doc.doc} aria-label={t('tools.plugins.detailsLabel')}>
+      <DocumentHeader
+        title={opened.name}
+        badges={<>
+          <span className={doc.chip} data-tone={opened.enabled ? 'on' : 'muted'}>{stateLabel(opened.state)}</span>
+          {opened.readOnly && <span className={doc.chip}>{t('tools.plugins.readonly')}</span>}
+          {operation && <span className={doc.chip} data-tone="warn">{t(`tools.plugins.operationState.${operation.status}`)}</span>}
+        </>}
+        tools={<>
+          {entryActions(opened).map(action => <button type="button" key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</button>)}
+          <button type="button" className={doc.iconButton} aria-label={t('tools.plugins.closeDetails')} title={t('tools.plugins.closeDetails')} onClick={closeDetails}><Icon name="close" size={15} /></button>
+        </>}
+      />
+      <div className={doc.body}><div className={styles.pluginDetails}>
+        <dl className={styles.detailGrid}><div><dt>{t('tools.plugins.version')}</dt><dd>{opened.version ?? t('tools.plugins.versionMissing')}</dd></div><div><dt>{t('tools.plugins.source')}</dt><dd>{displayPath(opened.source)}</dd></div><div><dt>{t('tools.plugins.scopeLabel')}</dt><dd>{scopeLabel(opened.scope)}</dd></div><div><dt>{t('tools.plugins.locationSummary')}</dt><dd>{opened.root ? displayPath(opened.root) : t('tools.plugins.notProvided')}</dd></div></dl>
+        <section className={styles.detailSection}><h4>{t('tools.plugins.policySummary')}</h4><p>{policyLabel(opened.policy)}{opened.readOnly ? t('tools.plugins.readonlySuffix') : ''}</p></section>
+        <section className={styles.detailSection}><h4>{t('tools.plugins.resourcesSummary')}</h4>{opened.resources.length ? <ul>{opened.resources.map(resource => <li key={resource.path}><span>{resource.kind}</span><code>{displayPath(resource.path)}</code></li>)}</ul> : <p>{t('tools.plugins.noResources')}</p>}</section>
+        {opened.readOnly && <p className={styles.readonlyNote}>{t('tools.plugins.readonlyDetail')}</p>}
+        {blockProjectUpdate && entryActions(opened).includes('update') && <p className={styles.readonlyNote}>{t('tools.plugins.updateProjectTitle')}</p>}
+      </div></div>
+    </article> : null}
   />;
 }

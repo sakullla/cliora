@@ -7,12 +7,10 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
 import { SkeletonRows } from '../../components/Skeleton';
-import { ResourceWorkspace } from '../../components/resource/ResourceWorkspace';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
-import { McpDetails } from '../../components/mcp/McpDetails';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
 import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
@@ -39,12 +37,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [stale, setStale] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [willDistribute, setWillDistribute] = useState(false);
   const [confirmation, setConfirmation] = useState<McpConfirmation>('none');
   const [formKey, setFormKey] = useState(0);
   const [pasteFirst, setPasteFirst] = useState(false);
-  const [editorIntent, setEditorIntent] = useState<'edit' | 'distribute'>('edit');
   const distributeRef = useRef<McpDistributeHandle>(null);
   const loadRequest = useRef(0);
   const [draft, setDraft] = useState<McpDraft | null>(null);
@@ -56,7 +52,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const { setError, setNotice } = useFeedback();
   const [dialogError, setDialogError] = useState('');
   const [search, setSearch] = useState('');
-  const [placementFilter, setPlacementFilter] = useState<'all' | 'placed' | 'unplaced'>('all');
   const [batchItems, setBatchItems] = useState<McpBatchItem[] | null>(null);
   const [importSource, setImportSource] = useState('');
   const [removalConflict, setRemovalConflict] = useState<{ draft: McpDraft; target: McpDraftTargetRequest; result: McpTargetResult } | null>(null);
@@ -71,7 +66,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       if (request !== loadRequest.current) return;
       setDefinitions(items);
       setPlacements(placed);
-      setSelectedId(current => current && items.some(item => item.id === current && item.inLibrary !== false) ? current : items.find(item => item.inLibrary !== false)?.id ?? null);
       setLoaded(true);
       setStale(false);
     } catch (value) {
@@ -96,9 +90,8 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const current: EditorState | null = draft ? { draft, envRows, headerRows } : null;
   const dirty = !!current && fingerprint(current) !== baseline;
 
-  function editMcp(item?: McpDefinition, paste = false, intent: 'edit' | 'distribute' = 'edit') {
+  function editMcp(item?: McpDefinition, paste = false) {
     const next: EditorState = { draft: item ? mcpDraftOf(item) : blankMcpDraft(), envRows: editableRowsOf(item?.env ?? {}), headerRows: editableRowsOf(item?.headers ?? {}) };
-    setEditorIntent(intent);
     setDraft(next.draft);
     setEnvRows(next.envRows);
     setHeaderRows(next.headerRows);
@@ -134,19 +127,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     editMcp();
   }, [createSignal]);
 
-  // "Edit and distribute" lands on the CLI targets; the narrow editor stacks them
-  // below the form, so focus also scrolls the dialog to the right section.
-  useEffect(() => {
-    if (!draft || editorIntent !== 'distribute') return;
-    const timer = window.setTimeout(() => {
-      const panel = document.querySelector<HTMLElement>('dialog[open] [data-mcp-targets]');
-      const first = panel?.querySelector<HTMLInputElement>('input[type="checkbox"]:not(:disabled)');
-      first?.focus({ preventScroll: true });
-      panel?.scrollIntoView({ block: 'nearest' });
-    }, 30);
-    return () => window.clearTimeout(timer);
-  }, [editorIntent, formKey]);
-
   function importJson(parsed: McpParsedServer[], source: string) {
     const seen = new Set<string>();
     const items = parsed.map((server, index): McpBatchItem => {
@@ -166,7 +146,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
 
   function keepDefinition(saved: McpDefinition) {
     setDefinitions(current => [...current.filter(item => item.id !== saved.id), saved]);
-    setSelectedId(saved.id);
   }
 
   async function refreshPlacements() {
@@ -185,7 +164,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(current => current.filter(entry => entry.id !== item.id));
-      if (selectedId === item.id) setSelectedId(null);
       setDraft(null);
       setNotice(t('library.resources.removed'));
     } catch (value) { setError(failure(value)); }
@@ -332,17 +310,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
 
   const needle = search.trim().toLowerCase();
   const library = definitions.filter((item) => item.inLibrary !== false);
-  const placementCount = new Map<string, number>();
-  for (const place of placements) placementCount.set(place.definitionId, (placementCount.get(place.definitionId) ?? 0) + 1);
-  const placedTotal = library.reduce((total, item) => total + (placementCount.get(item.id) ? 1 : 0), 0);
-  const totalPlacements = library.reduce((total, item) => total + (placementCount.get(item.id) ?? 0), 0);
-  const shown = library.filter((item) => {
-    if (needle && !`${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle)) return false;
-    const count = placementCount.get(item.id) ?? 0;
-    if (placementFilter === 'placed') return count > 0;
-    if (placementFilter === 'unplaced') return count === 0;
-    return true;
-  });
+  const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
 
   const handledSpotlight = useRef<number | null>(null);
   useEffect(() => {
@@ -351,7 +319,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     const item = definitions.find(entry => entry.id === spotlight.id && entry.inLibrary !== false);
     if (!item) return;
     handledSpotlight.current = spotlight.token;
-    setSelectedId(item.id);
     requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-mcp-id="' + CSS.escape(item.id) + '"]')?.scrollIntoView({ block: 'center' }));
   }, [active, spotlight?.id, spotlight?.token, definitions, search]);
 
@@ -361,76 +328,50 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       ? <EmptyState title={t('library.resources.loadFailedTitle')} detail={t('library.resources.loadFailedDetail')} action={<button className="button primary" onClick={() => void reload()}>{t('library.resources.retry')}</button>} icon="alert" />
       : needle && shown.length === 0
         ? <EmptyState title={t('library.resources.noMcpMatch', { query: search.trim() })} action={<button onClick={() => setSearch('')}>{t('library.resources.clearSearch')}</button>} icon="search" />
-        : placementFilter !== 'all' && shown.length === 0
-          ? <EmptyState title={t('library.resources.filterEmpty')} action={<button onClick={() => setPlacementFilter('all')}>{t('library.resources.clearFilter')}</button>} icon="search" />
-          : library.length === 0
-            ? <EmptyState title={t('library.resources.emptyMcpTitle')} detail={t('library.resources.emptyMcpDetail')} action={<div className={styles.emptyActions}><button className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} />{t('library.resources.emptyMcpCreate')}</button><button onClick={() => editMcp(undefined, true)}><Icon name="clipboard" size={14} />{t('library.resources.pasteCreate')}</button></div>} icon="connections" />
-            : undefined;
+        : library.length === 0
+          ? <EmptyState title={t('library.resources.emptyMcpTitle')} detail={t('library.resources.emptyMcpDetail')} action={<div className={styles.emptyActions}><button className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} />{t('library.resources.emptyMcpCreate')}</button><button onClick={() => editMcp(undefined, true)}><Icon name="clipboard" size={14} />{t('library.resources.pasteCreate')}</button></div>} icon="connections" />
+          : undefined;
 
-  const selected = shown.find(item => item.id === selectedId) ?? null;
   return <>
-    <ResourceWorkspace<McpDefinition>
-      ariaLabel={t('library.resources.mcpWorkspaceAria')}
-      title={t('library.resources.mcpTitle')}
-      listLabel={t('library.resources.mcpListAria')}
-      description={t('library.resources.mcpDescription')}
-      headerActions={<>{onOpenConnections && <button type="button" onClick={onOpenConnections}><Icon name="arrowLeft" size={14} />{t('tools.mcp.returnConnections')}</button>}<button type="button" className={styles.refreshButton} disabled={loading || busy} onClick={() => void reload()}><Icon name="refresh" size={14} />{t('library.resources.refresh')}</button></>}
-      toolbar={<div className={styles.mcpToolbar}>
+    <section className={styles.layout} aria-label={t('library.resources.mcpWorkspaceAria')}>
+      <div className={styles.toolbar}>
         <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
-        {library.length > 0 && <div className={styles.filterGroup} role="group" aria-label={t('library.resources.filterLabel')}>
-          {([['all', library.length], ['placed', placedTotal], ['unplaced', library.length - placedTotal]] as const).map(([value, count]) => <button key={value} type="button" aria-pressed={placementFilter === value} data-value={value} onClick={() => setPlacementFilter(value)}>{t(`library.resources.filter${value === 'all' ? 'All' : value === 'placed' ? 'Placed' : 'Unplaced'}`)}<span aria-hidden="true">{count}</span></button>)}
-        </div>}
-      </div>}
-      status={<>
-        {loaded && <p className={styles.summaryLine}><span className={styles.summaryCount}>{t('library.resources.summary', { definitions: library.length, placements: totalPlacements })}</span>{!totalPlacements && <span data-quiet>{t('library.resources.summaryEmpty')}</span>}{library.length > 0 && <span className={styles.editHint}><Icon name="pencil" size={11} />{t('library.resources.doubleClickHint')}</span>}</p>}
-        {loading && loaded && <p className={styles.progress} role="status">{t('library.resources.refreshing')}</p>}
-        {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><button disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</button></div>}
-      </>}
-      items={shown}
-      getItemKey={item => item.id}
-      getItemLabel={item => item.name}
-      selectedKey={selectedId}
-      onSelect={item => setSelectedId(item.id)}
-      onOpenItem={item => { if (!busy) editMcp(item); }}
-      openItemHint={t('library.resources.doubleClickHint')}
-      onCloseDetails={() => setSelectedId(null)}
-      detailsLabel={t('tools.mcp.detailsLabel')}
-      closeDetailsLabel={t('tools.mcp.closeDetails')}
-      detailsSuspended={!!draft || !!batchItems}
-      empty={empty}
-      detailsActions={selected && <>
-        <button type="button" className={styles.primary} disabled={busy} onClick={() => editMcp(selected, false, 'distribute')}><Icon name="connections" size={14} />{t('library.resources.distribute')}</button>
-        <button type="button" disabled={busy} onClick={() => editMcp(selected)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
-        <button type="button" disabled={busy} onClick={() => void duplicateMcp(selected)}><Icon name="copy" size={14} />{t('library.resources.duplicate')}</button>
-        <button type="button" className={styles.danger} disabled={busy} onClick={() => void remove(selected)}><Icon name="trash" size={14} />{t('tools.agents.delete')}</button>
-      </>}
-      renderItem={item => {
-        const places = placements.filter(entry => entry.definitionId === item.id);
-        return <span className={styles.resourceBody} data-mcp-id={item.id} data-placed={places.length > 0 || undefined}>
-          <span className={styles.rowIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={17} /></span>
-          <span className={styles.rowMain}>
-            <span className={styles.resourceTitle}><strong>{item.name}</strong><span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span></span>
-            <code className={styles.command} title={mcpSummary(item)}>{mcpSummary(item) || t(item.transport === 'http' ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
-          </span>
-          <span className={styles.rowSide}>
-            <span className={styles.placedNote} data-placed={places.length > 0 || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
-          </span>
-        </span>;
-      }}
-      renderDetails={item => {
-        const places = placements.filter(entry => entry.definitionId === item.id);
-        return <McpDetails item={item}>
-          <section className={styles.placementDetails} aria-label={t('library.resources.distributionTitle')}>
-            <div className={styles.placementHeading}><h4>{t('library.resources.distributionTitle')}</h4><span>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span></div>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
-              if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
-              if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
-              return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
-            }} />
-          </section>
-        </McpDetails>;
-      }}
-    />
+        <div className={styles.headActions}>
+          {onOpenConnections && <button type="button" onClick={onOpenConnections}><Icon name="arrowLeft" size={14} />{t('tools.mcp.returnConnections')}</button>}
+          <button type="button" className={styles.refreshButton} disabled={loading || busy} onClick={() => void reload()}><Icon name="refresh" size={14} />{t('library.resources.refresh')}</button>
+        </div>
+      </div>
+      <p className={styles.hint}>{t('library.resources.mcpDescription')}</p>
+      {loading && loaded && <p className={styles.progress} role="status">{t('library.resources.refreshing')}</p>}
+      {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><button disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</button></div>}
+      {empty ?? <ul className={styles.list} aria-label={t('library.resources.mcpListAria')}>
+        {shown.map((item) => {
+          const places = placements.filter(entry => entry.definitionId === item.id);
+          const summary = mcpSummary(item);
+          return <li className={styles.row} data-mcp-id={item.id} data-placed={places.length > 0 || undefined} data-spotlight={spotlight?.id === item.id || undefined} key={item.id}>
+            <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={18} /></span>
+            <div className={styles.main}>
+              <strong>{item.name}</strong>
+              <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+            </div>
+            <span className={styles.count} data-placed={places.length > 0 || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
+            <code className={styles.command} title={summary}>{summary || t(item.transport === 'http' ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
+            <div className={styles.foot}>
+              <ScopeMarks className={styles.marks} contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+                if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
+                if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
+                return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+              }} />
+              <div className={styles.rowActions}>
+              <button type="button" disabled={busy} onClick={() => editMcp(item)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
+              <button type="button" disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={14} />{t('library.resources.duplicate')}</button>
+              <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={14} />{t('tools.agents.delete')}</button>
+              </div>
+            </div>
+          </li>;
+        })}
+      </ul>}
+    </section>
     <GuideDialog wide open={!!writeConflict} title={t('library.resources.replaceMcpTitle')} hint={writeConflict ? t('library.resources.confirmReplace', { name: writeConflict.name, tool: tools.find(tool => tool.id === writeConflict.result.toolId)?.name ?? writeConflict.result.toolId }) : undefined} onClose={() => setWriteConflict(null)}>
       {writeConflict && <>
         <ConflictCompare

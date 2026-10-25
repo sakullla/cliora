@@ -162,7 +162,7 @@ export default {
     mcpListAria: 'MCP 列表',
     mcpWorkspaceAria: '资料库 MCP',
     mcpTitle: 'MCP 服务器',
-    mcpDescription: '连接、密钥与写入位置都在这一个工作台里。',
+    mcpDescription: '亮着的图标是已经写入的工具。点一下写入，再点一下移除。',
     filterLabel: '按写入状态筛选',
     filterAll: '全部',
     filterPlaced: '已写入',

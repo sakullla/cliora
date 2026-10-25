@@ -113,11 +113,10 @@ test('library MCP details keep long text and all CLI targets without horizontal 
   await openLibraryMcp(page);
   const workspace = page.getByRole('region', { name: '资料库 MCP' });
   const list = page.getByRole('list', { name: 'MCP 列表' });
-  const row = list.locator('li:has([data-mcp-id="mcp-chrome"])').getByRole('button');
-  const longRow = list.getByRole('button').filter({ hasText: longName });
-  const details = page.getByRole('complementary', { name: 'MCP 详情' });
-  await expect(details.getByText('已写入 18 处')).toBeVisible();
-  const marks = details.getByRole('group', { name: `${shortName} 的 CLI · 全局` });
+  const row = list.locator('li[data-mcp-id="mcp-chrome"]');
+  const longRow = list.getByRole('listitem').filter({ hasText: longName });
+  await expect(row.getByText('已写入 18 处')).toBeVisible();
+  const marks = row.getByRole('group', { name: `${shortName} 的 CLI · 全局` });
   await expect(marks.getByRole('button')).toHaveCount(tools.length);
 
   const wideName = await readLine(row.locator('strong'));
@@ -133,10 +132,8 @@ test('library MCP details keep long text and all CLI targets without horizontal 
   expect(await workspace.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
 
   await page.setViewportSize({ width: 720, height: 900 });
-  const narrowDialog = page.getByRole('dialog', { name: shortName });
-  await expect(narrowDialog).toBeVisible();
-  await expect(narrowDialog.getByRole('group', { name: `${shortName} 的 CLI · 全局` }).getByRole('button')).toHaveCount(tools.length);
-  expect(await narrowDialog.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+  await expect(marks.getByRole('button')).toHaveCount(tools.length);
+  expect(await workspace.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
   expectHorizontal(await readLine(row.locator('strong')), 'narrow name');
   expectHorizontal(await readLine(longRow.locator('strong')), 'narrow long name');
 
@@ -151,14 +148,13 @@ test('library MCP details keep long text and all CLI targets without horizontal 
   await expect(marks.getByRole('button', { name: 'CLI Extra · 未写入' })).toBeVisible();
   await expect(row.getByText('已写入 18 处')).toBeVisible();
 
-  await details.getByRole('button', { name: '创建副本', exact: true }).click();
-  await expect(list.getByRole('button').filter({ hasText: `${shortName}-copy` })).toBeVisible();
-  await row.click();
-  await details.getByRole('button', { name: '删除', exact: true }).click();
+  await row.getByRole('button', { name: '创建副本', exact: true }).click();
+  await expect(list.getByRole('listitem').filter({ hasText: `${shortName}-copy` })).toBeVisible();
+  await row.getByRole('button', { name: '删除', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: '删除 MCP' });
   await confirm.getByRole('button', { name: '取消', exact: true }).click();
   await expect(confirm).toHaveCount(0);
-  await details.getByRole('button', { name: '修改', exact: true }).click();
+  await row.getByRole('button', { name: '修改', exact: true }).click();
   const editor = page.getByRole('dialog', { name: '修改 MCP' });
   await expect(editor).toBeVisible();
   await editor.getByRole('button', { name: '关闭', exact: true }).click();
@@ -202,13 +198,13 @@ test('library MCP read failures never masquerade as empty or clear placements', 
   await expect(workspace.getByText('还没有 MCP', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__failMcpReads = false; });
   await workspace.getByRole('button', { name: '重试', exact: true }).click();
-  const details = page.getByRole('complementary', { name: 'MCP 详情' });
-  await expect(details.getByText('已写入 18 处')).toBeVisible();
+  const row = page.getByRole('list', { name: 'MCP 列表' }).locator('li[data-mcp-id="mcp-chrome"]');
+  await expect(row.getByText('已写入 18 处')).toBeVisible();
   await page.evaluate(() => { (window as any).__failMcpReads = true; });
   await workspace.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(workspace.getByText('MCP 列表可能已过期', { exact: true })).toBeVisible();
-  await expect(details.getByText('已写入 18 处')).toBeVisible();
-  await expect(details.getByRole('group', { name: `${shortName} 的 CLI · 全局` }).getByRole('button')).toHaveCount(tools.length);
+  await expect(row.getByText('已写入 18 处')).toBeVisible();
+  await expect(row.getByRole('group', { name: `${shortName} 的 CLI · 全局` }).getByRole('button')).toHaveCount(tools.length);
   await page.evaluate(() => { (window as any).__failMcpReads = false; });
   await workspace.getByRole('button', { name: '重试', exact: true }).click();
   await expect(workspace.getByText('MCP 列表可能已过期', { exact: true })).toHaveCount(0);
