@@ -87,6 +87,63 @@ pub enum RemoteCapability {
 }
 
 impl RemoteCapability {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::Configuration => "configuration",
+            Self::Accounts => "accounts",
+            Self::Resources => "resources",
+            Self::History => "history",
+            Self::Usage => "usage",
+        }
+    }
+}
+
+/// Typed operation envelope shared by remote capability consumers. The
+/// adapter owns the executable and operation syntax; callers only select the
+/// capability and pass sanitized, capability-specific values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RemoteOperation {
+    Configuration { args: Vec<String> },
+    Accounts { args: Vec<String> },
+    Resources { args: Vec<String> },
+    History { args: Vec<String> },
+    Usage { args: Vec<String> },
+}
+
+impl RemoteOperation {
+    fn capability(&self) -> RemoteCapability {
+        match self {
+            Self::Configuration { .. } => RemoteCapability::Configuration,
+            Self::Accounts { .. } => RemoteCapability::Accounts,
+            Self::Resources { .. } => RemoteCapability::Resources,
+            Self::History { .. } => RemoteCapability::History,
+            Self::Usage { .. } => RemoteCapability::Usage,
+        }
+    }
+
+    fn args(&self) -> &[String] {
+        match self {
+            Self::Configuration { args }
+            | Self::Accounts { args }
+            | Self::Resources { args }
+            | Self::History { args }
+            | Self::Usage { args } => args,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteOperationResult {
+    pub capability: &'static str,
+    pub source: String,
+    pub integrity: &'static str,
+    #[serde(flatten)]
+    pub command: RemoteCommandResult,
+}
+
+impl RemoteCapability {
     fn label(self) -> &'static str {
         match self {
             Self::Probe => "探测",
@@ -366,40 +423,144 @@ pub trait CliAdapter: Sync {
         self.dispatch_remote_owned_command(target, &command)
     }
 
+    /// Capability-specific declarations are opt-in. A local port alone does
+    /// not imply that its remote protocol is available.
+    fn remote_configuration_declared(&self) -> bool {
+        false
+    }
+    fn remote_accounts_declared(&self) -> bool {
+        false
+    }
+    fn remote_resources_declared(&self) -> bool {
+        false
+    }
+    fn remote_history_declared(&self) -> bool {
+        false
+    }
+    fn remote_usage_declared(&self) -> bool {
+        false
+    }
+
+    fn remote_port_command(
+        &self,
+        capability: RemoteCapability,
+        args: &[&str],
+    ) -> Result<String, String> {
+        let capabilities = self.remote_capabilities();
+        let facet = match capability {
+            RemoteCapability::Probe => &capabilities.probe,
+            RemoteCapability::Configuration => &capabilities.configuration,
+            RemoteCapability::Accounts => &capabilities.accounts,
+            RemoteCapability::Resources => &capabilities.resources,
+            RemoteCapability::History => &capabilities.history,
+            RemoteCapability::Usage => &capabilities.usage,
+        };
+        if facet.state != "supported" {
+            return Err(format!("远程{}不可用：{}", capability.label(), facet.reason));
+        }
+        Ok(remote_command(self.command(), args))
+    }
+
+    fn remote_configuration_command(&self, args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(RemoteCapability::Configuration, args)
+    }
+    fn remote_accounts_command(&self, args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(RemoteCapability::Accounts, args)
+    }
+    fn remote_resources_command(&self, args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(RemoteCapability::Resources, args)
+    }
+    fn remote_history_command(&self, args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(RemoteCapability::History, args)
+    }
+    fn remote_usage_command(&self, args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(RemoteCapability::Usage, args)
+    }
+
+    fn dispatch_remote_port(
+        &self,
+        target: &RemoteTarget,
+        capability: RemoteCapability,
+        command: Result<String, String>,
+    ) -> Result<RemoteCommandResult, String> {
+        let command = command?;
+        let capabilities = self.remote_capabilities();
+        let facet = match capability {
+            RemoteCapability::Probe => &capabilities.probe,
+            RemoteCapability::Configuration => &capabilities.configuration,
+            RemoteCapability::Accounts => &capabilities.accounts,
+            RemoteCapability::Resources => &capabilities.resources,
+            RemoteCapability::History => &capabilities.history,
+            RemoteCapability::Usage => &capabilities.usage,
+        };
+        if facet.state != "supported" {
+            return Err(format!("远程{}不可用：{}", capability.label(), facet.reason));
+        }
+        crate::remote::run_command(target, &command).map_err(|error| error.to_string())
+    }
+
+    fn remote_operation(
+        &self,
+        target: &RemoteTarget,
+        operation: &RemoteOperation,
+    ) -> Result<RemoteOperationResult, String> {
+        let capability = operation.capability();
+        let args = operation
+            .args()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let command = match capability {
+            RemoteCapability::Configuration => self.remote_configuration_command(&args),
+            RemoteCapability::Accounts => self.remote_accounts_command(&args),
+            RemoteCapability::Resources => self.remote_resources_command(&args),
+            RemoteCapability::History => self.remote_history_command(&args),
+            RemoteCapability::Usage => self.remote_usage_command(&args),
+            RemoteCapability::Probe => unreachable!("probe is not a capability operation"),
+        };
+        let result = self.dispatch_remote_port(target, capability, command)?;
+        Ok(RemoteOperationResult {
+            capability: capability.key(),
+            source: format!("ssh:{}", result.target_id),
+            integrity: if result.exit_code == 0 { "verified" } else { "unverified" },
+            command: result,
+        })
+    }
+
     fn remote_configuration(
         &self,
         target: &RemoteTarget,
         args: &[&str],
     ) -> Result<RemoteCommandResult, String> {
-        self.dispatch_remote(target, RemoteCapability::Configuration, args)
+        self.dispatch_remote_port(target, RemoteCapability::Configuration, self.remote_configuration_command(args))
     }
     fn remote_accounts(
         &self,
         target: &RemoteTarget,
         args: &[&str],
     ) -> Result<RemoteCommandResult, String> {
-        self.dispatch_remote(target, RemoteCapability::Accounts, args)
+        self.dispatch_remote_port(target, RemoteCapability::Accounts, self.remote_accounts_command(args))
     }
     fn remote_resources(
         &self,
         target: &RemoteTarget,
         args: &[&str],
     ) -> Result<RemoteCommandResult, String> {
-        self.dispatch_remote(target, RemoteCapability::Resources, args)
+        self.dispatch_remote_port(target, RemoteCapability::Resources, self.remote_resources_command(args))
     }
     fn remote_history(
         &self,
         target: &RemoteTarget,
         args: &[&str],
     ) -> Result<RemoteCommandResult, String> {
-        self.dispatch_remote(target, RemoteCapability::History, args)
+        self.dispatch_remote_port(target, RemoteCapability::History, self.remote_history_command(args))
     }
     fn remote_usage(
         &self,
         target: &RemoteTarget,
         args: &[&str],
     ) -> Result<RemoteCommandResult, String> {
-        self.dispatch_remote(target, RemoteCapability::Usage, args)
+        self.dispatch_remote_port(target, RemoteCapability::Usage, self.remote_usage_command(args))
     }
 
     fn remote_capabilities(&self) -> RemoteCapabilities {
@@ -410,32 +571,33 @@ pub trait CliAdapter: Sync {
                 "此 CLI 未声明可探测的远程 executable",
             ),
             configuration: RemoteCapabilities::facet(
-                self.configuration().is_some(),
-                "远程配置沿用适配器声明的原生文件能力",
+                self.configuration().is_some() && self.remote_configuration_declared(),
+                "适配器已声明远程配置端口",
                 "此 CLI 未声明可通过远程传输读写的配置端口",
             ),
             accounts: RemoteCapabilities::facet(
-                self.accounts().is_some(),
-                "远程账号观察沿用适配器只读账号端口",
+                self.accounts().is_some() && self.remote_accounts_declared(),
+                "适配器已声明远程账号观察端口",
                 "此 CLI 未声明远程账号观察端口",
             ),
             resources: RemoteCapabilities::facet(
-                self.supports_mcp()
+                (self.supports_mcp()
                     || self.supports_skills()
                     || self.agents().is_some()
                     || self.plugins().is_some()
-                    || self.memory().is_some(),
-                "远程资源操作沿用适配器 capability port",
+                    || self.memory().is_some())
+                    && self.remote_resources_declared(),
+                "适配器已声明远程资源端口",
                 "此 CLI 未声明可用的远程资源 capability port",
             ),
             history: RemoteCapabilities::facet(
-                self.history_supported(),
-                "远程历史仅在适配器声明格式后读取",
+                self.history_supported() && self.remote_history_declared(),
+                "适配器已声明远程历史端口",
                 "此 CLI 未声明已验证的远程历史格式",
             ),
             usage: RemoteCapabilities::facet(
-                self.official_usage().is_some(),
-                "远程额度仅在适配器声明官方查询后读取",
+                self.official_usage().is_some() && self.remote_usage_declared(),
+                "适配器已声明远程额度端口",
                 "此 CLI 未声明官方远程额度查询端口",
             ),
         }
@@ -1325,6 +1487,9 @@ mod association_facet_tests {
         fn history_supported(&self) -> bool {
             !matches!(self.0, AssociationCase::NoHistory)
         }
+        fn remote_history_declared(&self) -> bool {
+            matches!(self.0, AssociationCase::Declared)
+        }
         fn history_association(&self) -> Option<Facet> {
             match self.0 {
                 AssociationCase::Undeclared => None,
@@ -1452,5 +1617,61 @@ mod association_facet_tests {
         assert!(install_error.contains("未声明远程安装命令"));
         let uninstall_error = adapter.remote_uninstall(&target).unwrap_err();
         assert!(uninstall_error.contains("未声明远程卸载命令"));
+    }
+
+    #[test]
+    fn registry_remote_account_consumer_preserves_unavailable_reason() {
+        let target = RemoteTarget {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            host: "invalid.example".into(),
+            port: 22,
+            user: "root".into(),
+            ssh_config: None,
+            default_path: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let error = crate::accounts::remote_observe(
+            &crate::adapters::Registry::builtins(),
+            "codex",
+            &target,
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("远程账号不可用"));
+        assert!(error.contains("未声明远程账号观察端口"));
+    }
+
+    #[test]
+    fn all_registry_remote_consumers_fail_closed_with_capability_reasons() {
+        let target = RemoteTarget {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            host: "invalid.example".into(),
+            port: 22,
+            user: "root".into(),
+            ssh_config: None,
+            default_path: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let registry = crate::adapters::Registry::builtins();
+        let args = Vec::new();
+        let results = [
+            crate::adapters::configuration::remote_configuration(&registry, "codex", &target, &args),
+            crate::accounts::remote_observe(&registry, "codex", &target, &args),
+            crate::resources::remote_resources(&registry, "codex", &target, &args),
+            crate::history::remote_history(&registry, "codex", &target, &args),
+            crate::usage::remote_usage(&registry, "codex", &target, &args),
+        ];
+        let expected = ["配置", "账号", "资源", "历史", "额度"];
+        for (result, capability) in results.into_iter().zip(expected) {
+            let error = result.expect_err("undeclared remote port must fail before SSH");
+            assert!(error.contains(&format!("远程{capability}不可用")), "{error}");
+            assert!(error.contains("未声明"), "{error}");
+        }
     }
 }
