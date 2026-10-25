@@ -14,6 +14,7 @@ use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::profile::{Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
+use crate::remote::{RemoteCommandResult, RemoteTarget};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +73,27 @@ pub struct RemoteCapabilities {
     pub resources: RemoteFacet,
     pub history: RemoteFacet,
     pub usage: RemoteFacet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoteCapability {
+    Configuration,
+    Accounts,
+    Resources,
+    History,
+    Usage,
+}
+
+impl RemoteCapability {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Configuration => "配置",
+            Self::Accounts => "账号",
+            Self::Resources => "资源",
+            Self::History => "历史",
+            Self::Usage => "额度",
+        }
+    }
 }
 
 impl RemoteCapabilities {
@@ -272,6 +294,70 @@ fn npm_uninstall_command_for(package: &str) -> Option<String> {
 }
 
 pub trait CliAdapter: Sync {
+    /// Dispatches one adapter-owned, read-only remote command through the
+    /// shared OpenSSH transport. Capability checks happen before transport
+    /// launch, so unsupported ports never create a remote connection.
+    fn dispatch_remote(
+        &self,
+        target: &RemoteTarget,
+        capability: RemoteCapability,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        let capabilities = self.remote_capabilities();
+        let facet = match capability {
+            RemoteCapability::Configuration => &capabilities.configuration,
+            RemoteCapability::Accounts => &capabilities.accounts,
+            RemoteCapability::Resources => &capabilities.resources,
+            RemoteCapability::History => &capabilities.history,
+            RemoteCapability::Usage => &capabilities.usage,
+        };
+        if facet.state != "supported" {
+            return Err(format!("远程{}不可用：{}", capability.label(), facet.reason));
+        }
+        let mut command = crate::remote::quote_command_arg(self.command());
+        for arg in args {
+            command.push(' ');
+            command.push_str(&crate::remote::quote_command_arg(arg));
+        }
+        crate::remote::run_command(target, &command).map_err(|error| error.to_string())
+    }
+
+    fn remote_configuration(
+        &self,
+        target: &RemoteTarget,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::Configuration, args)
+    }
+    fn remote_accounts(
+        &self,
+        target: &RemoteTarget,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::Accounts, args)
+    }
+    fn remote_resources(
+        &self,
+        target: &RemoteTarget,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::Resources, args)
+    }
+    fn remote_history(
+        &self,
+        target: &RemoteTarget,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::History, args)
+    }
+    fn remote_usage(
+        &self,
+        target: &RemoteTarget,
+        args: &[&str],
+    ) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::Usage, args)
+    }
+
     fn remote_capabilities(&self) -> RemoteCapabilities {
         RemoteCapabilities {
             configuration: RemoteCapabilities::facet(
@@ -1239,5 +1325,25 @@ mod association_facet_tests {
         let value = serde_json::to_value(&published).unwrap();
         assert_eq!(value["remote"]["history"]["state"], "supported");
         assert!(value["remote"]["history"]["reason"].as_str().is_some());
+    }
+
+    #[test]
+    fn unsupported_remote_port_fails_before_transport_launch() {
+        let adapter = AssociationCli(AssociationCase::Declared);
+        let target = RemoteTarget {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            host: "invalid.example".into(),
+            port: 22,
+            user: "root".into(),
+            ssh_config: None,
+            default_path: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let error = adapter.remote_accounts(&target, &["status"]).unwrap_err();
+        assert!(error.contains("远程账号不可用"));
+        assert!(error.contains("未声明远程账号观察端口"));
     }
 }
