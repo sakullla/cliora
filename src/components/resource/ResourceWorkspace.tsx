@@ -6,6 +6,7 @@ import styles from './ResourceWorkspace.module.css';
 export type ResourceWorkspaceProps<T> = {
   ariaLabel: string;
   title: string;
+  listLabel?: string;
   description: string;
   headerActions?: ReactNode;
   context?: ReactNode;
@@ -17,8 +18,11 @@ export type ResourceWorkspaceProps<T> = {
   getItemLabel: (item: T) => string;
   renderItem: (item: T) => ReactNode;
   renderDetails: (item: T) => ReactNode;
+  detailsActions?: ReactNode;
   selectedKey: Key | null;
   onSelect: (item: T) => void;
+  onOpenItem?: (item: T) => void;
+  openItemHint?: string;
   onCloseDetails: () => void;
   detailsLabel: string;
   closeDetailsLabel: string;
@@ -55,12 +59,15 @@ export function ResourceWorkspace<T>(props: ResourceWorkspaceProps<T>) {
     buttons?.[next]?.focus();
   }
 
-  const details = selected && <div className={styles.detailsInner}>
-    <div className={styles.detailsHeading}>
-      <div><span className={styles.detailsEyebrow}>{props.detailsLabel}</span><h3>{props.getItemLabel(selected)}</h3></div>
-      <button type="button" className={styles.iconButton} onClick={props.onCloseDetails} aria-label={props.closeDetailsLabel} title={props.closeDetailsLabel}><Icon name="close" size={17} /></button>
+  const details = selected && <div className={styles.detailsInner} data-narrow={narrow || undefined}>
+    <div className={styles.detailsTop}>
+      <div className={styles.detailsHeading}>
+        <div><span className={styles.detailsEyebrow}>{props.detailsLabel}</span><h3>{props.getItemLabel(selected)}</h3></div>
+        <button type="button" className={styles.iconButton} onClick={props.onCloseDetails} aria-label={props.closeDetailsLabel} title={props.closeDetailsLabel}><Icon name="close" size={17} /></button>
+      </div>
+      {props.detailsActions && <div className={styles.detailsActions}>{props.detailsActions}</div>}
     </div>
-    {props.renderDetails(selected)}
+    <div className={styles.detailsBody}>{props.renderDetails(selected)}</div>
   </div>;
 
   return <section className={styles.workspace} aria-label={props.ariaLabel}>
@@ -74,11 +81,11 @@ export function ResourceWorkspace<T>(props: ResourceWorkspaceProps<T>) {
     <div className={styles.body} data-has-details={selected && !narrow ? 'true' : 'false'}>
       <div className={styles.listPane}>
         {props.toolbar}
-        {props.empty ?? (items.length > 0 && <ul className={styles.list} aria-label={props.title}>
+        {props.empty ?? (items.length > 0 && <ul className={styles.list} aria-label={props.listLabel ?? props.title}>
           {items.map((item, index) => {
             const key = props.getItemKey(item);
             return <li key={key} className={styles.item} data-selected={key === selectedKey ? 'true' : 'false'}>
-              <button type="button" data-resource-select className={styles.select} aria-pressed={key === selectedKey} onClick={() => props.onSelect(item)} onKeyDown={event => moveFocus(event, index)}>
+              <button type="button" data-resource-select className={styles.select} aria-pressed={key === selectedKey} title={props.onOpenItem ? props.openItemHint : undefined} onClick={() => props.onSelect(item)} onDoubleClick={props.onOpenItem ? () => props.onOpenItem!(item) : undefined} onKeyDown={event => moveFocus(event, index)}>
                 {props.renderItem(item)}
               </button>
             </li>;

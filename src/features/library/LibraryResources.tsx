@@ -217,7 +217,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
   return <div className={styles.layout}>
-    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
+    <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
         return <article className={styles.card} key={item.id}>

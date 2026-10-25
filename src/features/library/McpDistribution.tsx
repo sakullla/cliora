@@ -252,7 +252,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   ].filter(Boolean);
 
   return <div className={styles.distributeContents}>
-    <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`}>
+    <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`} data-mcp-targets>
       <div className={styles.panelHead}>
         <div className={styles.panelTitleRow}>
           <h3 id={`${panelId}-title`}><Icon name="connections" size={16} />{t('library.distribute.title')}<span className={styles.targetCount} aria-hidden="true">{selected.length}/{tools.length}</span></h3>

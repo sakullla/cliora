@@ -79,7 +79,8 @@ test('a success notice can be dismissed', async ({ page }) => {
 test('MCP and Skill tabs share one heading and one add action in the head and empty state', async ({ page }) => {
   await mockWorkspace(page, 1);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'MCP 服务器' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'MCP 服务器' })).toBeVisible();
+  await expect(page.getByText('MCP 服务器', { exact: true })).toBeVisible();
   await expect(page.getByText('这个 CLI 还没有生效的 MCP')).toBeVisible();
   // The empty state embeds an entry with the same action as the head button.
   await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(2);
