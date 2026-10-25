@@ -43,13 +43,26 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
         mode: LaunchMode::Normal,
         resume_latest: false,
     };
-    let plan = plan(&db, &Registry::builtins(), directory.path(), request).unwrap();
-    assert_eq!(plan.directory, PathBuf::from("/srv/project"));
-    assert_eq!(plan.executable, PathBuf::from("ssh"));
-    assert_eq!(plan.terminal, TerminalId::Workbench);
-    assert!(plan.cli_args.contains(&"-tt".to_string()));
-    assert!(plan.cli_args.iter().any(|value| value.contains("root@example.test")));
-    assert!(plan.cli_args.iter().any(|value| value.contains("/srv/project")));
-    assert!(plan.cli_args.iter().any(|value| value.contains("hello remote")));
+    let remote_plan = plan(&db, &Registry::builtins(), directory.path(), request).unwrap();
+    assert_eq!(remote_plan.directory, PathBuf::from("/srv/project"));
+    assert_eq!(remote_plan.executable, PathBuf::from("ssh"));
+    assert_eq!(remote_plan.terminal, TerminalId::Workbench);
+    assert!(remote_plan.cli_args.contains(&"-tt".to_string()));
+    assert!(remote_plan.cli_args.iter().any(|value| value.contains("root@example.test")));
+    assert!(remote_plan.cli_args.iter().any(|value| value.contains("/srv/project")));
+    assert!(remote_plan.cli_args.iter().any(|value| value.contains("hello remote")));
+
+    let claude_request = LaunchRequest {
+        tool_id: "claude_code".into(),
+        project_id: Some(format!("remote:{}", project.id)),
+        session_id: None,
+        directory: None,
+        initial_prompt: None,
+        mode: LaunchMode::Normal,
+        resume_latest: false,
+    };
+    let claude = plan(&db, &Registry::builtins(), directory.path(), claude_request).unwrap();
+    let command = claude.cli_args.last().unwrap();
+    assert!(command.contains("'claude'"), "adapter command was not used: {command}");
 }
 
