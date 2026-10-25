@@ -188,6 +188,14 @@ pub struct LaunchPlan {
     pub credential: Option<LaunchCredential>,
 }
 
+fn remote_project_key(project_id: Option<&str>) -> Option<&str> {
+    project_id.and_then(|value| value.strip_prefix("remote:"))
+}
+
+fn remote_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[derive(Clone, Debug)]
 pub struct TerminalCommand {
     pub program: String,
@@ -218,6 +226,73 @@ impl LaunchPlanError {
     fn new(stage: LaunchStage, message: String) -> Self {
         Self { stage, message }
     }
+}
+
+fn remote_launch_plan(
+    db: &Database,
+    request: &LaunchRequest,
+) -> Result<Option<LaunchPlan>, LaunchPlanError> {
+    let Some(project_key) = remote_project_key(request.project_id.as_deref()) else {
+        return Ok(None);
+    };
+    crate::remote::ensure_enabled(db)
+        .map_err(|error| LaunchPlanError::new(LaunchStage::ProjectDirectory, error.to_string()))?;
+    let project = crate::remote::list_projects(db, None)
+        .map_err(|error| LaunchPlanError::new(LaunchStage::ProjectDirectory, error.to_string()))?
+        .into_iter()
+        .find(|item| item.id == project_key)
+        .ok_or_else(|| LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程项目不存在".into()))?;
+    let target = crate::remote::list_targets(db)
+        .map_err(|error| LaunchPlanError::new(LaunchStage::ProjectDirectory, error.to_string()))?
+        .into_iter()
+        .find(|item| item.id == project.target_id && item.enabled)
+        .ok_or_else(|| LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程目标不可用".into()))?;
+    let path = project.path.trim();
+    if path.is_empty() || path.chars().any(|ch| ch.is_control()) {
+        return Err(LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程路径无效".into()));
+    }
+    let executable = std::env::var_os("CLIORA_SSH_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("ssh"));
+    let mut args = vec![
+        "-tt".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=yes".into(),
+        "-p".into(),
+        target.port.to_string(),
+    ];
+    if let Some(config) = target.ssh_config.as_deref() {
+        args.extend(["-F".into(), config.into()]);
+    }
+    args.push(format!("{}@{}", target.user, target.host));
+    let mut remote_command = format!(
+        "cd -- {} && exec {}",
+        remote_shell_quote(path),
+        remote_shell_quote(&request.tool_id),
+    );
+    if request.mode == LaunchMode::Yolo {
+        remote_command.push_str(" --yolo");
+    }
+    if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        remote_command.push(' ');
+        remote_command.push_str(&remote_shell_quote(prompt));
+    }
+    args.push(remote_command);
+    let terminal = session_terminal(db)
+        .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;
+    Ok(Some(LaunchPlan {
+        account_version: None,
+        account_context: None,
+        tool_id: request.tool_id.clone(),
+        project_id: request.project_id.clone(),
+        mode: request.mode,
+        executable,
+        cli_args: args,
+        directory: PathBuf::from(path),
+        terminal,
+        session_markers: &[],
+        credential: None,
+    }))
 }
 
 fn on_path(name: &str) -> bool {
@@ -753,6 +828,9 @@ fn plan_with_stage_at(
     directory_override: Option<&Path>,
     resume_context: Option<Option<(String, crate::accounts::NativeContext)>>,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    if let Some(plan) = remote_launch_plan(db, &request)? {
+        return Ok(plan);
+    }
     let skill_issues = skills::recover_report(db).map_err(|message| {
         LaunchPlanError::new(
             LaunchStage::Skills,
@@ -1056,6 +1134,11 @@ fn powershell_script(
     plan: &LaunchPlan,
     credential: Option<&(String, String)>,
 ) -> Result<String, String> {
+    if plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:")) {
+        let mut parts = vec![format!("& {}", quote_powershell(&terminal_path(&plan.executable)?))];
+        parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
+        return Ok(format!("{}{}", context_script(plan, true, credential), parts.join(" ")));
+    }
     let directory = terminal_path(&plan.directory)?;
     #[cfg(windows)]
     let executable = terminal_path(&windows_cli_path(&plan.executable))?;
@@ -1101,6 +1184,12 @@ fn shell_script(
     plan: &LaunchPlan,
     credential: Option<&(String, String)>,
 ) -> Result<String, String> {
+    if plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:")) {
+        let executable = plan.executable.to_str().ok_or("SSH 路径文字编码无法识别")?;
+        let mut parts = vec![quote_shell(executable)];
+        parts.extend(plan.cli_args.iter().map(|arg| quote_shell(arg)));
+        return Ok(format!("{}exec {}", context_script(plan, false, credential), parts.join(" ")));
+    }
     let directory = plan.directory.to_str().ok_or("项目目录文字编码无法识别")?;
     let executable = plan.executable.to_str().ok_or("CLI 路径文字编码无法识别")?;
     let mut parts = vec![quote_shell(executable)];
@@ -1169,7 +1258,16 @@ pub fn terminal_command(
     plan: &LaunchPlan,
     credential: Option<&(String, String)>,
 ) -> Result<TerminalCommand, String> {
-    let directory = terminal_path(&plan.directory)?;
+    let remote = plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:"));
+    let directory = if remote {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        PathBuf::from(terminal_path(&plan.directory)?)
+    };
+    let directory = directory.to_string_lossy().into_owned();
     let powershell = || interactive_powershell_script(plan, credential).map(|script| encoded_powershell(&script));
     let mac_script = if matches!(plan.terminal, TerminalId::MacTerminal | TerminalId::Custom) {
         Some(mac_terminal_shell_body(&directory, &interactive_shell_script(plan, credential)?))
@@ -2081,3 +2179,7 @@ mod installed_desktop_launch {
 #[cfg(test)]
 #[path = "../../tests/launch/launch.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/launch/remote.rs"]
+mod remote_tests;

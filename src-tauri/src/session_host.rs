@@ -88,6 +88,9 @@ pub struct SessionSnapshot {
     pub running: bool,
     pub exit_code: Option<i32>,
     pub started_at: u64,
+    pub connection_state: &'static str,
+    pub exit_reason: &'static str,
+    pub reattachable: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -118,6 +121,8 @@ struct Session {
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     replay: Mutex<VecDeque<u8>>,
+    remote: bool,
+    connection_lost: AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<process_tree::Job>>,
 }
@@ -127,10 +132,11 @@ pub fn install(app: AppHandle) {
 }
 
 pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<LaunchResult, String> {
-    if !plan.executable.is_file() {
+    let remote = plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:"));
+    if !remote && !plan.executable.is_file() {
         return Err("CLI 可执行文件不存在，请在工具页重新检测".into());
     }
-    if !plan.directory.is_dir() {
+    if !remote && !plan.directory.is_dir() {
         return Err("工作目录不存在".into());
     }
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -140,7 +146,9 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     let directory = crate::launch::terminal_path(&plan.directory)?;
     let (program, args) = hosted_command(&plan)?;
     let mut command = CommandBuilder::new(program);
-    command.cwd(&directory);
+    if !remote {
+        command.cwd(&directory);
+    }
     command.args(args);
     apply_environment(&mut command, &plan, credential);
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
@@ -178,6 +186,8 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         writer: Mutex::new(writer),
         child: Mutex::new(child),
         replay: Mutex::new(VecDeque::new()),
+        remote,
+        connection_lost: AtomicBool::new(false),
         #[cfg(windows)]
         job: Mutex::new(job),
     });
@@ -355,6 +365,9 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
         }
     }
     let code = session.child.lock().ok().and_then(|mut child| child.wait().ok()).map(|status| status.exit_code() as i32);
+    if session.remote && code == Some(255) {
+        session.connection_lost.store(true, Ordering::SeqCst);
+    }
     session.running.store(false, Ordering::SeqCst);
     if let Ok(mut exit_code) = session.exit_code.lock() {
         *exit_code = code;
@@ -417,6 +430,9 @@ impl Session {
             running: self.running.load(Ordering::SeqCst),
             exit_code: self.exit_code.lock().ok().and_then(|code| *code),
             started_at: self.started_at,
+            connection_state: if self.running.load(Ordering::SeqCst) { "connected" } else if self.connection_lost.load(Ordering::SeqCst) { "disconnected" } else { "closed" },
+            exit_reason: if self.running.load(Ordering::SeqCst) { "running" } else if self.connection_lost.load(Ordering::SeqCst) { "connection_lost" } else { "process_exit" },
+            reattachable: false,
         }
     }
 }
