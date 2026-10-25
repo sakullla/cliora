@@ -251,6 +251,9 @@ fn remote_launch_plan(
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
+    let launch_args = adapter
+        .launch_args(None, request.mode)
+        .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?;
     let path = project.path.trim();
     if path.is_empty() || path.chars().any(|ch| ch.is_control()) {
         return Err(LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程路径无效".into()));
@@ -274,8 +277,9 @@ fn remote_launch_plan(
         remote_shell_quote(path),
         remote_shell_quote(adapter.command()),
     );
-    if request.mode == LaunchMode::Yolo {
-        remote_command.push_str(" --yolo");
+    for argument in launch_args {
+        remote_command.push(' ');
+        remote_command.push_str(&remote_shell_quote(&argument));
     }
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         remote_command.push(' ');
