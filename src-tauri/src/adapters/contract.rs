@@ -75,10 +75,18 @@ pub struct RemoteCapabilities {
 }
 
 impl RemoteCapabilities {
-    fn facet(supported: bool, reason: &'static str) -> RemoteFacet {
+    fn facet(
+        supported: bool,
+        supported_reason: &'static str,
+        unavailable_reason: &'static str,
+    ) -> RemoteFacet {
         RemoteFacet {
             state: if supported { "supported" } else { "unsupported" },
-            reason,
+            reason: if supported {
+                supported_reason
+            } else {
+                unavailable_reason
+            },
         }
     }
 }
@@ -269,10 +277,12 @@ pub trait CliAdapter: Sync {
             configuration: RemoteCapabilities::facet(
                 self.configuration().is_some(),
                 "远程配置沿用适配器声明的原生文件能力",
+                "此 CLI 未声明可通过远程传输读写的配置端口",
             ),
             accounts: RemoteCapabilities::facet(
                 self.accounts().is_some(),
                 "远程账号观察沿用适配器只读账号端口",
+                "此 CLI 未声明远程账号观察端口",
             ),
             resources: RemoteCapabilities::facet(
                 self.supports_mcp()
@@ -281,14 +291,17 @@ pub trait CliAdapter: Sync {
                     || self.plugins().is_some()
                     || self.memory().is_some(),
                 "远程资源操作沿用适配器 capability port",
+                "此 CLI 未声明可用的远程资源 capability port",
             ),
             history: RemoteCapabilities::facet(
                 self.history_supported(),
                 "远程历史仅在适配器声明格式后读取",
+                "此 CLI 未声明已验证的远程历史格式",
             ),
             usage: RemoteCapabilities::facet(
                 self.official_usage().is_some(),
                 "远程额度仅在适配器声明官方查询后读取",
+                "此 CLI 未声明官方远程额度查询端口",
             ),
         }
     }
@@ -1213,8 +1226,16 @@ mod association_facet_tests {
         let published = PublishedDescriptor::from_adapter(&AssociationCli(AssociationCase::Declared));
         assert_eq!(published.descriptor.remote.configuration.state, "unsupported");
         assert_eq!(published.descriptor.remote.accounts.state, "unsupported");
+        assert_eq!(
+            published.descriptor.remote.accounts.reason,
+            "此 CLI 未声明远程账号观察端口"
+        );
         assert_eq!(published.descriptor.remote.history.state, "supported");
         assert_eq!(published.descriptor.remote.usage.state, "unsupported");
+        assert_eq!(
+            published.descriptor.remote.usage.reason,
+            "此 CLI 未声明官方远程额度查询端口"
+        );
         let value = serde_json::to_value(&published).unwrap();
         assert_eq!(value["remote"]["history"]["state"], "supported");
         assert!(value["remote"]["history"]["reason"].as_str().is_some());
