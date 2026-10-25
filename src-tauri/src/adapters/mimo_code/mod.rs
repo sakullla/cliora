@@ -608,6 +608,7 @@ impl CliAdapter for MiMoCode {
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
+            remote: self.remote_capabilities(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),

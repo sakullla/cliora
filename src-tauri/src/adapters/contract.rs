@@ -54,6 +54,33 @@ pub struct AdapterDescriptor {
     pub login: Option<LoginCapability>,
     pub management: ManagementCapabilities,
     pub configuration: Option<super::configuration::ConfigurationDescriptor>,
+    pub remote: RemoteCapabilities,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFacet {
+    pub state: &'static str,
+    pub reason: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteCapabilities {
+    pub configuration: RemoteFacet,
+    pub accounts: RemoteFacet,
+    pub resources: RemoteFacet,
+    pub history: RemoteFacet,
+    pub usage: RemoteFacet,
+}
+
+impl RemoteCapabilities {
+    fn facet(supported: bool, reason: &'static str) -> RemoteFacet {
+        RemoteFacet {
+            state: if supported { "supported" } else { "unsupported" },
+            reason,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -237,6 +264,34 @@ fn npm_uninstall_command_for(package: &str) -> Option<String> {
 }
 
 pub trait CliAdapter: Sync {
+    fn remote_capabilities(&self) -> RemoteCapabilities {
+        RemoteCapabilities {
+            configuration: RemoteCapabilities::facet(
+                self.configuration().is_some(),
+                "远程配置沿用适配器声明的原生文件能力",
+            ),
+            accounts: RemoteCapabilities::facet(
+                self.accounts().is_some(),
+                "远程账号观察沿用适配器只读账号端口",
+            ),
+            resources: RemoteCapabilities::facet(
+                self.supports_mcp()
+                    || self.supports_skills()
+                    || self.agents().is_some()
+                    || self.plugins().is_some()
+                    || self.memory().is_some(),
+                "远程资源操作沿用适配器 capability port",
+            ),
+            history: RemoteCapabilities::facet(
+                self.history_supported(),
+                "远程历史仅在适配器声明格式后读取",
+            ),
+            usage: RemoteCapabilities::facet(
+                self.official_usage().is_some(),
+                "远程额度仅在适配器声明官方查询后读取",
+            ),
+        }
+    }
     fn native_credential_target(&self, _scope: Scope) -> Option<NativeCredentialTarget> { None }
     fn portable_field_kind(&self, path: &[String]) -> super::configuration::PortableFieldKind {
         self.configuration().map_or(super::configuration::PortableFieldKind::Unknown, |port| port.portable_field_kind(path))
@@ -876,6 +931,7 @@ pub trait CliAdapter: Sync {
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
+            remote: self.remote_capabilities(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: ManagementCapabilities {
@@ -1150,5 +1206,17 @@ mod association_facet_tests {
         let value = serde_json::to_value(&published).unwrap();
         assert!(value.get("association").is_none());
         assert!(value.get("history").is_some());
+    }
+
+    #[test]
+    fn remote_capabilities_are_declared_per_port_without_inference_from_id() {
+        let published = PublishedDescriptor::from_adapter(&AssociationCli(AssociationCase::Declared));
+        assert_eq!(published.descriptor.remote.configuration.state, "unsupported");
+        assert_eq!(published.descriptor.remote.accounts.state, "unsupported");
+        assert_eq!(published.descriptor.remote.history.state, "supported");
+        assert_eq!(published.descriptor.remote.usage.state, "unsupported");
+        let value = serde_json::to_value(&published).unwrap();
+        assert_eq!(value["remote"]["history"]["state"], "supported");
+        assert!(value["remote"]["history"]["reason"].as_str().is_some());
     }
 }

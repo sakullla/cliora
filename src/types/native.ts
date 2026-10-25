@@ -82,6 +82,8 @@ export type MemoryAggregate = {
   nativeFileNames?: boolean;
 };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
+export type RemoteFacet = { state: 'supported' | 'unsupported'; reason: string };
+export type RemoteCapabilities = { configuration: RemoteFacet; accounts: RemoteFacet; resources: RemoteFacet; history: RemoteFacet; usage: RemoteFacet };
 /** Parent/child association. Omitted when the CLI does not provide usage records. */
 export type AssociationFacet = { state: 'available' | 'unavailable'; reason: string };
 export type AdapterDescriptor = {
@@ -101,6 +103,7 @@ export type AdapterDescriptor = {
   association?: AssociationFacet;
   login?: { hint: string } | null;
   management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement };
+  remote?: RemoteCapabilities;
 };
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];

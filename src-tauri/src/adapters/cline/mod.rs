@@ -321,6 +321,7 @@ impl CliAdapter for Cline {
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
+            remote: self.remote_capabilities(),
             id: self.id(),
             configuration: None,
             name: self.name(),

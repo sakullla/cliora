@@ -315,6 +315,7 @@ impl CliAdapter for Cursor {
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
+            remote: self.remote_capabilities(),
             id: self.id(),
             name: self.name(),
             interface_formats: self.interface_formats(),
