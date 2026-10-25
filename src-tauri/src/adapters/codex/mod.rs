@@ -28,6 +28,20 @@ pub struct Codex;
 
 const RESERVED_MODEL_PROVIDERS: &[&str] = &["openai", "ollama", "lmstudio"];
 
+fn remote_account_read_command() -> String {
+    let initialize = r#"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"cliora","version":"1"}}}"#;
+    let initialized = r#"{"method":"initialized"}"#;
+    let account_read = r#"{"id":2,"method":"account/read","params":{"refreshToken":false}}"#;
+    format!(
+        "printf '%s\\n' {} {} {} | {} {}",
+        crate::remote::quote_command_arg(initialize),
+        crate::remote::quote_command_arg(initialized),
+        crate::remote::quote_command_arg(account_read),
+        crate::remote::quote_command_arg("codex"),
+        crate::remote::quote_command_arg("app-server")
+    )
+}
+
 fn model_provider_id(id: &str) -> String {
     if RESERVED_MODEL_PROVIDERS.contains(&id) {
         format!("{id}-custom")
@@ -78,6 +92,30 @@ impl CliAdapter for Codex {
     }
     fn accounts(&self) -> Option<&dyn crate::adapters::accounts::AccountAdapter> {
         Some(self)
+    }
+    fn remote_accounts_declared(&self) -> bool {
+        true
+    }
+    fn remote_accounts_command(&self, _args: &[&str]) -> Result<String, String> {
+        self.remote_port_command(crate::adapters::RemoteCapability::Accounts, &[])
+            .map(|_| remote_account_read_command())
+    }
+    fn parse_remote_accounts(&self, stdout: &str) -> Result<(), String> {
+        let value = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find_map(|value| {
+                value
+                    .get("result")
+                    .filter(|result| result.get("account").is_some())
+                    .cloned()
+            })
+            .ok_or("Codex 远程账号响应缺少 result")?;
+        let observation = accounts::parse_codex(&value);
+        if observation.identity.is_none() {
+            return Err("Codex 远程账号响应缺少可核验身份".into());
+        }
+        Ok(())
     }
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
@@ -620,5 +658,22 @@ mod tests {
         assert_eq!(published.state, "unavailable");
         assert_eq!(published.reason, facet.reason);
         assert_eq!(Codex.descriptor().history.state, "available");
+    }
+
+    #[test]
+    fn remote_account_protocol_is_fixed_and_requires_complete_identity() {
+        let facet = Codex.remote_capabilities().accounts;
+        assert_eq!(facet.state, "supported");
+        let command = Codex
+            .remote_accounts_command(&["caller", "controlled"])
+            .unwrap();
+        assert_eq!(command, remote_account_read_command());
+        assert!(command.contains("account/read"));
+        assert!(Codex
+            .parse_remote_accounts(
+                r#"{"id":2,"result":{"account":{"type":"chatgpt","email":"user@example.test"}}}"#,
+            )
+            .is_ok());
+        assert!(Codex.parse_remote_accounts(r#"{"id":2,"result":{}}"#).is_err());
     }
 }

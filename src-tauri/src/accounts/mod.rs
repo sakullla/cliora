@@ -31,12 +31,15 @@ pub fn remote_observe(
     let adapter = registry
         .get(adapter_id)
         .ok_or_else(|| format!("未知 CLI 适配器：{adapter_id}"))?;
-    adapter.remote_operation(
+    let mut result = adapter.remote_operation(
         target,
         &crate::adapters::RemoteOperation::Accounts {
             args: args.to_vec(),
         },
-    )
+    )?;
+    adapter.parse_remote_accounts(&result.command.stdout)?;
+    result.integrity = "verified";
+    Ok(result)
 }
 
 pub const LOGIN_TIMEOUT_DETAIL: &str = "原生认证操作超时，已停止接纳结果。外部终端仍由用户控制，请关闭；候选目录不会自动激活。";
