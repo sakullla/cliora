@@ -141,15 +141,19 @@ async function startLibraryMcp(page: Page) {
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
 }
 
+function mcpEditor(page: Page, surface: 'library' | 'current CLI') {
+  return surface === 'library' ? page.getByRole('dialog', { name: '新建 MCP' }) : page.getByRole('article', { name: '添加 MCP' });
+}
+
 async function openMcpPasteReview(page: Page, surface: 'library' | 'current CLI', source: string) {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: surface === 'library' ? '资料库' : '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: surface === 'library' ? '新建 MCP' : '添加 MCP', exact: true }).first().click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByRole('textbox', { name: '名称' }).fill('keep-draft');
-  await dialog.getByRole('button', { name: '粘贴导入' }).click();
-  await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(source);
-  await dialog.getByRole('button', { name: '解析并填入' }).click();
+  const editor = mcpEditor(page, surface);
+  await editor.getByRole('textbox', { name: '名称' }).fill('keep-draft');
+  await editor.getByRole('button', { name: '粘贴导入' }).click();
+  await editor.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(source);
+  await editor.getByRole('button', { name: '解析并填入' }).click();
   return page.getByRole('dialog', { name: '审查 MCP 导入' });
 }
 
@@ -322,7 +326,7 @@ for (const surface of ['library', 'current CLI'] as const) {
     await review.getByRole('button', { name: '预览选中的 1 项' }).click();
     await expect(review.getByRole('alert')).toContainText('env/headers 不能包含控制字符');
     await review.getByRole('button', { name: '返回', exact: true }).click();
-    const editor = page.getByRole('dialog');
+    const editor = mcpEditor(page, surface);
     const paste = editor.getByRole('textbox', { name: '粘贴 MCP JSON' });
     await expect(paste).toBeVisible();
     await expect(paste).toHaveValue(source);
@@ -347,7 +351,7 @@ for (const surface of ['library', 'current CLI'] as const) {
       await confirmation.getByRole('button', { name: '取消', exact: true }).click();
       await expect(review).toBeVisible();
       await review.getByRole('button', { name: '返回', exact: true }).click();
-      const editor = page.getByRole('dialog');
+      const editor = mcpEditor(page, surface);
       await expect(editor.getByRole('textbox', { name: '名称' })).toHaveValue('keep-draft');
       await expect(editor.getByRole('textbox', { name: '粘贴 MCP JSON' })).toHaveValue(source);
       await editor.getByRole('button', { name: '解析并填入' }).click();
@@ -369,7 +373,7 @@ for (const surface of ['library', 'current CLI'] as const) {
       await page.getByRole('tab', { name: 'MCP', exact: true }).click();
       await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
     }
-    const dialog = page.getByRole('dialog');
+    const dialog = mcpEditor(page, surface);
     await dialog.getByRole('button', { name: '粘贴导入' }).click();
     await dialog.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(JSON.stringify({
       local: { command: 'npx', env: { ROOT: '/tmp', PORT: 3000, ENABLED: true } },
@@ -401,7 +405,7 @@ test('MCP card duplicates a definition under a distinct backend-valid name', asy
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '创建副本' }).click();
   await expect(page.getByRole('status').filter({ hasText: '已创建副本「filesystem-copy」' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'filesystem-copy' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'MCP 列表' }).getByText('filesystem-copy', { exact: true })).toBeVisible();
   const copies = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ id: string; name: string; command: string }> }).__resourceMcpDefinitions);
   expect(copies.map((item) => item.name)).toEqual(['filesystem', 'filesystem-copy']);
   // The backend valid_name only accepts ASCII alphanumerics, '-' and '_' within 1–80 bytes.
@@ -437,11 +441,12 @@ test('MCP details keep delete, duplicate, edit, and distribution actions', async
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  const card = page.getByRole('complementary', { name: 'MCP 详情' });
+  const card = page.getByRole('list', { name: 'MCP 列表' }).getByRole('listitem').filter({ hasText: 'filesystem' });
   await expect(card.getByRole('button', { name: '删除' })).toBeVisible();
   await expect(card.getByRole('button', { name: '创建副本' })).toBeVisible();
   await expect(card.getByRole('button', { name: '修改' })).toBeVisible();
-  await expect(card.getByRole('button', { name: '编辑并分发' })).toBeVisible();
+  await expect(card.getByRole('group', { name: 'filesystem 的 CLI · 全局' })).toBeVisible();
+  await expect(card.getByRole('button', { name: '编辑并分发' })).toHaveCount(0);
   await expect(card.getByRole('button', { name: '复制 JSON' })).toHaveCount(0);
   await expect(card.getByRole('button', { name: '复制命令' })).toHaveCount(0);
 });
@@ -894,7 +899,7 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'filesystem' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'MCP 列表' }).getByText('filesystem', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '修改' }).click();
   await expect(page.getByRole('dialog').getByRole('textbox', { name: '命令' })).toHaveValue('npx');
   await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click();
@@ -917,11 +922,13 @@ test('saving an MCP closes the dialog and leaves the success on the page', async
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
-  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
-  await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '确认写入当前 CLI' }).click();
+  const editor = page.getByRole('article', { name: '添加 MCP' });
+  await editor.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await editor.getByRole('textbox', { name: '命令' }).fill('npx');
+  await editor.getByRole('button', { name: '添加', exact: true }).click();
+  await editor.getByRole('button', { name: '确认写入当前 CLI' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(editor).toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: '已写入当前工具。' })).toBeVisible();
 });
 
@@ -932,12 +939,12 @@ test('an MCP write conflict stays in the dialog', async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
-  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
-  await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByText('当前同名条目与读取时不同，请比较后选择')).toBeVisible();
-  await expect(dialog.getByRole('status').filter({ hasText: '已写入当前工具。' })).toHaveCount(0);
+  const editor = page.getByRole('article', { name: '添加 MCP' });
+  await editor.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await editor.getByRole('textbox', { name: '命令' }).fill('npx');
+  await editor.getByRole('button', { name: '添加', exact: true }).click();
+  await expect(editor.getByText('当前同名条目与读取时不同，请比较后选择')).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '已写入当前工具。' })).toHaveCount(0);
 });
 
 
@@ -1215,20 +1222,20 @@ test('saving an unmanaged native MCP keeps it out of the library unless asked', 
   const row = page.getByRole('button', { name: /native-one/ });
   await expect(row).toContainText('npx -y native-one');
   await row.click();
-  await page.getByRole('button', { name: '修改', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByRole('checkbox', { name: '同时放进资料库' })).not.toBeChecked();
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await dialog.getByRole('button', { name: '确认写入当前 CLI' }).click();
-  await expect(dialog).toHaveCount(0);
+  await page.getByRole('article', { name: 'MCP 详情' }).getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('article', { name: '修改 MCP' });
+  await expect(editor.getByRole('checkbox', { name: '同时放进资料库' })).not.toBeChecked();
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await editor.getByRole('button', { name: '确认写入当前 CLI' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   let saved = await page.evaluate(() => (window as any).__resourceMcpDefinitions);
   expect(saved).toEqual([expect.objectContaining({ name: 'native-one', inLibrary: false })]);
   await row.click();
-  await page.getByRole('button', { name: '修改', exact: true }).click();
-  await dialog.getByRole('checkbox', { name: '同时放进资料库' }).check();
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await dialog.getByRole('button', { name: '确认写入当前 CLI' }).click();
-  await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor.getByRole('checkbox', { name: '同时放进资料库' }).check();
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await editor.getByRole('button', { name: '确认写入当前 CLI' }).click();
+  await expect(editor).toHaveCount(0);
   saved = await page.evaluate(() => (window as any).__resourceMcpDefinitions);
   expect(saved).toEqual([expect.objectContaining({ name: 'native-one', inLibrary: true })]);
   await expect(row).toContainText('资料库');
@@ -1248,15 +1255,15 @@ test('current MCP details reveal secrets explicitly and library navigation retur
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   const row = page.getByRole('button', { name: /native-one/ });
   await row.click();
-  const details = page.getByRole('complementary', { name: 'MCP 详情' });
+  const details = page.getByRole('article', { name: 'MCP 详情' });
   await expect(details).toContainText('••••');
   await expect(details).not.toContainText('literal-secret');
   await details.getByRole('button', { name: '显示 API_TOKEN 的值' }).click();
   await expect(details).toContainText('literal-secret');
   await details.getByRole('button', { name: '在资料库中打开' }).click();
-  const libraryDetails = page.getByRole('complementary', { name: 'MCP 详情' });
-  await expect(libraryDetails).toContainText('native-one');
-  await expect(libraryDetails).toContainText('••••');
+  const libraryRow = page.getByRole('list', { name: 'MCP 列表' }).getByRole('listitem').filter({ hasText: 'native-one' });
+  await expect(libraryRow).toBeVisible();
+  await expect(libraryRow).not.toContainText('literal-secret');
   await expect(page.getByRole('dialog', { name: '修改 MCP' })).toHaveCount(0);
   await page.getByRole('button', { name: '返回工具与连接' }).click();
   await expect(page.getByRole('tab', { name: 'MCP', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -1275,7 +1282,7 @@ test('current MCP details reset revealed secrets when selecting another entry', 
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: /native-one/ }).click();
-  const details = page.getByRole('complementary', { name: 'MCP 详情' });
+  const details = page.getByRole('article', { name: 'MCP 详情' });
   await details.getByRole('button', { name: '显示 API_TOKEN 的值' }).click();
   await expect(details).toContainText('secret-1');
   await page.getByRole('button', { name: /native-two/ }).click();
@@ -1292,7 +1299,7 @@ test('current MCP paste import preserves disabled and library choices', async ({
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('article', { name: '添加 MCP' });
   await dialog.getByRole('checkbox', { name: '启用', exact: true }).uncheck();
   await dialog.getByRole('checkbox', { name: '同时放进资料库' }).check();
   await dialog.getByRole('button', { name: '粘贴导入' }).click();
@@ -1314,9 +1321,9 @@ test('canceling a current MCP candidate leaves definitions and native writes unt
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
-  await page.getByRole('textbox', { name: '名称' }).fill('candidate');
-  await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('article', { name: '添加 MCP' });
+  await dialog.getByRole('textbox', { name: '名称' }).fill('candidate');
+  await dialog.getByRole('textbox', { name: '命令' }).fill('npx');
   await dialog.getByRole('button', { name: '添加', exact: true }).click();
   await expect(dialog.getByText('将创建 CLI 原生条目')).toBeVisible();
   await dialog.getByRole('button', { name: '返回', exact: true }).click();
@@ -1482,8 +1489,9 @@ test('MCP workspace shows skeleton rows on first load and embeds the add entry i
   const add = page.getByRole('button', { name: '添加 MCP', exact: true });
   await expect(add).toHaveCount(2);
   await add.last().click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('dialog').getByRole('heading', { name: '添加 MCP' })).toBeVisible();
+  const editor = page.getByRole('article', { name: '添加 MCP' });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByRole('heading', { name: '添加 MCP' })).toBeVisible();
 });
 
 test('MCP search with no results keeps the empty-state add entry hidden', async ({ page }) => {

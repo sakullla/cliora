@@ -20,7 +20,7 @@ function Values({ label, values }: { label: string; values: Record<string, strin
   })}</dl>;
 }
 
-export function McpDetails({ item, actions, children }: { item: McpDefinition | NativeMcpEntry; actions?: ReactNode; children?: ReactNode }) {
+export function McpDetails({ item, children }: { item: McpDefinition | NativeMcpEntry; children?: ReactNode }) {
   const { t } = useTranslation();
   const enabled = 'enabled' in item ? item.enabled : null;
   return <div className={styles.details}>
@@ -28,18 +28,22 @@ export function McpDetails({ item, actions, children }: { item: McpDefinition | 
       <span className={styles.transport} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={15} />{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
       {enabled !== null && <span className={styles.enabled} data-on={enabled || undefined}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>}
       {'protectedValues' in item && item.protectedValues && <span className={styles.protected}><Icon name="lock" size={12} />{t('tools.mcp.detailProtected')}</span>}
+      <span className={styles.commandPreview} title={mcpCommandLine(item.command, item.args) || item.url || ''}><code>{item.transport === 'http' ? item.url || '—' : mcpCommandLine(item.command, item.args) || '—'}</code></span>
     </div>
-    <dl className={styles.fields}>
-      <div><dt>{t('tools.mcp.name')}</dt><dd>{item.name}</dd></div>
-      {item.transport === 'stdio' ? <>
-        <div><dt>{t('tools.mcp.command')}</dt><dd><code>{item.command || '—'}</code></dd></div>
-        <div><dt>{t('tools.mcp.commandPreview')}</dt><dd><code>{mcpCommandLine(item.command, item.args) || '—'}</code></dd></div>
-        <div><dt>{t('tools.mcp.args')}</dt><dd>{item.args.length ? <ol className={styles.args}>{item.args.map((arg, index) => <li key={index}><code>{arg}</code></li>)}</ol> : '—'}</dd></div>
-      </> : <div><dt>{t('tools.mcp.urlAria')}</dt><dd><code>{item.url || '—'}</code></dd></div>}
-    </dl>
-    {item.transport === 'stdio' ? <section className={styles.group}><h4>{t('tools.mcp.env')}</h4><Values key={`${'id' in item ? item.id : item.name}:env`} label={t('tools.mcp.env')} values={item.env} /></section>
-      : <section className={styles.group}><h4>{t('tools.mcp.headers')}</h4><Values key={`${'id' in item ? item.id : item.name}:headers`} label={t('tools.mcp.headers')} values={item.headers} /></section>}
+    <section className={styles.section}>
+      <h4>{t('library.resources.connectionSection')}</h4>
+      <dl className={styles.fields}>
+        <div><dt>{t('tools.mcp.name')}</dt><dd>{item.name}</dd></div>
+        {item.transport === 'stdio' ? <>
+          <div><dt>{t('tools.mcp.command')}</dt><dd><code>{item.command || '—'}</code></dd></div>
+          <div><dt>{t('tools.mcp.args')}</dt><dd>{item.args.length ? <ol className={styles.args}>{item.args.map((arg, index) => <li key={index}><code>{arg}</code></li>)}</ol> : '—'}</dd></div>
+        </> : <div><dt>{t('tools.mcp.urlAria')}</dt><dd><code>{item.url || '—'}</code></dd></div>}
+      </dl>
+    </section>
     {children}
-    {actions && <div className={styles.actions}>{actions}</div>}
+    <section className={styles.section}>
+      <h4>{t(item.transport === 'stdio' ? 'tools.mcp.env' : 'tools.mcp.headers')}</h4>
+      <Values key={`${'id' in item ? item.id : item.name}:${item.transport === 'stdio' ? 'env' : 'headers'}`} label={t(item.transport === 'stdio' ? 'tools.mcp.env' : 'tools.mcp.headers')} values={item.transport === 'stdio' ? item.env : item.headers} />
+    </section>
   </div>;
 }
