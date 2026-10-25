@@ -191,7 +191,7 @@ function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boo
 function RemoteSshSettings({ enabled, busy, onChange }: { enabled: boolean; busy: boolean; onChange: (enabled: boolean) => void }) {
   const { t } = useTranslation();
   const [targets, setTargets] = useState<RemoteTarget[]>([]);
-  const [draft, setDraft] = useState({ name: '', host: '', port: '22', user: 'root', defaultPath: '' });
+  const [draft, setDraft] = useState({ id: '', name: '', host: '', port: '22', user: 'root', sshConfig: '', defaultPath: '' });
   const [message, setMessage] = useState('');
   useEffect(() => {
     if (!enabled || !nativeAvailable) { setTargets([]); return; }
@@ -201,14 +201,14 @@ function RemoteSshSettings({ enabled, busy, onChange }: { enabled: boolean; busy
     if (!draft.name.trim() || !draft.host.trim() || !draft.user.trim()) return;
     setMessage('');
     const target: RemoteTarget = {
-      id: '', name: draft.name.trim(), host: draft.host.trim(), port: Number(draft.port) || 22,
-      user: draft.user.trim(), sshConfig: null, defaultPath: draft.defaultPath.trim() || null,
+      id: draft.id, name: draft.name.trim(), host: draft.host.trim(), port: Number(draft.port) || 22,
+      user: draft.user.trim(), sshConfig: draft.sshConfig.trim() || null, defaultPath: draft.defaultPath.trim() || null,
       enabled: true, createdAt: 0, updatedAt: 0,
     };
     try {
       const saved = await native.saveRemoteTarget(target);
       setTargets((items) => [...items.filter((item) => item.id !== saved.id), saved]);
-      setDraft({ name: '', host: '', port: '22', user: 'root', defaultPath: '' });
+      setDraft({ id: '', name: '', host: '', port: '22', user: 'root', sshConfig: '', defaultPath: '' });
       setMessage(t('settings.remoteSsh.saved'));
     } catch (error) { setMessage((error as { message?: string }).message ?? t('settings.remoteSsh.saveFailed')); }
   }
@@ -230,9 +230,10 @@ function RemoteSshSettings({ enabled, busy, onChange }: { enabled: boolean; busy
         <input aria-label={t('settings.remoteSsh.port')} inputMode="numeric" placeholder="22" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} />
         <input aria-label={t('settings.remoteSsh.user')} placeholder={t('settings.remoteSsh.user')} value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} />
         <input aria-label={t('settings.remoteSsh.path')} placeholder={t('settings.remoteSsh.path')} value={draft.defaultPath} onChange={(event) => setDraft({ ...draft, defaultPath: event.target.value })} />
-        <button className="button" type="button" disabled={busy} onClick={() => void save()}>{t('settings.remoteSsh.add')}</button>
+        <input aria-label={t('settings.remoteSsh.config')} placeholder={t('settings.remoteSsh.config')} value={draft.sshConfig} onChange={(event) => setDraft({ ...draft, sshConfig: event.target.value })} />
+        <button className="button" type="button" disabled={busy} onClick={() => void save()}>{draft.id ? t('settings.remoteSsh.update') : t('settings.remoteSsh.add')}</button>
       </div>
-      {targets.map((target) => <div className="setting-row" key={target.id}><span><strong>{target.name}</strong><small>{target.user}@{target.host}:{target.port}{target.defaultPath ? ` · ${target.defaultPath}` : ''}</small></span><span className="setting-actions"><button className="button" type="button" onClick={() => void test(target)}>{t('settings.remoteSsh.test')}</button><button className="text-button" type="button" onClick={() => void remove(target.id)}>{t('settings.remoteSsh.delete')}</button></span></div>)}
+      {targets.map((target) => <div className="setting-row" key={target.id}><span><strong>{target.name}</strong><small>{target.user}@{target.host}:{target.port}{target.defaultPath ? ` · ${target.defaultPath}` : ''}</small></span><span className="setting-actions"><button className="button" type="button" onClick={() => void test(target)}>{t('settings.remoteSsh.test')}</button><button className="text-button" type="button" onClick={() => setDraft({ id: target.id, name: target.name, host: target.host, port: String(target.port), user: target.user, sshConfig: target.sshConfig ?? '', defaultPath: target.defaultPath ?? '' })}>{t('settings.remoteSsh.edit')}</button><button className="text-button" type="button" onClick={() => void remove(target.id)}>{t('settings.remoteSsh.delete')}</button></span></div>)}
       {message && <small role="status">{message}</small>}
     </>}
   </section>;
