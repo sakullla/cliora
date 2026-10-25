@@ -36,7 +36,9 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
     old_credentials
         .put("connection-original", "private-api-key")
         .unwrap();
-    let profile = RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
+    let profile = RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
         revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
@@ -174,7 +176,8 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
 fn portable_snapshot_rejects_duplicate_entities() {
     let entity = PortableEntity {
         id: "managed".into(),
-        payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
+        payload: PortablePayload::Preferences(PortablePreferences {
+            tool_icons: Default::default(),
             managed_tools: vec!["codex".into()],
             theme: "system".into(),
             language: None,
@@ -193,7 +196,9 @@ fn same_version_profile_import_shows_content_and_marks_native_binding_pending() 
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
-    let profile = RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
+    let profile = RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
         revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
@@ -324,7 +329,9 @@ fn import_rechecks_digest_inside_the_write_transaction() {
     incoming.entities.push(PortableEntity {
         id: "secret-profile".into(),
         payload: PortablePayload::Profile(Box::new(PortableProfile {
-            profile: RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
+            profile: RegisteredProfile {
+                editing: None,
+                authentication: crate::native::profile::ProfileAuthentication::Native,
                 revision: String::new(),
                 id: "secret-profile".into(),
                 tool: "codex".into(),
@@ -416,20 +423,46 @@ fn absent_preferences_are_new_and_actual_edits_after_preview_are_protected() {
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
-    assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.is_empty());
-    let incoming = PortableSnapshot { schema_version: 1, entities: vec![PortableEntity {
-        id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
-            managed_tools: vec!["pi".into()], theme: "dark".into(), language: None,
-        }),
-    }] };
+    assert!(collect_snapshot(&db, &credentials, &registry)
+        .unwrap()
+        .entities
+        .is_empty());
+    let incoming = PortableSnapshot {
+        schema_version: 1,
+        entities: vec![PortableEntity {
+            id: "managed".into(),
+            payload: PortablePayload::Preferences(PortablePreferences {
+                tool_icons: Default::default(),
+                managed_tools: vec!["pi".into()],
+                theme: "dark".into(),
+                language: None,
+            }),
+        }],
+    };
     let draft = preview_import(&db, &credentials, &registry, incoming.clone()).unwrap();
     assert_eq!(draft.items[0].status, "new");
     assert_eq!(draft.baseline["preferences:managed"], None);
-    db.update_preferences(|preferences| preferences.theme = crate::domain::Theme::Light).unwrap();
-    assert!(apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["preferences:managed".into()])).unwrap_err().starts_with("本机资料已变化"));
+    db.update_preferences(|preferences| preferences.theme = crate::domain::Theme::Light)
+        .unwrap();
+    assert!(apply_import(
+        &db,
+        &credentials,
+        &registry,
+        &draft,
+        &BTreeSet::from(["preferences:managed".into()])
+    )
+    .unwrap_err()
+    .starts_with("本机资料已变化"));
     assert_eq!(db.preferences().unwrap().theme, crate::domain::Theme::Light);
     let draft = preview_import(&db, &credentials, &registry, incoming).unwrap();
-    apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["preferences:managed".into()])).unwrap();
+    apply_import(
+        &db,
+        &credentials,
+        &registry,
+        &draft,
+        &BTreeSet::from(["preferences:managed".into()]),
+    )
+    .unwrap();
     assert_eq!(db.preferences().unwrap().theme, crate::domain::Theme::Dark);
 }
 
@@ -440,13 +473,38 @@ fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_del
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
-    let old_profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
-        id: String::new(), tool: "codex".into(), name: "local".into(), version: 0, revision: String::new(),
-        inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
-    }, None).unwrap();
-    let old_common = profile::save_registered_common(&db, &registry, RegisteredCommon {
-        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"low\"".into())]),
-    }, None).unwrap();
+    let old_profile = profile::save_registered_profile(
+        &db,
+        &registry,
+        RegisteredProfile {
+            editing: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
+            id: String::new(),
+            tool: "codex".into(),
+            name: "local".into(),
+            version: 0,
+            revision: String::new(),
+            inherit_common: true,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            connection: None,
+            native_credentials: BTreeMap::new(),
+        },
+        None,
+    )
+    .unwrap();
+    let old_common = profile::save_registered_common(
+        &db,
+        &registry,
+        RegisteredCommon {
+            tool: "codex".into(),
+            version: 0,
+            revision: String::new(),
+            files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"low\"".into())]),
+        },
+        None,
+    )
+    .unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
     let json = serde_json::to_string(&snapshot).unwrap();
     assert!(!json.contains(&old_profile.revision));
@@ -454,28 +512,84 @@ fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_del
     for entity in &mut snapshot.entities {
         match &mut entity.payload {
             PortablePayload::Profile(value) => value.profile.name = "remote".into(),
-            PortablePayload::Common(value) => value.files.insert("settings".into(), "model_reasoning_effort = \"high\"\n".into()).map(|_| ()).unwrap_or(()),
-            _ => {},
+            PortablePayload::Common(value) => value
+                .files
+                .insert(
+                    "settings".into(),
+                    "model_reasoning_effort = \"high\"\n".into(),
+                )
+                .map(|_| ())
+                .unwrap_or(()),
+            _ => {}
         }
     }
     let draft = preview_import(&db, &credentials, &registry, snapshot.clone()).unwrap();
     let keys = draft.items.iter().map(|item| item.key.clone()).collect();
-    assert_eq!(apply_import(&db, &credentials, &registry, &draft, &keys).unwrap(), 2);
+    assert_eq!(
+        apply_import(&db, &credentials, &registry, &draft, &keys).unwrap(),
+        2
+    );
     let new_profile = profile::get_registered_profile(&db, &old_profile.id).unwrap();
-    let new_common = profile::get_registered_common(&db, "codex").unwrap().unwrap();
+    let new_common = profile::get_registered_common(&db, "codex")
+        .unwrap()
+        .unwrap();
     assert_eq!(new_profile.version, old_profile.version);
     assert_ne!(new_profile.revision, old_profile.revision);
     assert_eq!(new_common.version, old_common.version);
     assert_ne!(new_common.revision, old_common.revision);
-    assert!(profile::save_registered_profile(&db, &registry, old_profile.clone(), Some(old_profile.version)).unwrap_err().contains("其他操作修改"));
-    assert!(profile::delete_registered_profile(&db, &registry, &old_profile.id, old_profile.version, &old_profile.revision).unwrap_err().contains("版本已变化"));
-    assert!(profile::save_registered_common(&db, &registry, old_common.clone(), Some(old_common.version)).unwrap_err().contains("其他操作修改"));
+    assert!(profile::save_registered_profile(
+        &db,
+        &registry,
+        old_profile.clone(),
+        Some(old_profile.version)
+    )
+    .unwrap_err()
+    .contains("其他操作修改"));
+    assert!(profile::delete_registered_profile(
+        &db,
+        &registry,
+        &old_profile.id,
+        old_profile.version,
+        &old_profile.revision
+    )
+    .unwrap_err()
+    .contains("版本已变化"));
+    assert!(profile::save_registered_common(
+        &db,
+        &registry,
+        old_common.clone(),
+        Some(old_common.version)
+    )
+    .unwrap_err()
+    .contains("其他操作修改"));
     let again = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    assert_eq!(apply_import(&db, &credentials, &registry, &again, &keys).unwrap(), 0);
-    assert_eq!(profile::get_registered_profile(&db, &old_profile.id).unwrap().revision, new_profile.revision);
-    assert_eq!(profile::get_registered_common(&db, "codex").unwrap().unwrap().revision, new_common.revision);
-    profile::save_registered_common(&db, &registry, new_common.clone(), Some(new_common.version)).unwrap();
-    profile::delete_registered_profile(&db, &registry, &new_profile.id, new_profile.version, &new_profile.revision).unwrap();
+    assert_eq!(
+        apply_import(&db, &credentials, &registry, &again, &keys).unwrap(),
+        0
+    );
+    assert_eq!(
+        profile::get_registered_profile(&db, &old_profile.id)
+            .unwrap()
+            .revision,
+        new_profile.revision
+    );
+    assert_eq!(
+        profile::get_registered_common(&db, "codex")
+            .unwrap()
+            .unwrap()
+            .revision,
+        new_common.revision
+    );
+    profile::save_registered_common(&db, &registry, new_common.clone(), Some(new_common.version))
+        .unwrap();
+    profile::delete_registered_profile(
+        &db,
+        &registry,
+        &new_profile.id,
+        new_profile.version,
+        &new_profile.revision,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -487,10 +601,26 @@ fn common_only_import_marks_inheriting_bindings_pending_and_notifies_partial_suc
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     for inherit in [true, false] {
-        let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
-            id: String::new(), tool: "codex".into(), name: inherit.to_string(), version: 0, revision: String::new(),
-            inherit_common: inherit, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
-        }, None).unwrap();
+        let profile = profile::save_registered_profile(
+            &db,
+            &registry,
+            RegisteredProfile {
+                editing: None,
+                authentication: crate::native::profile::ProfileAuthentication::Native,
+                id: String::new(),
+                tool: "codex".into(),
+                name: inherit.to_string(),
+                version: 0,
+                revision: String::new(),
+                inherit_common: inherit,
+                files: BTreeMap::new(),
+                suppressed: BTreeMap::new(),
+                connection: None,
+                native_credentials: BTreeMap::new(),
+            },
+            None,
+        )
+        .unwrap();
         db.with_connection(|conn| {
             for scope in ["global", "project:local"] {
                 conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,?2,?3,1,'{}')",
@@ -499,35 +629,82 @@ fn common_only_import_marks_inheriting_bindings_pending_and_notifies_partial_suc
             Ok(())
         }).unwrap();
     }
-    let common = PortableEntity { id: "codex".into(), payload: PortablePayload::Common(RegisteredCommon {
-        tool: "codex".into(), version: 1, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"remote\"\n".into())]),
-    }) };
-    let draft = preview_import(&db, &credentials, &registry, PortableSnapshot { schema_version: 1, entities: vec![common] }).unwrap();
+    let common = PortableEntity {
+        id: "codex".into(),
+        payload: PortablePayload::Common(RegisteredCommon {
+            tool: "codex".into(),
+            version: 1,
+            revision: String::new(),
+            files: BTreeMap::from([("settings".into(), "model = \"remote\"\n".into())]),
+        }),
+    };
+    let draft = preview_import(
+        &db,
+        &credentials,
+        &registry,
+        PortableSnapshot {
+            schema_version: 1,
+            entities: vec![common],
+        },
+    )
+    .unwrap();
     let events = Cell::new(0);
-    let result: Result<(), &str> = with_change_notification(&db, || events.set(events.get()+1), || {
-        apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["common:codex".into()])).unwrap();
-        Err("later target failed")
-    });
+    let result: Result<(), &str> = with_change_notification(
+        &db,
+        || events.set(events.get() + 1),
+        || {
+            apply_import(
+                &db,
+                &credentials,
+                &registry,
+                &draft,
+                &BTreeSet::from(["common:codex".into()]),
+            )
+            .unwrap();
+            Err("later target failed")
+        },
+    );
     assert!(result.is_err());
     assert_eq!(events.get(), 1);
     db.with_connection(|conn| {
         for inherit in [true, false] {
-            let version: i64 = conn.query_row("SELECT profile_version FROM applied_bindings WHERE scope_key=?1", [format!("global-{inherit}")], |row| row.get(0)).unwrap();
+            let version: i64 = conn
+                .query_row(
+                    "SELECT profile_version FROM applied_bindings WHERE scope_key=?1",
+                    [format!("global-{inherit}")],
+                    |row| row.get(0),
+                )
+                .unwrap();
             assert_eq!(version, if inherit { -1 } else { 1 });
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let again = preview_import(&db, &credentials, &registry, draft.snapshot).unwrap();
-    with_change_notification(&db, || events.set(events.get()+1), || apply_import(&db, &credentials, &registry, &again, &BTreeSet::from(["common:codex".into()]))).unwrap();
+    with_change_notification(
+        &db,
+        || events.set(events.get() + 1),
+        || {
+            apply_import(
+                &db,
+                &credentials,
+                &registry,
+                &again,
+                &BTreeSet::from(["common:codex".into()]),
+            )
+        },
+    )
+    .unwrap();
     assert_eq!(events.get(), 1);
-    let _: Result<(), &str> = with_change_notification(&db, || events.set(events.get()+1), || Err("no changes"));
+    let _: Result<(), &str> =
+        with_change_notification(&db, || events.set(events.get() + 1), || Err("no changes"));
     assert_eq!(events.get(), 1);
 }
 
 #[test]
 fn incoming_content_never_becomes_automatic_project_directory_recovery() {
-    use crate::projects;
     use crate::native::profile;
+    use crate::projects;
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
@@ -535,11 +712,34 @@ fn incoming_content_never_becomes_automatic_project_directory_recovery() {
     let directory = temp.path().join("project");
     let moved = temp.path().join("moved");
     fs::create_dir(&directory).unwrap();
-    let project = projects::add(&db, &registry, directory.to_str().unwrap(), None, Some("codex")).unwrap();
-    let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
-        id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
-        inherit_common: false, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
-    }, None).unwrap();
+    let project = projects::add(
+        &db,
+        &registry,
+        directory.to_str().unwrap(),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let profile = profile::save_registered_profile(
+        &db,
+        &registry,
+        RegisteredProfile {
+            editing: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
+            id: String::new(),
+            tool: "codex".into(),
+            name: "Work".into(),
+            version: 0,
+            revision: String::new(),
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            connection: None,
+            native_credentials: BTreeMap::new(),
+        },
+        None,
+    )
+    .unwrap();
     projects::record_applied_profile(&db, &directory, "codex", &profile.id).unwrap();
     db.with_connection(|conn| {
         conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex',?2,1,'{}')", params![format!("project:{}", project.path.as_ref().unwrap()), profile.id]).unwrap();
@@ -548,21 +748,46 @@ fn incoming_content_never_becomes_automatic_project_directory_recovery() {
     let native_file = directory.join("config.toml");
     fs::write(&native_file, "model = \"already-applied\"").unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    snapshot.entities.retain(|entity| entity.kind() == "profile");
-    let PortablePayload::Profile(value) = &mut snapshot.entities[0].payload else { panic!() };
-    value.profile.files.insert("settings".into(), "model = \"remote\"\n".into());
+    snapshot
+        .entities
+        .retain(|entity| entity.kind() == "profile");
+    let PortablePayload::Profile(value) = &mut snapshot.entities[0].payload else {
+        panic!()
+    };
+    value
+        .profile
+        .files
+        .insert("settings".into(), "model = \"remote\"\n".into());
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([format!("profile:{}", profile.id)])).unwrap();
+    apply_import(
+        &db,
+        &credentials,
+        &registry,
+        &draft,
+        &BTreeSet::from([format!("profile:{}", profile.id)]),
+    )
+    .unwrap();
     let received = projects::get(&db, &project.id).unwrap();
     assert!(received.applied_profiles.is_empty());
     assert!(received.reapply_profiles.is_empty());
-    assert_eq!(fs::read_to_string(&native_file).unwrap(), "model = \"already-applied\"");
+    assert_eq!(
+        fs::read_to_string(&native_file).unwrap(),
+        "model = \"already-applied\""
+    );
     fs::rename(&directory, &moved).unwrap();
     let moved_project = projects::relink(&db, &project.id, moved.to_str().unwrap()).unwrap();
     assert!(moved_project.reapply_profiles.is_empty());
     // After explicit content acceptance, ordinary directory recovery retains its behavior.
-    db.with_connection(|conn| { conn.execute("UPDATE applied_bindings SET profile_version=1", []).unwrap(); Ok(()) }).unwrap();
-    assert_eq!(projects::get(&db, &project.id).unwrap().reapply_profiles["codex"], profile.id);
+    db.with_connection(|conn| {
+        conn.execute("UPDATE applied_bindings SET profile_version=1", [])
+            .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        projects::get(&db, &project.id).unwrap().reapply_profiles["codex"],
+        profile.id
+    );
 }
 
 #[test]
@@ -574,27 +799,65 @@ fn tool_icons_roundtrip_encryption_and_participate_in_import_cas_without_device_
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=";
-    db.update_preferences(|p| { p.tool_icons.insert("future_cli".into(), png.into()); p.theme = crate::domain::Theme::Dark; }).unwrap();
+    db.update_preferences(|p| {
+        p.tool_icons.insert("future_cli".into(), png.into());
+        p.theme = crate::domain::Theme::Dark;
+    })
+    .unwrap();
     let selected = BTreeSet::from(["preferences:managed".into()]);
     let bytes = old.path().join("icons.cliora");
-    export_bundle(&db, &credentials, &registry, "correct-password", Some(&selected), &bytes).unwrap();
+    export_bundle(
+        &db,
+        &credentials,
+        &registry,
+        "correct-password",
+        Some(&selected),
+        &bytes,
+    )
+    .unwrap();
     let snapshot = unlock_bundle(&bytes, "correct-password").unwrap();
     let draft = preview_import(&destination, &credentials, &registry, snapshot).unwrap();
     apply_import(&destination, &credentials, &registry, &draft, &selected).unwrap();
-    assert_eq!(destination.preferences().unwrap().tool_icons["future_cli"], png);
-    assert_eq!(destination.preferences().unwrap().theme, crate::domain::Theme::Dark);
-    let again = preview_import(&destination, &credentials, &registry, unlock_bundle(&bytes, "correct-password").unwrap()).unwrap();
+    assert_eq!(
+        destination.preferences().unwrap().tool_icons["future_cli"],
+        png
+    );
+    assert_eq!(
+        destination.preferences().unwrap().theme,
+        crate::domain::Theme::Dark
+    );
+    let again = preview_import(
+        &destination,
+        &credentials,
+        &registry,
+        unlock_bundle(&bytes, "correct-password").unwrap(),
+    )
+    .unwrap();
     assert_eq!(again.items[0].status, "same");
-    destination.update_preferences(|p| { p.tool_icons.remove("future_cli"); }).unwrap();
-    assert!(apply_import(&destination, &credentials, &registry, &again, &selected).unwrap_err().contains("本机资料已变化"));
+    destination
+        .update_preferences(|p| {
+            p.tool_icons.remove("future_cli");
+        })
+        .unwrap();
+    assert!(
+        apply_import(&destination, &credentials, &registry, &again, &selected)
+            .unwrap_err()
+            .contains("本机资料已变化")
+    );
     // Older packages omit icon fields; an empty map preserves their canonical digest.
-    let old: PortablePreferences = serde_json::from_str(r#"{"managedTools":["codex"],"theme":"light"}"#).unwrap();
+    let old: PortablePreferences =
+        serde_json::from_str(r#"{"managedTools":["codex"],"theme":"light"}"#).unwrap();
     assert!(old.tool_icons.is_empty());
     assert!(old.language.is_none());
     assert!(!serde_json::to_string(&old).unwrap().contains("toolIcons"));
 }
 
-fn bare_profile(id: &str, tool: &str, name: &str, files: BTreeMap<String, String>) -> RegisteredProfile {
+fn bare_profile(
+    id: &str,
+    tool: &str,
+    name: &str,
+    files: BTreeMap<String, String>,
+) -> RegisteredProfile {
     RegisteredProfile {
         editing: None,
         authentication: crate::native::profile::ProfileAuthentication::Native,
@@ -625,8 +888,12 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     let source = database(&temp.path().join("old"));
     let credentials = MemoryCredentials::default();
     credentials.put("auth-secret", "oauth-token-value").unwrap();
-    credentials.put("session-secret", "session-token-value").unwrap();
-    credentials.put("minimax-secret", "sk-minimax-plain").unwrap();
+    credentials
+        .put("session-secret", "session-token-value")
+        .unwrap();
+    credentials
+        .put("minimax-secret", "sk-minimax-plain")
+        .unwrap();
     let auth_dir = temp.path().join("source-auth");
     fs::create_dir_all(&auth_dir).unwrap();
     fs::write(auth_dir.join("auth.json"), r#"{"token":"auth-file-token"}"#).unwrap();
@@ -700,11 +967,24 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
         detail: None,
     };
     let mut oauth = bare_profile("oauth-profile", "codex", "OAuth", BTreeMap::new());
-    oauth.authentication = crate::native::profile::ProfileAuthentication::OAuth { account_id: "acct-1".into() };
+    oauth.authentication = crate::native::profile::ProfileAuthentication::OAuth {
+        account_id: "acct-1".into(),
+    };
     let mut secret = bare_profile("secret-profile", "codex", "Secret", BTreeMap::new());
-    secret.native_credentials.insert("auth".into(), BTreeMap::from([("access_token".into(), "auth-secret".into())]));
-    secret.native_credentials.insert("config".into(), BTreeMap::from([("session_token".into(), "session-secret".into())]));
-    let mut minimax = bare_profile("minimax-profile", "minimax_code", "MiniMax", BTreeMap::new());
+    secret.native_credentials.insert(
+        "auth".into(),
+        BTreeMap::from([("access_token".into(), "auth-secret".into())]),
+    );
+    secret.native_credentials.insert(
+        "config".into(),
+        BTreeMap::from([("session_token".into(), "session-secret".into())]),
+    );
+    let mut minimax = bare_profile(
+        "minimax-profile",
+        "minimax_code",
+        "MiniMax",
+        BTreeMap::new(),
+    );
     minimax.connection = Some(crate::native::profile::Connection {
         provider_id: "minimax".into(),
         interface_format: "anthropic_messages".into(),
@@ -714,8 +994,21 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
         auth_env_var: None,
         model_records: Vec::new(),
     });
-    let pi = bare_profile("pi-profile", "pi", "Pi", BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]));
-    let codex = bare_profile("codex-profile", "codex", "Codex", BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]));
+    let pi = bare_profile(
+        "pi-profile",
+        "pi",
+        "Pi",
+        BTreeMap::from([(
+            "settings".into(),
+            r#"{"defaultProvider":"restore-marker"}"#.into(),
+        )]),
+    );
+    let codex = bare_profile(
+        "codex-profile",
+        "codex",
+        "Codex",
+        BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]),
+    );
     let missing = bare_profile("missing-profile", "missing-cli", "Missing", BTreeMap::new());
     let pi_scope = format!("project:{}", pi_project.display());
     let codex_scope = format!("project:{}", codex_project.display());
@@ -733,9 +1026,19 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
         }
         Ok(())
     }).unwrap();
-    let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0").with_fixture_installation("codex", "0.160.0");
+    let registry = Registry::builtins()
+        .with_fixture_installation("pi", "1.0.0")
+        .with_fixture_installation("codex", "0.160.0");
     let bundle = temp.path().join("full.cliora");
-    let exported = export_bundle(&source, &credentials, &registry, "correct-password", None, &bundle).unwrap();
+    let exported = export_bundle(
+        &source,
+        &credentials,
+        &registry,
+        "correct-password",
+        None,
+        &bundle,
+    )
+    .unwrap();
     assert!(exported >= 8);
     let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
     assert_eq!(snapshot.schema_version, 3);
@@ -745,14 +1048,43 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     assert!(rendered.contains("sk-minimax-plain"));
     assert!(rendered.contains("oauth-token-value"));
     assert!(rendered.contains("session-token-value"));
-    let PortablePayload::Account(exported_account) = &snapshot.entities.iter().find(|entity| entity.key() == "account:acct-1").unwrap().payload else { panic!("account") };
+    let PortablePayload::Account(exported_account) = &snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "account:acct-1")
+        .unwrap()
+        .payload
+    else {
+        panic!("account")
+    };
     assert!(exported_account.account.pending_login.is_none());
-    assert!(exported_account.account.context.as_ref().unwrap().history_roots.is_empty());
-    assert!(exported_account.auth_files.iter().any(|file| file.name == "auth.json" && !file.contents.is_empty()));
-    let minimax_entity = snapshot.entities.iter().find(|entity| entity.key() == "profile:minimax-profile").unwrap();
-    let PortablePayload::Profile(minimax_payload) = &minimax_entity.payload else { panic!("minimax profile") };
-    assert!(!matches!(minimax_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
-    assert_eq!(minimax_payload.connection_secret.as_deref(), Some("sk-minimax-plain"));
+    assert!(exported_account
+        .account
+        .context
+        .as_ref()
+        .unwrap()
+        .history_roots
+        .is_empty());
+    assert!(exported_account
+        .auth_files
+        .iter()
+        .any(|file| file.name == "auth.json" && !file.contents.is_empty()));
+    let minimax_entity = snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "profile:minimax-profile")
+        .unwrap();
+    let PortablePayload::Profile(minimax_payload) = &minimax_entity.payload else {
+        panic!("minimax profile")
+    };
+    assert!(!matches!(
+        minimax_payload.profile.authentication,
+        crate::native::profile::ProfileAuthentication::RebindRequired
+    ));
+    assert_eq!(
+        minimax_payload.connection_secret.as_deref(),
+        Some("sk-minimax-plain")
+    );
     let fresh = database(&temp.path().join("new"));
     let received = MemoryCredentials::default();
     let home = temp.path().join("home");
@@ -760,54 +1092,161 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&base).unwrap();
     set_restore_roots_for_test(Some((home, base.clone())));
-    fresh.with_connection(|conn| {
-        conn.execute("INSERT INTO installation_choices (tool,path) VALUES ('minimax_code',?1)", [executable.to_str().unwrap()]).unwrap();
-        Ok(())
-    }).unwrap();
+    fresh
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO installation_choices (tool,path) VALUES ('minimax_code',?1)",
+                [executable.to_str().unwrap()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
     let draft = preview_import(&fresh, &received, &registry, snapshot).unwrap();
-    assert!(draft.items.iter().any(|item| item.key == "project:kept" && item.pending_fields.is_empty()));
-    assert!(draft.items.iter().any(|item| item.key == "project:missing" && item.pending_fields.contains(&"项目本机目录".into())));
+    assert!(draft
+        .items
+        .iter()
+        .any(|item| item.key == "project:kept" && item.pending_fields.is_empty()));
+    assert!(draft.items.iter().any(|item| item.key == "project:missing"
+        && item.pending_fields.contains(&"项目本机目录".into())));
     let keys: BTreeSet<_> = draft.baseline.keys().cloned().collect();
-    assert_eq!(apply_import(&fresh, &received, &registry, &draft, &keys).unwrap(), keys.len());
+    assert_eq!(
+        apply_import(&fresh, &received, &registry, &draft, &keys).unwrap(),
+        keys.len()
+    );
     let restored = collect_snapshot(&fresh, &received, &registry).unwrap();
-    let oauth_entity = restored.entities.iter().find(|entity| entity.key() == "profile:oauth-profile").unwrap();
-    let PortablePayload::Profile(oauth_payload) = &oauth_entity.payload else { panic!("oauth profile") };
-    assert!(matches!(&oauth_payload.profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { account_id } if account_id == "acct-1"));
-    let secret_entity = restored.entities.iter().find(|entity| entity.key() == "profile:secret-profile").unwrap();
-    let PortablePayload::Profile(secret_payload) = &secret_entity.payload else { panic!("secret profile") };
-    assert_eq!(secret_payload.native_secrets.get("auth").and_then(|values| values.get("access_token")).map(String::as_str), Some("oauth-token-value"));
-    assert_eq!(secret_payload.native_secrets.get("config").and_then(|values| values.get("session_token")).map(String::as_str), Some("session-token-value"));
-    assert!(!matches!(secret_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
-    fresh.with_connection(|conn| {
-        let kept_path: String = conn.query_row("SELECT path FROM projects WHERE id='kept'", [], |row| row.get(0)).unwrap();
-        let missing_path: String = conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0)).unwrap();
-        assert_eq!(kept_path, kept.to_str().unwrap());
-        assert_eq!(missing_path, "C:/missing/restore-project");
-        Ok(())
-    }).unwrap();
+    let oauth_entity = restored
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "profile:oauth-profile")
+        .unwrap();
+    let PortablePayload::Profile(oauth_payload) = &oauth_entity.payload else {
+        panic!("oauth profile")
+    };
+    assert!(
+        matches!(&oauth_payload.profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { account_id } if account_id == "acct-1")
+    );
+    let secret_entity = restored
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "profile:secret-profile")
+        .unwrap();
+    let PortablePayload::Profile(secret_payload) = &secret_entity.payload else {
+        panic!("secret profile")
+    };
+    assert_eq!(
+        secret_payload
+            .native_secrets
+            .get("auth")
+            .and_then(|values| values.get("access_token"))
+            .map(String::as_str),
+        Some("oauth-token-value")
+    );
+    assert_eq!(
+        secret_payload
+            .native_secrets
+            .get("config")
+            .and_then(|values| values.get("session_token"))
+            .map(String::as_str),
+        Some("session-token-value")
+    );
+    assert!(!matches!(
+        secret_payload.profile.authentication,
+        crate::native::profile::ProfileAuthentication::RebindRequired
+    ));
+    fresh
+        .with_connection(|conn| {
+            let kept_path: String = conn
+                .query_row("SELECT path FROM projects WHERE id='kept'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let missing_path: String = conn
+                .query_row("SELECT path FROM projects WHERE id='missing'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(kept_path, kept.to_str().unwrap());
+            assert_eq!(missing_path, "C:/missing/restore-project");
+            Ok(())
+        })
+        .unwrap();
     let auth_file = base.join("accounts").join("ctx-1").join("auth.json");
-    assert_eq!(fs::read_to_string(&auth_file).unwrap(), r#"{"token":"auth-file-token"}"#);
-    assert!(fs::read_to_string(pi_project.join(".pi").join("settings.json")).unwrap().contains("restore-marker"));
-    assert_eq!(fs::read_to_string(codex_project.join(".codex")).unwrap(), "not-a-directory");
+    assert_eq!(
+        fs::read_to_string(&auth_file).unwrap(),
+        r#"{"token":"auth-file-token"}"#
+    );
+    assert!(
+        fs::read_to_string(pi_project.join(".pi").join("settings.json"))
+            .unwrap()
+            .contains("restore-marker")
+    );
+    assert_eq!(
+        fs::read_to_string(codex_project.join(".codex")).unwrap(),
+        "not-a-directory"
+    );
     let blockers = load_blockers(&fresh).unwrap();
-    assert!(blockers.iter().any(|item| item.key.contains("missing-cli") && item.action == "install"), "{blockers:?}");
-    assert!(blockers.iter().any(|item| item.key.starts_with("binding:") && item.key.contains("codex")), "{blockers:?}");
-    assert!(blockers.iter().any(|item| item.key == "account:acct-m" && item.action == "relogin"), "{blockers:?}");
-    assert!(fs::read_to_string(base.join("accounts").join("ctx-m").join("auth").join("auth-state.json")).is_ok()
-        || walk_contains(&base.join("accounts").join("ctx-m"), "login-material-kept"));
-    let again = preview_import(&fresh, &received, &registry, unlock_bundle(&bundle, "correct-password").unwrap()).unwrap();
-    assert!(again.items.iter().all(|item| item.status == "same"), "{:?}", again.items.iter().filter(|item| item.status != "same").map(|item| item.key.clone()).collect::<Vec<_>>());
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key.contains("missing-cli") && item.action == "install"),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key.starts_with("binding:") && item.key.contains("codex")),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "account:acct-m" && item.action == "relogin"),
+        "{blockers:?}"
+    );
+    assert!(
+        fs::read_to_string(
+            base.join("accounts")
+                .join("ctx-m")
+                .join("auth")
+                .join("auth-state.json")
+        )
+        .is_ok()
+            || walk_contains(&base.join("accounts").join("ctx-m"), "login-material-kept")
+    );
+    let again = preview_import(
+        &fresh,
+        &received,
+        &registry,
+        unlock_bundle(&bundle, "correct-password").unwrap(),
+    )
+    .unwrap();
+    assert!(
+        again.items.iter().all(|item| item.status == "same"),
+        "{:?}",
+        again
+            .items
+            .iter()
+            .filter(|item| item.status != "same")
+            .map(|item| item.key.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 fn walk_contains(root: &Path, needle: &str) -> bool {
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&path) else { continue };
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
-            } else if fs::read_to_string(&path).ok().is_some_and(|text| text.contains(needle)) {
+            } else if fs::read_to_string(&path)
+                .ok()
+                .is_some_and(|text| text.contains(needle))
+            {
                 return true;
             }
         }
@@ -834,15 +1273,42 @@ fn schema_two_project_import_omits_path_and_short_password_writes_nothing() {
         }],
     };
     validate_snapshot(&snapshot).unwrap();
-    validate_snapshot(&PortableSnapshot { schema_version: 1, entities: snapshot.entities.clone() }).unwrap();
+    validate_snapshot(&PortableSnapshot {
+        schema_version: 1,
+        entities: snapshot.entities.clone(),
+    })
+    .unwrap();
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    apply_import(&db, &credentials, &registry, &draft, &draft.baseline.keys().cloned().collect()).unwrap();
-    let path: Option<String> = db.with_connection(|conn| {
-        conn.query_row("SELECT path FROM projects WHERE id='project-old'", [], |row| row.get(0)).map_err(|error| error.to_string())
-    }).unwrap();
+    apply_import(
+        &db,
+        &credentials,
+        &registry,
+        &draft,
+        &draft.baseline.keys().cloned().collect(),
+    )
+    .unwrap();
+    let path: Option<String> = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT path FROM projects WHERE id='project-old'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
     assert_eq!(path, None);
     let destination = temp.path().join("short.cliora");
-    assert!(export_bundle(&db, &credentials, &registry, "too-short", None, &destination).unwrap_err().contains("12"));
+    assert!(export_bundle(
+        &db,
+        &credentials,
+        &registry,
+        "too-short",
+        None,
+        &destination
+    )
+    .unwrap_err()
+    .contains("12"));
     assert!(!destination.exists());
 }
 
@@ -864,12 +1330,27 @@ fn bundle_restore_keeps_conflict_local_and_applies_other_items() {
         model_records: Vec::new(),
     });
     db.with_connection(|conn| {
-        conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)", rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![
+                profile.id,
+                profile.tool,
+                serde_json::to_string(&profile).unwrap()
+            ],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
-    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    let entity = snapshot
+        .entities
+        .iter_mut()
+        .find(|entity| entity.key() == "profile:profile-1")
+        .unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else {
+        panic!("profile")
+    };
     value.profile.name = "Remote".into();
     snapshot.entities.push(PortableEntity {
         id: "project-new".into(),
@@ -881,27 +1362,79 @@ fn bundle_restore_keeps_conflict_local_and_applies_other_items() {
         }),
     });
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
-    assert!(draft.items.iter().any(|item| item.key == "project:project-new" && item.status == "new"));
+    assert!(draft
+        .items
+        .iter()
+        .any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    assert!(draft
+        .items
+        .iter()
+        .any(|item| item.key == "project:project-new" && item.status == "new"));
     restore_preview(&db, &credentials, &registry, &draft).unwrap();
-    let saved: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    let saved: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM native_profiles WHERE id='profile-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
     assert!(saved.contains("Local"), "{saved}");
     assert!(!saved.contains("Remote"));
-    let name: String = db.with_connection(|conn| conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    let name: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT name FROM projects WHERE id='project-new'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
     assert_eq!(name, "Added");
-    let raw: String = db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    let raw: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_settings WHERE key='bundle_conflicts'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
     assert!(!raw.contains("sk-local-plain"), "{raw}");
     let records: Vec<sync::BundleHold> = serde_json::from_str(&raw).unwrap();
-    let conflict = records.iter().find(|item| item.key == "profile:profile-1").unwrap();
+    let conflict = records
+        .iter()
+        .find(|item| item.key == "profile:profile-1")
+        .unwrap();
     assert!(conflict.local_present);
     assert!(conflict.version_id.starts_with("bundle:"));
-    let PortablePayload::Profile(held) = &conflict.entity.payload else { panic!("held profile") };
+    let PortablePayload::Profile(held) = &conflict.entity.payload else {
+        panic!("held profile")
+    };
     assert_eq!(held.profile.name, "Remote");
     assert!(held.connection_secret.is_none());
-    let id = held.profile.connection.as_ref().unwrap().secret_ref.as_deref().unwrap();
+    let id = held
+        .profile
+        .connection
+        .as_ref()
+        .unwrap()
+        .secret_ref
+        .as_deref()
+        .unwrap();
     assert_eq!(credentials.get(id).unwrap(), "sk-local-plain");
     let visible = sync::status(&db).unwrap();
-    assert!(visible.conflicts.iter().any(|item| item.key == "profile:profile-1" && item.versions.iter().all(|version| version.entity.is_none() && version.id == conflict.version_id)));
+    assert!(visible
+        .conflicts
+        .iter()
+        .any(|item| item.key == "profile:profile-1"
+            && item
+                .versions
+                .iter()
+                .all(|version| version.entity.is_none() && version.id == conflict.version_id)));
 }
 
 #[test]
@@ -929,7 +1462,15 @@ fn binding_update_keeps_existing_managed_until_apply_rewrites_it() {
     };
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
     let key = format!("binding:{}", binding_id("codex", "global"));
-    assert_eq!(draft.items.iter().find(|item| item.key == key).unwrap().status, "conflict");
+    assert_eq!(
+        draft
+            .items
+            .iter()
+            .find(|item| item.key == key)
+            .unwrap()
+            .status,
+        "conflict"
+    );
     apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([key])).unwrap();
     let (saved, version, profile_id): (String, i64, String) = db.with_connection(|conn| {
         conn.query_row("SELECT managed, profile_version, profile_id FROM applied_bindings WHERE tool='codex' AND scope_key='global'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| error.to_string())
@@ -943,22 +1484,45 @@ fn binding_update_keeps_existing_managed_until_apply_rewrites_it() {
 fn schema3_language_round_trips_and_older_packages_do_not_clear_it() {
     let temp = tempfile::tempdir().unwrap();
     let source = database(&temp.path().join("source"));
-    source.update_preferences(|preferences| preferences.language = Some("en".into())).unwrap();
+    source
+        .update_preferences(|preferences| preferences.language = Some("en".into()))
+        .unwrap();
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     let bundle = temp.path().join("language.cliora");
-    export_bundle(&source, &credentials, &registry, "correct-password", None, &bundle).unwrap();
+    export_bundle(
+        &source,
+        &credentials,
+        &registry,
+        "correct-password",
+        None,
+        &bundle,
+    )
+    .unwrap();
     let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
-    let PortablePayload::Preferences(preferences) = &snapshot.entities.iter().find(|entity| entity.key() == "preferences:managed").unwrap().payload else { panic!("preferences") };
+    let PortablePayload::Preferences(preferences) = &snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "preferences:managed")
+        .unwrap()
+        .payload
+    else {
+        panic!("preferences")
+    };
     assert_eq!(preferences.language.as_deref(), Some("en"));
     let fresh = database(&temp.path().join("fresh"));
     let draft = preview_import(&fresh, &credentials, &registry, snapshot.clone()).unwrap();
     restore_preview(&fresh, &credentials, &registry, &draft).unwrap();
     assert_eq!(fresh.preferences().unwrap().language.as_deref(), Some("en"));
     let local = database(&temp.path().join("local"));
-    local.update_preferences(|preferences| preferences.language = Some("zh".into())).unwrap();
+    local
+        .update_preferences(|preferences| preferences.language = Some("zh".into()))
+        .unwrap();
     let conflict = preview_import(&local, &credentials, &registry, snapshot).unwrap();
-    assert!(conflict.items.iter().any(|item| item.key == "preferences:managed" && item.status == "conflict"));
+    assert!(conflict
+        .items
+        .iter()
+        .any(|item| item.key == "preferences:managed" && item.status == "conflict"));
     restore_preview(&local, &credentials, &registry, &conflict).unwrap();
     assert_eq!(local.preferences().unwrap().language.as_deref(), Some("zh"));
     let older = PortableSnapshot {
@@ -974,7 +1538,14 @@ fn schema3_language_round_trips_and_older_packages_do_not_clear_it() {
         }],
     };
     let draft = preview_import(&local, &credentials, &registry, older).unwrap();
-    apply_import(&local, &credentials, &registry, &draft, &draft.baseline.keys().cloned().collect()).unwrap();
+    apply_import(
+        &local,
+        &credentials,
+        &registry,
+        &draft,
+        &draft.baseline.keys().cloned().collect(),
+    )
+    .unwrap();
     let saved = local.preferences().unwrap();
     assert_eq!(saved.theme, crate::domain::Theme::Dark);
     assert_eq!(saved.language.as_deref(), Some("zh"));
@@ -992,7 +1563,10 @@ fn insert_account(db: &Database, account: &crate::accounts::AuthAccount) {
     .unwrap();
 }
 
-fn sample_account(id: &str, context: crate::accounts::NativeContext) -> crate::accounts::AuthAccount {
+fn sample_account(
+    id: &str,
+    context: crate::accounts::NativeContext,
+) -> crate::accounts::AuthAccount {
     crate::accounts::AuthAccount {
         id: id.into(),
         tool_id: "codex".into(),
@@ -1038,38 +1612,80 @@ fn unreadable_auth_file_blocks_only_that_account() {
     let account = sample_account("acct", context.clone());
     insert_account(&db, &account);
     let destination = temp.path().join("partial.cliora");
-    let exported = export_bundle(&db, &credentials, &registry, "correct-password", None, &destination).unwrap();
+    let exported = export_bundle(
+        &db,
+        &credentials,
+        &registry,
+        "correct-password",
+        None,
+        &destination,
+    )
+    .unwrap();
     assert!(exported >= 1);
     let snapshot = unlock_bundle(&destination, "correct-password").unwrap();
     let rendered = serde_json::to_string(&snapshot).unwrap();
     assert!(rendered.contains("Kept"), "{rendered}");
-    assert!(!rendered.contains("account:acct") && !rendered.contains("\"acct\""), "{rendered}");
+    assert!(
+        !rendered.contains("account:acct") && !rendered.contains("\"acct\""),
+        "{rendered}"
+    );
     let blockers = load_blockers(&db).unwrap();
-    assert!(blockers.iter().any(|item| item.key == "account:acct" && item.detail.contains("无法读取")), "{blockers:?}");
-    let row_still_there: bool = db.with_connection(|conn| {
-        conn.query_row("SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id='acct')", [], |row| row.get(0))
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "account:acct" && item.detail.contains("无法读取")),
+        "{blockers:?}"
+    );
+    let row_still_there: bool = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id='acct')",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
+        })
+        .unwrap();
     assert!(row_still_there);
 
     let mut invalid = context.clone();
     invalid.auth_files = vec![PathBuf::from("bad:name")];
     insert_account(&db, &sample_account("acct", invalid));
     let named = collect_snapshot(&db, &credentials, &registry).unwrap();
-    assert!(named.entities.iter().any(|entity| entity.key() == "project:kept"));
-    assert!(named.entities.iter().all(|entity| entity.key() != "account:acct"));
-    assert!(load_blockers(&db).unwrap().iter().any(|item| item.detail.contains("文件名无效")));
+    assert!(named
+        .entities
+        .iter()
+        .any(|entity| entity.key() == "project:kept"));
+    assert!(named
+        .entities
+        .iter()
+        .all(|entity| entity.key() != "account:acct"));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .any(|item| item.detail.contains("文件名无效")));
 
     let huge = root.join("huge.bin");
-    fs::File::create(&huge).unwrap().set_len(4 * 1024 * 1024 + 1).unwrap();
+    fs::File::create(&huge)
+        .unwrap()
+        .set_len(4 * 1024 * 1024 + 1)
+        .unwrap();
     let mut oversized = context;
     oversized.auth_files = vec![huge];
     insert_account(&db, &sample_account("acct", oversized));
     let limited = collect_snapshot(&db, &credentials, &registry).unwrap();
-    assert!(limited.entities.iter().any(|entity| entity.key() == "project:kept"));
-    assert!(limited.entities.iter().all(|entity| entity.key() != "account:acct"));
-    assert!(load_blockers(&db).unwrap().iter().any(|item| item.key == "account:acct" && item.detail.contains("4MiB")));
+    assert!(limited
+        .entities
+        .iter()
+        .any(|entity| entity.key() == "project:kept"));
+    assert!(limited
+        .entities
+        .iter()
+        .all(|entity| entity.key() != "account:acct"));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .any(|item| item.key == "account:acct" && item.detail.contains("4MiB")));
 
     let incoming = PortableSnapshot {
         schema_version: 3,
@@ -1085,13 +1701,22 @@ fn unreadable_auth_file_blocks_only_that_account() {
     };
     let draft = preview_import(&db, &credentials, &registry, incoming).unwrap();
     restore_preview(&db, &credentials, &registry, &draft).unwrap();
-    let name: String = db.with_connection(|conn| {
-        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+    let name: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT name FROM projects WHERE id='project-new'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
+        })
+        .unwrap();
     assert_eq!(name, "Added");
-    assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.iter().any(|entity| entity.key() == "project:project-new"));
+    assert!(collect_snapshot(&db, &credentials, &registry)
+        .unwrap()
+        .entities
+        .iter()
+        .any(|entity| entity.key() == "project:project-new"));
 }
 
 #[test]
@@ -1102,8 +1727,18 @@ fn missing_auth_candidate_exports_the_login_file_that_exists() {
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     let root = temp.path().join("minimax-home");
-    let present = root.join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
-    let missing = root.join("auth").join("dev").join("cn").join("mcode-public").join("auth-state.json");
+    let present = root
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
+    let missing = root
+        .join("auth")
+        .join("dev")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
     fs::create_dir_all(present.parent().unwrap()).unwrap();
     fs::write(&present, "login-material-kept").unwrap();
     let account = sample_account(
@@ -1126,21 +1761,39 @@ fn missing_auth_candidate_exports_the_login_file_that_exists() {
     account.label = "MiniMax".into();
     insert_account(&db, &account);
     let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let PortablePayload::Account(exported) = &snapshot.entities.iter().find(|entity| entity.key() == "account:acct-m").unwrap().payload else {
+    let PortablePayload::Account(exported) = &snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "account:acct-m")
+        .unwrap()
+        .payload
+    else {
         panic!("account");
     };
     assert_eq!(exported.auth_files.len(), 1);
     assert_eq!(exported.auth_files[0].name, "auth-state.json");
-    assert_eq!(exported.auth_files[0].relative, "auth/prod/cn/mcode-public/auth-state.json");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
-    record_blocker(&db, RestoreBlocker {
-        key: "account:acct-m".into(),
-        label: "MiniMax".into(),
-        action: "relogin".into(),
-        detail: "账号 MiniMax 的认证文件无法读取，不能当作已导出".into(),
-    });
+    assert_eq!(
+        exported.auth_files[0].relative,
+        "auth/prod/cn/mcode-public/auth-state.json"
+    );
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != "account:acct-m"));
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "account:acct-m".into(),
+            label: "MiniMax".into(),
+            action: "relogin".into(),
+            detail: "账号 MiniMax 的认证文件无法读取，不能当作已导出".into(),
+        },
+    );
     retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap();
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != "account:acct-m"));
 
     let fresh = database(&temp.path().join("restored"));
     let home = temp.path().join("home");
@@ -1151,9 +1804,24 @@ fn missing_auth_candidate_exports_the_login_file_that_exists() {
     let draft = preview_import(&fresh, &credentials, &registry, snapshot).unwrap();
     let keys: BTreeSet<_> = draft.baseline.keys().cloned().collect();
     apply_import(&fresh, &credentials, &registry, &draft, &keys).unwrap();
-    let restored = base.join("accounts").join("ctx-m").join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
-    assert_eq!(fs::read_to_string(&restored).unwrap(), "login-material-kept");
-    assert!(!base.join("accounts").join("ctx-m").join("auth").join("dev").exists());
+    let restored = base
+        .join("accounts")
+        .join("ctx-m")
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
+    assert_eq!(
+        fs::read_to_string(&restored).unwrap(),
+        "login-material-kept"
+    );
+    assert!(!base
+        .join("accounts")
+        .join("ctx-m")
+        .join("auth")
+        .join("dev")
+        .exists());
 }
 
 #[test]
@@ -1252,38 +1920,104 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
         ],
     };
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    assert_eq!(draft.items.iter().find(|item| item.key == "account:acct").unwrap().status, "conflict");
-    assert_eq!(draft.items.iter().find(|item| item.key == "account:acct-new").unwrap().status, "new");
-    assert_eq!(draft.items.iter().find(|item| item.key == "project:project-new").unwrap().status, "new");
+    assert_eq!(
+        draft
+            .items
+            .iter()
+            .find(|item| item.key == "account:acct")
+            .unwrap()
+            .status,
+        "conflict"
+    );
+    assert_eq!(
+        draft
+            .items
+            .iter()
+            .find(|item| item.key == "account:acct-new")
+            .unwrap()
+            .status,
+        "new"
+    );
+    assert_eq!(
+        draft
+            .items
+            .iter()
+            .find(|item| item.key == "project:project-new")
+            .unwrap()
+            .status,
+        "new"
+    );
     restore_preview(&db, &credentials, &registry, &draft).unwrap();
-    let saved: String = db.with_connection(|conn| {
-        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct'", [], |row| row.get(0))
+    let saved: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM auth_accounts WHERE id='acct'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    }).unwrap();
-    assert!(saved.contains("Local Label") && saved.contains("local-subject") && saved.contains("missing.json"), "{saved}");
-    assert!(!saved.contains("Remote Label") && !saved.contains("remote-subject"), "{saved}");
-    let fresh: String = db.with_connection(|conn| {
-        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct-new'", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert!(
+        saved.contains("Local Label")
+            && saved.contains("local-subject")
+            && saved.contains("missing.json"),
+        "{saved}"
+    );
+    assert!(
+        !saved.contains("Remote Label") && !saved.contains("remote-subject"),
+        "{saved}"
+    );
+    let fresh: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM auth_accounts WHERE id='acct-new'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    }).unwrap();
+        })
+        .unwrap();
     assert!(fresh.contains("Work acct-new"), "{fresh}");
-    let project: String = db.with_connection(|conn| {
-        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+    let project: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT name FROM projects WHERE id='project-new'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    }).unwrap();
+        })
+        .unwrap();
     assert_eq!(project, "Added");
-    let raw: String = db.with_connection(|conn| {
-        conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0))
+    let raw: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_settings WHERE key='bundle_conflicts'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    }).unwrap();
+        })
+        .unwrap();
     let holds: Vec<sync::BundleHold> = serde_json::from_str(&raw).unwrap();
-    let hold = holds.iter().find(|item| item.key == "account:acct").unwrap();
-    let PortablePayload::Account(held) = &hold.entity.payload else { panic!("held account") };
+    let hold = holds
+        .iter()
+        .find(|item| item.key == "account:acct")
+        .unwrap();
+    let PortablePayload::Account(held) = &hold.entity.payload else {
+        panic!("held account")
+    };
     assert_eq!(held.account.label, "Remote Label");
     assert!(held.auth_files.iter().any(|file| file.name == "auth.json"));
     assert!(holds.iter().all(|item| item.key != "account:acct-new"));
     let blockers = load_blockers(&db).unwrap();
-    assert!(blockers.iter().any(|item| item.key == "account:acct" && item.detail.contains("无法读取") && item.detail.contains("不能当作已导出")), "{blockers:?}");
+    assert!(
+        blockers.iter().any(|item| item.key == "account:acct"
+            && item.detail.contains("无法读取")
+            && item.detail.contains("不能当作已导出")),
+        "{blockers:?}"
+    );
 }
 
 #[test]
@@ -1303,31 +2037,59 @@ fn bundle_conflict_can_be_chosen_without_webdav() {
         auth_env_var: None,
         model_records: Vec::new(),
     });
-    profile.native_credentials.insert("auth".into(), BTreeMap::from([("access_token".into(), "local-secret".into())]));
+    profile.native_credentials.insert(
+        "auth".into(),
+        BTreeMap::from([("access_token".into(), "local-secret".into())]),
+    );
     db.with_connection(|conn| {
         conn.execute(
             "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
-            rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()],
+            rusqlite::params![
+                profile.id,
+                profile.tool,
+                serde_json::to_string(&profile).unwrap()
+            ],
         )
         .unwrap();
         Ok(())
     })
     .unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
-    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    let entity = snapshot
+        .entities
+        .iter_mut()
+        .find(|entity| entity.key() == "profile:profile-1")
+        .unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else {
+        panic!("profile")
+    };
     value.profile.name = "Remote".into();
     value.connection_secret = Some("sk-remote-plain".into());
-    value.native_secrets.get_mut("auth").unwrap().insert("access_token".into(), "native-remote-plain".into());
+    value
+        .native_secrets
+        .get_mut("auth")
+        .unwrap()
+        .insert("access_token".into(), "native-remote-plain".into());
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    assert!(draft
+        .items
+        .iter()
+        .any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
     restore_preview(&db, &credentials, &registry, &draft).unwrap();
-    let before: String = db.with_connection(|conn| {
-        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0))
+    let before: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM native_profiles WHERE id='profile-1'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
-    assert!(before.contains("Local") && !before.contains("Remote"), "{before}");
+        })
+        .unwrap();
+    assert!(
+        before.contains("Local") && !before.contains("Remote"),
+        "{before}"
+    );
     let visible = sync::status(&db).unwrap();
     let version_id = visible
         .conflicts
@@ -1338,23 +2100,64 @@ fn bundle_conflict_can_be_chosen_without_webdav() {
         .id
         .clone();
     assert!(version_id.starts_with("bundle:"));
-    let preview = sync::preview_conflict(&db, &credentials, &registry, "profile:profile-1").unwrap();
-    assert!(preview.versions.iter().any(|version| version.id == version_id && version.summary.contains("Remote")));
-    assert!(sync::resolve(&db, &credentials, &registry, "profile:profile-1", Some(&version_id)).is_ok());
+    let preview =
+        sync::preview_conflict(&db, &credentials, &registry, "profile:profile-1").unwrap();
+    assert!(preview
+        .versions
+        .iter()
+        .any(|version| version.id == version_id && version.summary.contains("Remote")));
+    assert!(sync::resolve(
+        &db,
+        &credentials,
+        &registry,
+        "profile:profile-1",
+        Some(&version_id)
+    )
+    .is_ok());
     let saved = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let PortablePayload::Profile(applied) = &saved.entities.iter().find(|entity| entity.key() == "profile:profile-1").unwrap().payload else { panic!("profile") };
+    let PortablePayload::Profile(applied) = &saved
+        .entities
+        .iter()
+        .find(|entity| entity.key() == "profile:profile-1")
+        .unwrap()
+        .payload
+    else {
+        panic!("profile")
+    };
     assert_eq!(applied.profile.name, "Remote");
-    assert_eq!(applied.connection_secret.as_deref(), Some("sk-remote-plain"));
-    assert_eq!(applied.native_secrets.get("auth").and_then(|values| values.get("access_token")).map(String::as_str), Some("native-remote-plain"));
-    assert!(sync::status(&db).unwrap().conflicts.iter().all(|item| item.key != "profile:profile-1"));
-    let stored: Option<String> = db.with_connection(|conn| {
-        conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0))
+    assert_eq!(
+        applied.connection_secret.as_deref(),
+        Some("sk-remote-plain")
+    );
+    assert_eq!(
+        applied
+            .native_secrets
+            .get("auth")
+            .and_then(|values| values.get("access_token"))
+            .map(String::as_str),
+        Some("native-remote-plain")
+    );
+    assert!(sync::status(&db)
+        .unwrap()
+        .conflicts
+        .iter()
+        .all(|item| item.key != "profile:profile-1"));
+    let stored: Option<String> = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_settings WHERE key='bundle_conflicts'",
+                [],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
+        })
+        .unwrap();
     let stored = stored.unwrap_or_else(|| "[]".into());
-    assert!(stored == "[]" || !stored.contains("profile:profile-1"), "{stored}");
+    assert!(
+        stored == "[]" || !stored.contains("profile:profile-1"),
+        "{stored}"
+    );
 }
 
 #[test]
@@ -1376,8 +2179,14 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
     })
     .unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
-    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    let entity = snapshot
+        .entities
+        .iter_mut()
+        .find(|entity| entity.key() == "profile:profile-1")
+        .unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else {
+        panic!("profile")
+    };
     value.profile.name = "Remote".into();
     let home = temp.path().join("home");
     let base = temp.path().join("base");
@@ -1422,31 +2231,61 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
         })),
     });
     let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
-    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    assert!(draft
+        .items
+        .iter()
+        .any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
     let imported = restore_preview(&db, &credentials, &registry, &draft).unwrap();
     assert!(imported >= 2, "{imported}");
-    let project: String = db.with_connection(|conn| {
-        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+    let project: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT name FROM projects WHERE id='project-new'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
+        })
+        .unwrap();
     assert_eq!(project, "Added");
-    let saved: String = db.with_connection(|conn| {
-        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0))
+    let saved: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM native_profiles WHERE id='profile-1'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
-    assert!(saved.contains("Local") && !saved.contains("Remote"), "{saved}");
-    let account_json: String = db.with_connection(|conn| {
-        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct-write'", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert!(
+        saved.contains("Local") && !saved.contains("Remote"),
+        "{saved}"
+    );
+    let account_json: String = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT data FROM auth_accounts WHERE id='acct-write'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
-    })
-    .unwrap();
+        })
+        .unwrap();
     assert!(!account_json.contains("auth.json"), "{account_json}");
     let blockers = load_blockers(&db).unwrap();
-    assert!(blockers.iter().any(|item| item.key == "account:acct-write" && item.detail.contains("无法写入")), "{blockers:?}");
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "account:acct-write" && item.detail.contains("无法写入")),
+        "{blockers:?}"
+    );
     assert!(collect_snapshot(&db, &credentials, &registry).is_ok());
-    assert!(sync::status(&db).unwrap().conflicts.iter().any(|item| item.key == "profile:profile-1"));
+    assert!(sync::status(&db)
+        .unwrap()
+        .conflicts
+        .iter()
+        .any(|item| item.key == "profile:profile-1"));
 }
 
 #[test]
@@ -1460,7 +2299,10 @@ fn choosing_a_missing_directory_clears_its_relink_blocker_and_applies_the_saved_
         "pi-profile",
         "pi",
         "Pi",
-        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+        BTreeMap::from([(
+            "settings".into(),
+            r#"{"defaultProvider":"restore-marker"}"#.into(),
+        )]),
     );
     let old_scope = format!("project:{missing}");
     db.with_connection(|conn| {
@@ -1521,37 +2363,73 @@ fn choosing_a_missing_directory_clears_its_relink_blocker_and_applies_the_saved_
     set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
     let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0");
     let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
-    apply_relinked_directory(&db, &credentials, &registry, missing, linked.path.as_deref().unwrap()).unwrap();
+    apply_relinked_directory(
+        &db,
+        &credentials,
+        &registry,
+        missing,
+        linked.path.as_deref().unwrap(),
+    )
+    .unwrap();
     let blockers = load_blockers(&db).unwrap();
     assert!(
-        blockers.iter().all(|item| item.detail != format!("目录不存在：{missing}")),
+        blockers
+            .iter()
+            .all(|item| item.detail != format!("目录不存在：{missing}")),
         "{blockers:?}"
     );
-    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
     assert!(
-        blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:install" && item.action == "install"),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:other-path" && item.action == "relink"),
         "{blockers:?}"
     );
     let again = sync::status(&db).unwrap();
-    assert!(again.blockers.iter().all(|item| item.detail != format!("目录不存在：{missing}")), "{:?}", again.blockers);
+    assert!(
+        again
+            .blockers
+            .iter()
+            .all(|item| item.detail != format!("目录不存在：{missing}")),
+        "{:?}",
+        again.blockers
+    );
     let scope: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
-    assert_eq!(scope, format!("project:{}", linked.path.as_deref().unwrap()));
+    assert_eq!(
+        scope,
+        format!("project:{}", linked.path.as_deref().unwrap())
+    );
     let global: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(global, "global");
     let written = fs::read_to_string(moved.join(".pi").join("settings.json")).unwrap();
     assert!(written.contains("restore-marker"), "{written}");
     let reloaded = load_blockers(&db).unwrap();
-    assert!(reloaded.iter().all(|item| item.detail != format!("目录不存在：{missing}")));
+    assert!(reloaded
+        .iter()
+        .all(|item| item.detail != format!("目录不存在：{missing}")));
 }
 
 #[test]
@@ -1565,7 +2443,10 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
         "pi-profile",
         "pi",
         "Pi",
-        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+        BTreeMap::from([(
+            "settings".into(),
+            r#"{"defaultProvider":"restore-marker"}"#.into(),
+        )]),
     );
     let occupied_profile = bare_profile("occupied-profile", "pi", "Occupied", BTreeMap::new());
     let old_scope = format!("project:{missing}");
@@ -1628,7 +2509,11 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
         },
     );
     let before = collect_snapshot(&db, &credentials, &Registry::builtins()).unwrap();
-    let source_entity = before.entities.iter().find(|entity| entity.key() == source_key).unwrap();
+    let source_entity = before
+        .entities
+        .iter()
+        .find(|entity| entity.key() == source_key)
+        .unwrap();
     let before_digest = source_entity.digest().unwrap();
     db.with_connection(|conn| {
         conn.execute(
@@ -1646,7 +2531,11 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
     let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0");
     let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
     let new_path = linked.path.as_deref().unwrap();
-    let occupied_scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(Path::new(new_path))).unwrap();
+    let occupied_scope = crate::native::apply::scope_key(
+        crate::native::adapter::Scope::Project,
+        Some(Path::new(new_path)),
+    )
+    .unwrap();
     let occupied_dir = occupied_scope.strip_prefix("project:").unwrap();
     fs::create_dir_all(Path::new(occupied_dir).join(".pi")).unwrap();
     fs::write(
@@ -1662,12 +2551,15 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
         .map_err(|error| error.to_string())
     })
     .unwrap();
-    let error = apply_relinked_directory(&db, &credentials, &registry, missing, new_path).unwrap_err();
+    let error =
+        apply_relinked_directory(&db, &credentials, &registry, missing, new_path).unwrap_err();
     assert!(error.contains("外部修改"), "{error}");
     let project_path: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(project_path, missing);
@@ -1699,46 +2591,87 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
     assert_eq!(occupied.2, managed);
     let global: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(global, "global");
     let blockers = load_blockers(&db).unwrap();
     assert!(
-        blockers.iter().any(|item| item.key == source_key && item.action == "relink" && item.detail == format!("目录不存在：{missing}")),
+        blockers.iter().any(|item| item.key == source_key
+            && item.action == "relink"
+            && item.detail == format!("目录不存在：{missing}")),
         "{blockers:?}"
     );
-    assert!(blockers.iter().all(|item| item.action != "retry"), "{blockers:?}");
-    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
-    assert!(blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"), "{blockers:?}");
+    assert!(
+        blockers.iter().all(|item| item.action != "retry"),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:install" && item.action == "install"),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        "{blockers:?}"
+    );
     let saved: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT data FROM native_profiles WHERE id=?1", [&profile.id], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT data FROM native_profiles WHERE id=?1",
+                [&profile.id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert!(saved.contains("restore-marker"), "{saved}");
-    let native = fs::read_to_string(Path::new(occupied_dir).join(".pi").join("settings.json")).unwrap();
-    assert!(native.contains("external-marker") && !native.contains("restore-marker"), "{native}");
+    let native =
+        fs::read_to_string(Path::new(occupied_dir).join(".pi").join("settings.json")).unwrap();
+    assert!(
+        native.contains("external-marker") && !native.contains("restore-marker"),
+        "{native}"
+    );
     // A known sync row whose binding disappeared would be uploaded as a local deletion.
     let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let entity = snapshot.entities.iter().find(|entity| entity.key() == source_key).unwrap();
-    let PortablePayload::Binding(binding) = &entity.payload else { panic!("binding") };
+    let entity = snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == source_key)
+        .unwrap();
+    let PortablePayload::Binding(binding) = &entity.payload else {
+        panic!("binding")
+    };
     assert_eq!(binding.scope_key, old_scope);
     assert_eq!(binding.profile_id, profile.id);
     assert_eq!(entity.digest().unwrap(), before_digest);
     let deleted: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT deleted FROM sync_entity_state WHERE entity_key=?1", [&source_key], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT deleted FROM sync_entity_state WHERE entity_key=?1",
+                [&source_key],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted, 0);
     let deleted_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM sync_entity_state WHERE deleted!=0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted_rows, 0);
@@ -1755,7 +2688,10 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
         "pi-profile",
         "pi",
         "Pi",
-        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+        BTreeMap::from([(
+            "settings".into(),
+            r#"{"defaultProvider":"restore-marker"}"#.into(),
+        )]),
     );
     let codex = bare_profile(
         "codex-profile",
@@ -1826,7 +2762,11 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
         },
     );
     let before = collect_snapshot(&db, &credentials, &Registry::builtins()).unwrap();
-    let source_entity = before.entities.iter().find(|entity| entity.key() == codex_key).unwrap();
+    let source_entity = before
+        .entities
+        .iter()
+        .find(|entity| entity.key() == codex_key)
+        .unwrap();
     let before_digest = source_entity.digest().unwrap();
     db.with_connection(|conn| {
         conn.execute(
@@ -1846,30 +2786,45 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
         .with_fixture_installation("codex", "0.160.0");
     let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
     let new_path = linked.path.as_deref().unwrap().to_string();
-    let chosen_scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(Path::new(&new_path))).unwrap();
+    let chosen_scope = crate::native::apply::scope_key(
+        crate::native::adapter::Scope::Project,
+        Some(Path::new(&new_path)),
+    )
+    .unwrap();
     let chosen_dir = chosen_scope.strip_prefix("project:").unwrap();
     fs::write(Path::new(chosen_dir).join(".codex"), "not-a-directory").unwrap();
     apply_relinked_directory(&db, &credentials, &registry, missing, &new_path).unwrap();
     let project_path: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(project_path, new_path);
     let pi_scope: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(pi_scope, chosen_scope);
-    let pi_written = fs::read_to_string(Path::new(chosen_dir).join(".pi").join("settings.json")).unwrap();
+    let pi_written =
+        fs::read_to_string(Path::new(chosen_dir).join(".pi").join("settings.json")).unwrap();
     assert!(pi_written.contains("restore-marker"), "{pi_written}");
     let codex_scope: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(codex_scope, old_scope);
@@ -1886,30 +2841,64 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
     assert_eq!(codex_rows, 0);
     let blockers = load_blockers(&db).unwrap();
     assert!(
-        blockers.iter().all(|item| item.action != "relink" || !item.detail.contains(missing)),
+        blockers
+            .iter()
+            .all(|item| item.action != "relink" || !item.detail.contains(missing)),
         "{blockers:?}"
     );
-    let failed = blockers.iter().find(|item| item.key == codex_key).unwrap_or_else(|| panic!("{blockers:?}"));
+    let failed = blockers
+        .iter()
+        .find(|item| item.key == codex_key)
+        .unwrap_or_else(|| panic!("{blockers:?}"));
     assert_ne!(failed.action, "relink");
-    assert!(failed.action == "retry" || failed.action == "install", "{failed:?}");
-    let target = failed.detail.split_once("写入已选目录：").unwrap_or_else(|| panic!("{}", failed.detail)).1.trim();
-    assert_eq!(target, new_path);
-    assert!(!failed.detail.contains(&format!("目录不存在：{missing}")), "{}", failed.detail);
-    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
     assert!(
-        blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        failed.action == "retry" || failed.action == "install",
+        "{failed:?}"
+    );
+    let target = failed
+        .detail
+        .split_once("写入已选目录：")
+        .unwrap_or_else(|| panic!("{}", failed.detail))
+        .1
+        .trim();
+    assert_eq!(target, new_path);
+    assert!(
+        !failed.detail.contains(&format!("目录不存在：{missing}")),
+        "{}",
+        failed.detail
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:install" && item.action == "install"),
+        "{blockers:?}"
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|item| item.key == "binding:other-path" && item.action == "relink"),
         "{blockers:?}"
     );
     let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
-    let entity = snapshot.entities.iter().find(|entity| entity.key() == codex_key).unwrap();
-    let PortablePayload::Binding(binding) = &entity.payload else { panic!("binding") };
+    let entity = snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == codex_key)
+        .unwrap();
+    let PortablePayload::Binding(binding) = &entity.payload else {
+        panic!("binding")
+    };
     assert_eq!(binding.scope_key, old_scope);
     assert_eq!(binding.profile_id, codex.id);
     assert_eq!(entity.digest().unwrap(), before_digest);
     let deleted: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT deleted FROM sync_entity_state WHERE entity_key=?1", [&codex_key], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT deleted FROM sync_entity_state WHERE entity_key=?1",
+                [&codex_key],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted, 0);
@@ -1917,36 +2906,66 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
     apply_relinked_directory(&db, &credentials, &registry, &new_path, target).unwrap();
     let retried: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(retried, chosen_scope);
-    let written = fs::read_to_string(Path::new(chosen_dir).join(".codex").join("config.toml")).unwrap();
+    let written =
+        fs::read_to_string(Path::new(chosen_dir).join(".codex").join("config.toml")).unwrap();
     assert!(written.contains("gpt-6"), "{written}");
     let pi_still: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT scope_key FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(pi_still, chosen_scope);
     let kept_path: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(kept_path, new_path);
     let after = load_blockers(&db).unwrap();
     assert!(after.iter().all(|item| item.key != codex_key), "{after:?}");
-    assert!(after.iter().all(|item| item.action != "relink" || !item.detail.contains(missing)), "{after:?}");
-    assert!(after.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{after:?}");
-    assert!(after.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"), "{after:?}");
+    assert!(
+        after
+            .iter()
+            .all(|item| item.action != "relink" || !item.detail.contains(missing)),
+        "{after:?}"
+    );
+    assert!(
+        after
+            .iter()
+            .any(|item| item.key == "binding:install" && item.action == "install"),
+        "{after:?}"
+    );
+    assert!(
+        after
+            .iter()
+            .any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        "{after:?}"
+    );
     let deleted_after: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM sync_entity_state WHERE deleted!=0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted_after, 0);
@@ -2021,15 +3040,29 @@ fn retry_rewrites_a_failed_active_binding_without_webdav() {
     let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
     assert!(!failed.contains("请先配置 WebDAV"), "{failed}");
     assert_eq!(sync_config_count(&db), 0);
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
-    assert!(blocker.action == "retry" || blocker.action == "install", "{blocker:?}");
-    assert!(!blocker.detail.contains("写入已选目录"), "{}", blocker.detail);
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("blocker");
+    assert!(
+        blocker.action == "retry" || blocker.action == "install",
+        "{blocker:?}"
+    );
+    assert!(
+        !blocker.detail.contains("写入已选目录"),
+        "{}",
+        blocker.detail
+    );
     assert_ne!(blocker.detail, "上次写入失败");
     crate::test_support::make_writable(&config).unwrap();
     retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
     let written = fs::read_to_string(&config).unwrap();
     assert!(written.contains("gpt-6"), "{written}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
     assert_eq!(sync_config_count(&db), 0);
 }
 
@@ -2059,8 +3092,12 @@ fn retry_releases_a_failed_native_binding_without_webdav() {
     retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
     let managed: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT managed FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT managed FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert!(managed.contains("model"), "{managed}");
@@ -2089,41 +3126,68 @@ fn retry_releases_a_failed_native_binding_without_webdav() {
     fs::write(&config, ":::not toml").unwrap();
     let error = note_failed_release(&db, &registry, &key, "codex", &scope, &managed).unwrap_err();
     assert!(!error.contains("请先配置 WebDAV"), "{error}");
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("blocker");
     assert_eq!(blocker.action, "retry", "{blocker:?}");
-    assert!(!blocker.detail.contains("写入已选目录"), "{}", blocker.detail);
+    assert!(
+        !blocker.detail.contains("写入已选目录"),
+        "{}",
+        blocker.detail
+    );
     fs::write(&config, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
     retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
     let released = fs::read_to_string(&config).unwrap();
     assert!(!released.contains("gpt-6"), "{released}");
     assert!(released.contains("keep"), "{released}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
     assert_eq!(sync_config_count(&db), 0);
     let kept_body: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT body FROM library_items WHERE id='library-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(kept_body, "kept-body");
     let pi_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(pi_rows, 1);
     let codex_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(codex_rows, 0);
     let deleted: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM sync_entity_state WHERE deleted!=0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted, 0);
@@ -2148,15 +3212,20 @@ fn restored_binding_is_applied_ahead_of_a_pending_release() {
     fs::create_dir_all(config.parent().unwrap()).unwrap();
     fs::write(&config, ":::not toml").unwrap();
     db.with_connection(|conn| {
-        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", [])
+            .unwrap();
         Ok(())
     })
     .unwrap();
     let release_managed = r#"{"settings":{"/model":"gpt-6","/sandbox_mode":"workspace-write"}}"#;
-    let error = note_failed_release(&db, &registry, &key, "codex", &scope, release_managed).unwrap_err();
+    let error =
+        note_failed_release(&db, &registry, &key, "codex", &scope, release_managed).unwrap_err();
     assert!(!error.contains("请先配置 WebDAV"), "{error}");
     assert!(
-        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.managed.contains("sandbox_mode")),
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .any(|item| item.key == key && item.managed.contains("sandbox_mode")),
         "{:?}",
         load_pending_releases(&db).unwrap()
     );
@@ -2199,17 +3268,30 @@ fn restored_binding_is_applied_ahead_of_a_pending_release() {
         },
     );
     let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
-    assert!(failed.contains("外部修改") || failed.contains("上次管理的字段"), "{failed}");
+    assert!(
+        failed.contains("外部修改") || failed.contains("上次管理的字段"),
+        "{failed}"
+    );
     finish_pending_native(&db, &credentials, &registry).unwrap();
     let during = fs::read_to_string(&config).unwrap();
     assert!(during.contains("external"), "{during}");
     assert!(during.contains("sandbox_mode"), "{during}");
     assert!(during.contains("keep"), "{during}");
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("write blocker");
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("write blocker");
     assert_eq!(blocker.action, "retry", "{blocker:?}");
-    assert!(blocker.detail.contains("外部修改") || blocker.detail.contains("上次管理的字段"), "{blocker:?}");
     assert!(
-        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key),
+        blocker.detail.contains("外部修改") || blocker.detail.contains("上次管理的字段"),
+        "{blocker:?}"
+    );
+    assert!(
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .any(|item| item.key == key),
         "a failed write must keep the old release"
     );
     assert_unchanged_neighbors(&db);
@@ -2228,9 +3310,15 @@ fn restored_binding_is_applied_ahead_of_a_pending_release() {
     assert!(written.contains("sandbox_mode"), "{written}");
     assert!(written.contains("keep"), "{written}");
     assert!(!written.contains("external"), "{written}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
     assert!(
-        load_pending_releases(&db).unwrap().iter().all(|item| item.key != key),
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .all(|item| item.key != key),
         "{:?}",
         load_pending_releases(&db).unwrap()
     );
@@ -2241,29 +3329,45 @@ fn restored_binding_is_applied_ahead_of_a_pending_release() {
 fn assert_unchanged_neighbors(db: &Database) {
     let kept_body: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT body FROM library_items WHERE id='library-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(kept_body, "kept-body");
     let pi_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(pi_rows, 1);
     let codex_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(codex_rows, 1);
     let deleted: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM sync_entity_state WHERE deleted!=0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(deleted, 0);
@@ -2322,29 +3426,54 @@ fn successful_release_clears_a_stale_write_blocker_when_nothing_is_pending() {
     let released = fs::read_to_string(&config).unwrap();
     assert!(!released.contains("gpt-6"), "{released}");
     assert!(released.contains("keep"), "{released}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key), "{:?}", load_blockers(&db).unwrap());
-    assert!(load_pending_releases(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(
+        load_blockers(&db)
+            .unwrap()
+            .iter()
+            .all(|item| item.key != key),
+        "{:?}",
+        load_blockers(&db).unwrap()
+    );
+    assert!(load_pending_releases(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
     retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
     finish_pending_native(&db, &credentials, &registry).unwrap();
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
     let kept_body: String = db
         .with_connection(|conn| {
-            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT body FROM library_items WHERE id='library-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(kept_body, "kept-body");
     let pi_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='pi'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(pi_rows, 1);
     let codex_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(codex_rows, 0);
@@ -2367,8 +3496,12 @@ fn release_keeps_the_blocker_until_every_pending_release_for_the_key_is_done() {
     set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
     let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
     let key = "binding:shared-release";
-    let config_a = Path::new(scope_a.strip_prefix("project:").unwrap()).join(".codex").join("config.toml");
-    let config_b = Path::new(scope_b.strip_prefix("project:").unwrap()).join(".codex").join("config.toml");
+    let config_a = Path::new(scope_a.strip_prefix("project:").unwrap())
+        .join(".codex")
+        .join("config.toml");
+    let config_b = Path::new(scope_b.strip_prefix("project:").unwrap())
+        .join(".codex")
+        .join("config.toml");
     fs::create_dir_all(config_a.parent().unwrap()).unwrap();
     fs::create_dir_all(config_b.parent().unwrap()).unwrap();
     fs::write(&config_a, ":::not toml").unwrap();
@@ -2390,19 +3523,37 @@ fn release_keeps_the_blocker_until_every_pending_release_for_the_key_is_done() {
     assert!(!during.contains("gpt-6"), "{during}");
     assert!(during.contains("keep"), "{during}");
     assert!(
-        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.scope_key == scope_a),
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .any(|item| item.key == key && item.scope_key == scope_a),
         "{:?}",
         load_pending_releases(&db).unwrap()
     );
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("pending release");
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("pending release");
     assert_eq!(blocker.action, "retry", "{blocker:?}");
     fs::write(&config_a, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
     note_failed_release(&db, &registry, key, "codex", &scope_a, managed).unwrap();
     let released = fs::read_to_string(&config_a).unwrap();
     assert!(!released.contains("gpt-6"), "{released}");
     assert!(released.contains("keep"), "{released}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key), "{:?}", load_blockers(&db).unwrap());
-    assert!(load_pending_releases(&db).unwrap().is_empty(), "{:?}", load_pending_releases(&db).unwrap());
+    assert!(
+        load_blockers(&db)
+            .unwrap()
+            .iter()
+            .all(|item| item.key != key),
+        "{:?}",
+        load_blockers(&db).unwrap()
+    );
+    assert!(
+        load_pending_releases(&db).unwrap().is_empty(),
+        "{:?}",
+        load_pending_releases(&db).unwrap()
+    );
 }
 
 #[test]
@@ -2424,7 +3575,8 @@ fn restored_binding_write_failure_is_not_cleared_by_release() {
     fs::create_dir_all(config.parent().unwrap()).unwrap();
     fs::write(&config, ":::not toml").unwrap();
     db.with_connection(|conn| {
-        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", [])
+            .unwrap();
         Ok(())
     })
     .unwrap();
@@ -2458,30 +3610,51 @@ fn restored_binding_write_failure_is_not_cleared_by_release() {
     assert!(during.contains("external"), "{during}");
     assert!(during.contains("sandbox_mode"), "{during}");
     assert!(during.contains("keep"), "{during}");
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("write blocker");
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("write blocker");
     assert_eq!(blocker.detail, "上次写入失败", "{blocker:?}");
     assert!(
-        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.managed.contains("sandbox_mode")),
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .any(|item| item.key == key && item.managed.contains("sandbox_mode")),
         "{:?}",
         load_pending_releases(&db).unwrap()
     );
     let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
-    assert!(failed.contains("外部修改") || failed.contains("上次管理的字段"), "{failed}");
+    assert!(
+        failed.contains("外部修改") || failed.contains("上次管理的字段"),
+        "{failed}"
+    );
     assert!(!failed.contains("请先配置 WebDAV"), "{failed}");
-    let after = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("still blocked");
+    let after = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("still blocked");
     assert_eq!(after.action, "retry", "{after:?}");
     assert_ne!(after.detail, "");
     let still = fs::read_to_string(&config).unwrap();
     assert!(still.contains("sandbox_mode"), "{still}");
     assert!(still.contains("external"), "{still}");
     assert!(
-        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key),
+        load_pending_releases(&db)
+            .unwrap()
+            .iter()
+            .any(|item| item.key == key),
         "a failed write must keep the old release"
     );
     let codex_rows: i64 = db
         .with_connection(|conn| {
-            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
-                .map_err(|error| error.to_string())
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE tool='codex'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
         })
         .unwrap();
     assert_eq!(codex_rows, 1);
@@ -2516,14 +3689,22 @@ fn install_retry_rewrites_and_clears_the_blocker_once_the_cli_is_present() {
         error.contains("未发现") || error.contains("未注册") || error.contains("不能探测"),
         "{error}"
     );
-    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
+    let blocker = load_blockers(&db)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.key == key)
+        .expect("blocker");
     assert_eq!(blocker.action, "install", "{blocker:?}");
     let ready = Registry::builtins().with_fixture_installation("codex", "0.160.0");
     retry_native_blocker(&db, &credentials, &ready, &key).unwrap();
     let canonical = scope.strip_prefix("project:").unwrap();
-    let written = fs::read_to_string(Path::new(canonical).join(".codex").join("config.toml")).unwrap();
+    let written =
+        fs::read_to_string(Path::new(canonical).join(".codex").join("config.toml")).unwrap();
     assert!(written.contains("gpt-6"), "{written}");
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != key));
 }
 
 #[test]
@@ -2533,7 +3714,12 @@ fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let root = temp.path().join("account");
-    let state = root.join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
+    let state = root
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
     fs::create_dir_all(state.parent().unwrap()).unwrap();
     let authenticated = r#"{"schemaVersion":2,"status":"authenticated","storeKind":"file","clientId":"mcode-public","scopes":["agent.default"],"audience":"agent-backend","buildEnv":"prod","region":"cn","generation":1}"#;
     fs::write(&state, authenticated).unwrap();
@@ -2551,7 +3737,10 @@ fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
         history_roots: Vec::new(),
         resource_root: root.clone(),
         environment: BTreeMap::from([
-            ("MINIMAX_DATA_DIR".into(), root.to_string_lossy().into_owned()),
+            (
+                "MINIMAX_DATA_DIR".into(),
+                root.to_string_lossy().into_owned(),
+            ),
             ("MAVIS_DATA_DIR".into(), root.to_string_lossy().into_owned()),
         ]),
         remove_environment: Vec::new(),
@@ -2596,10 +3785,17 @@ fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
     );
     fs::write(&state, authenticated.replace("authenticated", "expired")).unwrap();
     let registry = Registry::builtins();
-    let rejected = retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap_err();
+    let rejected =
+        retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap_err();
     assert!(!rejected.contains("请先配置 WebDAV"), "{rejected}");
-    assert!(load_blockers(&db).unwrap().iter().any(|item| item.key == "account:acct-m" && item.action == "relogin"));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .any(|item| item.key == "account:acct-m" && item.action == "relogin"));
     fs::write(&state, authenticated).unwrap();
     retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap();
-    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
+    assert!(load_blockers(&db)
+        .unwrap()
+        .iter()
+        .all(|item| item.key != "account:acct-m"));
 }

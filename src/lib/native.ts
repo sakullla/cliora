@@ -13,6 +13,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanSt
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
+import type { RemoteProbe, RemoteProject, RemoteTarget } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
@@ -192,6 +193,14 @@ export const native = {
   saveLibraryItem: (draft: LibraryDraft) => command<LibraryItem>('save_library_item', { draft }),
   deleteLibraryItem: (id: string, expectedVersion: number) => command<void>('delete_library_item', { id, expectedVersion }),
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
+  setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
+  listRemoteTargets: () => command<RemoteTarget[]>('list_remote_targets'),
+  saveRemoteTarget: (target: RemoteTarget) => command<RemoteTarget>('save_remote_target', { target }),
+  deleteRemoteTarget: (id: string) => command<void>('delete_remote_target', { id }),
+  listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
+  saveRemoteProject: (project: RemoteProject) => command<RemoteProject>('save_remote_project', { project }),
+  deleteRemoteProject: (id: string) => command<void>('delete_remote_project', { id }),
+  testRemoteTarget: (target: RemoteTarget) => command<RemoteProbe>('test_remote_target', { target }),
   listProjects: () => command<Project[]>('list_projects'),
   addProject: (projectPath: string, name?: string, preferredTool?: string) => command<Project>('add_project', { projectPath, name: name || null, preferredTool: preferredTool || null }),
   renameProject: (projectId: string, name: string) => command<Project>('rename_project', { projectId, name }),
