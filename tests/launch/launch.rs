@@ -219,6 +219,8 @@ fn sample(terminal: TerminalId) -> LaunchPlan {
         terminal,
         session_markers: &[],
         credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
     }
 }
 
@@ -893,6 +895,8 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
         terminal: TerminalId::Workbench,
         session_markers: &["CLIORA_TEST_SESSION"],
         credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
     };
     let started = spawn(&db, plan).unwrap();
     assert_eq!(started.status, "session_started");

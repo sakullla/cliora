@@ -66,3 +66,34 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
     assert!(command.contains("'claude'"), "adapter command was not used: {command}");
 }
 
+#[test]
+fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("remote-mux.db")).unwrap();
+    db.update_preferences(|preferences| preferences.remote_ssh_enabled = true).unwrap();
+    let target = crate::remote::save_target(&db, crate::remote::RemoteTarget {
+        id: String::new(), name: "fixture".into(), host: "example.test".into(), port: 22,
+        user: "root".into(), ssh_config: None, default_path: None, enabled: true,
+        created_at: 0, updated_at: 0,
+    }).unwrap();
+    let project = crate::remote::save_project(&db, crate::remote::RemoteProject {
+        id: String::new(), target_id: target.id, name: "mux".into(), path: "/srv/mux".into(),
+        preferred_tool: Some("codex".into()), updated_at: 0,
+    }).unwrap();
+    let plan = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
+        tool_id: "codex".into(), project_id: Some(format!("remote:{}", project.id)),
+        session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
+        resume_latest: false,
+    }).unwrap();
+    let command = plan.cli_args.last().unwrap();
+    assert!(command.contains("tmux new-session -A"));
+    assert!(command.contains("screen -dmS"));
+    assert!(command.contains("requires tmux or screen"));
+    assert!(plan.remote_session_id.as_deref().is_some_and(|id| id.starts_with("cliora-")));
+    assert!(plan.remote_end_args.is_some());
+    let reattach = crate::launch::remote_reattach_command(plan.remote_session_id.as_deref().unwrap());
+    assert!(reattach.contains("tmux has-session"));
+    assert!(reattach.contains("screen -r"));
+    assert!(reattach.contains("exit 44"));
+}
+
