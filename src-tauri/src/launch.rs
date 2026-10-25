@@ -230,6 +230,7 @@ impl LaunchPlanError {
 
 fn remote_launch_plan(
     db: &Database,
+    registry: &Registry,
     request: &LaunchRequest,
 ) -> Result<Option<LaunchPlan>, LaunchPlanError> {
     let Some(project_key) = remote_project_key(request.project_id.as_deref()) else {
@@ -247,6 +248,9 @@ fn remote_launch_plan(
         .into_iter()
         .find(|item| item.id == project.target_id && item.enabled)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程目标不可用".into()))?;
+    let adapter = registry
+        .get(&request.tool_id)
+        .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
     let path = project.path.trim();
     if path.is_empty() || path.chars().any(|ch| ch.is_control()) {
         return Err(LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程路径无效".into()));
@@ -268,7 +272,7 @@ fn remote_launch_plan(
     let mut remote_command = format!(
         "cd -- {} && exec {}",
         remote_shell_quote(path),
-        remote_shell_quote(&request.tool_id),
+        remote_shell_quote(adapter.command()),
     );
     if request.mode == LaunchMode::Yolo {
         remote_command.push_str(" --yolo");
@@ -828,7 +832,7 @@ fn plan_with_stage_at(
     directory_override: Option<&Path>,
     resume_context: Option<Option<(String, crate::accounts::NativeContext)>>,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    if let Some(plan) = remote_launch_plan(db, &request)? {
+    if let Some(plan) = remote_launch_plan(db, registry, &request)? {
         return Ok(plan);
     }
     let skill_issues = skills::recover_report(db).map_err(|message| {
