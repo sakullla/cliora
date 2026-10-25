@@ -30,6 +30,15 @@ export default {
     less: 'Show less',
     preservedUnknown: 'No adapter installed, {{count}} profile(s) preserved, read-only',
   },
+  remoteSsh: {
+    title: 'Remote SSH',
+    description: 'Off by default. Turn it on to save hosts and launch CLIs in the workbench or an external terminal.',
+    enable: 'Enable remote SSH',
+    enableHint: 'When off, no new connection is created; saved targets and active sessions remain.',
+    name: 'Display name', host: 'Host or alias', port: 'Port', user: 'User', path: 'Default remote directory',
+    add: 'Save host', test: 'Test connection', delete: 'Delete', saved: 'Remote host saved.', ready: 'Connection ready.',
+    loadFailed: 'Unable to load remote hosts.', saveFailed: 'Unable to save remote host.', testFailed: 'Remote connection test failed.',
+  },
   icons: {
     updated: 'Tool icon updated.',
     restored: 'Default icon restored.',

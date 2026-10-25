@@ -235,6 +235,9 @@ export default {
     label: 'Pages',
     mainLabel: 'Main navigation',
     workspace: 'Workspace',
+    tools: 'Tools',
+    recordsGroup: 'Records',
+    settingsGroup: 'Settings',
     itemTitle: '{{label}} ({{shortcut}})',
   },
   theme: {

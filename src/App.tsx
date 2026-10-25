@@ -57,6 +57,13 @@ const pages: { id: Page; glyph: IconName }[] = [
   { id: 'settings', glyph: 'settings' },
 ];
 
+const navGroups: { label: string; pages: Page[] }[] = [
+  { label: 'workspace', pages: ['home', 'sessions'] },
+  { label: 'tools', pages: ['connections', 'library'] },
+  { label: 'recordsGroup', pages: ['records'] },
+  { label: 'settingsGroup', pages: ['settings'] },
+];
+
 const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'system', glyph: 'monitor' },
   { id: 'light', glyph: 'sun' },
@@ -489,6 +496,14 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  async function updateRemoteSsh(enabled: boolean) {
+    if (!nativeAvailable || busy) return;
+    setBusy(true); setError(null);
+    try { setBootstrap(await native.setRemoteSshEnabled(enabled)); }
+    catch (value) { setError(value as ApiError); }
+    finally { setBusy(false); }
+  }
+
   async function updateIcon(toolId: string, dataUrl: string | null) {
     if (!nativeAvailable || busy) return;
     setBusy(true); setError(null);
@@ -502,11 +517,8 @@ export default function App() {
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>{t('common.shell.brand')}</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={18} /></button></div>
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel}+K</kbd></button>
-      <div className="nav-label" aria-hidden="true">{t('common.nav.workspace')}</div>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {pages.map((item) => { const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}>{item.id === 'settings' && <span className="nav-divider" aria-hidden="true" />}<button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span>
-        </button></Fragment>; })}
+        {navGroups.map((group) => <Fragment key={group.label}><div className="nav-label" aria-hidden="true">{t(`common.nav.${group.label}`)}</div>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <button type="button" key={item.id} className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button>; })}</Fragment>)}
       </nav>
       <div className="sidebar-foot">
         {updateOffer && <button type="button" className="sidebar-update" title={t('common.shell.updateTitle', { version: updateOffer.version })} aria-label={t('common.shell.updateTitle', { version: updateOffer.version })} onClick={openAppUpdate}><span className="sidebar-update-glyph" aria-hidden="true"><Icon name="download" size={14} /></span><span className="sidebar-update-text">{t('common.shell.updateAvailable', { version: updateOffer.version })}</span><span className="sidebar-update-action" aria-hidden="true">{t('common.shell.updateAction')}</span></button>}
@@ -556,6 +568,8 @@ export default function App() {
           onOpenMigration={() => setSettingsTab('migration')}
           onOpenShortcutHelp={() => setHelpOpen(true)}
           onReopenOnboarding={reopenOnboardingGuide}
+          remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled}
+          onRemoteSshChange={(enabled) => void updateRemoteSsh(enabled)}
         />}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}

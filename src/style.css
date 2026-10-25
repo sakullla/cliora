@@ -1121,3 +1121,6 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
 @media (max-width: 760px) {
   .content-workbench > .content-inner { padding: 0; }
 }
+.remote-target-form { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(150px, 1.4fr) 80px 110px minmax(150px, 1.4fr) auto; gap: 8px; align-items: center; margin: 12px 0; }
+.remote-target-form input { min-width: 0; }
+@media (max-width: 900px) { .remote-target-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .remote-target-form button { grid-column: span 2; } }

@@ -235,6 +235,9 @@ export default {
     label: '页面',
     mainLabel: '主导航',
     workspace: '工作区',
+    tools: '工具',
+    recordsGroup: '记录',
+    settingsGroup: '设置',
     itemTitle: '{{label}}（{{shortcut}}）',
   },
   theme: {
