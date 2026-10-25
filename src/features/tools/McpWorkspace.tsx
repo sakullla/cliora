@@ -124,6 +124,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setComposing(true); setError(''); setNotice('');
   }
   function editNative(item: NativeMcpEntry) {
+    if (busy) return;
     const found = definitions.find(definition => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
       env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
@@ -217,12 +218,22 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       ariaLabel={t('tools.mcp.title')} title={t('tools.mcp.title')} description={t('tools.mcp.description')}
       headerActions={<div className={styles.headerActions}><button type="button" aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} onClick={() => void refreshNative()}><Icon name="refresh" size={14} /></button>{addButton}</div>}
       status={<>{stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}{loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><button type="button" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</button></div>}</>}
-      toolbar={<div className={styles.toolbar}><strong>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong>{nativeEntries.length >= SEARCH_THRESHOLD && <SearchField className={styles.search} type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}</div>}
+      toolbar={<div className={styles.toolbar}><strong>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong>{nativeEntries.length >= SEARCH_THRESHOLD && <SearchField className={styles.search} type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}{nativeEntries.length > 0 && <span className={styles.editHint}><Icon name="pencil" size={11} />{t('tools.mcp.doubleClickHint')}</span>}</div>}
       items={shown} getItemKey={item => item.name} getItemLabel={item => item.name} selectedKey={selectedName}
-      onSelect={item => setSelectedName(item.name)} onCloseDetails={() => setSelectedName(null)}
+      onSelect={item => setSelectedName(item.name)} onOpenItem={editNative} openItemHint={t('tools.mcp.doubleClickHint')} onCloseDetails={() => setSelectedName(null)}
       detailsLabel={t('tools.mcp.detailsLabel')} closeDetailsLabel={t('tools.mcp.closeDetails')} detailsSuspended={composing || !!batchItems} empty={shown.length ? undefined : empty}
-      renderItem={item => <span className={styles.entry}><span className={styles.entryIcon} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={16} /></span><span className={styles.entryBody}><span className={styles.entryTitle}><strong>{item.name}</strong><span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>{libraryFor(item.name) && <span className={styles.chip}>{t('tools.mcp.inLibrary')}</span>}</span><small className={styles.summary}><span>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span><code>{mcpSummary(item) || '—'}</code></small></span><Icon name="chevronRight" size={14} /></span>}
-      renderDetails={item => <McpDetails item={item} actions={<><button type="button" className={styles.primary} onClick={() => editNative(item)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>{libraryFor(item.name) && onOpenLibrary && <button type="button" onClick={() => onOpenLibrary(libraryFor(item.name)!.id)}><Icon name="library" size={14} />{t('tools.mcp.openLibrary')}</button>}<button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removeNative(item)}><Icon name="trash" size={14} />{t('tools.mcp.removeFromTool')}</button></>} />}
+      detailsActions={(() => {
+        const selected = shown.find(item => item.name === selectedName);
+        if (!selected) return undefined;
+        const library = libraryFor(selected.name);
+        return <>
+          <button type="button" className={styles.primary} disabled={busy} onClick={() => editNative(selected)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
+          {library && onOpenLibrary && <button type="button" onClick={() => onOpenLibrary(library.id)}><Icon name="library" size={14} />{t('tools.mcp.openLibrary')}</button>}
+          <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removeNative(selected)}><Icon name="trash" size={14} />{t('tools.mcp.removeFromTool')}</button>
+        </>;
+      })()}
+      renderItem={item => <span className={styles.entry}><span className={styles.entryIcon} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={17} /></span><span className={styles.entryBody}><span className={styles.entryTitle}><strong>{item.name}</strong><span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>{libraryFor(item.name) && <span className={styles.chip}>{t('tools.mcp.inLibrary')}</span>}</span><small className={styles.summary}><span>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span><code>{mcpSummary(item) || '—'}</code></small></span><Icon name="chevronRight" size={14} /></span>}
+      renderDetails={item => <McpDetails item={item} />}
     />
     <GuideDialog wide open={composing && !batchItems} title={nativeOrigin || draft.id ? t('tools.mcp.editTitle') : t('tools.mcp.newTitle')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
       <div className={styles.panel}>

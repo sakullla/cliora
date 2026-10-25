@@ -406,6 +406,7 @@ export default {
     title: 'MCP 服务器',
     description: '这里列出当前 CLI 已经生效的 MCP，修改只写入这个 CLI。要分发到多个 CLI，请到资料库。',
     add: '添加 MCP',
+    doubleClickHint: '双击条目可直接修改',
     blocked: '当前工具不能添加可提交的 MCP，请查看上方原因。',
     emptyTitle: '这个 CLI 还没有生效的 MCP',
     emptyDetail: '添加后只写进当前这个 CLI。要给其他 CLI 用，勾选快速同步，再到资料库分发。',
