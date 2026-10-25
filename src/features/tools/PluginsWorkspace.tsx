@@ -208,7 +208,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   </div> : null;
   const operation = opened ? operationFor(opened) : undefined;
 
-  return <DocumentWorkspace label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.label')} backLabel={t('common.dialog.back')} onBack={closeDetails}
+  return <DocumentWorkspace label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.toolbar')} backLabel={t('common.dialog.back')} onBack={closeDetails}
     heading={t('tools.plugins.title')}
     count={countText}
     actions={<button type="button" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()}><Icon name="refresh" size={15} /></button>}
