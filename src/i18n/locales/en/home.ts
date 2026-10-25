@@ -37,6 +37,7 @@ export default {
     panelTitle: 'Manage projects in the desktop app',
     panelDetail: 'Link local folders and launch them with a CLI in an external terminal.',
   },
+  remote: { title: 'Remote projects', project: 'Remote path', tool: 'Remote CLI', launch: 'Launch remote CLI' },
   tools: {
     operationFailed: 'Operation failed. Please try again.',
     pendingChanges: 'Unapplied changes',

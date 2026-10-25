@@ -35,8 +35,8 @@ export default {
     description: '默认关闭。开启后可保存远程主机，并在工作台或外部终端启动 CLI。',
     enable: '启用远程 SSH',
     enableHint: '关闭时不会新建连接；已保存目标和活动会话保留。',
-    name: '显示名称', host: '主机或别名', port: '端口', user: '用户', path: '默认远程目录',
-    add: '保存主机', test: '测试连接', delete: '删除', saved: '远程主机已保存。', ready: '连接正常。',
+    name: '显示名称', host: '主机或别名', port: '端口', user: '用户', path: '默认远程目录', config: 'SSH 配置来源',
+    add: '保存主机', update: '更新主机', edit: '编辑', test: '测试连接', delete: '删除', saved: '远程主机已保存。', ready: '连接正常。',
     loadFailed: '无法读取远程主机列表。', saveFailed: '无法保存远程主机。', testFailed: '远程连接测试失败。',
   },
   icons: {

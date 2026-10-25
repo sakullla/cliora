@@ -7,6 +7,7 @@ import { confirmAction } from '../../lib/confirm';
 import type { LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
+import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -19,7 +20,7 @@ import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import styles from './ProjectLauncher.module.css';
 
-export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -35,6 +36,10 @@ export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, 
   const [dialogError, setDialogError] = useState('');
   const [dialogFeedback, setDialogFeedback] = useState('');
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
+  const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
+  const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
+  const [remoteProjectId, setRemoteProjectId] = useState('');
+  const [remoteTool, setRemoteTool] = useState('');
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
@@ -116,6 +121,18 @@ export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, 
   }, []);
 
   useEffect(() => {
+    if (!nativeAvailable || !remoteSshEnabled) { setRemoteTargets([]); setRemoteProjects([]); return; }
+    let active = true;
+    void Promise.all([native.listRemoteTargets(), native.listRemoteProjects()]).then(([targets, projects]) => {
+      if (!active) return;
+      setRemoteTargets(targets.filter((target) => target.enabled));
+      setRemoteProjects(projects);
+      setRemoteProjectId((current) => current && projects.some((project) => project.id === current) ? current : projects[0]?.id ?? '');
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [remoteSshEnabled]);
+
+  useEffect(() => {
     if (!nativeAvailable) return;
     void refresh();
     let active = true;
@@ -135,6 +152,8 @@ export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, 
   const resumeTool = resumable.some((tool) => tool.id === globalTool) ? globalTool : resumable[0]?.id ?? '';
   const resumeDescriptor = resumable.find((tool) => tool.id === resumeTool);
   const directMode = preferredLaunchMode(launchSettings, 'cli', !!resumeDescriptor?.yoloAvailable);
+  const remoteToolId = managed.some((tool) => tool.id === remoteTool) ? remoteTool : defaultTool;
+  const remoteProject = remoteProjects.find((project) => project.id === remoteProjectId);
 
   async function remove(project: Project) {
     if (!await confirmAction(t('home.launcher.removeConfirm', { name: project.name }), () => mounted.current && latestProjects.current.some(item => item.id === project.id && JSON.stringify(item) === JSON.stringify(project)), { title: t('home.launcher.removeAction'), confirmLabel: t('home.launcher.removeAction'), destructive: true })) return;
@@ -259,6 +278,7 @@ export function ProjectLauncher({ tools, repair, spotlight, onWorkbenchSession, 
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
+    {remoteSshEnabled && remoteProjects.length > 0 && <div className="remote-launcher-panel" data-testid="remote-launcher"><div className={styles.heading}><strong>{t('home.remote.title')}</strong><span className="count-chip">{remoteProjects.length}</span></div><div className={styles.extra}><label>{t('home.remote.project')}<select aria-label={t('home.remote.project')} value={remoteProjectId} onChange={(event) => setRemoteProjectId(event.target.value)}>{remoteProjects.map((project) => <option key={project.id} value={project.id}>{project.name} · {remoteTargets.find((target) => target.id === project.targetId)?.name ?? project.targetId}</option>)}</select></label><label>{t('home.remote.tool')}<select aria-label={t('home.remote.tool')} value={remoteToolId} onChange={(event) => setRemoteTool(event.target.value)}>{toolOptions(managed).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><button type="button" disabled={!!busy || !remoteProject || !remoteToolId} onClick={() => void launch(remoteToolId, remoteProject ? `remote:${remoteProject.id}` : null, directMode)}>{t('home.remote.launch')}</button></div><small>{remoteProject?.path}</small></div>}
     <div className={styles.heading}><strong>{t('home.projects.title')}{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} />{t('home.launcher.add')}</button></div>
     {projects.length > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {listLoading && !projects.length ? <SkeletonRows count={2} /> : projects.length ? (visibleProjects.length ? <div className={styles.projectGrid}>

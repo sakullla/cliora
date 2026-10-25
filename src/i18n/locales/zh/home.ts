@@ -37,6 +37,7 @@ export default {
     panelTitle: '桌面应用中管理项目',
     panelDetail: '可以关联本机目录，并用选定的 CLI 在外部终端启动。',
   },
+  remote: { title: '远程项目', project: '远程路径', tool: '远程 CLI', launch: '启动远程 CLI' },
   tools: {
     operationFailed: '操作失败，请重试',
     pendingChanges: '有未应用修改',
