@@ -3,12 +3,34 @@ use crate::native::{
     adapter::Scope,
     profile::{Connection, RegisteredProfile},
 };
+use crate::adapters::{Registry, RemoteOperation, RemoteOperationResult};
+use crate::remote::RemoteTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub type Documents = BTreeMap<String, Value>;
 pub const EDITING_VERSION: u32 = 1;
+
+/// Registry-driven remote configuration consumer. File transfer and baseline
+/// conflict handling remain transport/service responsibilities; adapters must
+/// explicitly declare the remote port before this can create an SSH command.
+pub fn remote_configuration(
+    registry: &Registry,
+    adapter_id: &str,
+    target: &RemoteTarget,
+    args: &[String],
+) -> Result<RemoteOperationResult, String> {
+    let adapter = registry
+        .get(adapter_id)
+        .ok_or_else(|| format!("未知 CLI 适配器：{adapter_id}"))?;
+    adapter.remote_operation(
+        target,
+        &RemoteOperation::Configuration {
+            args: args.to_vec(),
+        },
+    )
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

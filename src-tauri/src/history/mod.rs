@@ -14,6 +14,8 @@ use sha2::{Digest, Sha256};
 use crate::database::Database;
 use crate::domain::CliId;
 use crate::adapters::{CliAdapter, Registry};
+use crate::adapters::{RemoteOperation, RemoteOperationResult};
+use crate::remote::RemoteTarget;
 
 pub(crate) mod models_dev;
 mod report;
@@ -33,6 +35,26 @@ const MAX_MESSAGES: usize = 2_000;
 const MAX_MESSAGE_CHARS: usize = 16_000;
 /// A source that parsed cleanly but holds nothing to show is skipped, not a failure.
 pub const EMPTY_SESSION: &str = "会话没有可展示的内容";
+
+/// Registry-driven remote history consumer. Parsed history remains isolated to
+/// the target/source selected by the adapter and carries source/integrity
+/// metadata in the typed operation result.
+pub fn remote_history(
+    registry: &Registry,
+    adapter_id: &str,
+    target: &RemoteTarget,
+    args: &[String],
+) -> Result<RemoteOperationResult, String> {
+    let adapter = registry
+        .get(adapter_id)
+        .ok_or_else(|| format!("未知 CLI 适配器：{adapter_id}"))?;
+    adapter.remote_operation(
+        target,
+        &RemoteOperation::History {
+            args: args.to_vec(),
+        },
+    )
+}
 
 #[derive(Clone, Debug)]
 pub struct HistorySource {

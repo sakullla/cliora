@@ -19,6 +19,26 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// Registry-driven remote account observation consumer. The adapter selects
+/// the account port and remote protocol; this service never switches on CLI
+/// ids or adopts credentials from the returned observation.
+pub fn remote_observe(
+    registry: &crate::adapters::Registry,
+    adapter_id: &str,
+    target: &crate::remote::RemoteTarget,
+    args: &[String],
+) -> Result<crate::adapters::RemoteOperationResult, String> {
+    let adapter = registry
+        .get(adapter_id)
+        .ok_or_else(|| format!("未知 CLI 适配器：{adapter_id}"))?;
+    adapter.remote_operation(
+        target,
+        &crate::adapters::RemoteOperation::Accounts {
+            args: args.to_vec(),
+        },
+    )
+}
+
 pub const LOGIN_TIMEOUT_DETAIL: &str = "原生认证操作超时，已停止接纳结果。外部终端仍由用户控制，请关闭；候选目录不会自动激活。";
 
 static OPERATION_ADMISSION: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -18,6 +18,28 @@ pub use runtime::RuntimeReport;
 pub use contract::*;
 pub use store::{delete_query, get_query, list_queries, save_query};
 
+use crate::adapters::{Registry, RemoteOperation, RemoteOperationResult};
+use crate::remote::RemoteTarget;
+
+/// Registry-driven remote quota consumer. No local quota provider is inferred
+/// as a remote protocol; an adapter must explicitly declare its remote port.
+pub fn remote_usage(
+    registry: &Registry,
+    adapter_id: &str,
+    target: &RemoteTarget,
+    args: &[String],
+) -> Result<RemoteOperationResult, String> {
+    let adapter = registry
+        .get(adapter_id)
+        .ok_or_else(|| format!("未知 CLI 适配器：{adapter_id}"))?;
+    adapter.remote_operation(
+        target,
+        &RemoteOperation::Usage {
+            args: args.to_vec(),
+        },
+    )
+}
+
 #[cfg(test)]
 #[path = "../../../tests/usage/queries.rs"]
 mod tests;
