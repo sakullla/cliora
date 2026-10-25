@@ -68,6 +68,7 @@ pub struct RemoteFacet {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCapabilities {
+    pub probe: RemoteFacet,
     pub configuration: RemoteFacet,
     pub accounts: RemoteFacet,
     pub resources: RemoteFacet,
@@ -77,6 +78,7 @@ pub struct RemoteCapabilities {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteCapability {
+    Probe,
     Configuration,
     Accounts,
     Resources,
@@ -87,6 +89,7 @@ pub enum RemoteCapability {
 impl RemoteCapability {
     fn label(self) -> &'static str {
         match self {
+            Self::Probe => "探测",
             Self::Configuration => "配置",
             Self::Accounts => "账号",
             Self::Resources => "资源",
@@ -293,6 +296,15 @@ fn npm_uninstall_command_for(package: &str) -> Option<String> {
     (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
 }
 
+fn remote_command(executable: &str, args: &[&str]) -> String {
+    let mut command = crate::remote::quote_command_arg(executable);
+    for arg in args {
+        command.push(' ');
+        command.push_str(&crate::remote::quote_command_arg(arg));
+    }
+    command
+}
+
 pub trait CliAdapter: Sync {
     /// Dispatches one adapter-owned, read-only remote command through the
     /// shared OpenSSH transport. Capability checks happen before transport
@@ -305,6 +317,7 @@ pub trait CliAdapter: Sync {
     ) -> Result<RemoteCommandResult, String> {
         let capabilities = self.remote_capabilities();
         let facet = match capability {
+            RemoteCapability::Probe => &capabilities.probe,
             RemoteCapability::Configuration => &capabilities.configuration,
             RemoteCapability::Accounts => &capabilities.accounts,
             RemoteCapability::Resources => &capabilities.resources,
@@ -314,12 +327,43 @@ pub trait CliAdapter: Sync {
         if facet.state != "supported" {
             return Err(format!("远程{}不可用：{}", capability.label(), facet.reason));
         }
-        let mut command = crate::remote::quote_command_arg(self.command());
-        for arg in args {
-            command.push(' ');
-            command.push_str(&crate::remote::quote_command_arg(arg));
-        }
+        let command = remote_command(self.command(), args);
         crate::remote::run_command(target, &command).map_err(|error| error.to_string())
+    }
+
+    /// Adapter-owned executable probe. The shared transport only carries the
+    /// command; the adapter owns the executable and probe arguments.
+    fn remote_probe(&self, target: &RemoteTarget) -> Result<RemoteCommandResult, String> {
+        self.dispatch_remote(target, RemoteCapability::Probe, &["--version"])
+    }
+
+    fn dispatch_remote_owned_command(
+        &self,
+        target: &RemoteTarget,
+        command: &str,
+    ) -> Result<RemoteCommandResult, String> {
+        let capabilities = self.remote_capabilities();
+        if capabilities.probe.state != "supported" {
+            return Err(format!("远程探测不可用：{}", capabilities.probe.reason));
+        }
+        crate::remote::run_command(target, command).map_err(|error| error.to_string())
+    }
+
+    fn remote_install(&self, target: &RemoteTarget) -> Result<RemoteCommandResult, String> {
+        let command = self.install_command().ok_or_else(|| "此 CLI 未声明远程安装命令".to_owned())?;
+        self.dispatch_remote_owned_command(target, &command)
+    }
+
+    fn remote_upgrade(&self, target: &RemoteTarget, source: &str) -> Result<RemoteCommandResult, String> {
+        let command = self.upgrade_command(source).ok_or_else(|| "此 CLI 未声明远程升级命令".to_owned())?;
+        self.dispatch_remote_owned_command(target, &command)
+    }
+
+    fn remote_uninstall(&self, target: &RemoteTarget) -> Result<RemoteCommandResult, String> {
+        let command = self
+            .uninstall_command()
+            .ok_or_else(|| "此 CLI 未声明远程卸载命令".to_owned())?;
+        self.dispatch_remote_owned_command(target, &command)
     }
 
     fn remote_configuration(
@@ -360,6 +404,11 @@ pub trait CliAdapter: Sync {
 
     fn remote_capabilities(&self) -> RemoteCapabilities {
         RemoteCapabilities {
+            probe: RemoteCapabilities::facet(
+                !self.command().trim().is_empty(),
+                "远程 CLI 探测沿用适配器 executable",
+                "此 CLI 未声明可探测的远程 executable",
+            ),
             configuration: RemoteCapabilities::facet(
                 self.configuration().is_some(),
                 "远程配置沿用适配器声明的原生文件能力",
@@ -1005,6 +1054,11 @@ pub trait CliAdapter: Sync {
     fn npm_uninstall_command(&self) -> Option<String> {
         npm_uninstall_command_for(self.npm_package())
     }
+    /// Adapter-owned uninstall command used by the remote lifecycle port.
+    /// Adapters with a native package manager can override this declaration.
+    fn uninstall_command(&self) -> Option<String> {
+        self.npm_uninstall_command()
+    }
     /// npm uninstall command for the identified install line.
     fn npm_uninstall_command_for_version(&self, version: Option<&str>) -> Option<String> {
         match self.install_line_for_version(version) {
@@ -1191,6 +1245,7 @@ mod association_facet_tests {
         Undeclared,
         Declared,
         NoHistory,
+        NoProbe,
     }
 
     struct AssociationCli(AssociationCase);
@@ -1201,13 +1256,17 @@ mod association_facet_tests {
                 AssociationCase::Undeclared => "association_undeclared",
                 AssociationCase::Declared => "association_declared",
                 AssociationCase::NoHistory => "association_no_history",
+                AssociationCase::NoProbe => "",
             }
         }
         fn name(&self) -> &'static str {
             "association fixture"
         }
         fn command(&self) -> &'static str {
-            "association-fixture"
+            match self.0 {
+                AssociationCase::NoProbe => "",
+                _ => "association-fixture",
+            }
         }
         fn npm_package(&self) -> &'static str {
             ""
@@ -1269,7 +1328,7 @@ mod association_facet_tests {
         fn history_association(&self) -> Option<Facet> {
             match self.0 {
                 AssociationCase::Undeclared => None,
-                AssociationCase::Declared | AssociationCase::NoHistory => Some(Facet {
+                AssociationCase::Declared | AssociationCase::NoHistory | AssociationCase::NoProbe => Some(Facet {
                     state: "available",
                     reason: "已核对直接子会话",
                 }),
@@ -1345,5 +1404,53 @@ mod association_facet_tests {
         let error = adapter.remote_accounts(&target, &["status"]).unwrap_err();
         assert!(error.contains("远程账号不可用"));
         assert!(error.contains("未声明远程账号观察端口"));
+    }
+
+    #[test]
+    fn remote_probe_command_is_owned_by_the_adapter() {
+        let adapter = AssociationCli(AssociationCase::Declared);
+        assert_eq!(remote_command(adapter.command(), &["--version"]), "'association-fixture' '--version'");
+        assert_eq!(adapter.remote_capabilities().probe.state, "supported");
+    }
+
+    #[test]
+    fn unsupported_remote_probe_fails_before_transport_launch() {
+        let adapter = AssociationCli(AssociationCase::NoProbe);
+        let target = RemoteTarget {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            host: "invalid.example".into(),
+            port: 22,
+            user: "root".into(),
+            ssh_config: None,
+            default_path: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let error = adapter.remote_probe(&target).unwrap_err();
+        assert!(error.contains("远程探测不可用"));
+        assert!(error.contains("未声明可探测的远程 executable"));
+    }
+
+    #[test]
+    fn undeclared_remote_lifecycle_command_fails_before_transport_launch() {
+        let adapter = AssociationCli(AssociationCase::Declared);
+        let target = RemoteTarget {
+            id: "fixture".into(),
+            name: "fixture".into(),
+            host: "invalid.example".into(),
+            port: 22,
+            user: "root".into(),
+            ssh_config: None,
+            default_path: None,
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let install_error = adapter.remote_install(&target).unwrap_err();
+        assert!(install_error.contains("未声明远程安装命令"));
+        let uninstall_error = adapter.remote_uninstall(&target).unwrap_err();
+        assert!(uninstall_error.contains("未声明远程卸载命令"));
     }
 }
