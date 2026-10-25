@@ -3329,6 +3329,11 @@ pub async fn close_workbench_session(session_id: String) -> Result<(), ApiError>
 }
 
 #[tauri::command]
+pub async fn reattach_workbench_session(session_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::session_host::reattach(&session_id).map_err(native_error)).await
+}
+
+#[tauri::command]
 pub fn get_tray_status(app: AppHandle) -> crate::tray::TrayStatus {
     app.state::<crate::tray::TrayState>().status()
 }

@@ -257,6 +257,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const copyTimerRef = useRef<number>(0);
 
   const firstSeenAt = useRef(new Map<string, number>());
+  const autoRemoteReattachAttempted = useRef(false);
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (data: string) => void>());
   const pending = useRef(new Map<string, string[]>());
@@ -508,9 +509,10 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     void Promise.all([
       native.listWorkbenchSessions(),
       native.listProjects().catch(() => [] as Project[]),
+      native.listRemoteProjects().catch(() => [] as Array<{ id: string; preferredTool?: string | null }>),
       native.listLibraryItems('prompt', null, '').catch(() => [] as LibraryItem[]),
       native.getLaunchSettings().catch(() => null),
-    ]).then(([listed, listedProjects, prompts, settings]) => {
+    ]).then(([listed, listedProjects, remoteProjects, prompts, settings]) => {
       if (!alive) return;
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
@@ -519,6 +521,21 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       setProjects(Array.isArray(listedProjects) ? listedProjects : []);
       setLibraryPrompts(Array.isArray(prompts) ? prompts : []);
       if (settings) setLaunchSettings(settings);
+      if (!next.length && !autoRemoteReattachAttempted.current && Array.isArray(remoteProjects)) {
+        const candidate = remoteProjects.find((item) => item?.id && item.preferredTool);
+        if (candidate?.preferredTool) {
+          autoRemoteReattachAttempted.current = true;
+          void native.launchCli({
+            toolId: candidate.preferredTool,
+            projectId: `remote:${candidate.id}`,
+            sessionId: '__remote_reattach__',
+            mode: 'normal',
+            directory: null,
+            initialPrompt: null,
+            resumeLatest: false,
+          }).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
+        }
+      }
       setListError('');
       setSelectedId((current) => {
         if (focusSessionId && next.some((item) => item.id === focusSessionId)) return focusSessionId;
@@ -713,6 +730,20 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       setSelectedId((current) => current === session.id ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext')));
+    } finally { setBusy(''); }
+  }
+
+  async function reattachSession(session: WorkbenchSession) {
+    if (busy || session.running || !session.reattachable) return;
+    setBusy('reattach:' + session.id);
+    setActionError('');
+    try {
+      await native.reattachWorkbenchSession(session.id);
+      const listed = await native.listWorkbenchSessions();
+      setSessions(listed);
+      setSelectedId(session.id);
+    } catch (value) {
+      setActionError(formatFailure(value, '重新附着失败', '请检查远程目标和 tmux/screen 会话。'));
     } finally { setBusy(''); }
   }
 
@@ -1224,6 +1255,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                     <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!selected.running} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={14} /><span>{t('sessions.interruptShort')}</span></button>
                   </span>
                   <span className={styles.toolDivider} aria-hidden="true" />
+                  {selected.reattachable && <button type="button" className={styles.toolButton} aria-label="重新附着远程会话" title="重新附着远程会话" disabled={!!busy} onClick={() => void reattachSession(selected)}><Icon name="refresh" size={16} /><span>{busy === 'reattach:' + selected.id ? '附着中…' : '继续会话'}</span></button>}
                   {splitRoom && <button type="button" className={styles.toolButton} aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit}><Icon name="columns" size={16} /><span>{splitLabel}</span></button>}
                   <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
                   <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={16} /></button>
