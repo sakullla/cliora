@@ -1644,7 +1644,7 @@ mod association_facet_tests {
         };
         let error = crate::accounts::remote_observe(
             &crate::adapters::Registry::builtins(),
-            "codex",
+            "claude_code",
             &target,
             &[],
         )
@@ -1670,11 +1670,11 @@ mod association_facet_tests {
         let registry = crate::adapters::Registry::builtins();
         let args = Vec::new();
         let results = [
-            crate::adapters::configuration::remote_configuration(&registry, "codex", &target, &args),
-            crate::accounts::remote_observe(&registry, "codex", &target, &args),
-            crate::resources::remote_resources(&registry, "codex", &target, &args),
-            crate::history::remote_history(&registry, "codex", &target, &args),
-            crate::usage::remote_usage(&registry, "codex", &target, &args),
+            crate::adapters::configuration::remote_configuration(&registry, "claude_code", &target, &args),
+            crate::accounts::remote_observe(&registry, "claude_code", &target, &args),
+            crate::resources::remote_resources(&registry, "claude_code", &target, &args),
+            crate::history::remote_history(&registry, "claude_code", &target, &args),
+            crate::usage::remote_usage(&registry, "claude_code", &target, &args),
         ];
         let expected = ["配置", "账号", "资源", "历史", "额度"];
         for (result, capability) in results.into_iter().zip(expected) {
