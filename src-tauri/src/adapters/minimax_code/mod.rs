@@ -470,6 +470,7 @@ impl CliAdapter for MiniMaxCode {
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
+            remote: self.remote_capabilities(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: ManagementCapabilities {
