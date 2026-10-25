@@ -98,6 +98,13 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// Quote one argument for the remote POSIX shell command assembled by an
+/// adapter port. Adapter command names and arguments remain data, never shell
+/// syntax supplied by the caller.
+pub fn quote_command_arg(value: &str) -> String {
+    shell_quote(value)
+}
+
 fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
     let detail = stderr.to_ascii_lowercase();
     if detail.contains("remote host identification has changed")
