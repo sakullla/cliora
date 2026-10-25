@@ -160,6 +160,7 @@ pub struct LaunchResult {
     pub terminal: TerminalId,
     pub status: &'static str,
     pub session_id: Option<String>,
+    pub remote_session_id: Option<String>,
 }
 
 /// A managed connection key the CLI reads only from the OS environment
@@ -186,6 +187,8 @@ pub struct LaunchPlan {
     pub terminal: TerminalId,
     pub session_markers: &'static [&'static str],
     pub credential: Option<LaunchCredential>,
+    pub remote_session_id: Option<String>,
+    pub remote_end_args: Option<Vec<String>>,
 }
 
 fn remote_project_key(project_id: Option<&str>) -> Option<&str> {
@@ -194,6 +197,37 @@ fn remote_project_key(project_id: Option<&str>) -> Option<&str> {
 
 fn remote_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn remote_session_name(project_id: &str) -> String {
+    let mut name = String::from("cliora-");
+    for ch in project_id.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            name.push(ch);
+        }
+    }
+    name.truncate(48);
+    if name == "cliora-" { name.push_str("session"); }
+    name
+}
+
+fn remote_persistent_command(path: &str, executable: &str, args: &[String], session: &str) -> String {
+    let mut cli = format!("exec {}", remote_shell_quote(executable));
+    for arg in args { cli.push(' '); cli.push_str(&remote_shell_quote(arg)); }
+    let command = format!("cd -- {} && {cli}", remote_shell_quote(path));
+    let quoted = remote_shell_quote(&command);
+    format!(
+        "if command -v tmux >/dev/null 2>&1; then tmux new-session -A -s {} -c {} -- {}; elif command -v screen >/dev/null 2>&1; then screen -dmS {} sh -lc {} >/dev/null 2>&1 || true; screen -r {}; else {}; fi",
+        remote_shell_quote(session), remote_shell_quote(path), cli,
+        remote_shell_quote(session), quoted, remote_shell_quote(session), "echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42"
+    )
+}
+
+pub(crate) fn remote_reattach_command(session: &str) -> String {
+    format!(
+        "if command -v tmux >/dev/null 2>&1 && tmux has-session -t {} 2>/dev/null; then exec tmux attach-session -t {}; elif command -v screen >/dev/null 2>&1 && screen -list | grep -q '[.]{}'; then exec screen -r {}; else echo 'Cliora remote session is unavailable' >&2; exit 44; fi",
+        remote_shell_quote(session), remote_shell_quote(session), session.replace(['.', '\\', '\n'], ""), remote_shell_quote(session)
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -251,7 +285,7 @@ fn remote_launch_plan(
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
-    let launch_args = adapter
+    let mut launch_args = adapter
         .launch_args(None, request.mode)
         .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?;
     let path = project.path.trim();
@@ -272,19 +306,13 @@ fn remote_launch_plan(
         args.extend(["-F".into(), config.into()]);
     }
     args.push(format!("{}@{}", target.user, target.host));
-    let mut remote_command = format!(
-        "cd -- {} && exec {}",
-        remote_shell_quote(path),
-        remote_shell_quote(adapter.command()),
-    );
-    for argument in launch_args {
-        remote_command.push(' ');
-        remote_command.push_str(&remote_shell_quote(&argument));
-    }
+    let session = remote_session_name(project_key);
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        remote_command.push(' ');
-        remote_command.push_str(&remote_shell_quote(prompt));
+        launch_args.push(prompt.to_owned());
     }
+    let remote_command = remote_persistent_command(path, adapter.command(), &launch_args, &session);
+    let mut remote_end_args = args.clone();
+    remote_end_args.push(format!("tmux kill-session -t {} 2>/dev/null || screen -S {} -X quit 2>/dev/null || true", remote_shell_quote(&session), remote_shell_quote(&session)));
     args.push(remote_command);
     let terminal = session_terminal(db)
         .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;
@@ -300,6 +328,8 @@ fn remote_launch_plan(
         terminal,
         session_markers: &[],
         credential: None,
+        remote_session_id: Some(session),
+        remote_end_args: Some(remote_end_args),
     }))
 }
 
@@ -1057,6 +1087,8 @@ fn plan_with_stage_at(
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
             LaunchForm::Desktop => TerminalId::Desktop,
         },
+        remote_session_id: None,
+        remote_end_args: None,
     })
 }
 
@@ -1067,7 +1099,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
     Ok(LaunchPlan {account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
-        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None})
+        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None,remote_session_id:None,remote_end_args:None})
 }
 
 fn quote_powershell(value: &str) -> String {
@@ -1625,6 +1657,7 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
         terminal: plan.terminal,
         status: "terminal_requested",
         session_id: None,
+        remote_session_id: plan.remote_session_id,
     })
 }
 
@@ -1673,6 +1706,7 @@ fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Re
         terminal: TerminalId::Desktop,
         status: "desktop_requested",
         session_id: None,
+        remote_session_id: plan.remote_session_id.clone(),
     })
 }
 
@@ -1917,6 +1951,8 @@ mod desktop_launch {
             terminal: TerminalId::Desktop,
             session_markers: &[],
             credential: None,
+            remote_session_id: None,
+            remote_end_args: None,
         }
     }
 

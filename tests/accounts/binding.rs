@@ -294,6 +294,8 @@ fn spawn_rejects_logout_or_reauthentication_since_plan_before_terminal_side_effe
         terminal: crate::launch::TerminalId::Auto,
         session_markers: &[],
         credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
     };
     let command = crate::launch::native_command(&plan).unwrap();
     assert!(command.contains("CODEX_HOME"));

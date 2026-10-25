@@ -91,6 +91,7 @@ pub struct SessionSnapshot {
     pub connection_state: &'static str,
     pub exit_reason: &'static str,
     pub reattachable: bool,
+    pub remote_session_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -122,6 +123,8 @@ struct Session {
     child: Mutex<Box<dyn Child + Send + Sync>>,
     replay: Mutex<VecDeque<u8>>,
     remote: bool,
+    remote_session_id: Option<String>,
+    remote_end_args: Option<Vec<String>>,
     connection_lost: AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<process_tree::Job>>,
@@ -187,13 +190,15 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         child: Mutex::new(child),
         replay: Mutex::new(VecDeque::new()),
         remote,
+        remote_session_id: plan.remote_session_id.clone(),
+        remote_end_args: plan.remote_end_args.clone(),
         connection_lost: AtomicBool::new(false),
         #[cfg(windows)]
         job: Mutex::new(job),
     });
     let id = session.id.clone();
     if let Err(error) = attach_reader(Arc::clone(&session), reader) {
-        end_child(&session);
+        end_child(&session, false);
         return Err(error);
     }
     sessions().insert(id.clone(), session);
@@ -204,6 +209,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         terminal: TerminalId::Workbench,
         status: "session_started",
         session_id: Some(id),
+        remote_session_id: plan.remote_session_id,
     })
 }
 
@@ -274,14 +280,43 @@ pub fn resize(id: &str, cols: u16, rows: u16) -> Result<(), String> {
 
 pub fn close(id: &str) -> Result<(), String> {
     let session = sessions().remove(id).ok_or("会话不存在")?;
-    end_child(&session);
+    end_child(&session, true);
     Ok(())
+}
+
+/// Reattach a disconnected SSH transport to the persistent tmux/screen session.
+/// The remote process is never recreated; only the local PTY attachment changes.
+pub fn reattach(id: &str) -> Result<(), String> {
+    let session = lookup(id)?;
+    if !session.remote {
+        return Err("仅远程会话支持重新附着".into());
+    }
+    if session.running.load(Ordering::SeqCst) {
+        return Err("会话仍已连接".into());
+    }
+    let mut args = session.remote_end_args.clone().ok_or("远程会话缺少持久上下文")?;
+    let _ = args.pop();
+    let remote_id = session.remote_session_id.clone().ok_or("远程会话缺少稳定 ID")?;
+    args.push(crate::launch::remote_reattach_command(&remote_id));
+    let executable = std::env::var_os("CLIORA_SSH_BINARY").unwrap_or_else(|| "ssh".into());
+    let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).map_err(|error| format!("无法创建重新附着终端：{error}"))?;
+    let mut command = CommandBuilder::new(executable);
+    command.args(args);
+    let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法重新附着远程会话：{error}"))?;
+    let reader = pair.master.try_clone_reader().map_err(|error| { let _ = child.kill(); format!("无法读取重新附着输出：{error}") })?;
+    let writer = pair.master.take_writer().map_err(|error| { let _ = child.kill(); format!("无法写入重新附着会话：{error}") })?;
+    *session.master.lock().map_err(|_| "会话状态不可用")? = pair.master;
+    *session.writer.lock().map_err(|_| "会话状态不可用")? = writer;
+    *session.child.lock().map_err(|_| "会话状态不可用")? = child;
+    session.connection_lost.store(false, Ordering::SeqCst);
+    session.running.store(true, Ordering::SeqCst);
+    attach_reader(Arc::clone(&session), reader)
 }
 
 pub fn shutdown() {
     let taken: Vec<_> = sessions().drain().map(|(_, session)| session).collect();
     for session in taken {
-        end_child(&session);
+        end_child(&session, false);
     }
 }
 
@@ -293,7 +328,13 @@ fn lookup(id: &str) -> Result<Arc<Session>, String> {
     sessions().get(id).cloned().ok_or_else(|| "会话不存在".into())
 }
 
-fn end_child(session: &Session) {
+fn end_child(session: &Session, explicit_end: bool) {
+    if explicit_end && session.remote {
+        if let Some(args) = session.remote_end_args.as_ref() {
+            let binary = std::env::var_os("CLIORA_SSH_BINARY").unwrap_or_else(|| "ssh".into());
+            let _ = std::process::Command::new(binary).args(args).status();
+        }
+    }
     if let Ok(mut child) = session.child.lock() {
         let _ = child.kill();
     }
@@ -432,7 +473,8 @@ impl Session {
             started_at: self.started_at,
             connection_state: if self.running.load(Ordering::SeqCst) { "connected" } else if self.connection_lost.load(Ordering::SeqCst) { "disconnected" } else { "closed" },
             exit_reason: if self.running.load(Ordering::SeqCst) { "running" } else if self.connection_lost.load(Ordering::SeqCst) { "connection_lost" } else { "process_exit" },
-            reattachable: false,
+            reattachable: self.remote && self.connection_lost.load(Ordering::SeqCst),
+            remote_session_id: self.remote_session_id.clone(),
         }
     }
 }
@@ -537,6 +579,8 @@ fn ending_a_session_terminates_the_process_tree() {
         terminal: TerminalId::Workbench,
         session_markers: &[],
         credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
     };
     let result = start(plan, None).expect("session started");
     let id = result.session_id.expect("session id");
