@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 25 {
+        if version > 26 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -293,7 +293,7 @@ impl Database {
                     tx.execute_batch(&trigger)?;
                 }
             }
-            for (event,row) in [("INSERT","NEW"),("UPDATE","NEW"),("DELETE","OLD")] {
+            for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
                 let trigger = format!("CREATE TRIGGER IF NOT EXISTS sync_preferences_{event} AFTER {event} ON app_settings
                     WHEN {row}.key='preferences' BEGIN
                     INSERT INTO sync_outbox (id,entity_key,object_json,created_at)
@@ -414,9 +414,11 @@ impl Database {
             let tx = connection.transaction()?;
             // Legacy aggregates have no proven call count. Reparse unchanged sources
             // on their next scan without dropping favorites or project associations.
-            tx.execute_batch("ALTER TABLE history_usage ADD COLUMN request_count INTEGER;
+            tx.execute_batch(
+                "ALTER TABLE history_usage ADD COLUMN request_count INTEGER;
                 UPDATE history_sessions SET source_fingerprint = '';
-                PRAGMA user_version = 18;")?;
+                PRAGMA user_version = 18;",
+            )?;
             tx.commit()?;
         }
 
@@ -430,10 +432,21 @@ impl Database {
 
         if version < 20 {
             let tx = connection.transaction()?;
-            let columns = { let mut statement=tx.prepare("PRAGMA table_info(applied_bindings)")?;
-                let rows=statement.query_map([],|row| row.get::<_,String>(1))?; rows.collect::<Result<Vec<_>,_>>()? };
-            for (name,kind) in [("common_version","INTEGER"),("common_revision","TEXT"),("applied_profile","TEXT")] {
-                if !columns.iter().any(|column|column==name) { tx.execute_batch(&format!("ALTER TABLE applied_bindings ADD COLUMN {name} {kind};"))?; }
+            let columns = {
+                let mut statement = tx.prepare("PRAGMA table_info(applied_bindings)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (name, kind) in [
+                ("common_version", "INTEGER"),
+                ("common_revision", "TEXT"),
+                ("applied_profile", "TEXT"),
+            ] {
+                if !columns.iter().any(|column| column == name) {
+                    tx.execute_batch(&format!(
+                        "ALTER TABLE applied_bindings ADD COLUMN {name} {kind};"
+                    ))?;
+                }
             }
             tx.execute_batch("PRAGMA user_version = 20;")?;
             tx.commit()?;
@@ -450,18 +463,25 @@ impl Database {
         if version < 22 {
             let tx = connection.transaction()?;
             // MCP 列表按最近更新排序；存量行保持 NULL，由名称排序兜底。
-            let columns = { let mut statement=tx.prepare("PRAGMA table_info(mcp_definitions)")?;
-                let rows=statement.query_map([],|row| row.get::<_,String>(1))?; rows.collect::<Result<Vec<_>,_>>()? };
-            if !columns.iter().any(|column|column=="updated_at") { tx.execute_batch("ALTER TABLE mcp_definitions ADD COLUMN updated_at INTEGER;")?; }
+            let columns = {
+                let mut statement = tx.prepare("PRAGMA table_info(mcp_definitions)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if !columns.iter().any(|column| column == "updated_at") {
+                tx.execute_batch("ALTER TABLE mcp_definitions ADD COLUMN updated_at INTEGER;")?;
+            }
             tx.execute_batch("PRAGMA user_version = 22;")?;
             tx.commit()?;
         }
         if version < 23 {
             let tx = connection.transaction()?;
             // Additive migration: old token-only records retain NULL native usage.
-            let columns = { let mut statement = tx.prepare("PRAGMA table_info(history_usage)")?;
+            let columns = {
+                let mut statement = tx.prepare("PRAGMA table_info(history_usage)")?;
                 let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
-                rows.collect::<Result<Vec<_>, _>>()? };
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
             if !columns.iter().any(|column| column == "native_usage_json") {
                 tx.execute_batch("ALTER TABLE history_usage ADD COLUMN native_usage_json TEXT;")?;
             }
@@ -490,22 +510,62 @@ impl Database {
             tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_history_usage_session_time_model ON history_usage(session_id, timestamp, model); PRAGMA user_version = 25;")?;
             tx.commit()?;
         }
+        if version < 26 {
+            let tx = connection.transaction()?;
+            // Remote targets and projects are intentionally separate from local
+            // projects. Removing a target removes only its remote project links.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS remote_targets (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   host TEXT NOT NULL,
+                   port INTEGER NOT NULL,
+                   user_name TEXT NOT NULL,
+                   ssh_config TEXT,
+                   default_path TEXT,
+                   enabled INTEGER NOT NULL DEFAULT 1,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_targets_endpoint
+                   ON remote_targets(host, port, user_name);
+                 CREATE TABLE IF NOT EXISTS remote_projects (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   target_id TEXT NOT NULL,
+                   name TEXT NOT NULL,
+                   path TEXT NOT NULL,
+                   preferred_tool TEXT,
+                   updated_at INTEGER NOT NULL,
+                   FOREIGN KEY(target_id) REFERENCES remote_targets(id) ON DELETE CASCADE
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_remote_projects_target
+                   ON remote_projects(target_id, updated_at DESC);
+                 PRAGMA user_version = 26;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
-            read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
+            read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
+                .then(|| path.to_owned()),
         })
     }
 
     /// An independent WAL snapshot lets history reports and session browsing
     /// run while the scanner commits batches on the shared writer connection.
-    pub fn with_read_connection<T>(&self, action: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
-        let Some(path) = &self.read_path else { return self.with_connection(|conn| action(conn)); };
-        let mut conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|error| error.to_string())?;
+    pub fn with_read_connection<T>(
+        &self,
+        action: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let Some(path) = &self.read_path else {
+            return self.with_connection(|conn| action(conn));
+        };
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|error| error.to_string())?;
         let snapshot = conn.transaction().map_err(|error| error.to_string())?;
         action(&snapshot)
     }
-
 
     pub fn with_connection<T>(
         &self,
@@ -569,20 +629,40 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = super::Database::open(&temp.path().join("snapshot.db")).unwrap();
         db.with_read_connection(|reader| {
-            let count: i64 = reader.query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0)).unwrap();
+            let count: i64 = reader
+                .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+                .unwrap();
             db.with_connection(|writer| {
-                writer.execute("INSERT INTO app_settings VALUES ('snapshot-test', 'new')", []).unwrap();
+                writer
+                    .execute(
+                        "INSERT INTO app_settings VALUES ('snapshot-test', 'new')",
+                        [],
+                    )
+                    .unwrap();
                 Ok(())
             })?;
-            let unchanged: i64 = reader.query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0)).unwrap();
+            let unchanged: i64 = reader
+                .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+                .unwrap();
             assert_eq!(count, unchanged);
             assert!(reader.execute("DELETE FROM app_settings", []).is_err());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         db.with_read_connection(|reader| {
-            assert_eq!(reader.query_row("SELECT value FROM app_settings WHERE key='snapshot-test'", [], |row| row.get::<_, String>(0)).unwrap(), "new");
+            assert_eq!(
+                reader
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key='snapshot-test'",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                "new"
+            );
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
     use super::*;
     use crate::domain::{CliId, Theme};
@@ -594,16 +674,23 @@ mod tests {
         let image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=";
         let db = Database::open(&path).unwrap();
         assert!(db.preferences().unwrap().tool_icons.is_empty());
-        db.update_preferences(|p| { p.tool_icons.insert("future_cli".into(), image.into()); }).unwrap();
+        db.update_preferences(|p| {
+            p.tool_icons.insert("future_cli".into(), image.into());
+        })
+        .unwrap();
         db.update_preferences(|p| p.theme = Theme::Dark).unwrap();
-        db.update_preferences(|p| p.set_managed(&[CliId::Pi])).unwrap();
+        db.update_preferences(|p| p.set_managed(&[CliId::Pi]))
+            .unwrap();
         drop(db);
         let db = Database::open(&path).unwrap();
         let saved = db.preferences().unwrap();
         assert_eq!(saved.tool_icons["future_cli"], image);
         assert_eq!(saved.theme, Theme::Dark);
         assert_eq!(saved.managed_tools, [CliId::Pi]);
-        db.update_preferences(|p| { p.tool_icons.remove("future_cli"); }).unwrap();
+        db.update_preferences(|p| {
+            p.tool_icons.remove("future_cli");
+        })
+        .unwrap();
         assert!(db.preferences().unwrap().tool_icons.is_empty());
         assert_eq!(db.preferences().unwrap().theme, Theme::Dark);
     }
@@ -722,7 +809,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 25);
+            assert_eq!(version, 26);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -733,7 +820,8 @@ mod tests {
                 })
                 .map_err(|e| e.to_string())?;
             assert_eq!(history_count, 0);
-            let sync_count: i64 = conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| row.get(0))
+            let sync_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
             assert_eq!(sync_count, 0);
             Ok(())

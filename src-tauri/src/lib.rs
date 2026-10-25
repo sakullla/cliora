@@ -74,30 +74,31 @@ mod path_policy {
         }
     }
 }
-mod external;
-mod background_process;
-mod process_environment;
-mod windows_registry;
-#[cfg(windows)]
-mod windows_security;
-#[cfg(all(test, target_os = "macos"))]
-#[path = "../../tests/platform/macos.rs"]
-mod macos_tests;
-pub mod commands;
 pub mod accounts;
+mod background_process;
+pub mod commands;
 pub mod credentials;
 pub mod database;
 pub mod domain;
+mod external;
 pub mod history;
 pub mod launch;
-pub mod session_host;
 pub mod library;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "../../tests/platform/macos.rs"]
+mod macos_tests;
 pub mod native;
 pub mod portable;
+mod process_environment;
 pub mod projects;
+pub mod remote;
 pub mod resources;
+pub mod session_host;
 pub mod tray;
 pub mod usage;
+mod windows_registry;
+#[cfg(windows)]
+mod windows_security;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -106,7 +107,11 @@ pub fn run() {
             tray::show_main(app)
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -352,6 +357,14 @@ pub fn run() {
             commands::set_managed_tools,
             commands::set_theme,
             commands::set_language,
+            commands::set_remote_ssh_enabled,
+            commands::list_remote_targets,
+            commands::save_remote_target,
+            commands::delete_remote_target,
+            commands::list_remote_projects,
+            commands::save_remote_project,
+            commands::delete_remote_project,
+            commands::test_remote_target,
             commands::set_tool_icon,
             commands::get_tool_workspace,
             commands::set_custom_cli_path,
