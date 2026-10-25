@@ -8,6 +8,7 @@ export type Preferences = {
   theme: Theme;
   tool_icons?: Record<string, string>;
   language?: 'zh' | 'en';
+  remote_ssh_enabled: boolean;
 };
 
 export type ToolSummary = {
@@ -40,7 +41,7 @@ export const CLI_NAMES: Record<CliId, string> = {
 
 export function browserBootstrap(): Bootstrap {
   return {
-    preferences: { schema_version: 1, managed_tools: [...CLI_IDS], theme: 'system', tool_icons: {} },
+    preferences: { schema_version: 1, managed_tools: [...CLI_IDS], theme: 'system', tool_icons: {}, remote_ssh_enabled: false },
     tools: CLI_IDS.map((id) => ({
       id,
       name: CLI_NAMES[id],
