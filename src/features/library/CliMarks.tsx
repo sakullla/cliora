@@ -22,11 +22,12 @@ export function scopeLabel(scope: Scope, projectPath: string | null, projects: {
   return projects.find((item) => samePath(item.path, projectPath))?.name ?? projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? i18n.t('tools.accounts.scopeProject');
 }
 
-export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => i18n.t('library.marks.account'), unavailable }: {
+export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => i18n.t('library.marks.account'), unavailable, className }: {
   label: string;
   accountContexts?: boolean;
   contextLabel?: (id: string | null) => string;
   unavailable?: (toolId: string, scope: Scope) => string | null;
+  className?: string;
   tools: { id: string; name: string }[];
   places: T[];
   projects: { name: string; path: string | null }[];
@@ -43,7 +44,7 @@ export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath
     const contextId = accountContexts ? sample?.contextId ?? null : null;
     return { key, scope, projectPath, contextId, name: `${scopeLabel(scope, projectPath, projects)}${contextId ? ` · ${contextLabel(contextId)}` : ''}`, items: places.filter((item) => placeKey(item) === key) };
   });
-  return <div className={styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><span className={styles.scopeName}>{row.name}</span><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
+  return <div className={className ? `${styles.scopeLines} ${className}` : styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><span className={styles.scopeName}>{row.name}</span><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
     const item = mark(row.items.find((place) => place.toolId === tool.id));
     const reason = unavailable?.(tool.id, row.scope);
     return <button type="button" key={tool.id} aria-pressed={item.pressed} aria-label={`${tool.name} · ${reason ?? item.status}`} title={`${row.name} · ${tool.name} · ${reason ?? item.status}`} data-state={reason ? 'unavailable' : item.state} disabled={busy || !!reason} onClick={() => onToggle(tool.id, row.scope, row.projectPath, row.contextId)}><ToolIcon toolId={tool.id} size={20} /></button>;

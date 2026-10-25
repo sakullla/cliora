@@ -10,7 +10,7 @@ test('plugin search and read-only filter expose relevant actions without changin
   await expect(page.getByText('Organization plugin', { exact: true })).toBeVisible();
   await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
   await page.getByRole('listitem').getByRole('button').click();
-  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
+  await expect(page.getByRole('article', { name: '插件详情' }).getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 });
 
 async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false) {
@@ -109,7 +109,7 @@ test('native plugin lifecycle retains context, policy, ownership and load distin
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(card.getByText(/原生已安装 · 加载未验证/)).toBeVisible();
   await card.getByRole('button').click();
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
   await expect(details.getByText('agents', { exact: true })).toBeVisible();
   await details.getByRole('button', { name: '禁用', exact: true }).click(); await expect(details.getByRole('button', { name: '启用' })).toBeVisible();
@@ -144,7 +144,7 @@ test('inventory appears before the slow native scan and unfinished scans are sha
   await page.evaluate(() => (window as any).pluginsHarness.releaseFull());
   const readyCard = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await readyCard.getByRole('button').click();
-  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true })).toBeEnabled();
+  await expect(page.getByRole('article', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true })).toBeEnabled();
   await expect(page.getByText('正在核对插件状态', { exact: true })).toHaveCount(0);
 });
 
@@ -152,7 +152,7 @@ test('failed native operation retains rescanned state and allows explicit recove
   await setup(page); await page.evaluate(() => { (window as any).pluginsHarness.fail = true; });
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await card.getByRole('button').click();
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await details.getByRole('button', { name: '禁用' }).click(); await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
   await expect(page.getByRole('alert')).toContainText('原生命令失败；已重新扫描实际状态');
   await expect(details.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).first().click();
@@ -170,7 +170,7 @@ for (const failed of [false, true]) {
       state.nullOperationSnapshot = true;
     }, failed);
     await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
-    await page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true }).click();
+    await page.getByRole('article', { name: '插件详情' }).getByRole('button', { name: '禁用', exact: true }).click();
     const stale = page.getByRole('status').filter({ has: page.getByText('列表可能已过期') });
     await expect(stale).toBeVisible();
     await expect(page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) })).toBeVisible();
@@ -216,7 +216,7 @@ test('local Cursor install opens the added snapshot entry when its installed pat
   await page.getByLabel('插件来源', { exact: true }).fill('C:/fixture/downloads/cursor-plugin');
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '安装插件' }).click();
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByRole('heading', { name: 'Cursor plugin', exact: true })).toBeVisible();
   await expect(details.getByText('C:/Users/fixture/.cursor/plugins/cursor-plugin', { exact: true }).first()).toBeVisible();
 });
@@ -255,7 +255,7 @@ test('Pi project plugin details visibly explain why update is unavailable', asyn
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '测试项目' }).click();
   await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByRole('button', { name: '更新', exact: true })).toBeDisabled();
   await expect(details.getByText('这个工具的项目插件请在原生 CLI 里更新', { exact: true })).toBeVisible();
 });
@@ -294,7 +294,7 @@ test('windows extended plugin paths are shown as ordinary paths', async ({ page 
   await expect(card.getByText(`${drive} · 全局`)).toBeVisible();
   await expect(card).not.toContainText('\\\\?\\');
   await card.getByRole('button').click();
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByText('安装位置', { exact: true })).toBeVisible();
   await expect(details.getByText(drive, { exact: true }).first()).toBeVisible();
   await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
@@ -355,7 +355,7 @@ test('update-only capability does not render an install form', async ({ page }) 
   await expect(page.getByLabel('插件来源', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '安装插件' })).toHaveCount(0);
   await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
-  await expect(page.getByRole('complementary', { name: '插件详情' }).getByRole('button', { name: '更新', exact: true })).toBeVisible();
+  await expect(page.getByRole('article', { name: '插件详情' }).getByRole('button', { name: '更新', exact: true })).toBeVisible();
 });
 
 test('invalid install source explains the problem and cannot be submitted', async ({ page }) => {
@@ -388,7 +388,7 @@ test('different plugin operations run serially and queued work uses the latest b
   });
   const fixture = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   const second = page.getByRole('listitem').filter({ has: page.getByText('Second plugin', { exact: true }) });
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await fixture.getByRole('button').click();
   await details.getByRole('button', { name: '禁用', exact: true }).click();
   await expect(details.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
@@ -415,7 +415,7 @@ test('changing context cancels queued plugin operations and ignores the running 
     state.holdFirstOperation = true;
     state.entries.push({ ...state.entries[0], id: 'second@market', name: 'Second plugin', source: 'second@market' });
   });
-  const details = page.getByRole('complementary', { name: '插件详情' });
+  const details = page.getByRole('article', { name: '插件详情' });
   await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').click();
   await details.getByRole('button', { name: '禁用', exact: true }).click();
   await page.getByRole('listitem').filter({ has: page.getByText('Second plugin', { exact: true }) }).getByRole('button').click();
@@ -440,18 +440,16 @@ test('catalog-only and filtered-empty states stay distinct', async ({ page }) =>
   await expect(page.getByRole('listitem')).toHaveCount(1);
 });
 
-test('resource list supports keyboard selection and narrow details close with Escape', async ({ page }) => {
+test('resource list opens the next plugin from the keyboard and returns to that row', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 800 });
   await setup(page);
-  const first = page.locator('[data-resource-select]').first();
-  await first.focus();
-  await first.press('ArrowDown');
-  await expect(page.locator('[data-resource-select]').nth(1)).toBeFocused();
-  await page.locator('[data-resource-select]').nth(1).press('Enter');
-  await expect(page.getByRole('dialog').getByRole('heading', { name: 'Organization plugin', exact: true }).first()).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.locator('[data-resource-select]').nth(1)).toBeFocused();
+  const rows = page.getByRole('list', { name: '插件' }).getByRole('button');
+  await rows.first().focus();
+  await rows.first().press('ArrowDown');
+  await expect(page.getByRole('article', { name: '插件详情' }).getByRole('heading', { name: 'Organization plugin', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '返回列表' }).click();
+  await expect(page.getByRole('article', { name: '插件详情' })).toHaveCount(0);
+  await expect(rows.nth(1)).toBeFocused();
 });
 
 for (const colorScheme of ['light', 'dark'] as const) {
@@ -461,17 +459,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
     for (const width of [1360, 900, 640]) {
       await page.setViewportSize({ width, height: 800 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      if (width <= 760 && await page.locator('[data-resource-select]').first().getAttribute('aria-pressed') === 'true') {
-        await expect(page.getByRole('dialog')).toBeVisible();
-        await page.keyboard.press('Escape');
-        await expect(page.getByRole('dialog')).toHaveCount(0);
-      }
-      await page.locator('[data-resource-select]').first().click();
-      if (width > 760) await expect(page.getByRole('complementary', { name: '插件详情' })).toBeVisible();
-      else {
-        await expect(page.getByRole('dialog')).toBeVisible();
-        await page.keyboard.press('Escape');
-      }
+      const back = page.getByRole('button', { name: '返回列表' });
+      // A document opened on a wide layout fills the pane once the page is narrow, so the list is hidden until the user goes back.
+      if (await back.isVisible()) await back.click();
+      await page.getByRole('list', { name: '插件' }).getByRole('button').first().click();
+      await expect(page.getByRole('article', { name: '插件详情' })).toBeVisible();
+      if (await back.isVisible()) await back.click();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }
   });

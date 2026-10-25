@@ -45,16 +45,19 @@
 .empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); }
 
 /* Plugin workspace: the shared shell owns list/detail layout; these are domain surfaces. */
-.installBox { display: grid; grid-template-columns: minmax(220px, .48fr) minmax(0, 1fr); align-items: center; gap: 10px 20px; padding: 14px 17px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(180deg, var(--surface) 0%, color-mix(in srgb, var(--surface-2) 34%, var(--surface)) 100%); box-shadow: var(--shadow-xs); }
+.installBox { display: grid; gap: 8px; margin: 8px 8px 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-xs); }
 .installHeading { display: flex; align-items: flex-start; gap: 11px; }
 .installGlyph { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
 .installHeading h3 { margin: 0 0 3px; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .installHeading p, .fieldError { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.6; }
 .installControls { display: grid; gap: 8px; min-width: 0; }
-.installBox .create { padding: 0; border: 0; background: transparent; gap: 8px; flex-wrap: nowrap; }
-.installBox .create label { flex: 1 1 220px; }
-.installBox .create > button { flex: none; }
+.installBox .create { flex-direction: column; align-items: stretch; padding: 0; border: 0; background: transparent; gap: 8px; }
+.installBox .create label { flex: 1 1 auto; }
+.installBox .create > button { align-self: stretch; }
 .fieldError { color: var(--danger); }
+.filter { flex: 1 1 auto; width: 100%; min-width: 0; }
+.listWrap { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.listWrap > ul { flex: none; overflow: visible; }
 .listToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .listToolbar:focus-within:has(input:focus) { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .listToolbar > :global(.search-field) { flex: 1 1 180px; min-width: 0; }
@@ -108,6 +111,6 @@
 .queueRow[data-state="queued"] .queueState, .queueRow[data-state="running"] .queueState { color: var(--warning); }
 .noMatch { display: grid; justify-items: center; gap: 8px; padding: 32px 20px; border: 1px dashed var(--line); border-radius: var(--radius-lg); text-align: center; }
 .noMatch p { margin: 0; color: var(--text-2); }
-@media (max-width: 900px) { .installBox { grid-template-columns: minmax(0, 1fr); align-items: start; } }
+@media (max-width: 900px) { .installBox { align-items: start; } }
 @media (max-width: 760px) { .panel { padding: 16px 0; } .create { align-items: stretch; } .create > button { flex: 1 1 auto; align-self: flex-end; } .installBox .create { flex-wrap: wrap; } .list > li { padding: 14px; } .listToolbar > span { margin-left: 0; } .detailGrid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .list > li { transition: none; } }
