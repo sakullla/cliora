@@ -1031,6 +1031,25 @@ for (const capability of ['writable', 'denied', 'missing', 'managed'] as const) 
   });
 }
 
+test('model combobox shows a failed catalog fetch instead of the empty prompt', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await page.evaluate(() => { (window as any).configurationProtocol.directoryFailure = '模型目录返回 HTTP 401（Bearer 认证）。请确认 API 地址、认证方式与所用密钥'; });
+  const model = dialog.getByRole('combobox', { name: '模型', exact: true });
+  await model.fill('');
+  await expect(model).toHaveValue('');
+  await model.blur();
+  await model.click();
+  await expect(dialog.getByRole('option')).toHaveCount(0);
+  await expect(dialog.getByText('尚未获取模型目录，可直接输入')).toBeVisible();
+  await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  const failure = '模型目录返回 HTTP 401（Bearer 认证）。请确认 API 地址、认证方式与所用密钥';
+  await expect(dialog.getByText(failure)).toHaveCount(2);
+  await expect(dialog.getByText('尚未获取模型目录，可直接输入')).toHaveCount(0);
+  await expect(dialog.getByText(/目录已获取/)).toHaveCount(0);
+});
+
 test('model combobox keeps the fetched catalog filterable while typing edits the draft', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');

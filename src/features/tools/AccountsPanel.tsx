@@ -47,7 +47,7 @@ function readNativeLogins(toolId: string) {
   nativeDiscoveryRequests.set(toolId, request);
   return request;
 }
-export function useAccounts(tool: string, active = true) {
+export function useAccounts(tool: string, active = true, remoteTargetId: string | null = null) {
   const currentTool = useRef(tool); currentTool.current = tool;
   const mounted = useRef(false);
   const generation = useRef(0);
@@ -59,7 +59,13 @@ export function useAccounts(tool: string, active = true) {
   const refresh = async () => {
     const scope = generation.current; const currentRequest = ++request.current;
     try {
-      const [all, caps] = await Promise.all([native.listAccounts(), native.accountCapabilities()]);
+      const [all, rawCaps] = remoteTargetId
+        ? await native.getRemoteResourceStore(remoteTargetId, tool, 'accounts').then(value => {
+          const store = value as { accounts?: AuthAccount[]; capability?: AccountCapability | null };
+          return [store.accounts ?? [], store.capability ?? null] as const;
+        })
+        : await Promise.all([native.listAccounts(), native.accountCapabilities()]);
+      const caps = Array.isArray(rawCaps) ? rawCaps : rawCaps ? [rawCaps] : [];
       if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) { const matching = all.filter(account => account.toolId === tool); setAccounts(matching); setCapability(caps.find(cap => cap.toolId === tool) ?? null); setError(''); return matching; }
       return null;
     } catch (value) {
@@ -72,16 +78,16 @@ export function useAccounts(tool: string, active = true) {
     if (!nativeAvailable || !active) { setLoading(false); return () => { mounted.current = false; generation.current++; }; }
     setLoading(true); setAccounts([]); setCapability(null); setError('');
     const read = () => refresh().catch(() => {}).finally(() => { if (mounted.current && generation.current === scope) setLoading(false); });
-    void read(); const timer = window.setInterval(() => void read(), 2500);
+    void read(); const timer = window.setInterval(() => void read(), remoteTargetId ? 30_000 : 2_500);
     return () => { mounted.current = false; generation.current++; window.clearInterval(timer); };
-  }, [tool, active]);
-  return { accounts, capability, error, refresh, loading };
+  }, [tool, active, remoteTargetId]);
+  return { accounts, capability, error, refresh, loading, remote: !!remoteTargetId };
 }
 type AccountNavigation = {
   onOpenProfile?: (profileId: string, target?: AccountImpactScope) => void;
   onOpenUsage?: (queryId: string) => void;
 };
-function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, onOpenUsage }: { account: AuthAccount; active: boolean; refreshAccounts: () => Promise<AuthAccount[] | null> } & AccountNavigation) {
+function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, onOpenUsage, remote = false }: { account: AuthAccount; active: boolean; refreshAccounts: () => Promise<AuthAccount[] | null>; remote?: boolean } & AccountNavigation) {
   const { t } = useTranslation();
   const [impact, setImpact] = useState<AccountImpact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -95,6 +101,7 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
   async function refresh() {
     const sequence = ++request.current; setLoading(true); setError('');
     try {
+      if (remote) { setImpact(null); return; }
       const value = await native.accountImpact(account.id);
       if (sequence !== request.current || current.current.id !== account.id || current.current.version !== account.version) return;
       if (value.accountId !== account.id || value.toolId !== account.toolId || value.accountVersion !== account.version) throw new Error(t('tools.accounts.changedError'));
@@ -106,9 +113,9 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
     const success = successfulReapply.current;
     if (success && (success.accountId !== account.id || success.contextId !== account.context?.id || account.state !== 'signed_in')) successfulReapply.current = null;
     setImpact(null); setNotice(successfulReapply.current?.notice ?? ''); setBusy(false);
-    if (active && nativeAvailable) void refresh();
+    if (active && nativeAvailable && !remote) void refresh();
     return () => { request.current++; };
-  }, [active, account.id, account.version, refreshEpoch]);
+  }, [active, account.id, account.version, refreshEpoch, remote]);
   async function refreshWithAccounts() {
     const sequence = request.current; setBusy(true); setError('');
     try {
@@ -167,6 +174,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
   const [nativeLoading, setNativeLoading] = useState(false);
   const [nativeError, setNativeError] = useState('');
   const discoverySequence = useRef(0);
+  const remote = state.remote;
   async function discover() {
     const sequence = ++discoverySequence.current;
     setNativeLoading(true); setNativeError('');
@@ -176,18 +184,18 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
   }
   useEffect(() => {
     setNativeLogins(null); setNativeError(''); setMessage(''); setError(''); setEditing(null); setCreating(false); setExpanded(new Set()); setLabel(metadata?.defaultLabel ?? t('tools.accounts.newAccount')); setMethod('browser');
-    if (nativeAvailable) void discover();
+    if (nativeAvailable && !remote) void discover();
     return () => { discoverySequence.current++; };
-  }, [toolId]);
+  }, [toolId, remote]);
   async function run(work: () => Promise<unknown>, notice: string) { setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) setMessage(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
   return <section className={styles.panel} aria-label={t('tools.accounts.label')}>
-    <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
+    <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && !remote && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
-    <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><button className={accountStyles.nativeCheck} disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</button></div>
+    <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><button className={accountStyles.nativeCheck} disabled={remote || nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</button></div>
       {nativeLoading && !nativeLogins && <div className={accountStyles.nativeLoading} role="status" aria-label={t('tools.accounts.nativeLoading')}><NativeLoginSkeleton /></div>}
       {nativeError && <p role="alert">{nativeError}</p>}
       {nativeLogins && !nativeLogins.logins.length && (!state.loading && !state.accounts.length
-        ? <EmptyState icon="monitor" title={t('tools.accounts.nativeEmptyTitle')} detail={t('tools.accounts.nativeEmpty')} action={<button className="button primary" disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{t('tools.accounts.rediscover')}</button>} />
+        ? <EmptyState icon="monitor" title={t('tools.accounts.nativeEmptyTitle')} detail={t('tools.accounts.nativeEmpty')} action={<button className="button primary" disabled={remote || nativeLoading || !nativeAvailable} onClick={() => void discover()}>{t('tools.accounts.rediscover')}</button>} />
         : <p>{t('tools.accounts.nativeEmpty')}</p>)}
       {nativeLogins?.logins.map(login => <div className={accountStyles.nativeRow} key={`${login.provider}:${login.authKind}`}><div className={accountStyles.nativeIdentity}><strong>{login.identity?.email ?? login.identity?.subject ?? login.provider}</strong><span>{login.identity ? `${login.provider} · ` : ''}{login.authKind === 'oauth' ? 'OAuth' : 'API Key'}{login.identity?.plan && ` · ${login.identity.plan}`}{!login.identity && login.authKind === 'oauth' && login.state === 'signed_in' ? t('tools.accounts.identityMissing') : ''}</span><p>{login.managedAccountId ? t('tools.accounts.managed', { label: state.accounts.find(account => account.id === login.managedAccountId)?.label ?? t('tools.accounts.existingAccount') }) : login.state === 'signed_in' ? t('tools.accounts.unmanagedNote') : login.detail}</p></div><span className={styles.badge} data-state={login.state}>{login.state === 'signed_in' ? login.authKind === 'api_key' ? t('tools.accounts.badgeConfigured') : t('tools.accounts.badgeSignedIn') : login.state === 'signed_out' ? t('tools.accounts.badgeSignedOut') : accountStateLabel(login.state)}</span>{login.state !== 'signed_out' && <details><summary>{t('tools.accounts.detail')}</summary><p>{login.detail}</p></details>}</div>)}
     </section>
@@ -204,17 +212,17 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       <div><strong>{account.label}</strong><span data-state={account.state}>{accountStateLabel(account.state)}</span></div>
       <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}{account.identity?.plan ? ` · ${account.identity.plan}` : ''}</p>
       {account.pendingLogin && <p>{t('tools.accounts.pendingNote')}</p>}
-      {account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run(() => native.cancelAccountLogin(account.id, account.pendingLogin!.id), t('tools.accounts.cancelledNotice'))}>{t('tools.accounts.cancelLogin')}</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run(() => native.openAccountLoginLink(account.id, account.pendingLogin!.id), t('tools.accounts.browserRequested'))}>{t('tools.accounts.openAuthPage')}</button>}</div>}
+      {!remote && account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run(() => native.cancelAccountLogin(account.id, account.pendingLogin!.id), t('tools.accounts.cancelledNotice'))}>{t('tools.accounts.cancelLogin')}</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run(() => native.openAccountLoginLink(account.id, account.pendingLogin!.id), t('tools.accounts.browserRequested'))}>{t('tools.accounts.openAuthPage')}</button>}</div>}
       {account.retiredContexts.length > 0 && <button onClick={() => setExpanded(previous => new Set(previous).add(account.id))}>{t('tools.accounts.viewRetired')}</button>}
       <details className={accountStyles.management} open={expanded.has(account.id)} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(account.id); else next.delete(account.id); return next; }); }}><summary>{t('tools.accounts.manageSummary')}</summary>
       <div className={accountStyles.accountActions}>
         <div className={styles.actions}>
-          <button disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</button>
+          {!remote && <><button disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</button>
           <button disabled={busy} onClick={() => { setEditing(account.id); setRenamed(account.label); }}>{t('tools.accounts.rename')}</button>
-          {!account.pendingLogin && state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), t('tools.accounts.reauthRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</button>}
+          {!account.pendingLogin && state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), t('tools.accounts.reauthRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</button>}</>}
         </div>
-        {editing === account.id && <label>{t('tools.accounts.newName')}<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run(async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, t('tools.accounts.renamed'))}>{t('tools.accounts.saveName')}</button><button disabled={busy} onClick={() => setEditing(null)}>{t('tools.accounts.cancelRename')}</button></label>}
-        <details className={accountStyles.moreActions}><summary>{t('tools.accounts.moreActions')}</summary>
+        {!remote && editing === account.id && <label>{t('tools.accounts.newName')}<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run(async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, t('tools.accounts.renamed'))}>{t('tools.accounts.saveName')}</button><button disabled={busy} onClick={() => setEditing(null)}>{t('tools.accounts.cancelRename')}</button></label>}
+        {!remote && <details className={accountStyles.moreActions}><summary>{t('tools.accounts.moreActions')}</summary>
           <div className={styles.actions}>
             {!account.pendingLogin && <button disabled={busy || account.state === 'signed_out'} onClick={() => void run(async () => {
               const impact = await native.accountImpact(account.id);
@@ -231,10 +239,10 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
               }, t('tools.accounts.deleted'));
             })()}>{t('tools.accounts.deleteAction')}</button>
           </div>
-        </details>
+        </details>}
         {account.pendingLogin && <p id={`account-delete-hint-${account.id}`} className={accountStyles.actionHint}>{t('tools.accounts.deleteDisabledHint')}</p>}
       </div>
-      <AccountImpactView account={account} active={expanded.has(account.id)} refreshAccounts={state.refresh} onOpenProfile={onOpenProfile} onOpenUsage={onOpenUsage} />
+      <AccountImpactView account={account} active={expanded.has(account.id)} refreshAccounts={state.refresh} remote={remote} onOpenProfile={onOpenProfile} onOpenUsage={onOpenUsage} />
       {account.detail && <p>{account.detail}</p>}
       </details>
     </li>)}</ul>

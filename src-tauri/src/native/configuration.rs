@@ -51,6 +51,8 @@ pub struct ConfigurationDraft {
     pub credential_status: Option<String>,
     #[serde(default)]
     pub source_capabilities: Vec<super::workspace::SourceCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_target_id: Option<String>,
 }
 
 pub fn validate_state(state: &EditingState) -> Result<(), String> {
@@ -386,6 +388,32 @@ pub fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> Configurat
     })();
     if let Err(error) = result {
         draft.issues = vec![issue(error)];
+        // A dedicated editor can still show the document and this issue.
+        // Adapters with no configuration port stay without a descriptor, so
+        // the workspace keeps the "no dedicated editor" state.
+        if draft.descriptor.is_none() {
+            if let Some(subject) = draft.subject {
+                if let Some(port) = registry
+                    .get(&draft.profile.tool)
+                    .and_then(|adapter| adapter.configuration())
+                {
+                    draft.descriptor = Some(port.describe_subject(draft.scope, subject));
+                    if draft.catalog_support.is_none() {
+                        draft.catalog_support = Some(
+                            if subject == crate::adapters::configuration::ConfigurationSubject::Common {
+                                crate::adapters::configuration::CatalogSupport {
+                                    available: false,
+                                    multiple: false,
+                                    reason: Some("通用配置不创建模型引用".into()),
+                                }
+                            } else {
+                                port.catalog_support()
+                            },
+                        );
+                    }
+                }
+            }
+        }
     }
     draft
 }
@@ -428,7 +456,7 @@ pub fn open_with_common(
             view: Value::Null,
             issues: Vec::new(),
             subject: None, context_id: None, project_path: None, descriptor: None,
-            draft_connection: None, credential: None, catalog_support: None, credential_status: None, source_capabilities: Vec::new(),
+            draft_connection: None, credential: None, catalog_support: None, credential_status: None, source_capabilities: Vec::new(), remote_target_id: None,
         },
     ))
 }

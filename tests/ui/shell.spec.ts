@@ -808,6 +808,15 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex.locator('strong')).toHaveText('修复登录');
   await expect(codex).toContainText('Codex · Alpha');
   await expect(stage).toContainText('修复登录');
+  // User-facing emoji in an OSC title survives the spinner cleanup. This is
+  // important for remote CLIs that use emoji to indicate the active task.
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { __events: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } }).__events;
+    const title = String.fromCharCode(0x1b) + ']0;✨ 远端修复' + String.fromCharCode(7);
+    const bytes = new TextEncoder().encode(title);
+    bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's1', dataBase64: btoa(String.fromCharCode(...bytes)) } });
+  });
+  await expect(codex.locator('strong')).toHaveText('✨ 远端修复');
   await codex.click({ button: 'right' });
   const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
   await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '同目录新开', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);

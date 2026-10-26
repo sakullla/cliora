@@ -9,13 +9,13 @@ import { ToolIcon } from '../../components/ToolIcon';
 import { ToastStack } from '../../components/Toast';
 import { ToolIconSettings } from './ToolIconSettings';
 import { TerminalSettings } from './TerminalSettings';
-import { native, nativeAvailable } from '../../lib/native';
+import { nativeAvailable } from '../../lib/native';
 import { useToasts } from '../../lib/toast';
 import { setUpdateOffer, useUpdateOffer, type UpdateOffer } from '../../lib/appUpdate';
 import brandIcon from '../../../src-tauri/icons/128x128@2x.png';
 import { setLanguage, supportedLanguages, type AppLanguage } from '../../i18n';
 import type { Theme } from '../../types/domain';
-import type { RemoteTarget } from '../../types/remote';
+import { RemoteHosts } from './RemoteHosts';
 import styles from './GeneralSettings.module.css';
 
 type ToolItem = { id: string; name: string };
@@ -188,58 +188,19 @@ function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boo
   }}>{t(`common.language.${id}`)}</button>)}</div>;
 }
 
-function RemoteSshSettings({ enabled, busy, onChange }: { enabled: boolean; busy: boolean; onChange: (enabled: boolean) => void }) {
+export function RemoteSshSettings({ enabled, busy, onChange, showHosts = true, showToggle = true, onOpenHosts }: { enabled: boolean; busy: boolean; onChange: (enabled: boolean) => void; showHosts?: boolean; showToggle?: boolean; onOpenHosts?: () => void }) {
   const { t } = useTranslation();
-  const [targets, setTargets] = useState<RemoteTarget[]>([]);
-  const [draft, setDraft] = useState({ id: '', name: '', host: '', port: '22', user: 'root', sshConfig: '', defaultPath: '' });
-  const [message, setMessage] = useState('');
-  useEffect(() => {
-    if (!enabled || !nativeAvailable) { setTargets([]); return; }
-    void native.listRemoteTargets().then(setTargets).catch(() => setMessage(t('settings.remoteSsh.loadFailed')));
-  }, [enabled, t]);
-  async function save() {
-    if (!draft.name.trim() || !draft.host.trim() || !draft.user.trim()) return;
-    setMessage('');
-    const target: RemoteTarget = {
-      id: draft.id, name: draft.name.trim(), host: draft.host.trim(), port: Number(draft.port) || 22,
-      user: draft.user.trim(), sshConfig: draft.sshConfig.trim() || null, defaultPath: draft.defaultPath.trim() || null,
-      enabled: true, createdAt: 0, updatedAt: 0,
-    };
-    try {
-      const saved = await native.saveRemoteTarget(target);
-      setTargets((items) => [...items.filter((item) => item.id !== saved.id), saved]);
-      setDraft({ id: '', name: '', host: '', port: '22', user: 'root', sshConfig: '', defaultPath: '' });
-      setMessage(t('settings.remoteSsh.saved'));
-    } catch (error) { setMessage((error as { message?: string }).message ?? t('settings.remoteSsh.saveFailed')); }
-  }
-  async function remove(id: string) {
-    try { await native.deleteRemoteTarget(id); setTargets((items) => items.filter((item) => item.id !== id)); }
-    catch (error) { setMessage((error as { message?: string }).message ?? t('settings.remoteSsh.saveFailed')); }
-  }
-  async function test(target: RemoteTarget) {
-    try { const result = await native.testRemoteTarget(target); setMessage(`${result.identity ?? ''} ${result.system ?? ''}`.trim() || t('settings.remoteSsh.ready')); }
-    catch (error) { setMessage((error as { message?: string }).message ?? t('settings.remoteSsh.testFailed')); }
-  }
-  return <section className="settings-group" id="remote-ssh-settings">
+  // Host management on its own (settings tab, workbench dialog): just the host list.
+  if (showHosts && !showToggle) return enabled ? <RemoteHosts /> : null;
+  return <section className="settings-group" id={showHosts ? undefined : 'remote-ssh-settings'}>
     <div className="setting-intro"><h2>{t('settings.remoteSsh.title')}</h2><p>{t('settings.remoteSsh.description')}</p></div>
-    <label className="setting-row"><span><strong>{t('settings.remoteSsh.enable')}</strong><small>{t('settings.remoteSsh.enableHint')}</small></span><input type="checkbox" role="switch" checked={enabled} disabled={busy} onChange={(event) => onChange(event.target.checked)} /></label>
-    {enabled && <>
-      <div className="remote-target-form">
-        <input aria-label={t('settings.remoteSsh.name')} placeholder={t('settings.remoteSsh.name')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-        <input aria-label={t('settings.remoteSsh.host')} placeholder={t('settings.remoteSsh.host')} value={draft.host} onChange={(event) => setDraft({ ...draft, host: event.target.value })} />
-        <input aria-label={t('settings.remoteSsh.port')} inputMode="numeric" placeholder="22" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} />
-        <input aria-label={t('settings.remoteSsh.user')} placeholder={t('settings.remoteSsh.user')} value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} />
-        <input aria-label={t('settings.remoteSsh.path')} placeholder={t('settings.remoteSsh.path')} value={draft.defaultPath} onChange={(event) => setDraft({ ...draft, defaultPath: event.target.value })} />
-        <input aria-label={t('settings.remoteSsh.config')} placeholder={t('settings.remoteSsh.config')} value={draft.sshConfig} onChange={(event) => setDraft({ ...draft, sshConfig: event.target.value })} />
-        <button className="button" type="button" disabled={busy} onClick={() => void save()}>{draft.id ? t('settings.remoteSsh.update') : t('settings.remoteSsh.add')}</button>
-      </div>
-      {targets.map((target) => <div className="setting-row" key={target.id}><span><strong>{target.name}</strong><small>{target.user}@{target.host}:{target.port}{target.defaultPath ? ` · ${target.defaultPath}` : ''}</small></span><span className="setting-actions"><button className="button" type="button" onClick={() => void test(target)}>{t('settings.remoteSsh.test')}</button><button className="text-button" type="button" onClick={() => setDraft({ id: target.id, name: target.name, host: target.host, port: String(target.port), user: target.user, sshConfig: target.sshConfig ?? '', defaultPath: target.defaultPath ?? '' })}>{t('settings.remoteSsh.edit')}</button><button className="text-button" type="button" onClick={() => void remove(target.id)}>{t('settings.remoteSsh.delete')}</button></span></div>)}
-      {message && <small role="status">{message}</small>}
-    </>}
+    {showToggle && <label className="setting-row"><span><strong>{t('settings.remoteSsh.enable')}</strong><small>{t('settings.remoteSsh.enableHint')}</small></span><input type="checkbox" role="switch" checked={enabled} disabled={busy} onChange={(event) => onChange(event.target.checked)} /></label>}
+    {enabled && !showHosts && <div className="setting-row"><span><strong>{t('settings.remoteSsh.manageHosts')}</strong><small>{t('settings.remoteSsh.manageHostsHint')}</small></span><button className="button" type="button" onClick={onOpenHosts}><Icon name="server" size={14} />{t('settings.remoteSsh.openHosts')}</button></div>}
+    {enabled && showHosts && <div className="setting-row-block"><RemoteHosts /></div>}
   </section>;
 }
 
-export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration, onOpenShortcutHelp, onReopenOnboarding, remoteSshEnabled, onRemoteSshChange }: {
+export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration, onOpenShortcutHelp, onReopenOnboarding, onOpenHosts, remoteSshEnabled, onRemoteSshChange }: {
   tools: ToolItem[];
   managed: string[];
   preservedUnknown: { id: string; profileCount: number }[];
@@ -253,6 +214,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   onOpenMigration: () => void;
   onOpenShortcutHelp: () => void;
   onReopenOnboarding: () => void;
+  onOpenHosts: () => void;
   remoteSshEnabled: boolean;
   onRemoteSshChange: (enabled: boolean) => void;
 }) {
@@ -295,7 +257,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
     </section>
     {nativeAvailable && <UpdateSettings busy={busy} />}
     {nativeAvailable && <TerminalSettings />}
-    {nativeAvailable && <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} />}
+    {nativeAvailable && <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} showHosts={false} onOpenHosts={onOpenHosts} />}
     <section className="settings-group">
       <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
       <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>

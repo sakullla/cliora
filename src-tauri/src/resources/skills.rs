@@ -752,6 +752,20 @@ fn local_candidate(source: &str) -> Result<Candidate, String> {
         digest: checksum,
     })
 }
+
+/// Read a local Skills directory for remote upload without inserting it into
+/// the local library database. Text files are returned as UTF-8 documents;
+/// binary assets are intentionally skipped because the remote native layout
+/// only materializes SKILL.md documents.
+pub fn local_documents(source: &str) -> Result<(String, String, BTreeMap<String, String>), String> {
+    let candidate = local_candidate(source)?;
+    let mut documents = BTreeMap::new();
+    for (path, encoded) in candidate.files {
+        let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
+        if let Ok(text) = String::from_utf8(bytes) { documents.insert(path, text); }
+    }
+    Ok((candidate.name, candidate.description, documents))
+}
 pub fn preview_local(db: &Database, source: &str) -> Result<SkillImportPreview, String> {
     preview_candidate(db, &local_candidate(source)?)
 }

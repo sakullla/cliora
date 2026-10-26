@@ -16,6 +16,60 @@ use crate::native::profile::{Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 use crate::remote::{RemoteCommandResult, RemoteTarget};
 
+const REMOTE_RULE_HOME: &str = "/__cliora_capability_home__";
+const REMOTE_RULE_PROJECT: &str = "/__cliora_capability_project__";
+
+pub(crate) fn remote_rule_file(global: Option<&str>, project: Option<&str>, scope: Scope) -> Option<String> {
+    match scope {
+        Scope::Global => global.map(str::to_owned),
+        Scope::Project => project.map(str::to_owned),
+    }
+}
+
+pub(crate) fn safe_rule_relative(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && value.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+}
+
+fn remote_rule_relative_from_rule_path<T: CliAdapter + ?Sized>(adapter: &T, scope: Scope) -> Option<String> {
+    let home = Path::new(REMOTE_RULE_HOME);
+    let project = Path::new(REMOTE_RULE_PROJECT);
+    let path = adapter.rule_path(
+        scope,
+        home,
+        match scope {
+            Scope::Global => None,
+            Scope::Project => Some(project),
+        },
+    )?;
+    let text = path.to_string_lossy().replace('\\', "/");
+    let marker = match scope {
+        Scope::Global => REMOTE_RULE_HOME,
+        Scope::Project => REMOTE_RULE_PROJECT,
+    };
+    let rest = text.strip_prefix(marker)?.trim_start_matches('/');
+    safe_rule_relative(rest).then(|| rest.to_owned())
+}
+
+/// Adapter install declarations are authored for the local OS. A Cliora
+/// process running on Windows can therefore receive a PowerShell installer
+/// even when the selected SSH host is Linux/macOS. Translate the common
+/// official `install.ps1` form to its POSIX counterpart before sending it
+/// over SSH; all other adapter-owned commands remain unchanged.
+fn portable_remote_install_command(command: &str) -> String {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix("irm ") {
+        if let Some((url, suffix)) = rest.split_once(" | iex") {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                return format!("curl -fsSL {} | bash{}", url.replace(".ps1", ".sh"), suffix);
+            }
+        }
+    }
+    trimmed.to_owned()
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Facet {
@@ -237,6 +291,15 @@ pub struct SkillObservation {
     pub detail: &'static str,
 }
 
+/// Login-home relative skill directory scanned on a remote host.
+/// Read-only roots are bundled or observed directories, same as the local scan.
+#[derive(Clone, Copy, Debug)]
+pub struct RemoteSkillDirectory {
+    pub relative: &'static str,
+    pub read_only: bool,
+    pub detail: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginCapability {
@@ -407,7 +470,10 @@ pub trait CliAdapter: Sync {
     }
 
     fn remote_install(&self, target: &RemoteTarget) -> Result<RemoteCommandResult, String> {
-        let command = self.install_command().ok_or_else(|| "此 CLI 未声明远程安装命令".to_owned())?;
+        let command = self
+            .install_command()
+            .map(|command| portable_remote_install_command(&command))
+            .ok_or_else(|| "此 CLI 未声明远程安装命令".to_owned())?;
         self.dispatch_remote_owned_command(target, &command)
     }
 
@@ -968,6 +1034,12 @@ pub trait CliAdapter: Sync {
     fn history_supported(&self) -> bool {
         false
     }
+    /// Directory under the remote login home that holds this CLI's native history.
+    /// The records page mirrors that tree and parses it with this adapter.
+    /// Absent means the CLI has no verified remote history layout.
+    fn native_history_relative(&self) -> Option<&'static str> {
+        None
+    }
     /// Verified parent/child association for usage records.
     /// `None` means this adapter has not declared one. The catalog then
     /// publishes `unavailable` when history itself is supported, and omits
@@ -1123,6 +1195,11 @@ pub trait CliAdapter: Sync {
     ) -> Vec<SkillObservation> {
         Vec::new()
     }
+    /// Remote inventory uses these paths under the login home. Empty keeps the
+    /// historical single-root fallback in the remote resource store.
+    fn remote_skill_directories(&self) -> &'static [RemoteSkillDirectory] {
+        &[]
+    }
     /// Public MCP views omit literal secrets. Removing the entry keeps those
     /// values in the credential store until the next enable writes them back.
     fn mcp_redacts_secrets(&self) -> bool {
@@ -1130,6 +1207,12 @@ pub trait CliAdapter: Sync {
     }
     fn rule_path(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
+    }
+    /// Single native rule file on a remote POSIX host. Global results are
+    /// relative to the login home. Project results are relative to the project
+    /// directory. Local environment variables and Windows paths are not used.
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        remote_rule_relative_from_rule_path(self, scope)
     }
     /// Project or user rules stored as many files instead of one document.
     fn uses_rule_catalog(&self, _scope: Scope) -> bool {
@@ -1396,6 +1479,27 @@ pub struct AdapterCatalog {
 }
 
 #[cfg(test)]
+mod remote_install_command_tests {
+    use super::portable_remote_install_command;
+
+    #[test]
+    fn translates_windows_official_installer_for_posix_hosts() {
+        assert_eq!(
+            portable_remote_install_command("irm https://x.ai/cli/install.ps1 | iex"),
+            "curl -fsSL https://x.ai/cli/install.sh | bash"
+        );
+    }
+
+    #[test]
+    fn leaves_adapter_owned_posix_commands_unchanged() {
+        assert_eq!(
+            portable_remote_install_command("curl -fsSL https://x.ai/cli/install.sh | bash"),
+            "curl -fsSL https://x.ai/cli/install.sh | bash"
+        );
+    }
+}
+
+#[cfg(test)]
 mod association_facet_tests {
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -1569,6 +1673,8 @@ mod association_facet_tests {
             host: "invalid.example".into(),
             port: 22,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,
@@ -1596,6 +1702,8 @@ mod association_facet_tests {
             host: "invalid.example".into(),
             port: 22,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,
@@ -1616,6 +1724,8 @@ mod association_facet_tests {
             host: "invalid.example".into(),
             port: 22,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,
@@ -1636,6 +1746,8 @@ mod association_facet_tests {
             host: "invalid.example".into(),
             port: 22,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,
@@ -1661,6 +1773,8 @@ mod association_facet_tests {
             host: "invalid.example".into(),
             port: 22,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,

@@ -1,16 +1,23 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { HostSwitcher } from '../../components/HostSwitcher';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath, shortPath } from '../../lib/paths';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
+import type { RemoteTarget } from '../../types/remote';
 import styles from './SessionWorkbench.module.css';
 
 const QUICK_TOOL_LIMIT = 8;
 
-export function WorkbenchEmpty({ tools, projects, onNewSession, onOpenHome }: {
+export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnabled = false, activeTargetId = 'local', onTargetChange, onManageHosts, onNewSession, onOpenHome }: {
   tools: AdapterDescriptor[];
   projects: Project[];
+  remoteTargets?: RemoteTarget[];
+  remoteEnabled?: boolean;
+  activeTargetId?: string;
+  onTargetChange?: (targetId: string) => void;
+  onManageHosts?: () => void;
   onNewSession: (prefill?: { toolId?: string; projectId?: string }) => void;
   onOpenHome: () => void;
 }) {
@@ -62,7 +69,7 @@ export function WorkbenchEmpty({ tools, projects, onNewSession, onOpenHome }: {
 
       <footer className={styles.emptyFoot}>
         <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}><kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span><span className={styles.shortcutSep} aria-hidden="true">·</span><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span></span>
-        <span className={styles.localOnly}><Icon name="lock" size={12} />{t('sessions.localSessions')}</span>
+        {remoteEnabled ? <HostSwitcher variant="chip" targets={remoteTargets} value={activeTargetId} onChange={(targetId) => onTargetChange?.(targetId)} onManage={onManageHosts} /> : <span className={styles.localOnly}><Icon name="lock" size={12} />{t('sessions.localSessions')}</span>}
       </footer>
     </div>
   </div>;

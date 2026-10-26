@@ -62,6 +62,11 @@ impl NativeSecrets {
             .or_default()
             .insert(pointer);
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.values.values().all(|values| values.is_empty())
+            && self.removals.values().all(|paths| paths.is_empty())
+    }
 }
 
 pub(crate) fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, String> {

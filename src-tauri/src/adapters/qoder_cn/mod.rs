@@ -264,6 +264,9 @@ impl CliAdapter for QoderAdapter {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        crate::adapters::remote_rule_file(Some(&format!("{}/AGENTS.md", self.directory)), Some("AGENTS.md"), scope)
+    }
     fn mcp_document(
         &self,
         definition: &McpDefinition,

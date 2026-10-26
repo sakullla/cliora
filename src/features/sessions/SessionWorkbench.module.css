@@ -1165,6 +1165,9 @@
 .shortcutsHint kbd { min-width: 18px; background: var(--surface); font-size: var(--fs-micro); line-height: 16px; }
 .shortcutSep { margin: 0 4px; color: var(--line-strong); }
 .localOnly { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
+.hostSwitcher { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-micro); white-space: nowrap; }
+.hostSwitcher select { max-width: 180px; min-height: 28px; padding: 3px 24px 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* Menus, dialog and feedback ---------------------------------------- */
 .contextMenu { min-width: 232px; }

@@ -16,11 +16,12 @@ import { Icon } from '../../components/Icon';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SkeletonRows } from '../../components/Skeleton';
+import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import styles from './ProjectLauncher.module.css';
 
-export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -38,11 +39,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
-  const [remoteProjectId, setRemoteProjectId] = useState('');
-  const [remoteTargetId, setRemoteTargetId] = useState('');
-  const [remoteProjectName, setRemoteProjectName] = useState('');
-  const [remoteProjectPath, setRemoteProjectPath] = useState('');
-  const [remoteTool, setRemoteTool] = useState('');
+  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
@@ -130,8 +127,6 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       if (!active) return;
       setRemoteTargets(targets.filter((target) => target.enabled));
       setRemoteProjects(projects);
-      setRemoteTargetId((current) => current && targets.some((target) => target.enabled && target.id === current) ? current : targets.find((target) => target.enabled)?.id ?? '');
-      setRemoteProjectId((current) => current && projects.some((project) => project.id === current) ? current : projects[0]?.id ?? '');
     }).catch(() => {});
     return () => { active = false; };
   }, [remoteSshEnabled]);
@@ -156,42 +151,6 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const resumeTool = resumable.some((tool) => tool.id === globalTool) ? globalTool : resumable[0]?.id ?? '';
   const resumeDescriptor = resumable.find((tool) => tool.id === resumeTool);
   const directMode = preferredLaunchMode(launchSettings, 'cli', !!resumeDescriptor?.yoloAvailable);
-  const remoteToolId = managed.some((tool) => tool.id === remoteTool) ? remoteTool : defaultTool;
-  const remoteProject = remoteProjects.find((project) => project.id === remoteProjectId);
-
-  useEffect(() => {
-    if (!remoteProject) return;
-    setRemoteTargetId(remoteProject.targetId);
-    setRemoteProjectName(remoteProject.name);
-    setRemoteProjectPath(remoteProject.path);
-  }, [remoteProject?.id]);
-
-  async function saveRemoteProject() {
-    const path = remoteProjectPath.trim();
-    const targetId = remoteTargetId.trim();
-    if (!targetId || !path) return;
-    const fallbackName = path.split('/').filter(Boolean).pop() || t('home.remote.defaultName');
-    const name = remoteProjectName.trim() || fallbackName;
-    begin('remote-project');
-    try {
-      const saved = await native.saveRemoteProject({
-        id: remoteProject && remoteProject.targetId === targetId && remoteProject.path === path ? remoteProject.id : '',
-        targetId,
-        name,
-        path,
-        preferredTool: remoteToolId || null,
-        updatedAt: 0,
-      });
-      setRemoteProjects((items) => [...items.filter((item) => item.id !== saved.id), saved]);
-      setRemoteProjectId(saved.id);
-      setRemoteTargetId(saved.targetId);
-      setRemoteProjectName(saved.name);
-      setRemoteProjectPath(saved.path);
-      showPageFeedback(t('home.remote.saved'));
-    } catch (value) { showPageError(value); }
-    finally { setBusy(''); }
-  }
-
   async function remove(project: Project) {
     if (!await confirmAction(t('home.launcher.removeConfirm', { name: project.name }), () => mounted.current && latestProjects.current.some(item => item.id === project.id && JSON.stringify(item) === JSON.stringify(project)), { title: t('home.launcher.removeAction'), confirmLabel: t('home.launcher.removeAction'), destructive: true })) return;
     begin(project.id);
@@ -208,6 +167,13 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     } catch (value) { showDialogError(value); } finally { setBusy(''); }
   }
   async function chooseDirectory(project?: Project) {
+    // The project action follows the global host context. A remote host must
+    // never fall through to the native file picker, which only knows local
+    // filesystem paths.
+    if (!project && remoteTargetId !== 'local') {
+      setRemoteDialogOpen(true);
+      return;
+    }
     try {
       const picked = await open({ directory: true, multiple: false, title: project ? t('home.launcher.relinkTitle') : t('home.launcher.pickTitle') });
       if (typeof picked !== 'string') return;
@@ -308,35 +274,32 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     finally { setBusy(''); }
   }
 
+  async function removeRemote(project: RemoteProject) {
+    if (!await confirmAction(t('home.remote.removeConfirm', { name: project.name }), () => mounted.current, { title: t('home.remote.remove'), confirmLabel: t('home.remote.remove'), destructive: true })) return;
+    begin(`remote:${project.id}`);
+    try {
+      await native.deleteRemoteProject(project.id);
+      setRemoteProjects((items) => items.filter((item) => item.id !== project.id));
+      showPageFeedback(t('home.remote.removed'));
+    } catch (value) { showPageError(value); }
+    finally { setBusy(''); }
+  }
+
   if (!nativeAvailable) return <p className={styles.note}>{t('home.launcher.nativeOnly')}</p>;
   const projectNeedle = projectQuery.trim().toLowerCase();
-  const visibleProjects = projectNeedle ? projects.filter((project) => `${project.name} ${project.path ?? ''}`.toLowerCase().includes(projectNeedle)) : projects;
+  const scopedProjects = remoteTargetId === 'local' ? projects : [];
+  const scopedRemoteProjects = remoteTargetId === 'local' ? [] : remoteProjects.filter((project) => project.targetId === remoteTargetId);
+  const visibleProjects = projectNeedle ? scopedProjects.filter((project) => `${project.name} ${project.path ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedProjects;
+  const visibleRemoteProjects = projectNeedle ? scopedRemoteProjects.filter((project) => `${project.name} ${project.path} ${remoteTargets.find((target) => target.id === project.targetId)?.host ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedRemoteProjects;
+  const totalProjects = scopedProjects.length + scopedRemoteProjects.length;
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    {remoteSshEnabled && <div className="remote-launcher-panel" data-testid="remote-launcher">
-      <div className={styles.heading}><strong>{t('home.remote.title')}</strong><span className="count-chip">{remoteProjects.length}</span></div>
-      {!remoteTargets.length
-        ? <p className={styles.note}>{t('home.remote.noTargets')}</p>
-        : <>
-          <div className={styles.extra}>
-            <label>{t('home.remote.target')}<select aria-label={t('home.remote.target')} value={remoteTargetId} onChange={(event) => setRemoteTargetId(event.target.value)}>{remoteTargets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}</select></label>
-            <label>{t('home.remote.name')}<input aria-label={t('home.remote.name')} value={remoteProjectName} placeholder={t('home.remote.namePlaceholder')} onChange={(event) => setRemoteProjectName(event.target.value)} /></label>
-            <label>{t('home.remote.path')}<input aria-label={t('home.remote.path')} value={remoteProjectPath} placeholder={t('home.remote.pathPlaceholder')} onChange={(event) => setRemoteProjectPath(event.target.value)} /></label>
-            <button type="button" disabled={!!busy || !remoteProjectPath.trim()} onClick={() => void saveRemoteProject()}>{t('home.remote.save')}</button>
-          </div>
-          {remoteProjects.length > 0 && <div className={styles.extra}>
-            <label>{t('home.remote.project')}<select aria-label={t('home.remote.project')} value={remoteProjectId} onChange={(event) => setRemoteProjectId(event.target.value)}>{remoteProjects.map((project) => <option key={project.id} value={project.id}>{project.name} · {remoteTargets.find((target) => target.id === project.targetId)?.name ?? project.targetId}</option>)}</select></label>
-            <label>{t('home.remote.tool')}<select aria-label={t('home.remote.tool')} value={remoteToolId} onChange={(event) => setRemoteTool(event.target.value)}>{toolOptions(managed).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-            <button type="button" disabled={!!busy || !remoteProject || !remoteToolId} onClick={() => void launch(remoteToolId, remoteProject ? `remote:${remoteProject.id}` : null, directMode)}>{t('home.remote.launch')}</button>
-          </div>}
-          {remoteProject && <small>{remoteProject.path}</small>}
-        </>}
-    </div>}
-    <div className={styles.heading}><strong>{t('home.projects.title')}{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} />{t('home.launcher.add')}</button></div>
-    {projects.length > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
-    {listLoading && !projects.length ? <SkeletonRows count={2} /> : projects.length ? (visibleProjects.length ? <div className={styles.projectGrid}>
+    <div className={styles.heading}><strong>{t('home.projects.title')}{!!totalProjects && <span className="count-chip" aria-hidden="true">{totalProjects}</span>}</strong><span className={styles.actions}><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} />{t('home.launcher.add')}</button></span></div>
+    {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
+    {listLoading && !totalProjects ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
+    {visibleProjects.length > 0 && <div className={styles.projectGrid}>
     {visibleProjects.map((project) => {
       const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
       const descriptor = managed.find((tool) => tool.id === toolId);
@@ -363,7 +326,22 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
         </GuideDialog>
       </div>;
     })}
-    </div> : <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p>) : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
+    </div>}
+    {visibleRemoteProjects.length > 0 && <div className={styles.projectGrid}>
+      {visibleRemoteProjects.map((project) => {
+        const target = remoteTargets.find((item) => item.id === project.targetId);
+        const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : defaultTool;
+        const descriptor = managed.find((tool) => tool.id === toolId);
+        const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
+        return <div className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
+          <div className={styles.identity}><div className={styles.projectTitle}><Icon name="globe" size={24} /><strong title={project.name}>{project.name}</strong><span className={styles.remoteBadge}>{t('home.remote.badge')}</span></div><span title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
+          <div className={styles.controls}><FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} /><div className={styles.actions}><button type="button" disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}><Icon name="play" size={14} />{t('home.tools.launch')}</button><button type="button" className={styles.secondary} onClick={() => void removeRemote(project)}>{t('home.remote.remove')}</button></div></div>
+        </div>;
+      })}
+    </div>}
+    {!visibleProjects.length && !visibleRemoteProjects.length && totalProjects > 0 ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p> : null}
+    {!totalProjects && <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
+    </> : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
       <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={resumeTool} options={toolOptions(resumable)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />
@@ -372,5 +350,23 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       {unindexedResume.map((item) => <p key={item.id}>{item.name}：{item.history.reason} {t('home.launcher.resumeOnProject')}</p>)}
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}
+    <RemoteProjectDialog
+      open={remoteDialogOpen}
+      targets={remoteTargets}
+      projects={remoteProjects}
+      tools={managed}
+      initialTargetId={remoteTargetId === 'local' ? undefined : remoteTargetId}
+      onClose={() => setRemoteDialogOpen(false)}
+      onSaved={(saved) => {
+        setRemoteProjects((items) => {
+          const index = items.findIndex((item) => item.id === saved.id);
+          if (index < 0) return [...items, saved];
+          const next = items.slice();
+          next[index] = saved;
+          return next;
+        });
+        showPageFeedback(t('home.remote.saved'));
+      }}
+    />
   </section>;
 }

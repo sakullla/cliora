@@ -261,6 +261,12 @@ export default {
     leaveDirtyConfirm: 'Discard changes',
     trayErrorAction: 'Check the project folder, tool configuration, or external terminal, then try again.',
   },
+  host: {
+    label: 'Runs on',
+    local: 'This device',
+    localDetail: 'Sessions and data on this computer',
+    manage: 'Manage remote hosts…',
+  },
   shell: {
     brand: 'Cliora',
     sidebarExpand: 'Expand sidebar',

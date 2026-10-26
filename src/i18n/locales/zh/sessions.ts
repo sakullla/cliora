@@ -169,6 +169,8 @@ export default {
   quickToolsHint: '选择工具，配置后启动',
   recentProjectsHint: '沿用项目偏好',
   localSessions: '本机会话',
+  sessionHost: '当前会话主机',
+  manageHosts: '管理远程主机…',
 
   lineHeight: '行距',
   lineCompact: '紧凑',

@@ -5,7 +5,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
-import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
+import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace, ToolProbe } from '../../types/native';
+import type { RemoteCliProbe } from '../../types/remote';
 import type { WorkspaceOpenIntent } from '../tools/ToolWorkspace';
 import { RowMenu } from '../../components/RowMenu';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
@@ -54,6 +55,23 @@ function settle(previous: Loaded, next: Notice | null): Loaded {
   return { ...previous, busy: false, activity: null, error: null, notice: next };
 }
 
+function remoteWorkspace(tool: AdapterDescriptor, probe: RemoteCliProbe): RegisteredToolWorkspace {
+  const toolProbe: ToolProbe = {
+    latestVersionSupported: true,
+    tool: tool.id as ToolProbe['tool'],
+    installations: probe.installed ? [{ path: probe.executable, version: probe.version ?? null, source: 'native', status: 'available', detail: null }] : [],
+    selectedPath: probe.installed ? probe.executable : null,
+    nativeFiles: [],
+    nativeWrites: { state: 'unsupported', reason: '远程配置写入由对应 CLI 适配器提供。', evidence: 'ssh' },
+    interfaceFormats: tool.interfaceFormats,
+    installUrl: '', upgradeHint: '', installCommand: probe.installed ? null : 'remote', upgradeCommand: probe.installed ? 'remote' : null,
+    majorUpgrade: null, nativeInstallCommand: null, npmInstallCommand: null, providerPresets: [],
+    connectionPolicy: { apiKey: { state: 'writable', reason: '' }, providerAddress: { state: 'configurable', reason: '' }, projection: 'single_connection' },
+    dependencies: [],
+  };
+  return { probe: toolProbe, customPath: null, profiles: [], profileModelSummaries: {}, common: null, binding: null, effectiveContextId: null, nativeContextError: null, snapshots: [], recoveryNeeded: [] };
+}
+
 function profileLabel(name: string, connection: { model?: string | null } | null | undefined): string {
   const model = connection?.model?.trim();
   return model ? `${name} · ${model}` : name;
@@ -97,7 +115,7 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   </div>;
 }
 
-export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; remoteTargetId?: string; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
@@ -111,6 +129,9 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
   const requests = useRef(new Map<string, number>());
   const recheck = useRef<(toolId: string) => void>(() => {});
   const [checking, setChecking] = useState(new Set<string>());
+  const [remoteStates, setRemoteStates] = useState<Record<string, RemoteCliProbe | null>>({});
+  const [remoteChecking, setRemoteChecking] = useState(new Set<string>());
+  const [remoteProbeRetry, setRemoteProbeRetry] = useState(0);
   const acting = useRef(new Set<string>());
   const noticeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
@@ -142,7 +163,7 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
   }, []);
 
   useEffect(() => {
-    if (!nativeAvailable) return;
+    if (!nativeAvailable || remoteTargetId !== 'local') return;
     let active = true;
     let unsubscribe: (() => void) | undefined;
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -191,7 +212,38 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
       if (active) unsubscribe = stop; else stop();
     }).catch(() => {});
     return () => { active = false; generation.current++; clearRetries(); recheck.current = () => {}; unsubscribe?.(); };
-  }, [tools.map((item) => item.id).join('|')]);
+  }, [remoteTargetId, tools.map((item) => item.id).join('|')]);
+
+  useEffect(() => {
+    if (!nativeAvailable || remoteTargetId === 'local') {
+      setRemoteStates({});
+      setRemoteChecking(new Set());
+      return;
+    }
+    let active = true;
+    const ids = tools.map((item) => item.id);
+    setRemoteStates({});
+    setRemoteChecking(new Set(ids));
+    setStates(Object.fromEntries(ids.map((toolId) => [toolId, { workspace: null, error: null, busy: false, activity: null, notice: null }])));
+    // Probe the complete list through one SSH command. This avoids a burst of
+    // handshakes on high-latency hosts and makes the result atomic for the UI.
+    void native.probeRemoteClis(remoteTargetId, ids).then((results) => {
+      if (!active) return;
+      setRemoteStates(Object.fromEntries(results.map((result) => [result.toolId, result])));
+      setStates((current) => {
+        const next = { ...current };
+        for (const result of results) next[result.toolId] = { workspace: remoteWorkspace(tools.find((item) => item.id === result.toolId) ?? tools[0], result), error: result.detail ?? null, busy: current[result.toolId]?.busy ?? false, activity: current[result.toolId]?.activity ?? null, notice: current[result.toolId]?.notice ?? null };
+        return next;
+      });
+      setRemoteChecking(new Set());
+    }).catch((error) => {
+      if (!active) return;
+      setRemoteStates(Object.fromEntries(ids.map((toolId) => [toolId, { targetId: remoteTargetId, toolId, executable: toolId, installed: false, version: null, detail: message(error) }])));
+      setStates(Object.fromEntries(ids.map((toolId) => [toolId, { workspace: null, error: message(error), busy: false, activity: null, notice: null }])));
+      setRemoteChecking(new Set());
+    });
+    return () => { active = false; };
+  }, [remoteTargetId, remoteProbeRetry, tools.map((item) => item.id).join('|')]);
 
   async function launchTool(toolId: string, pickDirectory = false) {
     const previous = states[toolId];
@@ -322,12 +374,14 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
   return <div className={styles.list} aria-label={t('home.managed.title')}>
     {tools.map((tool) => {
       const loaded = states[tool.id];
+      const isRemote = remoteTargetId !== 'local';
+      const remote = remoteStates[tool.id];
       const workspace = loaded?.workspace;
       const profiles = workspace?.profiles ?? [];
       const selected = profiles.find((item) => item.id === workspace?.binding?.profileId);
       const appliedCurrent = !!selected && workspace?.binding?.profileVersion === selected.version;
-      const installed = !!workspace?.probe.selectedPath;
-      const probeFailed = workspace?.probe.installations.some(item => item.status === 'probe_failed');
+      const installed = isRemote ? remote?.installed === true : !!workspace?.probe.selectedPath;
+      const probeFailed = isRemote ? remote !== undefined && remote?.installed === false : workspace?.probe.installations.some(item => item.status === 'probe_failed');
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
@@ -336,13 +390,15 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
       const launchTitle = !installed && workspace ? t('home.tools.launchRelaunch')
         : desktop ? t('home.tools.launchDesktop')
         : [rememberedDir ? t('home.tools.launchInDir', { dir: displayPath(rememberedDir) }) : '', launchMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.cliMode === 'yolo' ? t('home.tools.launchYoloFallback') : ''].filter(Boolean).join(t('home.tools.titleSeparator')) || undefined;
-      const line = loaded?.error
+      const line = isRemote && remote?.detail
+        ? lineNotice('error', t('home.tools.probeFailedNotice', { name: tool.name }), remote.detail)
+        : loaded?.error
         ? lineNotice('error', t('home.tools.probeFailedNotice', { name: tool.name }), loaded.error)
         : loaded?.activity === 'apply'
           ? lineNotice('pending', t('home.tools.applying', { name: tool.name }))
           : loaded?.notice ?? null;
       return <div className={styles.row} data-tool-row key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{checking.has(tool.id) && !installed ? t('home.tools.statusChecking') : loaded?.error ? t('home.tools.statusFailed') : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? t('home.tools.statusInstalled') : probeFailed ? t('home.tools.statusProbeFailed') : t('home.tools.statusNotFound') : t('home.tools.statusChecking')}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={isRemote && remote?.detail ? 'error' : loaded?.error ? 'error' : !workspace && !remote ? 'loading' : installed ? 'ok' : 'warn'}>{isRemote ? (remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : installed ? remote?.version || t('home.tools.statusInstalled') : t('home.tools.statusNotFound')) : checking.has(tool.id) && !installed ? t('home.tools.statusChecking') : loaded?.error ? t('home.tools.statusFailed') : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? t('home.tools.statusInstalled') : probeFailed ? t('home.tools.statusProbeFailed') : t('home.tools.statusNotFound') : t('home.tools.statusChecking')}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? null
             : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
@@ -350,7 +406,13 @@ export function ManagedTools({ tools, onOpenTool, onWorkbenchSession, onWorkbenc
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}><Icon name="refresh" size={14} />{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button> : <button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={14} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}{!desktop && <RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu>}<button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button></div>
+        <div className={styles.rowActions}>
+          {isRemote && remote?.detail ? <button type="button" className={styles.recheck} disabled={remoteChecking.has(tool.id)} onClick={() => setRemoteProbeRetry((value) => value + 1)}><Icon name="refresh" size={14} />{remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>
+            : !installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || remoteChecking.has(tool.id) || loaded?.busy} onClick={() => isRemote ? setRemoteProbeRetry((value) => value + 1) : recheck.current(tool.id)}><Icon name="refresh" size={14} />{checking.has(tool.id) || remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>
+            : <button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: false } })) : void launchTool(tool.id)} onContextMenu={(event) => { if (!isRemote) return; event.preventDefault(); if (installed) window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })); }}><Icon name="play" size={14} />{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}
+          {!desktop && <RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })) : void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && !isRemote && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu>}
+          <button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button>
+        </div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

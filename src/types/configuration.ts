@@ -38,6 +38,7 @@ export type ConfigurationDraft = {
   /** Stored describes persisted ownership, not authentication/network readiness. */
   credentialStatus?: 'draft' | 'stored' | 'none' | 'removed';
   sourceCapabilities?: { source: 'native' | 'account' | 'api_key'; available: boolean; reason: string | null }[];
+  remoteTargetId?: string | null;
 };
 export type ConfigurationEditorProps = {
   draft: ConfigurationDraft;
@@ -55,7 +56,9 @@ export type ConfigurationCredential =
   | { source: 'api_key'; secretRef: string | null; remove?: boolean };
 export type ConfigurationBeginRequest = {
   toolId: string; scope: Scope; projectPath: string | null; sessionId: string;
-  subject: ConfigurationSubject; profile: RegisteredProfile | null;
+  subject: ConfigurationSubject; profile: RegisteredProfile | null; remoteTargetId?: string | null; remoteCommon?: RegisteredCommon | null;
+  /** Filled by the remote command from the host store. Callers leave it empty. */
+  remoteFiles?: Record<string, string>;
 };
 export type ConfigurationCatalogSupport = { available: boolean; multiple: boolean; reason: string | null };
 export type ConfigurationSaveResult = {

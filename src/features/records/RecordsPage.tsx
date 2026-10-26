@@ -94,7 +94,7 @@ function rangeCaption(from: string, to: string) {
   if (from) return i18n.t('records.page.captionFrom', { date: dayLabel(from) });
   return i18n.t('records.page.captionTo', { date: dayLabel(to) });
 }
-export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; tools: AdapterDescriptor[]; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
   const [search, setSearch] = useState('');
@@ -170,6 +170,18 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   const initialized = useRef(false);
   const request = useRef(0);
   const detailRequest = useRef(0);
+  useEffect(() => {
+    initialized.current = false;
+    loadedFilter.current = '';
+    setInitialListSettled(false);
+    setScanMetadataReady(false);
+    if (remoteTargetId !== 'local') {
+      // Do not leave the previous local scan summary visible for one render
+      // after switching hosts.
+      setSessions([]); setScans([]); setProjects([]); setPrices([]); setUnfilteredTotal(0); setSelectedId(null);
+      setScanMetadataReady(true); setInitialListSettled(true);
+    }
+  }, [remoteTargetId]);
   const dates = useMemo(() => rangeDates(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
   const toolKey = tools.map((item) => item.id).join('|');
   const filter = useMemo<HistoryFilter>(() => ({
@@ -181,8 +193,39 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
 
   const filterRef = useRef(filter); filterRef.current = filter;
   const loadedFilter = useRef('');
-  const load = useCallback(async (current: HistoryFilter) => {
+  const load = useCallback(async (current: HistoryFilter, refresh = false) => {
     if (!nativeAvailable) return false;
+    if (remoteTargetId !== 'local') {
+      const sequence = ++request.current;
+      setFilterLoading(true); setListError(false);
+      try {
+        const indexed = await native.listRemoteNativeHistory(remoteTargetId, refresh);
+        const rows = new Map(indexed.map((item) => [item.id, item]));
+        const items = [...rows.values()].filter((item) => {
+          if (current.toolId && item.toolId !== current.toolId) return false;
+          if (current.tools?.length && !current.tools.includes(item.toolId)) return false;
+          if (current.favoriteOnly && !item.favorite) return false;
+          if (current.projectId === '__unknown__' ? !!item.projectId : current.projectId && item.projectId !== current.projectId) return false;
+          if (current.model === '__unknown__' ? !!item.model : current.model && item.model !== current.model) return false;
+          if (current.search && !`${item.title} ${item.cwd ?? ''} ${item.model ?? ''}`.toLowerCase().includes(current.search.toLowerCase())) return false;
+          if (current.fromMs !== null && current.fromMs !== undefined && (item.updatedAt ?? 0) < current.fromMs) return false;
+          if (current.toMs !== null && current.toMs !== undefined && (item.updatedAt ?? 0) >= current.toMs) return false;
+          return true;
+        });
+        if (sequence !== request.current || remoteTargetId === 'local') return false;
+        if (unfilteredQuery(current)) setUnfilteredTotal(rows.size);
+        loadedFilter.current = JSON.stringify(current);
+        setSessions(items);
+        setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
+        setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null); toasts.setError(null);
+        return true;
+      } catch (value) {
+        if (sequence === request.current) { setListError(true); showReadError(value); }
+        return false;
+      } finally {
+        if (sequence === request.current) { setFilterLoading(false); setInitialListSettled(true); }
+      }
+    }
     const sequence = ++request.current;
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
@@ -201,11 +244,12 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
       return false;
     }
     finally { if (sequence === request.current) { setFilterLoading(false); setInitialListSettled(true); } }
-  }, []);
+  }, [remoteTargetId]);
 
   useEffect(() => {
     if (!active || !nativeAvailable || initialized.current) return;
     initialized.current = true;
+    if (remoteTargetId !== 'local') { setProjects([]); setPrices([]); setScans([]); setScanMetadataReady(true); return; }
     void Promise.all([native.listProjects(), native.listHistoryPrices(), native.listHistoryScans()])
       .then(([knownProjects, knownPrices, knownScans]) => {
         const savedScans = knownScans ?? [];
@@ -215,7 +259,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
       })
       .catch(value => showReadError(value))
       .finally(() => setScanMetadataReady(true));
-  }, [active]);
+  }, [active, remoteTargetId]);
 
   // Scans are incremental, so the index is refreshed whenever the page is shown and
   // periodically while it stays open; today's numbers then track running sessions.
@@ -239,13 +283,20 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
     const sequence = ++detailRequest.current;
     setDetailError('');
     if (!selectedId || !nativeAvailable) { setDetail(null); return; }
+    if (remoteTargetId !== 'local') {
+      void native.getRemoteNativeHistory(remoteTargetId, selectedId).then((value) => {
+        if (sequence !== detailRequest.current) return;
+        setDetail(value);
+      }).catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, t('records.page.detailFailed'), t('records.page.detailFailedNext'))); });
+      return () => { detailRequest.current++; };
+    }
     void native.getHistorySession(selectedId).then((value) => {
       if (sequence !== detailRequest.current) return;
       setDetail(value);
     })
       .catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, t('records.page.detailFailed'), t('records.page.detailFailedNext'))); });
     return () => { detailRequest.current++; };
-  }, [selectedId, detailRetry, scanVersion]);
+  }, [selectedId, detailRetry, scanVersion, remoteTargetId, t]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const selectedFacet = tools.find((item) => item.id === selected?.session.toolId)?.association;
@@ -262,7 +313,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   useEffect(() => {
     setResumeCommand(null);
     setResumeError(null);
-    if (!selected || selected.resumeReason || !nativeAvailable || (mode === 'yolo' && !yolo)) {
+    if (remoteTargetId !== 'local' || !selected || selected.resumeReason || !nativeAvailable || (mode === 'yolo' && !yolo)) {
       return;
     }
     let live = true;
@@ -284,9 +335,33 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   }, [scanning, active]);
   async function refresh(announce = true, auto = false) {
     if (!nativeAvailable || scanningRef.current) return;
+    if (remoteTargetId !== 'local') {
+      await load(filterRef.current, !auto);
+      if (!auto) setScanVersion((value) => value + 1);
+      if (announce) showNotice(t('records.page.remoteRefreshed'));
+      return;
+    }
     const sequence = ++scanRequest.current; scanningRef.current = true; lastScan.current = Date.now();
     setScanning(true); setScanMode(auto ? 'auto' : 'manual');
     if (!auto) { toasts.clear(); }
+    // Keep the visible list responsive: reload the indexed rows immediately and
+    // let native log discovery continue in the background. The old flow waited
+    // for a full filesystem scan before showing any updated records.
+    if (!auto) {
+      try {
+        await load(filterRef.current);
+        if (sequence !== scanRequest.current) return;
+        scanningRef.current = false;
+        setScanning(false);
+        setScanProgress(null);
+        if (announce) showNotice(t('records.page.refreshed'));
+        void native.refreshHistory().then((reports) => {
+          if (sequence !== scanRequest.current) return;
+          setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
+        }).catch(() => {});
+      } catch (value) { if (sequence === scanRequest.current) showError(value); scanningRef.current = false; setScanning(false); }
+      return;
+    }
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
@@ -311,7 +386,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   }
 
   async function favorite() {
-    if (!selected || favoriteBusy) return;
+    if (remoteTargetId !== 'local' || !selected || favoriteBusy) return;
     setFavoriteBusy(true);
     try {
       await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
@@ -323,7 +398,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   }
 
   async function assignProject(next: string) {
-    if (!selected) return;
+    if (remoteTargetId !== 'local' || !selected) return;
     try {
       await native.setHistoryProject(selected.session.id, next || null);
       setScanVersion(value => value + 1);
@@ -451,7 +526,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
   const selectedUnindexed = unindexedTools.find((tool) => tool.id === toolId) ?? null;
   const indexGap = !listError && !filterLoading && !!selectedUnindexed;
   if (!nativeAvailable) return <EmptyState icon="records" title={t('records.page.nativeTitle')} detail={t('records.page.nativeDetail')} />;
-  return <section className={styles.page} aria-label={t('records.page.label')} data-mobile-detail={mobileDetail || undefined}>
+  return <section className={styles.page} aria-label={t('records.page.label')} data-host-target={remoteTargetId} data-mobile-detail={mobileDetail || undefined}>
     <div className={styles.board}>
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label={t('records.page.typesAria')} onKeyDown={navigateChoices}>
       <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={16} />{t('records.page.sessions')}{initialized.current ? <span className="count-chip">{sessions.length}</span> : null}</button>
@@ -486,7 +561,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
           {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <em className={styles.flag}>{t('records.page.partial')}</em>}{item.stale && <em className={styles.flag} data-tone="muted">{t('records.page.stale')}</em>}</small>}
         </button>),
       ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading ? t('records.page.loading') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading ? t('records.page.loadingHint') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{tool.name}：{tool.history.reason}</p>)}{listError ? <button type="button" onClick={() => void load(filter)}>{t('records.page.retryList')}</button> : activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button>}</div>}</div>
-        <details className={styles.coverage}><summary>{scanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
+        <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
       </aside>
       <div className={styles.detail} ref={detailRef}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
@@ -507,7 +582,7 @@ export function RecordsPage({ active, tools, onOpenProjects, onWorkbenchSession,
         <div className={styles.detailHead}><h2 title={openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : selected.session.title}>{openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : (selected.session.title || t('records.page.untitled'))}</h2></div>
         {!openedChild && <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown')}</span><time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>}
         {!openedChild && (selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
-        {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : <div className={styles.resume}>
+        {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : remoteTargetId !== 'local' ? (selected.session.cwd ? <p className={styles.fullPath}>{displayPath(selected.session.cwd)}</p> : null) : <div className={styles.resume}>
           {readyCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}><Icon name="tool" size={14} />{busy ? t('records.page.resuming') : t('records.page.resume')}{mode === 'yolo' && ' · YOLO'}</button>}
           <details className={styles.moreActions} ref={actionsRef} key={selected.session.id}><summary>{t('records.page.options')}</summary><div className={styles.actionPanel}>
             <div className={styles.resumeBar}><label>{t('records.page.resumeMode')} <select aria-label={t('records.page.resumeMode')} value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">{t('settings.terminal.modeNormal')}</option>{yolo && <option value="yolo">{t('settings.terminal.modeYolo')}</option>}</select></label>{readyCommand && <button type="button" aria-label={t('records.page.copyCommand')} data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? t('home.launcher.copied') : t('records.page.copyCommand')}</button>}</div>

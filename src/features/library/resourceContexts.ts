@@ -6,10 +6,11 @@ import i18n from '../../i18n';
 type Target = { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null };
 const scopeKey = (target: Target) => JSON.stringify([target.toolId, target.scope, target.projectPath]);
 
-export function useAccountLabels() {
+export function useAccountLabels(remote = false) {
   const [labels, setLabels] = useState<Record<string, string>>({});
   useEffect(() => {
     let live = true;
+    if (remote) return () => { live = false; };
     void native.listAccounts().then((accounts) => {
       if (!live || !Array.isArray(accounts)) return;
       const entries: [string, string][] = [];

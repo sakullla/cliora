@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 26 {
+        if version > 27 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -544,6 +544,18 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 27 {
+            let tx = connection.transaction()?;
+            let mut columns = std::collections::HashSet::new();
+            let mut statement = tx.prepare("PRAGMA table_info(remote_targets)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            for row in rows { columns.insert(row?); }
+            drop(statement);
+            if !columns.contains("auth_method") { tx.execute("ALTER TABLE remote_targets ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'key'", [])?; }
+            if !columns.contains("identity_file") { tx.execute("ALTER TABLE remote_targets ADD COLUMN identity_file TEXT", [])?; }
+            tx.execute_batch("PRAGMA user_version = 27;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -809,7 +821,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 26);
+            assert_eq!(version, 27);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

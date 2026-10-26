@@ -396,6 +396,8 @@ mod tests {
                     session_id: "cursor-new".into(),
                     subject: crate::adapters::configuration::ConfigurationSubject::Profile,
                     profile: Some(profile),
+                    remote_target_id: None,
+                    remote_common: None, remote_files: std::collections::BTreeMap::new(),
                 },
                 None,
                 Vec::new(),

@@ -17,7 +17,7 @@ import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry } from '../../types/resources';
 import { McpDistribution, type McpConfirmation, type McpDistributeHandle } from './McpDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
@@ -29,12 +29,16 @@ function failure(error: unknown) {
 type EditorState = { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] };
 const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, state.draft.transport, state.draft.command, keptMcpArgs(state.draft.args), state.draft.url, recordOfRows(state.envRows), recordOfRows(state.headerRows)]);
 
-export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void }) {
+export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
-  const contextLabel = useAccountLabels();
+  const contextLabel = useAccountLabels(!!remoteTargetId);
+  const remoteToolId = tools[0]?.id ?? 'codex';
+  const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
+  const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [placements, setPlacements] = useState<McpPlacement[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(false);
   const [stale, setStale] = useState(false);
   const [willDistribute, setWillDistribute] = useState(false);
@@ -61,7 +65,16 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     const request = ++loadRequest.current;
     setLoading(true);
     setError('');
+    setLoadError('');
     try {
+      if (remoteTargetId) {
+        const bundle = await native.listRemoteResourceStores(remoteTargetId, remoteToolIds, 'mcp');
+        const stores = remoteToolIds.map(toolId => (bundle.stores?.[toolId] ?? { entries: [] }) as { entries?: NativeMcpEntry[] });
+        const items: McpDefinition[] = stores.flatMap((store, toolIndex) => (store.entries ?? []).map((entry, index) => ({ id: `remote:${remoteToolIds[toolIndex]}:${entry.name}`, name: entry.name, transport: entry.transport, command: entry.command, args: entry.args ?? [], url: entry.url ?? '', env: entry.env ?? {}, headers: entry.headers ?? {}, inLibrary: entry.inLibrary !== false, version: index + 1 })));
+        if (request !== loadRequest.current) return;
+        setDefinitions(items); setPlacements([]); setLoaded(true); setStale(false);
+        return;
+      }
       const [items, placed] = await Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]);
       if (request !== loadRequest.current) return;
       setDefinitions(items);
@@ -70,8 +83,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       setStale(false);
     } catch (value) {
       if (request !== loadRequest.current) return;
+      const detail = failure(value);
       setStale(true);
-      setError(failure(value));
+      setLoadError(detail);
+      setError(detail);
     } finally {
       if (request === loadRequest.current) setLoading(false);
     }
@@ -81,7 +96,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     if (!active) return;
     void reload();
     return () => { loadRequest.current++; };
-  }, [active]);
+  }, [active, remoteTargetId, remoteToolIds.join('|')]);
 
   useEffect(() => {
     onCountChange?.(definitions.filter((item) => item.inLibrary !== false).length);
@@ -162,7 +177,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
-      await native.deleteMcpDefinition(item.id, item.version);
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: (store.entries ?? []).filter(entry => entry.name !== item.name), definitions: (store.definitions ?? []).filter(entry => entry.name !== item.name) });
+      } else await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(current => current.filter(entry => entry.id !== item.id));
       setDraft(null);
       setNotice(t('library.resources.removed'));
@@ -175,8 +193,17 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError(''); setNotice('');
     try {
       const name = mcpCopyName(item.name, definitions.map((entry) => entry.name));
-      const saved = await native.saveMcpDefinition({ ...mcpDraftOf(item), id: null, expectedVersion: null, name });
-      setDefinitions(current => [...current.filter(entry => entry.id !== saved.id), saved]);
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const source = (store.entries ?? []).find(entry => entry.name === item.name);
+        if (!source) throw new Error(t('library.resources.loadFailedDetail'));
+        const copied = { ...source, name };
+        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: [...(store.entries ?? []), copied], definitions: [...(store.definitions ?? []), copied] });
+        await reload();
+      } else {
+        const saved = await native.saveMcpDefinition({ ...mcpDraftOf(item), id: null, expectedVersion: null, name });
+        setDefinitions(current => [...current.filter(entry => entry.id !== saved.id), saved]);
+      }
       setNotice(t('library.resources.duplicated', { name }));
     } catch (value) { setError(failure(value)); }
     finally { setBusy(false); }
@@ -196,7 +223,15 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     const normalized = { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), inLibrary: true, env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
     try {
       const alreadyPlaced = !!draft.id && placements.some((item) => item.definitionId === draft.id);
-      if (willDistribute || alreadyPlaced) {
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(normalized.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const entries = (store.entries ?? []).filter(entry => entry.name !== normalized.name);
+        const remoteEntry = { ...normalized, enabled: true, protectedValues: false };
+        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: [...entries, remoteEntry], definitions: [...(store.definitions ?? []).filter(entry => entry.name !== normalized.name), remoteEntry] });
+        await reload();
+        setDraft(null);
+        setNotice(t('library.resources.saved'));
+      } else if (willDistribute || alreadyPlaced) {
         const outcome = await distributeRef.current?.run(normalized);
         if (outcome?.status === 'failed') setDialogError(outcome.message);
         else if (outcome?.status === 'stale') setDialogError(t('library.distribute.changedError'));
@@ -274,7 +309,12 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
     setBusy(true); setError(''); setNotice('');
     try {
-      if (place) {
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const entries = (store.entries ?? []).map(entry => entry.name === item.name ? { ...entry, enabled: !place } : entry);
+        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries, definitions: store.definitions ?? [] });
+        await reload();
+      } else if (place) {
         const target: McpDraftTargetRequest = { toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled, operation: 'remove' };
         const candidate = await native.previewMcpDraft(mcpDraftOf(item), [target]);
         const first = candidate.targets[0];
@@ -325,7 +365,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const empty = loading && !loaded
     ? <div role="status" aria-label={t('library.resources.loading')}><SkeletonRows count={3} /></div>
     : !loaded
-      ? <EmptyState title={t('library.resources.loadFailedTitle')} detail={t('library.resources.loadFailedDetail')} action={<button className="button primary" onClick={() => void reload()}>{t('library.resources.retry')}</button>} icon="alert" />
+      ? <EmptyState title={t('library.resources.loadFailedTitle')} detail={loadError || t('library.resources.loadFailedDetail')} action={<button className="button primary" onClick={() => void reload()}>{t('library.resources.retry')}</button>} icon="alert" />
       : needle && shown.length === 0
         ? <EmptyState title={t('library.resources.noMcpMatch', { query: search.trim() })} action={<button onClick={() => setSearch('')}>{t('library.resources.clearSearch')}</button>} icon="search" />
         : library.length === 0
@@ -418,7 +458,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           <div className={styles.editorForm}>
             <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
           </div>
-          <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} />
+          {!remoteTargetId && <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} />}
         </div>
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">

@@ -84,7 +84,7 @@ function Editor(props: ConfigurationContentProps) {
       </ConfigurationStep>
       <ConnectionCredential />
       <ConfigurationStep step="model" title={t('common.models.title')} meta={view.model ? <code>{view.model}</code> : undefined}>
-        {model && <ConfigurationField field={model} value={view.model ?? ''} disabled={blocked} presentation={{ combobox: true, placeholder: 'MiniMax-M2', catalog: props.catalog ? { supported: props.catalog.supported, busy: props.catalog.busy, fetch: props.catalog.fetch } : undefined }} onChange={value => commit('model', value)} onValidityChange={valid => props.onValidityChange('model', valid)} />}
+        {model && <ConfigurationField field={model} value={view.model ?? ''} disabled={blocked} presentation={{ combobox: true, placeholder: 'MiniMax-M2', catalog: props.catalog ? { supported: props.catalog.supported, busy: props.catalog.busy, fetch: props.catalog.fetch, error: props.catalog.error } : undefined }} onChange={value => commit('model', value)} onValidityChange={valid => props.onValidityChange('model', valid)} />}
         <p className={styles.note}>{t('tools.adapters.minimaxCode.modelHint')}</p>
       </ConfigurationStep>
     </div>

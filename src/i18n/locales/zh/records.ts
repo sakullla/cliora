@@ -142,6 +142,7 @@ export default {
     trail: '子会话层级',
   },
   page: {
+    remoteSubtitle: '当前主机的使用记录。',
     copiedCommand: '已复制原生恢复命令，粘贴后由终端执行。',
     next: '可点击刷新本机记录或调整筛选。',
     operationFailed: '使用记录操作失败',
@@ -168,6 +169,10 @@ export default {
     detailFailed: '这段会话暂时无法读取',
     detailFailedNext: '请重新加载会话。',
     refreshed: '已刷新本机记录。',
+    remoteRefreshed: '已刷新当前主机的使用记录。',
+    remoteCoverage: '来自当前主机的原生会话',
+    remoteUnavailable: '远程主机没有可用的会话索引。',
+    remoteSessionDetail: '远程会话详情请在工作台重新附着后查看。',
     scanStopped: '已请求停止扫描，现有记录保留。',
     copyFailed: '复制失败，恢复命令仍在页面上，可以手动选择。',
     resumeRequested: '已请求外部终端恢复会话。',

@@ -692,6 +692,8 @@ export default {
     frameProfile: 'Edit profile · {{name}}',
     frameNew: 'New profile',
     launchPickTitle: 'Choose a working directory to launch {{name}}',
+    remoteInstallHint: 'This CLI is not detected on the remote host. Install it there from this page.',
+    remoteCapabilityHint: 'Remote probing, install, upgrade, uninstall, and workbench launch are available. Remote config, accounts, MCP, Skills, Agents, plugins, memory, and history still need adapter support.',
     launched: '{{name}} launch request sent to the external terminal.',
     launchedDesktop: '{{name}} was asked to launch the desktop app.',
     newProfile: 'New profile',

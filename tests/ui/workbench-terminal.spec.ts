@@ -7,11 +7,13 @@ async function installWorkbenchMock(page: Page) {
     if ((window as unknown as { __twoSessions?: boolean }).__twoSessions) sessions.push({ id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/a-long-project-directory/for-the-second-session', mode: 'yolo', running: true, exitCode: null, startedAt: Date.now() });
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const writes: string[] = [];
+    const writeBytes: number[][] = [];
     const writeLog: Array<{ sessionId: string; text: string }> = [];
     const opened: string[] = [];
     Object.assign(window, {
       isTauri: true,
       __writes: writes,
+      __writeBytes: writeBytes,
       __writeLog: writeLog,
       __opened: opened,
       __output: (text: string, sessionId = 's1') => {
@@ -38,8 +40,10 @@ async function installWorkbenchMock(page: Page) {
           }
           if (command === 'replay_workbench_session') return (window as unknown as { __replayOverride?: string }).__replayOverride ?? btoa(args.sessionId === 's2' ? 'claude-ready\r\n> ' : 'codex-ready\r\n> ');
           if (command === 'write_workbench_session') {
-            const text = new TextDecoder().decode(Uint8Array.from(atob(args.dataBase64), (c) => c.charCodeAt(0)));
+            const raw = Uint8Array.from(atob(args.dataBase64), (c) => c.charCodeAt(0));
+            const text = new TextDecoder().decode(raw);
             writes.push(text);
+            writeBytes.push([...raw]);
             writeLog.push({ sessionId: args.sessionId, text });
             return null;
           }
@@ -410,6 +414,43 @@ test('mouse-tracking terminal clicks are forwarded to the CLI', async ({ page })
   const box = await screen.boundingBox();
   await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
   await expect.poll(async () => (await writes(page)).some((item) => item.includes('\u001b[M'))).toBe(true);
+});
+
+test('a mouse report past column 95 keeps its raw column byte', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1000hwide-target'));
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('wide-target');
+  const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const box = await screen.boundingBox();
+  await resetWrites(page);
+  await page.mouse.click(box!.x + box!.width - 8, box!.y + 24);
+  const bytes = () => page.evaluate(() => {
+    const packets = (window as unknown as { __writeBytes: number[][] }).__writeBytes;
+    return packets[packets.length - 1] ?? [];
+  });
+  await expect.poll(async () => (await bytes()).slice(0, 3)).toEqual([0x1b, 0x5b, 0x4d]);
+  const report = await bytes();
+  expect(report).toHaveLength(6);
+  expect(report[4]).toBeGreaterThan(127);
+});
+
+test('OSC 52 from the CLI copies text and a query does not', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openWorkbench(page);
+  const encoded = await page.evaluate(() => {
+    const raw = new TextEncoder().encode('复制一段');
+    let binary = '';
+    raw.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
+  });
+  await page.evaluate((payload) => {
+    (window as unknown as { __output: (text: string) => void }).__output(`\u001b]52;c;${payload}\u0007`);
+  }, encoded);
+  await expect(page.getByRole('status').filter({ hasText: '已复制选中内容' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('复制一段');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b]52;c;?\u0007'));
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('复制一段');
 });
 
 test('terminal cursor-position replies are forwarded through the binary input channel', async ({ page }) => {

@@ -13,7 +13,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanSt
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
-import type { RemoteProbe, RemoteProject, RemoteTarget } from '../types/remote';
+import type { RemoteCliProbe, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
@@ -171,6 +171,8 @@ export const native = {
   applyRuleTargets: (ruleId: string, expectedVersion: number, targets: RuleTarget[]) => command<RuleApplyResult[]>('apply_rule_targets', { ruleId, expectedVersion, targets }),
   listRulePlacements: () => command<RulePlacement[]>('list_rule_placements'),
   syncRuleClients: (ruleId: string, expectedVersion: number, selection: RuleClientSelection) => command<RuleSyncResult[]>('sync_rule_clients', { ruleId, expectedVersion, selection }),
+  listRemoteRulePlacements: (targetId: string) => command<RulePlacement[]>('list_remote_rule_placements', { targetId }),
+  syncRemoteRuleClients: (targetId: string, ruleId: string, expectedVersion: number, selection: RuleClientSelection) => command<RuleSyncResult[]>('sync_remote_rule_clients', { targetId, ruleId, expectedVersion, selection }),
   listSkillPackages: () => command<SkillPackage[]>('list_skill_packages'),
   setSkillInLibrary: (id: string, inLibrary: boolean) => command<void>('set_skill_in_library', { id, inLibrary }),
   previewSkillLocal: (source: string) => command<SkillImportPreview>('preview_skill_local', { source }),
@@ -192,15 +194,31 @@ export const native = {
   listLibraryItems: (kind: LibraryKind, projectId: string | null, search: string) => command<LibraryItem[]>('list_library_items', { kind, projectId, search }),
   saveLibraryItem: (draft: LibraryDraft) => command<LibraryItem>('save_library_item', { draft }),
   deleteLibraryItem: (id: string, expectedVersion: number) => command<void>('delete_library_item', { id, expectedVersion }),
+  listRemoteLibraryItems: (targetId: string, kind: LibraryKind, search: string) => command<LibraryItem[]>('list_remote_library_items', { targetId, kind, search }),
+  saveRemoteLibraryItem: (targetId: string, draft: LibraryDraft) => command<LibraryItem>('save_remote_library_item', { targetId, draft }),
+  deleteRemoteLibraryItem: (targetId: string, id: string, expectedVersion: number) => command<void>('delete_remote_library_item', { targetId, id, expectedVersion }),
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
   listRemoteTargets: () => command<RemoteTarget[]>('list_remote_targets'),
-  saveRemoteTarget: (target: RemoteTarget) => command<RemoteTarget>('save_remote_target', { target }),
+  /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
+  saveRemoteTarget: (target: RemoteTarget, password?: string | null) => command<RemoteTarget>('save_remote_target', { target, password: password || null }),
+  listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
   deleteRemoteTarget: (id: string) => command<void>('delete_remote_target', { id }),
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
+  listRemoteDirectories: (targetId: string, parent: string) => command<string[]>('list_remote_directories', { targetId, parent }),
+  createRemoteDirectory: (targetId: string, path: string) => command<void>('create_remote_directory', { targetId, path }),
   saveRemoteProject: (project: RemoteProject) => command<RemoteProject>('save_remote_project', { project }),
   deleteRemoteProject: (id: string) => command<void>('delete_remote_project', { id }),
-  testRemoteTarget: (target: RemoteTarget) => command<RemoteProbe>('test_remote_target', { target }),
+  testRemoteTarget: (target: RemoteTarget, password?: string | null) => command<RemoteProbe>('test_remote_target', { target, password: password || null }),
+  probeRemoteCli: (targetId: string, toolId: string) => command<RemoteCliProbe>('probe_remote_cli', { targetId, toolId }),
+  probeRemoteClis: (targetId: string, toolIds: string[]) => command<RemoteCliProbe[]>('probe_remote_clis', { targetId, toolIds }),
+  getRemoteToolStore: (targetId: string, toolId: string) => command<RemoteToolStore>('get_remote_tool_store', { targetId, toolId }),
+  saveRemoteToolStore: (targetId: string, toolId: string, store: RemoteToolStore) => command<void>('save_remote_tool_store', { targetId, toolId, store }),
+  deleteRemoteToolProfile: (targetId: string, toolId: string, profileId: string) => command<void>('delete_remote_tool_profile', { targetId, toolId, profileId }),
+  getRemoteResourceStore: (targetId: string, toolId: string, kind: string) => command<unknown>('get_remote_resource_store', { targetId, toolId, kind }),
+  listRemoteResourceStores: (targetId: string, toolIds: string[], kind: string) => command<{ stores?: Record<string, unknown> }>('list_remote_resource_stores', { targetId, toolIds, kind }),
+  saveRemoteResourceStore: (targetId: string, toolId: string, kind: string, value: unknown) => command<void>('save_remote_resource_store', { targetId, toolId, kind, value }),
+  importRemoteSkillDirectory: (targetId: string, toolId: string, source: string) => command<void>('import_remote_skill_directory', { targetId, toolId, source }),
   listProjects: () => command<Project[]>('list_projects'),
   addProject: (projectPath: string, name?: string, preferredTool?: string) => command<Project>('add_project', { projectPath, name: name || null, preferredTool: preferredTool || null }),
   renameProject: (projectId: string, name: string) => command<Project>('rename_project', { projectId, name }),
@@ -220,6 +238,9 @@ export const native = {
   },
   listWorkbenchSessions: () => command<WorkbenchSession[]>('list_workbench_sessions'),
   listRemoteSessions: () => command<RemoteSessionIndexEntry[]>('list_remote_sessions'),
+  listRemoteHistory: () => command<RemoteSessionIndexEntry[]>('list_remote_history'),
+  listRemoteNativeHistory: (targetId: string, refresh = false) => command<HistorySession[]>('list_remote_native_history', { targetId, refresh }),
+  getRemoteNativeHistory: (targetId: string, id: string) => command<HistoryDetail>('get_remote_native_history', { targetId, id }),
   replayWorkbenchSession: (sessionId: string) => command<string>('replay_workbench_session', { sessionId }),
   writeWorkbenchSession: (sessionId: string, dataBase64: string) => command<void>('write_workbench_session', { sessionId, dataBase64 }),
   resizeWorkbenchSession: (sessionId: string, cols: number, rows: number) => command<void>('resize_workbench_session', { sessionId, cols, rows }),
@@ -228,6 +249,7 @@ export const native = {
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
   cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),
   maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null, version: version || null }),
+  maintainRemoteCli: (targetId: string, toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_remote_cli', { targetId, toolId, action, source: source ?? null, version: version || null }),
   getTrayStatus: () => command<TrayStatus>('get_tray_status'),
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),

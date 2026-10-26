@@ -11,13 +11,14 @@ function scrollParent(node: HTMLElement | null) {
   return null;
 }
 
-export function ModelCombobox({ id, label, value, placeholder, options, disabled, action, onChange }: {
+export function ModelCombobox({ id, label, value, placeholder, options, disabled, emptyNotice, action, onChange }: {
   id?: string;
   label: string;
   value: string;
   placeholder: string;
   options: string[];
   disabled?: boolean;
+  emptyNotice?: string | null;
   action?: { label: string; busy: boolean; onClick: () => void };
   onChange: (model: string) => void;
 }) {
@@ -96,7 +97,7 @@ export function ModelCombobox({ id, label, value, placeholder, options, disabled
       <div id={listId} className={styles.list} role="listbox" aria-label={t('tools.modelCombo.list', { label })}>
         {matches.map((model, index) => <button key={model} type="button" role="option" aria-selected={model === value} data-active={index === active} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(model)}><span>{model}</span></button>)}
       </div>
-      {!matches.length && <div className={styles.empty}><p>{filtering ? t('tools.modelCombo.noMatch') : t('tools.modelCombo.noCatalog')}</p></div>}
+      {!matches.length && <div className={styles.empty}><p role={!filtering && emptyNotice ? 'alert' : undefined}>{filtering ? t('tools.modelCombo.noMatch') : emptyNotice || t('tools.modelCombo.noCatalog')}</p></div>}
       {!filtering && action && <button className={styles.fetch} type="button" disabled={action.busy} onMouseDown={event => event.preventDefault()} onClick={() => action.onClick()}>{action.busy ? t('tools.modelCombo.fetching') : action.label}</button>}
     </div>, anchor.current?.closest('dialog') ?? document.body)}
   </div>;

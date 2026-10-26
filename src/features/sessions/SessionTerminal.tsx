@@ -32,6 +32,43 @@ export function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** PTY input. Mouse reports are raw bytes; text and SGR reports are UTF-8. */
+export function ptyBytes(data: string, binary: boolean): Uint8Array {
+  if (!binary) return new TextEncoder().encode(data);
+  const bytes = new Uint8Array(data.length);
+  for (let index = 0; index < data.length; index += 1) bytes[index] = data.charCodeAt(index) & 0xff;
+  return bytes;
+}
+
+const OSC52_LIMIT = 1024 * 1024;
+
+/**
+ * Clipboard write from OSC 52 (`c;<base64>`). Queries and empty payloads are ignored
+ * so a CLI cannot read the clipboard back.
+ */
+export function textFromOsc52(payload: string): string | null {
+  const split = payload.indexOf(';');
+  if (split < 0) return null;
+  const kind = payload.slice(0, split);
+  const encoded = payload.slice(split + 1).replace(/\s/g, '');
+  if (!encoded || encoded === '?' || encoded.length > OSC52_LIMIT) return null;
+  if (kind && !/^[cps0-7]+$/.test(kind)) return null;
+  try {
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    const text = new TextDecoder().decode(bytes);
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Leave composition and IME-process keys to xterm. Shortcuts must not swallow them. */
+export function terminalYieldsToIme(event: { isComposing?: boolean; keyCode?: number; key?: string }): boolean {
+  return !!event.isComposing || event.keyCode === 229 || event.key === 'Process' || event.key === 'Unidentified';
+}
+
 function decodeBase64(value: string): Uint8Array {
   if (!value) return new Uint8Array();
   const binary = atob(value);
@@ -210,7 +247,10 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       fastScrollSensitivity: 5,
       macOptionIsMeta: true,
       allowProposedApi: true,
-      screenReaderMode: true,
+      // Screen reader mode drops insertText. A Chinese IME can then commit letters
+      // but never digits, punctuation, space, or Enter. Automation still reads the
+      // accessibility tree, so keep the mode only there.
+      screenReaderMode: navigator.webdriver === true,
       rescaleOverlappingGlyphs: true,
       minimumContrastRatio: contrastFloor(themeRef.current),
       theme: terminalTheme(themeRef.current),
@@ -223,6 +263,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     let disposed = false;
     let imeComposing = false;
     let imeFrame = 0;
+    let imeAnchor = '';
 
     // WebView2 can keep the native IME candidate window at the last textarea
     // position when the terminal is inside a clipped, scrollable workbench.
@@ -247,6 +288,11 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         const cursor = term.buffer.active;
         const left = Math.max(0, rowBox.left - elementBox.left + Math.min(cursor.cursorX, term.cols - 1) * cellWidth);
         const top = Math.max(0, rowBox.top - elementBox.top + Math.min(cursor.cursorY, term.rows - 1) * cellHeight);
+        const next = `${Math.round(left)}:${Math.round(top)}:${Math.round(cellWidth)}:${Math.round(cellHeight)}`;
+        // Rewriting the textarea on every frame restarts the Windows IME and drops
+        // the key that would commit or insert punctuation.
+        if (next === imeAnchor) return;
+        imeAnchor = next;
         textarea.style.left = `${left}px`;
         textarea.style.top = `${top}px`;
         textarea.style.width = `${Math.max(1, cellWidth)}px`;
@@ -259,6 +305,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     const onCompositionUpdate = () => syncImeAnchor();
     const onCompositionEnd = () => {
       imeComposing = false;
+      imeAnchor = '';
       cancelAnimationFrame(imeFrame);
     };
     textarea?.addEventListener('compositionstart', onCompositionStart);
@@ -334,10 +381,10 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
     writers.current.set(sessionId, publish);
 
-    const sendToPty = (data: string) => {
+    const sendToPty = (data: string, binary = false) => {
       if (!activeRef.current || !runningRef.current || !data) return;
-      if (data.includes('\r') || data.includes('\n')) markLiveOutput();
-      void native.writeWorkbenchSession(sessionId, encodeBase64(new TextEncoder().encode(data))).catch((error) => bridge.current.writeError(error));
+      if (!binary && (data.includes('\r') || data.includes('\n'))) markLiveOutput();
+      void native.writeWorkbenchSession(sessionId, encodeBase64(ptyBytes(data, binary))).catch((error) => bridge.current.writeError(error));
     };
 
     const copySelection = () => {
@@ -349,7 +396,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
 
     term.attachCustomKeyEventHandler((event) => {
-      if (event.isComposing || event.keyCode === 229) return true;
+      if (terminalYieldsToIme(event)) return true;
       const action = terminalKeyAction(event, { hasSelection: term.hasSelection(), canSwitch: bridge.current.canSwitch(), mac: MAC });
       if (!action) return true;
       if (event.type !== 'keydown') return false;
@@ -362,20 +409,22 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       return false;
     });
 
-    // Shift+wheel reads normal-buffer scrollback. The unmodified wheel is left to xterm.
+    // Shift+wheel reads normal-buffer scrollback. Scroll by whole rows. Writing
+    // scrollTop up to scrollHeight lands in the unused host pixels, and the next
+    // redraw rounds onto another row and paints the previous frame on top.
     const wheelScrollViewport = (event: WheelEvent) => {
       if (event.deltaY === 0) return;
       const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
       if (!viewport) return;
       userScrollRef.current = true;
+      const rowHeight = viewport.clientHeight / Math.max(1, term.rows);
       let amount = event.deltaY;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        amount *= viewport.clientHeight / Math.max(1, term.rows);
-      } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        amount *= viewport.clientHeight;
-      }
+      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) amount *= rowHeight;
+      else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) amount *= viewport.clientHeight;
       if (event.altKey) amount *= 5;
-      viewport.scrollTop = Math.max(0, Math.min(viewport.scrollTop + amount, viewport.scrollHeight));
+      const lines = amount / Math.max(1, rowHeight);
+      const steps = Math.trunc(lines) || (amount > 0 ? 1 : -1);
+      term.scrollLines(steps);
       event.preventDefault();
     };
 
@@ -468,11 +517,19 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       // mouse-tracking CLI), so use both signals before deciding to follow
       // incoming output.
       const away = userScrollRef.current && isAwayFromBottom();
+      if (away) scheduleRepaint();
       if (away === awayFromBottom) return;
       awayFromBottom = away;
       if (away) node.dataset.scrollAway = 'true';
       else delete node.dataset.scrollAway;
       bridge.current.scrolled(sessionId, away);
+    };
+    let repaintTimer = 0;
+    const scheduleRepaint = () => {
+      window.clearTimeout(repaintTimer);
+      repaintTimer = window.setTimeout(() => {
+        if (!disposed) term.refresh(0, Math.max(0, term.rows - 1));
+      }, 40);
     };
     const pinViewport = () => {
       if (!viewport || term.buffer.active.type !== 'normal') return;
@@ -578,9 +635,16 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     handles.current.set(sessionId, handle);
 
     const subscription = term.onData((data) => sendToPty(data));
-    // xterm emits legacy mouse reports through onBinary; forwarding only onData
-    // makes terminal UIs that use the default mouse encoding appear unclickable.
-    const binarySubscription = term.onBinary((data) => sendToPty(data));
+    // xterm emits legacy mouse reports through onBinary. Those bytes are not UTF-8:
+    // a column past 95 is 128 or higher, and encoding it as text makes the click
+    // and the wheel look like a different sequence, so the CLI ignores both.
+    const binarySubscription = term.onBinary((data) => sendToPty(data, true));
+    // Claude Code copies with OSC 52. xterm does not apply that sequence itself.
+    const osc52 = term.parser.registerOscHandler(52, (data) => {
+      const text = textFromOsc52(data);
+      if (text) void writeClipboard(text).then((ok) => { if (ok && !disposed) bridge.current.copied(); });
+      return true;
+    });
     const fitNow = () => {
       if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
       const dims = fit.proposeDimensions();
@@ -649,6 +713,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       disposed = true;
       imeComposing = false;
       cancelAnimationFrame(imeFrame);
+      window.clearTimeout(repaintTimer);
       window.clearTimeout(liveTimer);
       flushWrites();
       cancelAnimationFrame(resizeFrame);
@@ -669,6 +734,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       cursorSub.dispose();
       subscription.dispose();
       binarySubscription.dispose();
+      osc52.dispose();
       textarea?.removeEventListener('compositionstart', onCompositionStart);
       textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
       textarea?.removeEventListener('compositionend', onCompositionEnd);
@@ -768,16 +834,18 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
 
 const TITLE_LIMIT = 80;
 
-/** CLIs put spinners and status glyphs in front of the task title; keep only the words. */
+/** Keep the CLI's own title text. Drop only C0 controls so the workbench title stays one line. */
 export function cleanTerminalTitle(raw: string): string {
-  const text = raw
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .replace(/^[\s\u2800-\u28ff\u2700-\u27bf\u2600-\u26ff\u00b7\u2022\u25cf\u25cb\u25d0-\u25d3*\-\u2010-\u2015\u2731-\u273d]+/u, '')
-    .trim();
+  const text = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim();
   return text.length > TITLE_LIMIT ? text.slice(0, TITLE_LIMIT - 1).trimEnd() + '\u2026' : text;
 }
 
 function monoFont(): string {
   const stack = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
-  return stack || 'Consolas, monospace';
+  // xterm's DOM renderer uses this stack for every cell.  Explicit emoji
+  // fallbacks keep colour/combined emoji readable on Windows WebView2 while
+  // retaining the monospace metrics for ordinary CLI text.
+  return stack
+    ? `${stack}, "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"`
+    : 'Consolas, "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", monospace';
 }

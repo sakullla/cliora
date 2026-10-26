@@ -6,10 +6,11 @@ import { native, nativeAvailable } from '../../lib/native';
 import { configurationApplicationState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { searchShortcutHint } from '../../lib/shortcut';
-import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison, MaintenanceProgress } from '../../types/native';
+import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison, MaintenanceProgress, ToolProbe } from '../../types/native';
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
+import type { RemoteCliProbe, RemoteToolStore } from '../../types/remote';
 import { preferredLaunchMode } from '../../types/launch';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
 import type { UsageQuery } from '../../types/usage';
@@ -40,6 +41,10 @@ import styles from './ToolWorkspace.module.css';
 
 const errorText = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.workspace.operationFailed');
 function host(address?: string) { try { return address ? new URL(address).host : ''; } catch { return i18n.t('tools.workspace.hostUnknown'); } }
+function cleanRemoteVersion(value?: string | null) {
+  const text = value?.trim() ?? '';
+  return text.match(/\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? text;
+}
 
 type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents' | 'memory';
 type EditFrame = { key: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; title: string };
@@ -122,7 +127,7 @@ function ToolSwitcher({ tools, selected, onSelect }: { tools: AdapterDescriptor[
   </div>;
 }
 
-export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0, onWorkbenchSession, onWorkbenchFailure, onOpenMcpLibrary }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void; onOpenMcpLibrary?: (definitionId: string) => void }) {
+export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0, onWorkbenchSession, onWorkbenchFailure, onOpenMcpLibrary }: { active?: boolean; managedTools: AdapterDescriptor[]; remoteTargetId?: string; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void; onOpenMcpLibrary?: (definitionId: string) => void }) {
   const { t } = useTranslation();
   const [tool, setTool] = useState(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
   const descriptor = managedTools.find(item => item.id === tool) ?? managedTools[0];
@@ -158,7 +163,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
   const [launching, setLaunching] = useState(false);
   const quota = useUsageQuota(active);
-  const accounts = useAccounts(toolId, active);
+  const accounts = useAccounts(toolId, active, remoteTargetId === 'local' ? null : remoteTargetId);
   const loadSequence = useRef(0);
   const alive = useRef(true);
   const epoch = useRef(0);
@@ -172,12 +177,59 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const appliedDiscard = useRef(0);
   const pendingCreate = useRef(false);
   const management = descriptor?.management;
-  const supported = { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory };
+  const isRemote = remoteTargetId !== 'local';
+  // The descriptor describes the local adapter installation.  A remote target
+  // has its own CLI/resources and is intentionally exposed through the same
+  // workspace surface; do not hide tabs while the remote probe is still
+  // loading (or because a local adapter omitted a management flag).
+  const supported = isRemote
+    ? { config: true, accounts: true, mcp: true, skills: true, agents: true, plugins: true, memory: true }
+    : { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory };
   useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
   useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins, supported.memory]);
+  function makeRemoteWorkspace(probe: RemoteCliProbe, store: RemoteToolStore): RegisteredToolWorkspace {
+    const currentFiles = store.currentFiles ?? {};
+    const toolProbe: ToolProbe = {
+      latestVersionSupported: true,
+      tool: toolId as ToolProbe['tool'],
+      installations: probe.installed ? [{ path: probe.executable, version: cleanRemoteVersion(probe.version) || null, source: 'native', status: 'available', detail: null }] : [],
+      selectedPath: probe.installed ? probe.executable : null,
+      nativeFiles: Object.keys(currentFiles).map((role) => ({ role, path: `remote:${role}`, format: 'toml' as const, writable: true, reason: null, sensitive: false })),
+      nativeWrites: { state: 'unsupported', reason: '远程配置写入由对应 CLI 适配器提供。', evidence: 'ssh' },
+      interfaceFormats: descriptor?.interfaceFormats ?? [],
+      installUrl: '',
+      upgradeHint: '',
+      installCommand: probe.installed ? null : 'remote',
+      upgradeCommand: probe.installed ? 'remote' : null,
+      majorUpgrade: null,
+      nativeInstallCommand: null,
+      npmInstallCommand: null,
+      providerPresets: [],
+      connectionPolicy: { apiKey: { state: 'writable', reason: '' }, providerAddress: { state: 'configurable', reason: '' }, projection: 'single_connection' },
+      dependencies: [],
+    };
+    return { probe: toolProbe, customPath: null, profiles: store.profiles ?? [], profileModelSummaries: {}, common: store.common ?? null, binding: null, effectiveContextId: null, nativeContextError: null, snapshots: Object.keys(currentFiles).map((role) => ({ role, text: currentFiles[role], fingerprint: 'remote', error: null })), recoveryNeeded: [] };
+  }
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
+    if (remoteTargetId !== 'local') {
+      if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
+      const request = ++loadSequence.current;
+      setLoading(true); setError('');
+      try {
+        const [probe, store] = await Promise.all([native.probeRemoteCli(remoteTargetId, nextTool), native.getRemoteToolStore(remoteTargetId, nextTool)]);
+        if (!alive.current || request !== loadSequence.current) return null;
+        const value = makeRemoteWorkspace(probe, store);
+        setWorkspace(value);
+        setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
+        setCustomPath('');
+        return value;
+      } catch (failure) {
+        if (alive.current && request === loadSequence.current) { setWorkspace(null); setError(errorText(failure)); }
+        return null;
+      } finally { if (alive.current && request === loadSequence.current) setLoading(false); }
+    }
     if (nextScope === 'project' && !nextProject) {
       // A previous CLI read may still be in flight. Retire it before publishing
       // the choose-project prompt, or its completion overwrites this context.
@@ -202,10 +254,31 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       setWorkspace(value); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
-  }, []);
+  }, [remoteTargetId, descriptor, toolId]);
   useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, reload]);
   useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
-  useEffect(() => { if (nativeAvailable && active) void native.listProjects().then(value => { if (alive.current) setProjects(value); }).catch(failure => { if (alive.current) setError(errorText(failure)); }); }, [active]);
+  useEffect(() => {
+    if (!nativeAvailable || !active) return;
+    if (isRemote) {
+      void native.listRemoteProjects(remoteTargetId).then(items => {
+        if (!alive.current) return;
+        setProjects(items.map(item => ({
+          id: `remote:${item.id}`,
+          name: item.name,
+          path: item.path,
+          available: true,
+          preferredTool: item.preferredTool ?? null,
+          lastOpened: item.updatedAt,
+          modelOverrides: {},
+          selectedProfiles: {},
+          appliedProfiles: {},
+          reapplyProfiles: {},
+        })));
+      }).catch(value => { if (alive.current) setError(errorText(value)); });
+      return;
+    }
+    void native.listProjects().then(value => { if (alive.current) setProjects(value); }).catch(value => { if (alive.current) setError(errorText(value)); });
+  }, [active, isRemote, remoteTargetId]);
   useEffect(() => {
     if (!active || !nativeAvailable) return;
     const refresh = () => { if (!currentDirty.current && !currentFrame.current) void reload(toolId, scope, projectPath); };
@@ -227,6 +300,13 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   async function launch() {
     if (!nativeAvailable || launching) return;
+    if (isRemote) {
+      // Reuse the last remote project exactly like the local launch button.
+      // The workbench opens the directory picker only when no remote project
+      // exists for this host.
+      window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId, targetId: remoteTargetId, quickLaunch: true } }));
+      return;
+    }
     const desktop = descriptor?.launchForm === 'desktop';
     let directory: string | null = null;
     setLaunching(true);
@@ -253,7 +333,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       setLaunching(false);
     }
   }
-  async function createProfile() {    let name = t('tools.workspace.newProfile'); let suffix = 1;
+  async function createProfile() {
+    let name = t('tools.workspace.newProfile'); let suffix = 1;
     while (workspace?.profiles.some(profile => profile.name === name)) name = t('tools.workspace.newProfileN', { suffix: ++suffix });
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
@@ -272,7 +353,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (!await mayLeave()) return;
     if (target && (target.toolId !== toolId || !target.scope || target.scope === 'project' && !target.projectPath)) { setError(t('tools.workspace.scopeChanged')); return; }
     const nextScope = target?.scope ?? scope; const nextPath = target?.projectPath ?? projectPath; const original = currentContext.current; const navigation = epoch.current;
-    const value = await native.getRegisteredToolWorkspace(toolId, nextScope, nextPath, false, true).catch(failure => { setError(errorText(failure)); return null; });
+    const value = isRemote
+      ? await native.getRemoteToolStore(remoteTargetId, toolId).then(store => makeRemoteWorkspace({ targetId: remoteTargetId, toolId, executable: '', installed: true, version: null, detail: null }, store)).catch(failure => { setError(errorText(failure)); return null; })
+      : await native.getRegisteredToolWorkspace(toolId, nextScope, nextPath, false, true).catch(failure => { setError(errorText(failure)); return null; });
     if (!alive.current || original !== currentContext.current || navigation !== epoch.current || !value) return;
     const profile = value.profiles.find(item => item.id === profileId);
     if (!profile) { setError(t('tools.workspace.profileGone')); return; }
@@ -284,7 +367,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useEffect(() => {
     if (!repair || repair.page !== 'connections' || !repair.toolId || appliedRepair.current === repair.sequence) return;
     appliedRepair.current = repair.sequence;
-    void (async () => { if (!await mayLeave()) return; discard(); setTool(repair.toolId!); setScope(repair.scope ?? 'global'); setProjectPath(repair.projectPath ?? ''); setResource(repair.resourceView ?? 'config'); if (repair.profileId) { const value = await native.getRegisteredToolWorkspace(repair.toolId!, repair.scope ?? 'global', repair.projectPath ?? '', false, true).catch(() => null); const profile = value?.profiles.find(item => item.id === repair.profileId); if (alive.current && profile) setTimeout(() => void openFrame('profile', profile, true), 0); } })();
+    void (async () => { if (!await mayLeave()) return; discard(); setTool(repair.toolId!); setScope(repair.scope ?? 'global'); setProjectPath(repair.projectPath ?? ''); setResource(repair.resourceView ?? 'config'); if (repair.profileId && !isRemote) { const value = await native.getRegisteredToolWorkspace(repair.toolId!, repair.scope ?? 'global', repair.projectPath ?? '', false, true).catch(() => null); const profile = value?.profiles.find(item => item.id === repair.profileId); if (alive.current && profile) setTimeout(() => void openFrame('profile', profile, true), 0); } })();
   }, [repair]);
   useEffect(() => {
     if (!openSequence || appliedOpen.current === openSequence) return; appliedOpen.current = openSequence;
@@ -340,18 +423,26 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function apply(profile: RegisteredProfile) {
     if (!await mayLeave()) return;
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
-    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
+    try {
+      if (isRemote) {
+        const store = await native.getRemoteToolStore(remoteTargetId, toolId);
+        await native.saveRemoteToolStore(remoteTargetId, toolId, { ...store, currentFiles: profile.files, profiles: store.profiles.map(item => item.id === profile.id ? profile : item) });
+      } else await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false);
+      if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
     catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
     finally { if (identity === currentContext.current) setApplying(null); }
   }
   async function compareUse() {
     if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError('');
-    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.appliedShort')); } }
+    try {
+      if (isRemote) { setComparison(null); return; }
+      await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.appliedShort')); }
+    }
     catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
     finally { if (identity === currentContext.current) setBusy(false); }
   }
   async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += t('tools.workspace.copySuffix'); await openFrame('profile', copy, true, t('tools.workspace.frameCopy', { name: profile.name })); }
-  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
+  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { if (isRemote) await native.deleteRemoteToolProfile(remoteTargetId, toolId, profile.id); else await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
   function cancelMaintenance() {
@@ -371,7 +462,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       stop = await listen<MaintenanceProgress>('cliora:maintenance-progress', event => {
         if (alive.current && event.payload.toolId === toolId) setMaintenance(previous => previous ? { ...previous, output: event.payload.output } : previous);
       }).catch(() => undefined);
-      const result = await native.maintainRegisteredCli(toolId, action, source, lineVersion);
+      const result = isRemote
+        ? await native.maintainRemoteCli(remoteTargetId, toolId, action, source, lineVersion)
+        : await native.maintainRegisteredCli(toolId, action, source, lineVersion);
       if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, cancelling: false, output: result.output, version: result.version, finishedAt: Date.now() } : previous);
     } catch (failure) {
       if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, cancelling: false, error: errorText(failure), finishedAt: Date.now() } : previous);
@@ -379,12 +472,14 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       stop?.();
       if (alive.current) {
         setBusy(false);
-        if (currentContext.current === startedContext) await reload(toolId, scope, projectPath, true);
+        if (currentContext.current === startedContext) {
+          await reload(toolId, scope, projectPath, true);
+        }
       }
     }
   }
-  async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
-  async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function savePath() { if (isRemote) return; if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function usePath(path: string) { if (isRemote) return; if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
   async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError(t('tools.workspace.quotaChanged')); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
@@ -414,7 +509,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         </span>
         <span className={styles.profileActions}>{!applied && <button className={styles.primary} disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</button>}<button onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}>{t('tools.workspace.duplicateConfig')}</button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}>{t('tools.workspace.addQuota')}</button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}>{t('tools.workspace.deleteConfig')}</button></RowMenu></span>
       </div>
-      <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />
+      {!isRemote && <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />}
     </div>;
   }
   const linkedAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
@@ -423,7 +518,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const memoryProjects = useMemo(() => projects.flatMap(project => project.available && project.path ? [{ name: project.name, path: project.path }] : []), [projects]);
   const resourcesReady = resourceContext !== null && !resourceContext.nativeContextError;
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
-  return <section className={styles.workspace} aria-label={t('common.nav.connections')}><ToastScope toasts={toasts}>
+  return <section className={styles.workspace} aria-label={t('common.nav.connections')} data-host-target={remoteTargetId}><ToastScope toasts={toasts}>
     <div className={styles.chrome} data-workspace-chrome>
     <div className={styles.toolbar}><ToolSwitcher tools={managedTools} selected={toolId} onSelect={id => void switchTool(id)} /></div>
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar} hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
@@ -443,17 +538,17 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         {query && !profileGroups.length && <div className={styles.profileEmpty}><span>{t('tools.workspace.noMatch', { query: filter.trim() })}</span><button onClick={() => setFilter('')}>{t('tools.workspace.clearSearch')}</button></div>}
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><span>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</span></div>}{group.visible.map(row)}</div>)}</div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} />}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} />}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div className="dialog-footer"><button onClick={() => setComparison(null)}>{t('common.conflict.keepCurrent')}</button><span className="dialog-footer-gap" /><button className={styles.primary} disabled={busy} onClick={() => void compareUse()}>{t('common.conflict.useNext')}</button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
     {!['config', 'accounts', 'memory'].includes(resource) && !resourcesReady && <div role="status"><p>{resourceContext?.nativeContextError ?? (loading ? t('tools.workspace.contextLoading') : workspace?.nativeContextError ?? t('tools.workspace.contextFailed'))}</p>{!loading && <button onClick={() => void reload(toolId, scope, projectPath, true)}>{t('tools.workspace.contextRetry')}</button>}</div>}
-    {resourcesReady && resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={mcpDirty} onOpenLibrary={onOpenMcpLibrary} />}
-    {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
-    {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
-    {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
-    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />}
+    {resourcesReady && resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={mcpDirty} onOpenLibrary={onOpenMcpLibrary} />}
+    {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={skillsDirty} />}
+    {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={agentsDirty} />}
+    {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} />}
+    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} remoteTargetId={isRemote ? remoteTargetId : null} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />}
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
   </ToastScope></section>;
 }

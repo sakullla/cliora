@@ -204,6 +204,9 @@ impl CliAdapter for CodeBuddy {
             Scope::Project => None,
         }
     }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        crate::adapters::remote_rule_file(Some(".codebuddy/CODEBUDDY.md"), None, scope)
+    }
     fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
         crate::native::adapter::ConnectionPolicy {
             api_key: crate::native::adapter::api_key_writable(),

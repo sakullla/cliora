@@ -365,6 +365,10 @@ impl CliAdapter for Devin {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        // The Windows config dir is AppData; a remote host uses the POSIX layout.
+        crate::adapters::remote_rule_file(Some(".config/devin/AGENTS.md"), Some("AGENTS.md"), scope)
+    }
     fn history_sources(
         &self,
         home: &Path,
