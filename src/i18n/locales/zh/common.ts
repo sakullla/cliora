@@ -261,6 +261,12 @@ export default {
     leaveDirtyConfirm: '放弃修改',
     trayErrorAction: '请检查项目目录、工具配置或外部终端后重试。',
   },
+  host: {
+    label: '运行位置',
+    local: '本机',
+    localDetail: '此设备上的会话与资料',
+    manage: '管理远程主机…',
+  },
   shell: {
     brand: '栖点',
     sidebarExpand: '展开侧栏',

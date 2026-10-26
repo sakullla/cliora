@@ -142,6 +142,7 @@ export default {
     trail: 'Child session levels',
   },
   page: {
+    remoteSubtitle: 'Usage records for the selected host.',
     copiedCommand: 'Native resume command copied. Paste it into a terminal to run.',
     next: 'Refresh local records or adjust the filters.',
     operationFailed: 'Usage record operation failed',
@@ -168,6 +169,10 @@ export default {
     detailFailed: 'This session cannot be read right now',
     detailFailedNext: 'Reload the session.',
     refreshed: 'Local records refreshed.',
+    remoteRefreshed: 'Refreshed usage records for this host.',
+    remoteCoverage: 'Native sessions on this host',
+    remoteUnavailable: 'No remote session index is available for this host.',
+    remoteSessionDetail: 'Reattach this remote session in the workbench to view its live details.',
     scanStopped: 'Stop requested; existing records are kept.',
     copyFailed: 'Copy failed. The resume command is still on the page; select it manually.',
     resumeRequested: 'Session resume requested in the external terminal.',

@@ -13,7 +13,7 @@ import { useFeedback } from '../../lib/toast';
 import { searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
+import type { NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
 import { SkillDistribution } from './SkillDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
@@ -26,10 +26,25 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
+function remoteSkillPackages(toolIds: string[], stores: unknown[]): SkillPackage[] {
+  return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
+    const toolId = toolIds[index];
+    return { id: entry.packageId ?? `remote:${toolId}:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true };
+  }));
+}
+
+async function readRemoteSkillStores(targetId: string, toolIds: string[]) {
+  const bundle = await native.listRemoteResourceStores(targetId, toolIds, 'skills');
+  return toolIds.map(toolId => bundle.stores?.[toolId] ?? { entries: [] });
+}
+
 /** Skill library section. MCP lives in LibraryMcp. */
-export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void }) {
+export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
-  const contextLabel = useAccountLabels();
+  const contextLabel = useAccountLabels(!!remoteTargetId);
+  const remoteToolId = tools[0]?.id ?? 'codex';
+  const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
+  const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [busy, setBusy] = useState(false);
@@ -47,6 +62,15 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
 
   useEffect(() => {
     if (!active) return;
+    if (remoteTargetId) {
+      let live = true;
+      void readRemoteSkillStores(remoteTargetId, remoteToolIds).then(values => {
+        if (!live) return;
+        setPackages(remoteSkillPackages(remoteToolIds, values));
+        setInstallations([]);
+      }).catch(value => { if (live) setError(failure(value)); });
+      return () => { live = false; };
+    }
     let live = true;
     const load = native.listSkillPackages().then(async (items) => {
         if (!live) return;
@@ -56,7 +80,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       });
     void load.catch((value) => { if (live) setError(failure(value)); });
     return () => { live = false; };
-  }, [active]);
+  }, [active, remoteTargetId, remoteToolIds.join('|')]);
 
   useEffect(() => {
     onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
@@ -70,6 +94,11 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }, [createSignal]);
 
   async function reloadSkills() {
+    if (remoteTargetId) {
+      setPackages(remoteSkillPackages(remoteToolIds, await readRemoteSkillStores(remoteTargetId, remoteToolIds)));
+      setInstallations([]);
+      return;
+    }
     const items = await native.listSkillPackages();
     setPackages(items);
     setInstallations((await Promise.all(items.map((entry) => native.listSkillInstallations(entry.id)))).flat());
@@ -136,6 +165,14 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       const source = await pickPath({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
       setBusy(true); setDialogError('');
+      if (remoteTargetId) {
+        const toolIds = installTools.length ? installTools : [remoteToolId];
+        for (const toolId of toolIds) await native.importRemoteSkillDirectory(remoteTargetId, toolId, source);
+        await reloadSkills();
+        closeSkill();
+        setNotice(t('library.resources.addedToLibrary'));
+        return;
+      }
       await importPreview(await native.previewSkillLocal(source), 'local', source, null);
     } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
@@ -183,7 +220,14 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
-      await native.deleteSkillPackage(item.id);
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
+        const entries = (store.entries ?? []).filter(value => value !== entry);
+        const documents = { ...(store.documents ?? {}) };
+        if (entry) delete documents[entry.path];
+        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { ...store, entries, documents });
+      } else await native.deleteSkillPackage(item.id);
       await reloadSkills();
       setNotice(t('library.resources.removed'));
     } catch (value) { setError(failure(value)); }
@@ -197,6 +241,17 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
     setBusy(true); setError(''); setNotice('');
     try {
+      if (remoteTargetId) {
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
+        if (entry) {
+          const next = (store.entries ?? []).filter(value => value !== entry);
+          await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { ...store, entries: next, documents: Object.fromEntries(Object.entries(store.documents ?? {}).filter(([path]) => path !== entry.path)) });
+        }
+        await reloadSkills();
+        setNotice(t('library.resources.removed'));
+        return;
+      }
       if (place) {
         await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
         setNotice(t('library.page.removed', { where, tool: toolName }));
@@ -233,12 +288,12 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
             }} />
-            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
+            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>;
       }) : needle
         ? <div className={styles.empty}><Icon name="search" size={24} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} />{t('tools.skills.add')}</button></div>}
+        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}{!remoteTargetId && <button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} />{t('tools.skills.add')}</button>}</div>}
     </div>
     <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
       <div className={styles.skillAdd}>
@@ -252,9 +307,9 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
             <h3>{t('library.resources.importFrom')}</h3>
             <div className={styles.sources}>
               <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={18} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
-              <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={18} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
+              <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy || !!remoteTargetId} onClick={() => void addZip()}><Icon name="archive" size={18} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
             </div>
-            <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
+            <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} disabled={!!remoteTargetId} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !!remoteTargetId || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
           </section>
         </>}
         {archiveSelection && <section className={styles.skillSection}>
@@ -271,7 +326,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       </div>
     </GuideDialog>
     <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
-      {skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
+      {!remoteTargetId && skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
     </GuideDialog>
   </div>;
 }

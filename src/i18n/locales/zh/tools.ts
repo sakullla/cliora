@@ -766,6 +766,8 @@ export default {
     frameProfile: '修改配置 · {{name}}',
     frameNew: '新建配置',
     launchPickTitle: '选择 {{name}} 启动工作目录',
+    remoteInstallHint: '远程主机上尚未检测到此 CLI，可直接在这里安装到远程主机。',
+    remoteCapabilityHint: '当前远程支持探测、安装、升级、卸载和工作台启动；配置文件、账号、MCP、Skill、Agents、插件、记忆与历史的远程读写仍需对应适配器接入。',
     launched: '{{name}} 已向外部终端发出启动请求。',
     launchedDesktop: '{{name}} 已请求启动桌面应用。',
     newProfile: '新配置',

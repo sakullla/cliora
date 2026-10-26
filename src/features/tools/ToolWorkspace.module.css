@@ -507,6 +507,8 @@ div > .feedback { margin-bottom: 12px; }
 .taskEmpty > div { display: grid; gap: 2px; flex: 1 1 240px; min-width: 0; }
 .taskEmpty > div > strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .taskEmpty > div > p { margin: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
+.taskActions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.taskActions > button { min-height: var(--control-h-sm); padding: 0 12px; }
 
 .quickApply {
   display: flex;

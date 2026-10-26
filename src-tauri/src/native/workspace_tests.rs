@@ -47,6 +47,8 @@ fn begin(
                 session_id: id.into(),
                 subject: ConfigurationSubject::Profile,
                 profile: Some(profile),
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             Vec::new(),
@@ -336,6 +338,8 @@ fn workspace_current_comparison_is_redacted_cas_bound_and_preserves_private_nati
         session_id: "current".into(),
         subject: ConfigurationSubject::Current,
         profile: None,
+        remote_target_id: None,
+        remote_common: None, remote_files: std::collections::BTreeMap::new(),
     };
     let draft = sessions
         .begin(&registry, &db, request, None, files.clone(), None)
@@ -719,6 +723,8 @@ fn workspace_save_only_account_switch_uses_frozen_applied_identity_and_current_p
                     session_id: "project-current".into(),
                     subject: ConfigurationSubject::Current,
                     profile: None,
+                    remote_target_id: None,
+                    remote_common: None, remote_files: std::collections::BTreeMap::new(),
                 },
                 Some(a.id.clone()),
                 fp.clone(),
@@ -983,6 +989,8 @@ fn workspace_current_key_replace_and_remove_are_explicit_without_adopting_a_prof
                 session_id: "current-key".into(),
                 subject: ConfigurationSubject::Current,
                 profile: None,
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             files.clone(),
@@ -1218,6 +1226,8 @@ fn workspace_legacy_oauth_migration_opens_saved_draft_and_recovers_only_on_expli
         session_id: "legacy-saved".into(),
         subject: ConfigurationSubject::Profile,
         profile: Some(saved.clone()),
+        remote_target_id: None,
+        remote_common: None, remote_files: std::collections::BTreeMap::new(),
     };
     let draft = sessions
         .begin_registered(&registry, &db, request, temp.path(), None)
@@ -1231,6 +1241,8 @@ fn workspace_legacy_oauth_migration_opens_saved_draft_and_recovers_only_on_expli
         session_id: "legacy-current".into(),
         subject: ConfigurationSubject::Current,
         profile: None,
+        remote_target_id: None,
+        remote_common: None, remote_files: std::collections::BTreeMap::new(),
     };
     assert!(sessions
         .begin_registered(&registry, &db, current, temp.path(), None)
@@ -1300,6 +1312,8 @@ fn workspace_new_profile_defaults_to_api_key_when_tool_has_no_accounts() {
                 session_id: "api-key-default".into(),
                 subject: ConfigurationSubject::Profile,
                 profile: Some(profile_from_files("claude_code", BTreeMap::new())),
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             Vec::new(),
@@ -1345,6 +1359,8 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
                     session_id: format!("claude-catalog-{local}"),
                     subject: ConfigurationSubject::Profile,
                     profile: Some(p),
+                    remote_target_id: None,
+                    remote_common: None, remote_files: std::collections::BTreeMap::new(),
                 },
                 None,
                 Vec::new(),
@@ -1434,6 +1450,8 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
                 session_id: "claude-common".into(),
                 subject: ConfigurationSubject::Common,
                 profile: None,
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             Vec::new(),
@@ -1480,6 +1498,7 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
     let reopened_common = sessions.begin(&registry, &db, ConfigurationBeginRequest {
         tool_id: "claude_code".into(), scope: Scope::Global, project_path: None,
         session_id: "claude-common-reopen".into(), subject: ConfigurationSubject::Common, profile: None,
+        remote_target_id: None, remote_common: None, remote_files: std::collections::BTreeMap::new(),
     }, None, Vec::new(), None).unwrap();
     assert_eq!(reopened_common.view["commonFields"][0]["value"], "high");
     assert_eq!(reopened_common.profile.revision, saved_common.revision);
@@ -1568,6 +1587,8 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
                         session_id: format!("invalid-{role}-{}", reference.get("env").is_some()),
                         subject: ConfigurationSubject::Common,
                         profile: None,
+                        remote_target_id: None,
+                        remote_common: None, remote_files: std::collections::BTreeMap::new(),
                     },
                     None,
                     Vec::new(),
@@ -1622,6 +1643,8 @@ fn workspace_generic_current_protects_parent_and_owns_explicit_native_key_target
                 session_id: "codebuddy-current".into(),
                 subject: ConfigurationSubject::Current,
                 profile: None,
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             files.clone(),
@@ -1730,6 +1753,8 @@ fn workspace_generic_current_protects_parent_and_owns_explicit_native_key_target
                 session_id: "codebuddy-reopen".into(),
                 subject: ConfigurationSubject::Current,
                 profile: None,
+                remote_target_id: None,
+                remote_common: None, remote_files: std::collections::BTreeMap::new(),
             },
             None,
             files,
@@ -2036,6 +2061,8 @@ fn open_code_drafts_resolve_the_native_form_from_the_selected_installation() {
             session_id: format!("form-{form}"),
             subject: ConfigurationSubject::Profile,
             profile: Some(fixture()),
+            remote_target_id: None,
+            remote_common: None, remote_files: std::collections::BTreeMap::new(),
         };
         let mut draft = sessions
             .begin_registered(&registry, &db, request, temp.path(), None)
@@ -2094,4 +2121,480 @@ fn open_code_drafts_resolve_the_native_form_from_the_selected_installation() {
             assert!(parsed.get("provider").is_none(), "{form}");
         }
     }
+}
+
+#[test]
+fn remote_codex_draft_keeps_host_text_and_opens_the_dedicated_editor() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let settings = "\
+model = \"gpt-6-astra\"
+model_provider = \"openai-custom\"
+
+[model_providers]
+
+[model_providers.openai-custom]
+base_url = \"https://cpa.example.test/v1\"
+name = \"openai-custom\"
+wire_api = \"responses\"
+supports_standalone_web_search = true
+experimental_bearer_token = \"synthetic-bearer-token\"
+
+[model_providers.openai-custom.capabilities]
+external_web_access = true
+";
+    let common = RegisteredCommon {
+        tool: "codex".into(),
+        version: 1,
+        revision: String::new(),
+        files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"high\"\n".into())]),
+    };
+    let profile = serde_json::from_value(json!({
+        "editing": {"version": 1, "selectedProvider": "openai-custom", "intents": []},
+        "id": "remote-profile",
+        "tool": "codex",
+        "name": "新配置 2",
+        "version": 3,
+        "revision": "rev",
+        "inheritCommon": false,
+        "files": {"settings": settings.replace("experimental_bearer_token = \"synthetic-bearer-token\"\n", "")},
+        "authentication": {"kind": "api_key"},
+        "connection": {
+            "providerId": "openai-custom",
+            "interfaceFormat": "openai_responses",
+            "baseUrl": "https://cpa.example.test/v1",
+            "model": "gpt-6-astra",
+            "secretRef": null,
+            "authEnvVar": "CLIORA_CODEX_OPENAI_API_KEY"
+        },
+        "nativeCredentials": {}
+    }))
+    .unwrap();
+    let opened = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-profile".into(),
+                subject: ConfigurationSubject::Profile,
+                profile: Some(profile),
+                remote_target_id: Some("remote-host".into()),
+                remote_common: Some(common.clone()),
+                remote_files: BTreeMap::new(),
+            },
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    assert!(
+        opened.descriptor.as_ref().is_some_and(|descriptor| !descriptor.fields.is_empty()),
+        "{:?}",
+        opened.issues
+    );
+    assert!(opened.profile.files["settings"].contains("gpt-6-astra"));
+
+    let fresh = serde_json::from_value(json!({
+        "id": "",
+        "tool": "codex",
+        "name": "新配置",
+        "version": 0,
+        "inheritCommon": false,
+        "files": {},
+        "suppressed": {},
+        "connection": null,
+        "nativeCredentials": {}
+    }))
+    .unwrap();
+    let created = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-new".into(),
+                subject: ConfigurationSubject::Profile,
+                profile: Some(fresh),
+                remote_target_id: Some("remote-host".into()),
+                remote_common: Some(common),
+                remote_files: BTreeMap::new(),
+            },
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    assert!(created.descriptor.is_some(), "{:?}", created.issues);
+
+    let mut secret_profile = created.profile.clone();
+    secret_profile.id = "remote-secret".into();
+    secret_profile.files.insert("settings".into(), settings.into());
+    let secret = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-secret".into(),
+                subject: ConfigurationSubject::Profile,
+                profile: Some(secret_profile),
+                remote_target_id: Some("remote-host".into()),
+                remote_common: None,
+                remote_files: BTreeMap::new(),
+            },
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    assert!(secret.descriptor.is_some(), "{:?}", secret.issues);
+    assert!(secret.issues.iter().any(|issue| issue.message.contains("明文密钥")));
+
+    let local = temp.path().join("config.toml");
+    std::fs::write(&local, "model = \"local-only-marker\"\n").unwrap();
+    let native = vec![crate::adapters::file(
+        "settings",
+        local.clone(),
+        format::FileKind::Toml,
+        true,
+        None,
+        false,
+    )];
+    let current = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-current".into(),
+                subject: ConfigurationSubject::Current,
+                profile: None,
+                remote_target_id: Some("remote-host".into()),
+                remote_common: None,
+                remote_files: BTreeMap::from([("settings".into(), settings.into())]),
+            },
+            None,
+            native,
+            None,
+        )
+        .unwrap();
+    let public = current.profile.files.get("settings").map(String::as_str).unwrap_or("");
+    assert!(current.descriptor.is_some(), "{:?}", current.issues);
+    assert!(public.contains("gpt-6-astra"));
+    assert!(public.contains("external_web_access"));
+    assert!(!public.contains("synthetic-bearer-token"));
+    assert!(!public.contains("local-only-marker"));
+    let preserved = sessions
+        .remote_current_contents(&registry, &current, &current.profile.files)
+        .unwrap();
+    let preserved = preserved.get("settings").map(String::as_str).unwrap_or("");
+    assert!(preserved.contains("synthetic-bearer-token"));
+    assert!(preserved.contains("gpt-6-astra"));
+    assert!(!preserved.contains("local-only-marker"));
+
+    let empty = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-empty".into(),
+                subject: ConfigurationSubject::Current,
+                profile: None,
+                remote_target_id: Some("remote-host".into()),
+                remote_common: None,
+                remote_files: BTreeMap::new(),
+            },
+            None,
+            vec![crate::adapters::file(
+                "settings",
+                local.clone(),
+                format::FileKind::Toml,
+                true,
+                None,
+                false,
+            )],
+            None,
+        )
+        .unwrap();
+    assert!(empty.descriptor.is_some(), "{:?}", empty.issues);
+    assert!(!empty.profile.files.values().any(|text| text.contains("local-only-marker")));
+}
+
+#[test]
+fn remote_codex_draft_lists_provider_models_with_the_unsaved_key() {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let header = std::sync::Arc::clone(&seen);
+    let server = std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let started = std::time::Instant::now();
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if started.elapsed() > std::time::Duration::from_secs(5) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(first.starts_with("GET /v1/models"), "{first}");
+        let mut authorization = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let done = line == "\r\n" || line.is_empty();
+            if line.to_ascii_lowercase().starts_with("authorization:") {
+                authorization = line;
+            }
+            if done {
+                break;
+            }
+        }
+        *header.lock().unwrap() = authorization;
+        let body = r#"{"data":[{"id":"gpt-6-luna"},{"id":"gpt-6-astra"}],"has_more":false}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let store = Store::default();
+    let settings = format!(
+        "model_provider = \"openai-custom\"\n\n[model_providers.openai-custom]\nbase_url = \"http://{address}/v1\"\nname = \"openai-custom\"\nwire_api = \"responses\"\n"
+    );
+    let profile = serde_json::from_value(json!({
+        "id": "",
+        "tool": "codex",
+        "name": "新配置",
+        "version": 0,
+        "inheritCommon": false,
+        "files": {"settings": settings},
+        "connection": null,
+        "nativeCredentials": {}
+    }))
+    .unwrap();
+    let opened = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codex".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "remote-catalog".into(),
+                subject: ConfigurationSubject::Profile,
+                profile: Some(profile),
+                remote_target_id: Some("remote-host".into()),
+                remote_common: None,
+                remote_files: BTreeMap::new(),
+            },
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    assert!(opened.remote_target_id.is_some());
+    assert!(
+        opened.draft_connection.as_ref().is_some_and(|connection| connection.model.is_empty()),
+        "{:?}",
+        opened.issues
+    );
+    let selected = sessions
+        .select_credential(
+            &registry,
+            &db,
+            opened,
+            ConfigurationCredential::ApiKey {
+                secret_ref: None,
+                remove: false,
+            },
+        )
+        .unwrap();
+    let draft = sessions
+        .set_secret(&registry, selected, "synthetic-catalog-key".into())
+        .unwrap();
+    assert_eq!(draft.credential_status.as_deref(), Some("draft"));
+    let directory = sessions
+        .provider_directory(&db, &draft, &store, true, "")
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(directory.models, vec!["gpt-6-astra", "gpt-6-luna"]);
+    assert!(directory.error.is_none(), "{:?}", directory.error);
+    let authorization = seen.lock().unwrap().clone();
+    assert!(
+        authorization.contains("Bearer synthetic-catalog-key"),
+        "{authorization}"
+    );
+    assert!(!serde_json::to_string(&directory).unwrap().contains("synthetic-catalog-key"));
+    assert!(store.values.lock().unwrap().is_empty());
+}
+
+fn codex_remote_profile(settings: &str, connection: bool) -> RegisteredProfile {
+    let connection = if connection {
+        json!({
+            "providerId": "openai-custom",
+            "interfaceFormat": "openai_responses",
+            "baseUrl": "https://cpa.example.test/v1",
+            "model": "gpt-6-astra",
+            "secretRef": null,
+            "authEnvVar": "CLIORA_CODEX_OPENAI_API_KEY"
+        })
+    } else {
+        Value::Null
+    };
+    serde_json::from_value(json!({
+        "editing": {"version": 1, "selectedProvider": "openai-custom", "intents": []},
+        "id": "remote-profile",
+        "tool": "codex",
+        "name": "新配置",
+        "version": 1,
+        "revision": "rev",
+        "inheritCommon": false,
+        "files": {"settings": settings},
+        "authentication": {"kind": "api_key"},
+        "connection": connection,
+        "nativeCredentials": {}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn remote_codex_save_writes_the_key_into_the_file_and_drops_env_key() {
+    let registry = Registry::builtins();
+    let settings = "\
+model = \"gpt-6-astra\"
+model_provider = \"openai-custom\"
+
+[model_providers.openai-custom]
+name = \"openai-custom\"
+base_url = \"https://cpa.example.test/v1\"
+wire_api = \"responses\"
+env_key = \"CLIORA_CODEX_OPENAI_API_KEY\"
+";
+    let mut profile = codex_remote_profile(settings, true);
+    let secrets = remote_connection_secrets(
+        &registry,
+        &profile,
+        Scope::Global,
+        None,
+        "connection-11111111-1111-1111-1111-111111111111",
+        "synthetic-remote-key",
+    )
+    .unwrap();
+    for (role, text) in &mut profile.files {
+        let kind = registry.get("codex").unwrap().file_kind(role).unwrap();
+        *text = secrets.apply_text(role, kind, std::mem::take(text)).unwrap();
+    }
+    let text = profile.files.get("settings").unwrap();
+    assert!(text.contains("experimental_bearer_token = \"synthetic-remote-key\""), "{text}");
+    assert!(!text.contains("env_key"), "{text}");
+    assert!(!text.contains("CLIORA_CODEX_OPENAI_API_KEY"), "{text}");
+    assert_eq!(profile.connection.as_ref().unwrap().auth_env_var.as_deref(), Some("CLIORA_CODEX_OPENAI_API_KEY"));
+}
+
+#[test]
+fn remote_codex_save_uses_the_draft_connection_when_the_profile_has_none() {
+    let registry = Registry::builtins();
+    let settings = "\
+model_provider = \"openai-custom\"
+
+[model_providers.openai-custom]
+name = \"openai-custom\"
+base_url = \"https://cpa.example.test/v1\"
+wire_api = \"responses\"
+env_key = \"CLIORA_CODEX_OPENAI_API_KEY\"
+";
+    let profile = codex_remote_profile(settings, false);
+    let draft_connection = Connection {
+        provider_id: "openai-custom".into(),
+        interface_format: "openai_responses".into(),
+        base_url: "https://cpa.example.test/v1".into(),
+        model: String::new(),
+        secret_ref: None,
+        auth_env_var: Some("CLIORA_CODEX_OPENAI_API_KEY".into()),
+        model_records: Vec::new(),
+    };
+    let secrets = remote_connection_secrets(
+        &registry,
+        &profile,
+        Scope::Global,
+        Some(&draft_connection),
+        "connection-22222222-2222-2222-2222-222222222222",
+        "synthetic-remote-key",
+    )
+    .unwrap();
+    let text = secrets
+        .apply_text(
+            "settings",
+            registry.get("codex").unwrap().file_kind("settings").unwrap(),
+            settings.into(),
+        )
+        .unwrap();
+    assert!(text.contains("experimental_bearer_token = \"synthetic-remote-key\""), "{text}");
+    assert!(!text.contains("env_key"), "{text}");
+}
+
+#[test]
+fn remote_save_without_a_new_key_keeps_the_bearer_already_in_the_file() {
+    let registry = Registry::builtins();
+    let original = "\
+model = \"gpt-6-astra\"
+model_provider = \"openai-custom\"
+
+[model_providers.openai-custom]
+name = \"openai-custom\"
+base_url = \"https://cpa.example.test/v1\"
+wire_api = \"responses\"
+experimental_bearer_token = \"synthetic-remote-key\"
+";
+    let edited = "\
+model = \"gpt-6-luna\"
+model_provider = \"openai-custom\"
+
+[model_providers.openai-custom]
+name = \"openai-custom\"
+base_url = \"https://cpa.example.test/v1\"
+wire_api = \"responses\"
+";
+    let files = preserve_withheld_credentials(
+        &registry,
+        "codex",
+        &BTreeMap::from([("settings".into(), edited.into())]),
+        &BTreeMap::from([("settings".into(), original.into())]),
+    )
+    .unwrap();
+    let text = files.get("settings").unwrap();
+    assert!(text.contains("model = \"gpt-6-luna\""), "{text}");
+    assert!(text.contains("experimental_bearer_token = \"synthetic-remote-key\""), "{text}");
 }

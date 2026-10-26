@@ -17,8 +17,13 @@ import { Icon } from '../../components/Icon';
 import { modLabel, saveShortcutHint, withMod } from '../../lib/shortcut';
 
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
+function remoteAgentPath(toolId: string, scope: Scope, projectPath: string, name: string, format: string) {
+  const root = toolId === 'codex' ? '.codex' : toolId === 'grok' ? '.grok' : toolId === 'claude_code' ? '.claude' : toolId === 'cursor' ? '.cursor' : toolId === 'kimi_code' ? '.kimi-code' : toolId === 'codebuddy' ? '.codebuddy' : toolId === 'devin' ? '.devin' : toolId === 'minimax_code' ? '.minimax' : toolId === 'mimo_code' ? '.mimo' : toolId === 'opencode' ? '.config/opencode' : '.cliora';
+  const base = scope === 'project' && projectPath ? `${projectPath}/${root}` : `$HOME/${root}`;
+  return `${base}/agents/${name}.${format === 'toml' ? 'toml' : 'md'}`;
+}
 
-export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; onDirtyChange: (value: boolean) => void }) {
+export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; remoteTargetId?: string | null; onDirtyChange: (value: boolean) => void }) {
   const { t } = useTranslation();
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
   const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
@@ -36,7 +41,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [filter, setFilter] = useState('all');
   const importInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
-  const accountLabel = useAccountLabels();
+  const accountLabel = useAccountLabels(!!remoteTargetId);
   const dirty = creating ? !!content : !!selected && !selected.readOnly && content !== initial;
   const entries = snapshot?.entries ?? [];
   const supported = !!snapshot?.capability.supported;
@@ -46,9 +51,11 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   useEffect(() => {
     const id = ++generation.current;
     setBusy(true); setSnapshot(null); setError(''); setMode('read'); setCreating(false); setSelected(null); setLast(null);
-    void native.scanNativeAgents(target).then(value => { if (generation.current === id) setSnapshot(value); }).catch(value => { if (generation.current === id) setError(message(value)); }).finally(() => { if (generation.current === id) setBusy(false); });
+    void (remoteTargetId
+      ? native.getRemoteResourceStore(remoteTargetId, toolId, 'agents').then(value => (value as { snapshot?: AgentSnapshot }).snapshot ?? { target, capability: { version: 'remote', supported: true, format: 'text' as const, detail: '远程主机资源' , template: '' }, entries: [], baseline: 'remote', detail: '' })
+      : native.scanNativeAgents(target)).then(value => { if (generation.current === id) setSnapshot(value); }).catch(value => { if (generation.current === id) setError(message(value)); }).finally(() => { if (generation.current === id) setBusy(false); });
     return () => { generation.current += 1; };
-  }, [target]);
+  }, [target, remoteTargetId]);
 
   function applyEntry(entry: AgentEntry | null) {
     setSelected(entry);
@@ -67,7 +74,9 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const id = ++generation.current;
     setBusy(true); setError('');
     try {
-      const value = await native.scanNativeAgents(target);
+      const value = remoteTargetId
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents') as { snapshot?: AgentSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', supported: true, format: 'text' as const, detail: '远程主机资源', template: '' }, entries: [], baseline: 'remote', detail: '' })
+        : await native.scanNativeAgents(target);
       if (id !== generation.current) return;
       setSnapshot(value);
       setMode('read');
@@ -119,6 +128,29 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     if (id !== generation.current) return;
     setBusy(true); setError('');
     try {
+      if (remoteTargetId) {
+        const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents') as { snapshot?: AgentSnapshot };
+        const current = store.snapshot ?? snapshot;
+        if (!current) throw new Error(t('tools.config.loadFailed'));
+        const selectedId = action === 'restore' ? null : entry?.id ?? selected?.id ?? null;
+        let entries = [...current.entries];
+        if (action === 'create') {
+          const id = `remote:${name.trim()}`;
+          if (!name.trim() || entries.some(item => item.name === name.trim())) throw new Error(t('tools.config.nameRequired'));
+          const format = current.capability.format === 'toml' ? 'toml' : 'markdown';
+          const path = remoteAgentPath(toolId, scope, projectPath, name.trim(), format);
+          entries.push({ id, name: name.trim(), description: '', path, format, content, enabled: true, readOnly: false, builtin: false, owner: 'remote', detail: '远程主机' });
+        } else if (action === 'delete' && selectedId) entries = entries.filter(item => item.id !== selectedId);
+        else if ((action === 'save' || action === 'enable' || action === 'disable') && selectedId) entries = entries.map(item => item.id === selectedId ? { ...item, content: action === 'save' ? content : item.content, enabled: action === 'enable' ? true : action === 'disable' ? false : item.enabled } : item);
+        const next = { ...current, entries, baseline: 'remote' };
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'agents', { ...store, snapshot: next });
+        if (id !== generation.current) return;
+        setSnapshot(next); setLast(null); setMode('read'); setCreating(false);
+        if (action === 'delete') { setSelected(null); return; }
+        const focus = action === 'create' ? entries.find(item => item.name === name.trim()) : selectedId ? entries.find(item => item.id === selectedId) : null;
+        applyEntry(focus ?? null);
+        return;
+      }
       const result = await native.operateNativeAgent({ target, action, id: action === 'restore' ? last?.restorePath ?? null : entry?.id ?? selected?.id ?? null, name, content, baseline: snapshot.baseline, transactionId: action === 'restore' ? last?.transactionId ?? null : null });
       if (id !== generation.current) return;
       setSnapshot(result.snapshot);

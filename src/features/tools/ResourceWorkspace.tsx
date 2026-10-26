@@ -74,7 +74,7 @@ function loadKind(entry: NativeSkillEntry, enabledByPackage: Record<string, bool
   return enabledByPackage[entry.packageId] === false ? 'not_loaded' : 'will_load';
 }
 
-export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
+export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; remoteTargetId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const { t } = useTranslation();
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
@@ -145,7 +145,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [scanError, setScanError] = useState('');
   async function loadNativeSkills() {
     try {
-      const entries = await native.scanNativeSkills(toolId, scope, project);
+      const entries = remoteTargetId
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => entry.packageId ? entry : { ...entry, packageId: `remote:${entry.path}` })
+        : await native.scanNativeSkills(toolId, scope, project);
       setNativeEntries(entries);
       setScanError('');
       return entries;
@@ -161,20 +163,32 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     let live = true;
     setListLoading(true);
     setScanError('');
-    void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) setNativeEntries(entries); })
+    void (remoteTargetId
+      ? native.getRemoteResourceStore(remoteTargetId, toolId, 'skills').then(value => (value as { entries?: NativeSkillEntry[] }).entries ?? []).then(entries => entries.map(entry => entry.packageId ? entry : { ...entry, packageId: `remote:${entry.path}` }))
+      : native.scanNativeSkills(toolId, scope, project)).then((entries) => { if (live) setNativeEntries(entries); })
       .catch((value) => { if (live) { setNativeEntries([]); setRetained([]); setScanError(errorText(value)); } })
       .finally(() => { if (live) setListLoading(false); });
     return () => { live = false; };
-  }, [toolId, scope, project]);
+  }, [toolId, scope, project, remoteTargetId]);
   const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
-  useEffect(() => { void native.listSkillPackages().then(setPackages).catch((value) => setError(errorText(value))); }, []);
+  useEffect(() => {
+    if (remoteTargetId) {
+      void native.getRemoteResourceStore(remoteTargetId, toolId, 'skills').then(value => {
+        const entries = (value as { entries?: NativeSkillEntry[] }).entries ?? [];
+        setPackages(entries.map(entry => ({ id: entry.packageId ?? `remote:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true })));
+      }).catch(value => setError(errorText(value)));
+      return;
+    }
+    void native.listSkillPackages().then(setPackages).catch((value) => setError(errorText(value)));
+  }, [remoteTargetId, toolId]);
   useEffect(() => {
     if (!selectedId) return;
     let live = true;
+    if (remoteTargetId) { setInstallations([]); setSkillEnabled(true); return () => { live = false; }; }
     void Promise.all([native.listSkillInstallations(selectedId),native.getSkillEnabled(selectedId,toolId,scope,project)]).then(([items,enabled]) => { if (live) { setInstallations(items); setSkillEnabled(enabled); setEnabledByPackage(current => current[selectedId] === enabled ? current : { ...current, [selectedId]: enabled }); } })
       .catch((value) => { if (live) setError(errorText(value)); });
     return () => { live = false; };
-  }, [selectedId, toolId, scope, project]);
+  }, [selectedId, toolId, scope, project, remoteTargetId]);
 
   async function installPackage(packageId: string) {
     if (scope === 'project' && !project) { setError(t('tools.skills.pickProjectFirst')); return; }
@@ -212,6 +226,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       const source = await open({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
       setBusy(true); setError('');
+      if (remoteTargetId) {
+        await native.importRemoteSkillDirectory(remoteTargetId, toolId, source);
+        await loadNativeSkills();
+        setResult({ toolId, scope, projectPath: project, path: source, status: 'installed', detail: t('tools.skills.saved') });
+        return;
+      }
       const preview = await native.previewSkillLocal(source);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
         setPendingImport({ preview, kind: 'local', source, subdirectory: null, installAfter: true }); return;
@@ -300,7 +320,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     setPendingTarget(null);
     setUrl('');
     try {
-      const document = await native.readNativeSkill(toolId, scope, project, entry.path);
+      const document = remoteTargetId
+        ? { content: ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { documents?: Record<string, string> }).documents ?? {})[entry.path] ?? '' }
+        : await native.readNativeSkill(toolId, scope, project, entry.path);
       if (skillRequest.current !== request) return;
       setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content });
     } catch (value) {
@@ -315,7 +337,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const saved = skillDoc;
     setBusy(true); setError('');
     try {
-      await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
+      if (remoteTargetId) {
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'skills', { entries: current.entries ?? [], documents: { ...(current.documents ?? {}), [saved.path]: saved.draft } });
+      } else {
+        await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
+      }
       if (skillRequest.current !== request) return;
       setSkillDoc({ ...saved, baseline: saved.draft });
       setMode('read');
@@ -348,6 +375,16 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     if (!remove && selected.compatibility && !dependencyChecked) { setError(t('tools.skills.dependencyFirst')); return; }
     setBusy(true); setError(''); setResult(null);
     try {
+      if (remoteTargetId) {
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const entry = (current.entries ?? []).find(item => item.packageId === selected.id || `remote:${item.path}` === selected.id);
+        if (remove && entry) {
+          await native.saveRemoteResourceStore(remoteTargetId, toolId, 'skills', { ...current, entries: (current.entries ?? []).filter(item => item !== entry), documents: Object.fromEntries(Object.entries(current.documents ?? {}).filter(([path]) => path !== entry.path)) });
+        }
+        setPendingTarget(null); await loadNativeSkills(); setResult({ toolId, scope, projectPath: project, path: entry?.path ?? selected.source, status: remove ? 'removed' : 'already_current', detail: remove ? t('tools.skills.removed', { path: entry?.path ?? selected.source }) : t('tools.skills.saved') });
+        if (remove) resetDocument();
+        return;
+      }
       const targetPreview = !remove ? pendingTarget ?? await native.previewSkillTarget(selected.id, toolId, scope, project) : null;
       if (!remove && !pendingTarget && targetPreview?.status === 'conflict') { setPendingTarget(targetPreview); return; }
       const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project, contextId)
@@ -368,6 +405,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const remembered = nativeEntries.find(item => item.packageId === selected.id) ?? retained.find(item => item.packageId === selected.id) ?? null;
     setBusy(true); setError('');
     try {
+      if (remoteTargetId) {
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const entries = (current.entries ?? []).map(item => item.packageId === selected.id || `remote:${item.path}` === selected.id ? { ...item, state: next ? 'external' as const : 'read_only' as const } : item);
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'skills', { ...current, entries });
+        setSkillEnabled(next); await loadNativeSkills(); return;
+      }
       await native.setSkillEnabled(selected.id, toolId, scope, project, next, contextId);
       const enabled = await native.getSkillEnabled(selected.id, toolId, scope, project);
       setSkillEnabled(enabled);

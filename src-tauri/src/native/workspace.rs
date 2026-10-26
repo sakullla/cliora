@@ -44,6 +44,14 @@ pub struct ConfigurationBeginRequest {
     pub session_id: String,
     pub subject: ConfigurationSubject,
     pub profile: Option<RegisteredProfile>,
+    #[serde(default)]
+    pub remote_target_id: Option<String>,
+    #[serde(default)]
+    pub remote_common: Option<RegisteredCommon>,
+    /// Current-file text already read from the selected remote host.
+    /// Local begins leave this empty and keep reading the native paths.
+    #[serde(default)]
+    pub remote_files: BTreeMap<String, String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,7 +342,8 @@ impl DraftSessions {
         if records.len() >= 128 {
             return Err("打开的草稿过多，请先关闭旧草稿".into());
         }
-        let common = profile::get_registered_common(db, &request.tool_id)?;
+        let remote_target_id = request.remote_target_id.clone();
+        let common = if remote_target_id.is_some() { request.remote_common.clone() } else { profile::get_registered_common(db, &request.tool_id)? };
         let mut originals = BTreeMap::new();
         let mut protected = BTreeMap::new();
         let mut trusted = None;
@@ -344,7 +353,7 @@ impl DraftSessions {
                 if source.tool != request.tool_id {
                     return Err("草稿所属工具不匹配".into());
                 }
-                if !source.id.is_empty() {
+                if !source.id.is_empty() && remote_target_id.is_none() {
                     let saved = profile::get_registered_profile(db, &source.id)?;
                     if saved.tool != source.tool
                         || saved.version != source.version
@@ -372,12 +381,18 @@ impl DraftSessions {
                 source
             }
             ConfigurationSubject::Current => {
-                for file in &native_files {
-                    if !file.sensitive {
-                        originals.insert(
-                            file.role.into(),
-                            transaction::read_native(std::path::Path::new(&file.path))?,
-                        );
+                if remote_target_id.is_some() {
+                    // The host text was loaded with the remote store. Do not
+                    // read the local native paths named by the workspace probe.
+                    originals = request.remote_files.clone();
+                } else {
+                    for file in &native_files {
+                        if !file.sensitive {
+                            originals.insert(
+                                file.role.into(),
+                                transaction::read_native(std::path::Path::new(&file.path))?,
+                            );
+                        }
                     }
                 }
                 let (files, hidden) = redacted(registry, &request.tool_id, &originals)?;
@@ -474,6 +489,7 @@ impl DraftSessions {
             catalog_support: None,
             credential_status: None,
             source_capabilities: Vec::new(),
+            remote_target_id,
         };
         draft = refresh(registry, draft);
         let mut record = Record {
@@ -923,6 +939,23 @@ impl DraftSessions {
         } else {
             Err("请求所属草稿已变化或取消，旧结果已丢弃".into())
         }
+    }
+    /// The provider named by this draft lists its models over HTTP.
+    /// A remote draft uses that same request: the base URL in the draft and the
+    /// draft lease or saved connection secret. It does not open SSH, and it does
+    /// not read the CLI config of another machine.
+    pub fn provider_directory(
+        &self,
+        db: &Database,
+        draft: &ConfigurationDraft,
+        store: &dyn CredentialStore,
+        force: bool,
+        query: &str,
+    ) -> Result<crate::native::models::ModelDirectory, String> {
+        let (connection, credential) = self.request_directory(draft, store)?;
+        crate::native::models::list_models_guarded(db, &credential, &connection, force, query, || {
+            !self.is_current(draft)
+        })
     }
 }
 /// Request-scoped access grants exactly one selected credential; no mutation or fallback.
@@ -1613,6 +1646,16 @@ impl DraftSessions {
                 .ok_or("当前来源没有可显示的密钥")?,
         )
     }
+
+    /// Return a secret explicitly entered into this draft.  Remote saves use
+    /// this short-lived lease to transfer the key to the selected host; the
+    /// local credential store is never used as a substitute.
+    pub fn draft_secret(&self, draft: &ConfigurationDraft) -> Result<Option<String>, String> {
+        let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
+        let record = Self::checked(&mut records, draft)?;
+        let Some(ConfigurationCredential::ApiKey { secret_ref: Some(id), remove: false }) = &draft.credential else { return Ok(None); };
+        Ok(record.leases.get(id).map(|lease| lease.secret.clone()))
+    }
 }
 
 struct PrivateComparison {
@@ -1648,6 +1691,47 @@ pub struct ConfigurationBackupPreview {
     pub original: String,
 }
 impl DraftSessions {
+    /// Public edits applied onto the remote host text captured at open.
+    /// Withheld credential nodes stay in the returned text.
+    pub fn remote_current_contents(
+        &self,
+        registry: &Registry,
+        draft: &ConfigurationDraft,
+        edited: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
+        let record = records
+            .get(&draft.session_id)
+            .ok_or("草稿会话已关闭或失效")?;
+        if !draft_equal(&record.draft, draft) {
+            return Err("草稿会话或版本已变化，请等待当前操作完成".into());
+        }
+        if draft.subject != Some(ConfigurationSubject::Current) || draft.remote_target_id.is_none() {
+            return Err("此草稿不是远程当前文件".into());
+        }
+        let adapter = registry.get(&draft.profile.tool).ok_or("适配器未注册")?;
+        let mut files = BTreeMap::new();
+        for (role, original) in &record.original_texts {
+            let kind = adapter.file_kind(role)?;
+            let public = edited
+                .get(role)
+                .ok_or("不能通过普通草稿删除整个原生文件角色")?;
+            let baseline = draft.baseline_files.get(role).ok_or("缺少原文基线")?;
+            let protected = record.protected.get(role).map(Vec::as_slice).unwrap_or(&[]);
+            files.insert(
+                role.clone(),
+                patch_public_native(kind, baseline, public, original, protected)?,
+            );
+        }
+        for (role, text) in edited {
+            if !files.contains_key(role) {
+                let lone = BTreeMap::from([(role.clone(), text.clone())]);
+                profile::validate_registered_files(registry, &draft.profile.tool, &lone)?;
+                files.insert(role.clone(), text.clone());
+            }
+        }
+        Ok(files)
+    }
     pub fn compare_current(
         &self,
         registry: &Registry,
@@ -1662,17 +1746,21 @@ impl DraftSessions {
             &draft.profile.tool,
             draft.context_id.as_deref(),
         )?;
-        let current = record
-            .current_files
-            .iter()
-            .filter(|file| !file.sensitive)
-            .map(|file| {
-                Ok((
-                    file.role.into(),
-                    transaction::read_native(std::path::Path::new(&file.path))?,
-                ))
-            })
-            .collect::<Result<BTreeMap<String, String>, String>>()?;
+        let current = if draft.remote_target_id.is_some() {
+            record.original_texts.clone()
+        } else {
+            record
+                .current_files
+                .iter()
+                .filter(|file| !file.sensitive)
+                .map(|file| {
+                    Ok((
+                        file.role.into(),
+                        transaction::read_native(std::path::Path::new(&file.path))?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<String, String>, String>>()?
+        };
         let (public, _) = redacted(registry, &draft.profile.tool, &current)?;
         let files = public
             .iter()
@@ -1717,11 +1805,13 @@ impl DraftSessions {
             &draft.profile.tool,
             draft.context_id.as_deref(),
         )?;
-        for file in record.current_files.iter().filter(|file| !file.sensitive) {
-            if comparison.current.get(file.role)
-                != Some(&transaction::read_native(std::path::Path::new(&file.path))?)
-            {
-                return Err("比较后原生文件又被修改，请重新比较".into());
+        if draft.remote_target_id.is_none() {
+            for file in record.current_files.iter().filter(|file| !file.sensitive) {
+                if comparison.current.get(file.role)
+                    != Some(&transaction::read_native(std::path::Path::new(&file.path))?)
+                {
+                    return Err("比较后原生文件又被修改，请重新比较".into());
+                }
             }
         }
         if files.keys().ne(comparison.current.keys()) {
@@ -1943,6 +2033,111 @@ impl CredentialStore for CurrentCredentialStore<'_> {
     fn delete(&self, id: &str) -> Result<(), String> {
         self.persistent.delete(id)
     }
+}
+
+/// Write a key the user just typed into the native files the same way a local
+/// save does. The remote CLI reads that file on its own; the value is not left
+/// behind as an environment-variable name, and it is not injected only into
+/// whichever process happens to be running.
+pub fn remote_connection_secrets(
+    registry: &Registry,
+    profile: &RegisteredProfile,
+    scope: Scope,
+    draft_connection: Option<&Connection>,
+    secret_ref: &str,
+    secret: &str,
+) -> Result<crate::native::apply::NativeSecrets, String> {
+    if !profile::valid_connection_secret_ref(secret_ref) {
+        return Err("远程 API 密钥引用无效，请重新输入".into());
+    }
+    if secret.is_empty() {
+        return Err("远程 API 密钥为空，请重新输入".into());
+    }
+    let adapter = registry.get(&profile.tool).ok_or("适配器未注册")?;
+    let mut writer = profile.clone();
+    if writer.connection.as_ref().is_none_or(|connection| {
+        connection.provider_id.trim().is_empty() || connection.base_url.trim().is_empty()
+    }) {
+        writer.connection = draft_connection.cloned().filter(|connection| {
+            !connection.provider_id.trim().is_empty() && !connection.base_url.trim().is_empty()
+        });
+    }
+    if writer.connection.as_ref().is_none_or(|connection| {
+        connection.provider_id.trim().is_empty() || connection.base_url.trim().is_empty()
+    }) {
+        let documents = configuration::documents(registry, &writer)?;
+        let _ = configuration::derive_connection(registry, &mut writer, &documents);
+    }
+    let connection = writer
+        .connection
+        .as_mut()
+        .ok_or("请先填写供应商、请求地址和模型，再保存 API 密钥")?;
+    if connection.provider_id.trim().is_empty() || connection.base_url.trim().is_empty() {
+        return Err("请先填写供应商和请求地址，再保存 API 密钥".into());
+    }
+    connection.secret_ref = Some(secret_ref.to_owned());
+    connection.auth_env_var = None;
+    struct LeaseCredential<'a>(&'a str);
+    impl CredentialStore for LeaseCredential<'_> {
+        fn put(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("只读草稿凭据".into())
+        }
+        fn get(&self, id: &str) -> Result<String, String> {
+            if profile::valid_connection_secret_ref(id) {
+                Ok(self.0.to_owned())
+            } else {
+                Err("请求未授权此凭据".into())
+            }
+        }
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Err("只读草稿凭据".into())
+        }
+    }
+    let documents = configuration::documents(registry, &writer)?;
+    let mut secrets = crate::native::apply::NativeSecrets::default();
+    adapter.write_connection_secret_for_documents(
+        &writer,
+        scope,
+        &LeaseCredential(secret),
+        &mut secrets,
+        &documents,
+    )?;
+    if secrets.is_empty() {
+        return Err("请先填写供应商、请求地址和模型，再保存 API 密钥".into());
+    }
+    Ok(secrets)
+}
+
+/// Public edits keep credential fields that the editor is not allowed to show.
+/// A later save without a new key must not wipe a key already stored in the file.
+pub fn preserve_withheld_credentials(
+    registry: &Registry,
+    tool: &str,
+    edited: &BTreeMap<String, String>,
+    original: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    if original.is_empty() {
+        return Ok(edited.clone());
+    }
+    let (public, protected) = redacted(registry, tool, original)?;
+    let adapter = registry.get(tool).ok_or("适配器未注册")?;
+    let mut files = BTreeMap::new();
+    for (role, original_text) in original {
+        let kind = adapter.file_kind(role)?;
+        let edited_text = edited.get(role).map(String::as_str).unwrap_or(original_text);
+        let baseline = public.get(role).map(String::as_str).unwrap_or("");
+        let hidden = protected.get(role).map(Vec::as_slice).unwrap_or(&[]);
+        files.insert(
+            role.clone(),
+            patch_public_native(kind, baseline, edited_text, original_text, hidden)?,
+        );
+    }
+    for (role, text) in edited {
+        if !files.contains_key(role) {
+            files.insert(role.clone(), text.clone());
+        }
+    }
+    Ok(files)
 }
 
 #[cfg(test)]

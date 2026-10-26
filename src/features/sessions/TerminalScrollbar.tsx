@@ -22,10 +22,12 @@ export function TerminalScrollbar({ terminal, viewport, onUserScroll }: {
   const thumbTop = (trackHeight - thumbHeight) * ratio;
 
   function scrollAt(clientY: number, track: HTMLElement) {
-    if (!viewport) return;
+    if (!viewport || !terminal) return;
     const rect = track.getBoundingClientRect();
     const next = Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height)));
-    viewport.scrollTop = next * maxScroll;
+    // Scroll the buffer by row. Setting scrollTop to the host's max lands past
+    // the last row and the redraw paints the previous frame over the new one.
+    terminal.scrollToLine(Math.round(next * total));
   }
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -56,15 +58,14 @@ export function TerminalScrollbar({ terminal, viewport, onUserScroll }: {
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (!viewport || !terminal) return;
-    const row = viewport.clientHeight / Math.max(1, terminal.rows);
-    if (event.key === 'Home') viewport.scrollTop = 0;
-    else if (event.key === 'End') terminal.scrollToBottom();
-    else if (event.key === 'ArrowUp') viewport.scrollTop -= row;
-    else if (event.key === 'ArrowDown') viewport.scrollTop += row;
-    else if (event.key === 'PageUp') viewport.scrollTop -= viewport.clientHeight;
-    else if (event.key === 'PageDown') viewport.scrollTop += viewport.clientHeight;
-    else return;
+    if (!['Home', 'End', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(event.key)) return;
     onUserScroll?.();
+    if (event.key === 'Home') terminal.scrollToTop();
+    else if (event.key === 'End') terminal.scrollToBottom();
+    else if (event.key === 'ArrowUp') terminal.scrollLines(-1);
+    else if (event.key === 'ArrowDown') terminal.scrollLines(1);
+    else if (event.key === 'PageUp') terminal.scrollPages(-1);
+    else terminal.scrollPages(1);
     event.preventDefault();
     event.stopPropagation();
   }

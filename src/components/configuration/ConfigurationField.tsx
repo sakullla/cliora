@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ConfigurationField as Field, ConfigurationIssue } from '../../types/configuration';
 import { ModelCombobox } from '../../features/tools/ModelCombobox';
 import styles from './configuration.module.css';
-export type FieldPresentation = { label?: string; unit?: string; description?: string; nativeField?: string; origin?: 'explicit' | 'inherited' | 'unset' | 'unknown'; placeholder?: string; suggestions?: string[]; combobox?: boolean; catalog?: { supported: boolean; busy: boolean; fetch: () => void } };
+export type FieldPresentation = { label?: string; unit?: string; description?: string; nativeField?: string; origin?: 'explicit' | 'inherited' | 'unset' | 'unknown'; placeholder?: string; suggestions?: string[]; combobox?: boolean; catalog?: { supported: boolean; busy: boolean; fetch: () => void; error?: string | null } };
 
 type Props = {
   field: Field;
@@ -95,7 +95,7 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
       <button type="button" className={styles.infoToggle} aria-label={t('common.field.info')} aria-expanded={infoOpen} aria-controls={`${id}-info`} onClick={() => { setInfoOpen(open => !open); }}>ⓘ</button>
     </div>
     {field.kind === 'boolean' ? <input id={id} type="checkbox" checked={value === true} disabled={blocked} aria-invalid={Boolean(error || issues.length)} aria-describedby={`${id}-issues`} onChange={event => { const next = event.target.checked; void commit(() => onChange(next)); }} />
-      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={caption} value={input} placeholder={presentation.placeholder ?? t('common.field.pickOrType')} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} action={presentation.catalog?.supported ? { label: t('common.field.fetchCatalog'), busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
+      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={caption} value={input} placeholder={presentation.placeholder ?? t('common.field.pickOrType')} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} emptyNotice={presentation.catalog?.error} action={presentation.catalog?.supported ? { label: t('common.field.fetchCatalog'), busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
       : field.choices.length ? <select id={id} value={input} disabled={blocked} onChange={event => { void change(event.target.value); }}>
         <option value="" disabled={field.required || !onReset}>{field.required ? t('common.field.choose') : onReset ? field.defaultSource ?? t('common.field.followDefault') : t('common.field.unset')}</option>
         {input && !field.choices.includes(input) && <option value={input}>{t('common.field.nativeValue', { value: input })}</option>}

@@ -62,7 +62,7 @@ function remember(key: string, snapshot: PluginSnapshot) {
   if (remembered.size > 24) remembered.delete(remembered.keys().next().value!);
 }
 
-export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null }) {
+export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
   const cacheKey = JSON.stringify(target);
@@ -81,7 +81,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const refreshing = useRef(false);
   const sourceInput = useRef<HTMLInputElement>(null);
   const restoreFocus = useRef<string | null>(null);
-  const accountLabel = useAccountLabels();
+  const accountLabel = useAccountLabels(!!remoteTargetId);
   const entries = snapshot?.entries ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
   const installedCount = entries.filter(entry => entry.state !== 'not_installed').length;
@@ -96,12 +96,16 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     const cached = remembered.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     let completed = false;
-    void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
-    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
+    const readRemote = () => native.getRemoteResourceStore(remoteTargetId!, toolId, 'plugins').then(value => (value as { snapshot?: PluginSnapshot }).snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' });
+    void (remoteTargetId ? readRemote() : native.previewNativePlugins(target)).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
+    void (remoteTargetId ? readRemote() : scanOnce(target)).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
-  }, [target]);
+  }, [target, remoteTargetId]);
 
   useEffect(() => {
+    // Remote plugin inventory is currently read-only. Never fall through to
+    // the native plugin scanner or installer when a remote host is selected.
+    if (remoteTargetId) return;
     if (operations.some(operation => operation.status === 'running')) return;
     const operation = operations.find(item => item.status === 'queued');
     if (!operation || operation.generation !== generation.current) return;
@@ -154,7 +158,9 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     refreshing.current = true;
     setBusy(true); setError('');
     try {
-      const value = await native.scanNativePlugins(target);
+      const value = remoteTargetId
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'plugins') as { snapshot?: PluginSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' })
+        : await native.scanNativePlugins(target);
       if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); }
     } catch (value) {
       if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); }
@@ -228,7 +234,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
       {install}
       {busy && !snapshot && <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>}
       {showFailed && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button type="button" className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
-      {showEmpty && <EmptyState title={t('tools.plugins.emptyTitle')} detail={canInstall ? t('tools.plugins.emptyInstallable') : `${t('tools.plugins.emptyNone')}${snapshot?.capability.detail ? ` ${snapshot.capability.detail}` : ''}`} action={canInstall
+      {showEmpty && <EmptyState title={t('tools.plugins.emptyTitle')} detail={[canInstall ? t('tools.plugins.emptyInstallable') : t('tools.plugins.emptyNone'), snapshot?.detail, canInstall ? '' : snapshot?.capability.detail].filter(Boolean).join(' ')} action={canInstall
         ? <button type="button" className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
         : <button type="button" className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
       {!showFailed && !showEmpty && filtered.length === 0 && entries.length > 0 && <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button type="button" onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>}

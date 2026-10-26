@@ -14,6 +14,8 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
             host: "example.test".into(),
             port: 2222,
             user: "root".into(),
+            auth_method: "key".into(),
+            identity_file: None,
             ssh_config: None,
             default_path: None,
             enabled: true,
@@ -73,7 +75,7 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     db.update_preferences(|preferences| preferences.remote_ssh_enabled = true).unwrap();
     let target = crate::remote::save_target(&db, crate::remote::RemoteTarget {
         id: String::new(), name: "fixture".into(), host: "example.test".into(), port: 22,
-        user: "root".into(), ssh_config: None, default_path: None, enabled: true,
+        user: "root".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true,
         created_at: 0, updated_at: 0,
     }).unwrap();
     let project = crate::remote::save_project(&db, crate::remote::RemoteProject {
@@ -86,14 +88,19 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
         resume_latest: false,
     }).unwrap();
     let command = plan.cli_args.last().unwrap();
-    assert!(command.contains("tmux new-session -A"));
-    assert!(command.contains("screen -dmS"));
+    assert!(command.contains("tmux -u new-session -A"));
+    assert!(command.contains("export TERM=xterm-256color COLORTERM=truecolor"));
+    assert!(command.contains("LANG=C.UTF-8"));
+    assert!(command.contains("screen -U -dmS"));
+    assert!(command.contains("sh -lc"));
     assert!(command.contains("requires tmux or screen"));
     assert!(plan.remote_session_id.as_deref().is_some_and(|id| id.starts_with("cliora-")));
     assert!(plan.remote_end_args.is_some());
     let reattach = crate::launch::remote_reattach_command(plan.remote_session_id.as_deref().unwrap());
-    assert!(reattach.contains("tmux has-session"));
-    assert!(reattach.contains("screen -r"));
+    assert!(reattach.contains("tmux -u has-session"));
+    assert!(reattach.contains("tmux -u attach-session"));
+    assert!(reattach.contains("COLORTERM=truecolor"));
+    assert!(reattach.contains("screen -U -r"));
     assert!(reattach.contains("exit 44"));
 }
 

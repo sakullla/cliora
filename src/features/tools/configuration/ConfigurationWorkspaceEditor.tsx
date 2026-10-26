@@ -22,7 +22,7 @@ import i18n from '../../../i18n';
 
 type Session = ReturnType<typeof createConfigurationSession>;
 type Props = {
-  toolId: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; scope: Scope; projectPath: string;
+  toolId: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; scope: Scope; projectPath: string; remoteTargetId?: string | null;
   workspace: RegisteredToolWorkspace; accounts: ReturnType<typeof useAccounts>;
   onDirtyChange: (dirty: boolean) => void; onDraftChange: (draft: ConfigurationDraft) => void;
   onStored: (result: ConfigurationSaveResult) => void; onDone: (result: ConfigurationSaveResult, used?: boolean) => void; onClose: () => void;
@@ -47,7 +47,7 @@ function backupStamp(ms: number) {
 
 export function ConfigurationWorkspaceEditor(props: Props) {
   const { t } = useTranslation();
-  const { toolId, subject, scope, projectPath, workspace } = props;
+  const { toolId, subject, scope, projectPath, workspace, remoteTargetId = null } = props;
   const adapter = uiAdapterFor(toolId);
   const Editor = adapter.configuration?.Editor;
   const addressUnsupported = workspace.probe.connectionPolicy?.providerAddress.state === 'unsupported';
@@ -121,9 +121,10 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     alive.current = true;
     const generation = ++opening.current;
     const id = `configuration-${crypto.randomUUID()}`;
-    void beginConfigurationDraft({ toolId, scope, projectPath: projectPath || null, sessionId: id, subject, profile: props.profile }).then(value => {
+    void beginConfigurationDraft({ toolId, scope, projectPath: projectPath || null, sessionId: id, subject, profile: props.profile, remoteTargetId }).then(value => {
       if (!alive.current || opening.current !== generation) { void cancelConfigurationDraft(id).catch(() => {}); return; }
-      if (!value || Editor && !value.descriptor) throw new Error(t('tools.config.noCapability'));
+      if (!value) throw new Error(t('tools.config.noCapability'));
+      if (Editor && !value.descriptor) throw new Error(value.issues.find(issue => issue.message)?.message || t('tools.config.noCapability'));
       session.current = createConfigurationSession(value); baseline.current = JSON.stringify(value.profile); baselineRevision.current = value.revision;
       setDraft(value); setLegacyInputs(value.draftConnection ?? value.profile.connection); setNameInput(value.profile.name); setRawInputs(value.profile.files); setValid(session.current.canSubmit); setLoading(false);
       if (value.credential) {
@@ -132,11 +133,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
         if (value.credential.source === 'api_key') acceptApiCredential(value);
       }
     }).catch(failure => { if (alive.current && opening.current === generation) { setError(messageOf(failure)); setLoading(false); } });
-    if (subject === 'common') void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => { if (alive.current) setError(messageOf(failure)); });
+    if (subject === 'common' && !remoteTargetId) void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => { if (alive.current) setError(messageOf(failure)); });
     return () => { alive.current = false; opening.current++; sequence.current++; session.current?.close(); session.current = null; void cancelConfigurationDraft(id).catch(() => {}); latest.current.onDirtyChange(false); };
   }, []);
   useEffect(() => {
-    if (subject !== 'profile' || connectionChainAbsent) return;
+    if (subject !== 'profile' || connectionChainAbsent || remoteTargetId) return;
     let live = true;
     void native.discoverNativeLogins(toolId).then(value => { if (live) setNativeLogins(value); }).catch(failure => { if (live) setNativeError(messageOf(failure)); });
     return () => { live = false; };
@@ -284,6 +285,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     }).catch(() => {});
   }
   async function showPreview() {
+    if (remoteTargetId) { setError(t('tools.config.editorUnavailable')); return; }
     const owner = session.current; if (!owner || !owner.canSubmit) return;
     const started = owner.draft; const token = ++sequence.current; setView('preview'); setPreviewLoading(true);
     try { const value = await native.previewRegisteredNativeProfile(started.profile, scope); if (alive.current && owner === session.current && token === sequence.current && owner.draft.revision === started.revision) setPreview(value); }
@@ -291,6 +293,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     finally { if (alive.current && token === sequence.current) setPreviewLoading(false); }
   }
   async function applyStored(result: ConfigurationSaveResult) {
+    if (remoteTargetId) return true;
     if (result.profile) {
       try { await native.applyRegisteredNativeProfile(toolId, result.profile.id, scope, projectPath || undefined, false); }
       catch (failure) { setNotice(t('tools.config.savedNotUsed')); setError(messageOf(failure)); setComparison(await native.compareRegisteredApplication(result.profile.id, scope, projectPath).catch(() => null)); return false; }
@@ -346,6 +349,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     })).then(() => { if (alive.current) { setCurrentConflict(null); setNotice(t('tools.config.rebased')); setRawResetEpoch(value => value + 1); } }).catch(() => {});
   }
   async function showHistory() {
+    if (remoteTargetId) { setError(t('tools.config.editorUnavailable')); return; }
     const owner = session.current; if (!owner) return; const started = owner.draft;
     setHistory(true); setBackup(null); setError('');
     try { const rows = await native.listNativeBackups(toolId, scope, projectPath, rawRole); if (alive.current && owner === session.current && owner.draft.revision === started.revision) setBackups(rows); }
@@ -371,6 +375,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
 
   async function applyComparison() {
     if (!comparison) return;
+    if (remoteTargetId) { setComparison(null); return; }
     setBusy(true);
     try { await native.applyComparedApplication(comparison, scope, projectPath); if (alive.current) { setComparison(null); setNotice(t('tools.workspace.appliedShort')); } }
     catch (failure) { if (alive.current) setError(messageOf(failure)); }
@@ -427,7 +432,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     : dirty ? { text: t('tools.config.statusDirty'), tone: 'warn' }
     : { text: saved ? t('tools.config.statusSaved') : t('tools.config.statusClean'), tone: 'ok' };
   const catalogKey = `${draft.credential?.source ?? ''}|${configurationCredentialIdentity(draft)}`;
-  const catalog = { models: catalogCache.current.key === catalogKey ? catalogCache.current.models : [], supported: !!draft.catalogSupport?.available, busy: querying, fetch: () => { void query('directory'); } };
+  const catalogCurrent = catalogCache.current.key === catalogKey;
+  const shownDirectory = catalogCurrent ? directory : null;
+  const catalog = { models: catalogCurrent ? catalogCache.current.models : [], supported: !!draft.catalogSupport?.available, busy: querying, fetch: () => { void query('directory'); }, error: shownDirectory?.error ?? null };
   const picker = subject === 'profile' || subject === 'current' && apiWritable;
   const storedSecret = draft.credential?.source === 'api_key' && !!draft.credential.secretRef;
   const accountReady = !!selectedAccount && accountReadyForSelection(selectedAccount, props.accounts.capability);
@@ -490,7 +497,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
             <ConnectionCredential />
             <div data-config-step="model" className={sharedStyles.step}>
               <StepHead step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')} />
-              <label>{t('tools.config.model')}<ModelCombobox label={t('tools.config.model')} value={legacyInputs?.model ?? ''} placeholder={t('common.field.pickOrType')} disabled={busy || cancelling} options={[...new Set([...catalog.models, legacyInputs?.model].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))]} action={catalog.supported ? { label: t('common.field.fetchCatalog'), busy: querying, onClick: catalog.fetch } : undefined} onChange={value => legacyConnection('model', value)} /></label>
+              <label>{t('tools.config.model')}<ModelCombobox label={t('tools.config.model')} value={legacyInputs?.model ?? ''} placeholder={t('common.field.pickOrType')} disabled={busy || cancelling} options={[...new Set([...catalog.models, legacyInputs?.model].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))]} emptyNotice={catalog.error} action={catalog.supported ? { label: t('common.field.fetchCatalog'), busy: querying, onClick: catalog.fetch } : undefined} onChange={value => legacyConnection('model', value)} /></label>
               {connectionConfigurable && <details className={styles.inlineDisclosure}><summary>{t('tools.config.advancedConnection')}</summary><label>{t('tools.config.authEnvVar')}<input aria-label={t('tools.config.authEnvVar')} spellCheck={false} disabled={busy || cancelling} value={legacyInputs?.authEnvVar ?? ''} onChange={event => legacyConnection('authEnvVar', event.target.value)} /></label></details>}
             </div>
           </section> : <><p className={styles.hint}>{t('tools.config.rawOnlyNote')}</p><ConnectionCredential /></>}
@@ -507,7 +514,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
         {!connectionChainAbsent && !Editor && source === 'api_key' && connection && activeView === 'models' && <p className={`${styles.hint} ${styles.connectionSummary}`}>{t('tools.config.connectionSummary', { url: connection.baseUrl || t('tools.config.urlMissing'), format: connection.interfaceFormat })}</p>}
         {activeView === 'raw' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.rawFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{files.length === 1 && <code>{files[0]}</code>} {t('tools.config.rawHint')}</p><CodeEditor documentId={rawRole} label={t('tools.config.rawEditorLabel', { role: rawRole })} format={format} value={rawInputs[rawRole] ?? ''} onChange={text => textChanged(rawRole, text)} readOnly={busy || cancelling} />{currentConflict && changedConflictFiles.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} status={conflictChoices[file.role] ? (conflictChoices[file.role] === 'current' ? t('tools.config.choseCurrent') : t('tools.config.choseNext')) : undefined} currentContent={file.current} nextContent={file.edited} format={workspace.probe.nativeFiles.find(meta => meta.role === file.role)?.format ?? 'json'} busy={busy || pending} onKeepCurrent={() => void chooseCurrent(file.role, 'current')} onUseNext={() => void chooseCurrent(file.role, 'edited')} />)}</>}
         {activeView === 'preview' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.previewFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{t('tools.config.previewHint')}{previewLoading ? t('tools.config.previewLoading') : ''}</p>{preview && !previewLoading && preview.rendered?.[rawRole] === undefined && <p className={styles.hint}>{t('tools.config.previewEmpty', { role: rawRole })}</p>}<CodeEditor label={t('tools.config.previewEditorLabel')} format={format} readOnly value={preview?.rendered?.[rawRole] ?? ''} /><details><summary>{t('tools.config.sourcesSummary')}</summary><p>{t('tools.config.sourcesNote')}</p><dl>{Object.entries(preview?.sources?.[rawRole] ?? {}).map(([path, origin]) => <div key={path}><dt><code>{path}</code></dt><dd>{origin === '命名配置' ? t('tools.config.originNamed') : origin === '通用配置' ? t('tools.config.originCommon') : origin}</dd></div>)}</dl>{!Object.keys(preview?.sources?.[rawRole] ?? {}).length && <p>{t('tools.config.noSources')}</p>}</details></>}
-        {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && directory && draft.catalogSupport?.multiple !== true && <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: directory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>}
+        {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && shownDirectory && draft.catalogSupport?.multiple !== true && (shownDirectory.error ? <p role="alert" className={styles.hint}>{shownDirectory.error}</p> : <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: shownDirectory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>)}
         {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && <details className={styles.diagnostics}><summary>{Editor && draft.catalogSupport?.multiple !== true ? t('tools.config.diagConnection') : t('tools.config.diagCatalog')}</summary><div className={styles.buttons}>{!(Editor && draft.catalogSupport?.multiple !== true) && <button className={sharedStyles.accent} disabled={querying || pending || !draft.catalogSupport?.available} onClick={() => void query('directory')}>{t('common.field.fetchCatalog')}</button>}<button disabled={querying || pending || !connection} onClick={() => void query('check')}>{t('tools.config.checkConnection')}</button><button disabled={!querying || pending || cancelling} onClick={() => void cancelRequests()}>{cancelling ? t('tools.config.cancellingRequests') : t('tools.config.cancelRequests')}</button></div>{draft.catalogSupport?.reason && <p className={styles.hint}>{draft.catalogSupport.reason}{t('tools.config.catalogReasonSuffix')}</p>}<details><summary>{t('tools.config.moreDiagnostics')}</summary><button disabled={querying || pending || !connection} onClick={() => void query('check', true)}>{t('tools.config.sendMinimal')}</button></details>{check && <div role="status"><p className={styles.hint}>{check.format.message}</p><p className={styles.hint}>{check.connectivity.message}</p><p className={styles.hint}>{check.modelRequest.message}</p></div>}</details>}
         {subject === 'profile' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.inheritSummary')}</summary><label><input type="checkbox" disabled={busy || pending || cancelling} checked={draft.profile.inheritCommon} onChange={event => metadata({ inheritCommon: event.target.checked })} />{t('tools.config.inheritCommon')}</label></details>}
         {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <span className="count-chip">{influence.targets.length}</span>}</strong><button disabled={busy || cancelling} onClick={() => { void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button onClick={() => { const target = influence?.targets.find(target => target.scopeKey === item.scopeKey); if (target) void applyCommonConfiguration(saved.common!, [target]).then(next => setApplications(previous => previous.map(old => old.scopeKey === item.scopeKey ? next[0] : old))).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
@@ -520,6 +527,6 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       {error && <p role="alert" className={styles.errors}>{error}</p>}{notice && <p role="status" className={styles.success}>{notice}</p>}
       </div>
     </div>
-    <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button>{status.jump ? <button type="button" className={styles.status} data-tone={status.tone} title={t('tools.config.statusJumpTitle')} onClick={() => problems.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>{status.text}</button> : <span className={styles.status} data-tone={status.tone} title={status.text}>{status.text}</span>}{!picking && !history && <div className={styles.actions}><button className={subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' ? undefined : styles.primary} data-dialog-save title={saveShortcutHint()} disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? t('tools.config.saveCurrent') : subject === 'common' ? t('tools.config.saveCommon') : t('tools.config.saveProfile')}</button>{subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' && <button className={styles.primary} disabled={!canSubmit} onClick={() => void save(true)}>{t('tools.config.saveAndUse')}</button>}{(subject === 'common' || saved) && <details><summary>{t('tools.config.moreSaveActions')}</summary>{subject === 'common' && <button disabled={!canSubmit || !influence?.targets.length} onClick={() => void save(true)}>{t('tools.config.saveAndApply')}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>{t('tools.config.retryUse')}</button>}</details>}</div>}</footer>
+    <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button>{status.jump ? <button type="button" className={styles.status} data-tone={status.tone} title={t('tools.config.statusJumpTitle')} onClick={() => problems.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>{status.text}</button> : <span className={styles.status} data-tone={status.tone} title={status.text}>{status.text}</span>}{!picking && !history && <div className={styles.actions}><button className={subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' ? undefined : styles.primary} data-dialog-save title={saveShortcutHint()} disabled={!canSubmit || subject === 'current' && !remoteTargetId && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? t('tools.config.saveCurrent') : subject === 'common' ? t('tools.config.saveCommon') : t('tools.config.saveProfile')}</button>{subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' && <button className={styles.primary} disabled={!canSubmit} onClick={() => void save(true)}>{t('tools.config.saveAndUse')}</button>}{(subject === 'common' || saved) && <details><summary>{t('tools.config.moreSaveActions')}</summary>{subject === 'common' && <button disabled={!canSubmit || !influence?.targets.length} onClick={() => void save(true)}>{t('tools.config.saveAndApply')}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>{t('tools.config.retryUse')}</button>}</details>}</div>}</footer>
   </div>;
 }

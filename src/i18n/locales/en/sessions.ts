@@ -169,6 +169,8 @@ export default {
   quickToolsHint: 'Choose a tool to get started',
   recentProjectsHint: 'Uses each project’s preferences',
   localSessions: 'Local sessions',
+  sessionHost: 'Session host',
+  manageHosts: 'Manage remote hosts…',
 
   lineHeight: 'Line spacing',
   lineCompact: 'Compact',

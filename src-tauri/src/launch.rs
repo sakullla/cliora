@@ -190,6 +190,8 @@ pub struct LaunchPlan {
     pub credential: Option<LaunchCredential>,
     pub remote_session_id: Option<String>,
     pub remote_end_args: Option<Vec<String>>,
+    /// Non-secret variables for the spawned process (remote askpass wiring).
+    pub environment: Vec<(String, String)>,
 }
 
 /// Durable metadata for remote sessions.  The SSH attachment is ephemeral,
@@ -224,6 +226,47 @@ fn write_remote_session_index(db: &Database, entries: &[RemoteSessionIndexEntry]
 }
 
 pub fn list_remote_sessions(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
+    let entries = read_remote_session_index(db)?;
+    // Older builds recorded one index row for every local SSH attachment. A
+    // remote project/tool has one persistent tmux/screen session, so collapse
+    // those historical rows before the workbench tries to reattach them.
+    let mut latest = std::collections::HashMap::<(String, String, String), RemoteSessionIndexEntry>::new();
+    for entry in entries {
+        let key = (entry.target_id.clone(), entry.project_id.clone(), entry.tool_id.clone());
+        let replace = latest.get(&key).is_none_or(|current| entry.last_seen_at > current.last_seen_at);
+        if replace { latest.insert(key, entry); }
+    }
+    let mut entries: Vec<_> = latest.into_values().collect();
+    // Drop rows for removed remote projects before asking SSH to reattach.
+    let project_ids: std::collections::HashSet<String> = crate::remote::list_projects(db, None)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|project| project.id)
+        .collect();
+    entries.retain(|entry| project_ids.contains(&entry.project_id));
+    // A reachable host is authoritative about whether the persistent terminal
+    // still exists. If probing fails (offline host, password prompt, etc.) keep
+    // the row so the user can retry later instead of silently losing it.
+    let targets = crate::remote::list_targets(db).map_err(|error| error.to_string())?;
+    for target in targets.into_iter().filter(|target| target.enabled) {
+        let ids: Vec<String> = entries
+            .iter()
+            .filter(|entry| entry.target_id == target.id)
+            .map(|entry| entry.remote_session_id.clone())
+            .collect();
+        if ids.is_empty() { continue; }
+        if let Ok(active) = crate::remote::active_session_ids(&target, &ids) {
+            entries.retain(|entry| entry.target_id != target.id || active.contains(&entry.remote_session_id));
+        }
+    }
+    entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+    let _ = write_remote_session_index(db, &entries);
+    Ok(entries)
+}
+
+/// Durable index for history views. Ended and offline sessions stay visible;
+/// the workbench reattach path continues to use `list_remote_sessions`.
+pub fn list_remote_history(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
     let mut entries = read_remote_session_index(db)?;
     entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
     Ok(entries)
@@ -249,9 +292,19 @@ pub fn remember_remote_session(
         .ok_or_else(|| "远程项目不存在".to_owned())?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
     let mut entries = read_remote_session_index(db)?;
+    // Keep the durable index aligned with the one-session-per-project/tool
+    // contract. This also cleans rows created by pre-reuse versions.
+    let mut compacted = std::collections::HashMap::<(String, String, String), RemoteSessionIndexEntry>::new();
+    for entry in entries.drain(..) {
+        let key = (entry.target_id.clone(), entry.project_id.clone(), entry.tool_id.clone());
+        let replace = compacted.get(&key).is_none_or(|current| entry.last_seen_at > current.last_seen_at);
+        if replace { compacted.insert(key, entry); }
+    }
+    let mut entries: Vec<_> = compacted.into_values().collect();
     if let Some(existing) = entries.iter_mut().find(|entry| entry.remote_session_id == remote_session_id) {
         existing.last_seen_at = now;
     } else {
+        entries.retain(|entry| !(entry.project_id == project_key && entry.target_id == project.target_id && entry.tool_id == tool_id));
         entries.push(RemoteSessionIndexEntry { remote_session_id: remote_session_id.to_owned(), project_id: project_key.to_owned(), target_id: project.target_id, tool_id: tool_id.to_owned(), directory: project.path, mode, started_at: now, last_seen_at: now });
     }
     write_remote_session_index(db, &entries)
@@ -281,22 +334,31 @@ fn remote_session_name(project_id: &str, suffix: Option<&str>) -> String {
     name
 }
 
+/// Same capability advertisement as a local Cliora PTY. Full-screen CLIs such as
+/// Codex draw braille chrome only when stdout is truecolor, and a POSIX locale
+/// drops those bytes before they reach the local terminal.
+const REMOTE_TERMINAL_ENV: &str = "export TERM=xterm-256color COLORTERM=truecolor; case \"${LC_ALL:-${LC_CTYPE:-$LANG}}\" in *.UTF-8|*.utf8) ;; *) export LANG=C.UTF-8 LC_ALL=C.UTF-8 ;; esac";
+
 fn remote_persistent_command(path: &str, executable: &str, args: &[String], session: &str) -> String {
     let mut cli = format!("exec {}", remote_shell_quote(executable));
     for arg in args { cli.push(' '); cli.push_str(&remote_shell_quote(arg)); }
-    let command = format!("cd -- {} && {cli}", remote_shell_quote(path));
-    let quoted = remote_shell_quote(&command);
+    let command = format!("if ! command -v {} >/dev/null 2>&1; then echo {}; exit 127; fi; cd -- {} && {cli}", remote_shell_quote(executable), remote_shell_quote(&format!("Cliora: remote CLI '{}' is not installed or not on PATH", executable)), remote_shell_quote(path));
+    // OpenSSH on Windows may allocate a `dumb` terminal. tmux then exports
+    // its own TERM value, which is not sufficient for full-screen CLIs.
+    // Run the payload through a shell that advertises the PTY we provide.
+    let interactive = remote_shell_quote(&format!("{REMOTE_TERMINAL_ENV}; {command}"));
+    let session_q = remote_shell_quote(session);
+    let path_q = remote_shell_quote(path);
     format!(
-        "if command -v tmux >/dev/null 2>&1; then tmux new-session -A -s {} -c {} -- {}; elif command -v screen >/dev/null 2>&1; then screen -dmS {} sh -lc {} >/dev/null 2>&1 || true; screen -r {}; else {}; fi",
-        remote_shell_quote(session), remote_shell_quote(path), cli,
-        remote_shell_quote(session), quoted, remote_shell_quote(session), "echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42"
+        "if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -A -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then screen -U -dmS {session_q} sh -lc {interactive} >/dev/null 2>&1 || true; screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi"
     )
 }
 
 pub(crate) fn remote_reattach_command(session: &str) -> String {
+    let session_q = remote_shell_quote(session);
+    let screen_token = session.replace(['.', '\\', '\n'], "");
     format!(
-        "if command -v tmux >/dev/null 2>&1 && tmux has-session -t {} 2>/dev/null; then exec tmux attach-session -t {}; elif command -v screen >/dev/null 2>&1 && screen -list | grep -q '[.]{}'; then exec screen -r {}; else echo 'Cliora remote session is unavailable' >&2; exit 44; fi",
-        remote_shell_quote(session), remote_shell_quote(session), session.replace(['.', '\\', '\n'], ""), remote_shell_quote(session)
+        "{REMOTE_TERMINAL_ENV}; if command -v tmux >/dev/null 2>&1 && tmux -u has-session -t {session_q} 2>/dev/null; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; exec tmux -u attach-session -t {session_q}; elif command -v screen >/dev/null 2>&1 && screen -list | grep -q '[.]{screen_token}'; then exec screen -U -r {session_q}; else echo 'Cliora remote session is unavailable' >&2; exit 44; fi"
     )
 }
 
@@ -365,25 +427,30 @@ fn remote_launch_plan(
     let executable = std::env::var_os("CLIORA_SSH_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("ssh"));
-    let mut args = vec![
-        "-tt".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=yes".into(),
-        "-p".into(),
-        target.port.to_string(),
-    ];
-    if let Some(config) = target.ssh_config.as_deref() {
-        args.extend(["-F".into(), config.into()]);
-    }
-    args.push(format!("{}@{}", target.user, target.host));
+    // Keep OpenSSH informational shutdown lines out of the interactive PTY;
+    // the workbench already reports connection state in its status bar.
+    let mut args = vec!["-tt".into(), "-o".into(), "LogLevel=ERROR".into()];
+    args.extend(crate::remote::connection_args(&target));
     let requested_session = request.session_id.as_deref().and_then(|value| value.strip_prefix(REMOTE_REATTACH_PREFIX));
-    let session_suffix = requested_session.map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_owned());
-    let session = remote_session_name(project_key, Some(&session_suffix));
+    // A quick launch reuses the latest persistent session for this remote
+    // project/tool. Closing the app therefore detaches the local transport
+    // without creating another tmux/screen process next time.
+    let indexed_session = list_remote_sessions(db).ok().and_then(|items| items.into_iter().find(|item| item.project_id == project_key && item.target_id == project.target_id && item.tool_id == request.tool_id).map(|item| item.remote_session_id));
+    let existing_session = requested_session.map(str::to_owned).or(indexed_session);
+    let session = existing_session.clone().unwrap_or_else(|| {
+        let suffix = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
+        remote_session_name(project_key, Some(&suffix))
+    });
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         launch_args.push(prompt.to_owned());
     }
     // Remote project reattach requests use the reserved session marker so the
     // existing IPC contract stays backwards compatible with native resume IDs.
+    // A quick launch reuses the persistent tmux/screen session when it is
+    // still alive, but recreates the CLI in the same named session when an old
+    // index row points at a session that no longer exists. Explicit reattach
+    // requests keep strict attach semantics so the UI can report a real
+    // connection failure.
     let remote_command = if requested_session.is_some() {
         remote_reattach_command(&session)
     } else {
@@ -408,6 +475,7 @@ fn remote_launch_plan(
         credential: None,
         remote_session_id: Some(session),
         remote_end_args: Some(remote_end_args),
+        environment: crate::remote::password::askpass_environment(&target),
     }))
 }
 
@@ -1167,6 +1235,7 @@ fn plan_with_stage_at(
         },
         remote_session_id: None,
         remote_end_args: None,
+        environment: Vec::new(),
     })
 }
 
@@ -1177,7 +1246,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
     Ok(LaunchPlan {account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
-        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None,remote_session_id:None,remote_end_args:None})
+        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None,remote_session_id:None,remote_end_args:None,environment:Vec::new()})
 }
 
 fn quote_powershell(value: &str) -> String {
@@ -1236,6 +1305,7 @@ fn context_script(
     credential: Option<&(String, String)>,
 ) -> String {
     let mut parts = Vec::new();
+    for (key, value) in &plan.environment { parts.push(if windows {format!("$env:{key} = {}",quote_powershell(value))} else {format!("export {key}={}",quote_shell(value))}); }
     if let Some((_,context))=&plan.account_context {
         for key in &context.remove_environment { parts.push(if windows {format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue")} else {format!("unset {key}")}); }
         for (key,value) in &context.environment { parts.push(if windows {format!("$env:{key} = {}",quote_powershell(value))} else {format!("export {key}={}",quote_shell(value))}); }
@@ -2031,6 +2101,7 @@ mod desktop_launch {
             credential: None,
             remote_session_id: None,
             remote_end_args: None,
+        environment: Vec::new(),
         }
     }
 

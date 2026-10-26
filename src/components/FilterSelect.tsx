@@ -10,7 +10,7 @@ const searchThreshold = 4;
 // Strip the leading verb so the search input label stays concise in both languages.
 const stripLabelVerb = (label: string) => label.replace(/^(筛选|切换|Filter\s+|Switch\s+)/, '');
 
-export function FilterSelect({ label, value, options, placeholder, disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder, emptyText, onChange, variant = 'default', className, triggerRef, onTriggerKeyDown, onPickFolder, pickFolderLabel, triggerDetail = true }: {
+export function FilterSelect({ label, value, options, placeholder, disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder, emptyText, onChange, variant = 'default', className, triggerRef, onTriggerKeyDown, onPickFolder, pickFolderLabel, onPickRemote, pickRemoteLabel, triggerDetail = true }: {
   label: string;
   value: string;
   options: FilterSelectOption[];
@@ -29,6 +29,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   onTriggerKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
   onPickFolder?: () => void;
   pickFolderLabel?: string;
+  onPickRemote?: () => void;
+  pickRemoteLabel?: string;
   triggerDetail?: boolean;
 }) {
   const { t } = useTranslation();
@@ -130,13 +132,13 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     </button>
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
       {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
-      <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder ? 40 : 0)) }}>
+      <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
         {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
           {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
           <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
         </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>
-      {onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel ?? t('common.filterSelect.pickFolder')}</button>}
+      {(onPickFolder || onPickRemote) && <div className={styles.footerActions}>{onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel ?? t('common.filterSelect.pickFolder')}</button>}{onPickRemote && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickRemote(); }}><Icon name="globe" size={14} />{pickRemoteLabel ?? t('home.remote.add')}</button>}</div>}
     </div>, portalTarget)}
   </div>;
 }

@@ -453,6 +453,8 @@ mod tests {
             session_id: id.into(),
             subject: crate::adapters::configuration::ConfigurationSubject::Current,
             profile: None,
+            remote_target_id: None,
+            remote_common: None, remote_files: std::collections::BTreeMap::new(),
         }
     }
     fn assert_public(value: &impl serde::Serialize) {

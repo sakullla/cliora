@@ -159,3 +159,58 @@ fn new_adapter_rule_scopes_use_native_paths_and_shared_conflict_checks() {
     std::fs::write(project.join(".kimi-code/AGENTS.md"), "nested instructions").unwrap();
     assert_eq!(registry.get("kimi_code").unwrap().rule_path(Scope::Project, home, Some(&project)).unwrap(), project.join(".kimi-code/AGENTS.md"));
 }
+
+fn remote_rule(id: &str, title: &str, body: &str) -> library::LibraryItem {
+    library::LibraryItem { id: id.into(), kind: LibraryKind::Rule, title: title.into(), body: body.into(), category: String::new(), project_id: None, version: 1, updated_at: 1 }
+}
+
+fn global_codex(existing: &str) -> HostRuleFile {
+    HostRuleFile { tool_id: "codex".into(), scope_key: "global".into(), path: "$HOME/.codex/AGENTS.md".into(), existing: existing.into() }
+}
+
+fn global_tools(tools: &[&str], allow_replace: bool) -> RuleClientSelection {
+    RuleClientSelection { tool_ids: tools.iter().map(|item| (*item).to_owned()).collect(), scope: Scope::Global, project_path: None, allow_replace }
+}
+
+#[test]
+fn remote_rule_plan_uses_the_host_library_and_leaves_an_external_file() {
+    let missing = plan_host_rule_sync(&[], &RuleHostState::default(), &[], &[], "missing", 1, &global_tools(&["codex"], false)).unwrap_err();
+    assert_eq!(missing, "资料条目不存在");
+    let rule = remote_rule("rule-1", "Keep", "stay remote");
+    let external = plan_host_rule_sync(&[rule.clone()], &RuleHostState::default(), &[global_codex("hand written\n")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
+    assert!(!external.commit);
+    assert!(external.writes.is_empty());
+    assert_eq!(external.results[0].status, "conflict");
+    assert_eq!(external.state, RuleHostState::default());
+    let written = plan_host_rule_sync(&[rule.clone()], &RuleHostState::default(), &[global_codex("")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
+    assert!(written.commit);
+    assert_eq!(written.writes[0].path, "$HOME/.codex/AGENTS.md");
+    assert_eq!(written.writes[0].contents, "# Keep\n\nstay remote\n");
+    assert_eq!(written.state.placements.len(), 1);
+    assert_eq!(written.state.placements[0].tool_id, "codex");
+    assert!(!written.writes[0].contents.contains("local-only-rule"));
+}
+
+#[test]
+fn remote_rule_plan_removes_one_section_without_wiping_another() {
+    let first = remote_rule("rule-1", "Keep", "stay remote");
+    let second = remote_rule("rule-2", "Other", "also remote");
+    let existing = "# Keep\n\nstay remote\n\n# Other\n\nalso remote\n";
+    let state = RuleHostState {
+        placements: vec![
+            RuleMembership { rule_id: "rule-1".into(), tool_id: "codex".into(), scope_key: "global".into(), position: 1 },
+            RuleMembership { rule_id: "rule-2".into(), tool_id: "codex".into(), scope_key: "global".into(), position: 2 },
+        ],
+        files: vec![RuleFileRecord { tool_id: "codex".into(), scope_key: "global".into(), managed_hash: crate::native::transaction::fingerprint(existing.as_bytes()) }],
+    };
+    let removed = plan_host_rule_sync(&[first.clone(), second], &state, &[global_codex(existing)], &[], &first.id, 1, &global_tools(&[], false)).unwrap();
+    assert!(removed.commit);
+    assert_eq!(removed.writes[0].contents, "# Other\n\nalso remote\n");
+    assert!(removed.state.placements.iter().all(|item| item.rule_id != "rule-1"));
+    assert!(removed.state.placements.iter().any(|item| item.rule_id == "rule-2"));
+    let blocked = plan_host_rule_sync(&[first], &state, &[global_codex("hand written\n")], &[], "rule-1", 1, &global_tools(&[], false)).unwrap();
+    assert!(!blocked.commit);
+    assert!(blocked.writes.is_empty());
+    assert_eq!(blocked.results[0].status, "conflict");
+    assert_eq!(blocked.state.placements.len(), 2);
+}

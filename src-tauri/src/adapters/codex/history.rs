@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use sha2::{Digest, Sha256};
 
 use serde_json::Value;
@@ -80,7 +82,40 @@ fn discover_sources(home: &Path, cancelled: &dyn Fn() -> bool, metadata: bool) -
 
 // Native display names are stored outside rollouts. Read each catalog once,
 // and bind only the matching thread title into its incremental fingerprint.
+type TitleCache = HashMap<PathBuf, (String, HashMap<String, String>)>;
+static NATIVE_TITLE_CACHE: OnceLock<Mutex<TitleCache>> = OnceLock::new();
+
+fn native_title_stamp(root: &Path) -> String {
+    fn stamp(path: PathBuf) -> String {
+        let Ok(metadata) = std::fs::metadata(path) else { return "missing".into(); };
+        let modified = metadata.modified().ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_nanos()).unwrap_or_default();
+        format!("{}:{modified}", metadata.len())
+    }
+    let index = root.join("session_index.jsonl");
+    let state = std::fs::read_dir(root).ok().into_iter().flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite")))
+        .max_by_key(|path| std::fs::metadata(path).and_then(|value| value.modified()).ok());
+    format!("{}|{}", stamp(index), state.map(stamp).unwrap_or_else(|| "missing".into()))
+}
+
 fn native_titles(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, String>, String> {
+    let stamp = native_title_stamp(root);
+    let cache = NATIVE_TITLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((cached_stamp, titles)) = cache.lock().unwrap_or_else(|error| error.into_inner()).get(root).cloned() {
+        if cached_stamp == stamp { return Ok(titles); }
+    }
+    let titles = native_titles_uncached(root, cancelled)?;
+    let mut values = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if values.len() >= 16 { values.clear(); }
+    values.insert(root.to_owned(), (stamp, titles.clone()));
+    Ok(titles)
+}
+
+fn native_titles_uncached(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, String>, String> {
     let mut titles = HashMap::new();
     let mut databases = std::fs::read_dir(root).ok().into_iter().flatten().filter_map(Result::ok)
         .map(|entry| entry.path()).filter(|path| !path.is_symlink()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite"))).collect::<Vec<_>>();

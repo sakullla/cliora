@@ -890,6 +890,342 @@ fn persist_members(db: &Database, rule_id: &str, item: &PlannedWrite) -> Result<
     }
 }
 
+/// Membership and owned-file hashes kept on the remote host, never in the local library database.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleHostState {
+    #[serde(default)]
+    pub placements: Vec<RuleMembership>,
+    #[serde(default)]
+    pub files: Vec<RuleFileRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleMembership {
+    pub rule_id: String,
+    pub tool_id: String,
+    pub scope_key: String,
+    pub position: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleFileRecord {
+    pub tool_id: String,
+    pub scope_key: String,
+    pub managed_hash: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct HostRuleFile {
+    pub tool_id: String,
+    pub scope_key: String,
+    pub path: String,
+    pub existing: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRuleWrite {
+    pub path: String,
+    pub contents: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct HostRuleSync {
+    pub results: Vec<RuleSyncResult>,
+    pub writes: Vec<HostRuleWrite>,
+    pub state: RuleHostState,
+    pub commit: bool,
+}
+
+pub fn host_scope_key(scope: Scope, project_path: Option<&str>) -> Result<String, String> {
+    match scope {
+        Scope::Global => Ok("global".into()),
+        Scope::Project => {
+            let path = project_path.unwrap_or("").trim().trim_end_matches('/');
+            if !remote_project_path_ok(path) {
+                return Err("请选择项目目录".into());
+            }
+            Ok(format!("project:{path}"))
+        }
+    }
+}
+
+fn remote_project_path_ok(path: &str) -> bool {
+    if !path.starts_with('/') || path.contains('\\') || path.starts_with('~') || path.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    let mut parts = path.split('/');
+    if parts.next() != Some("") {
+        return false;
+    }
+    parts.all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn split_host_scope(scope_key: &str) -> (Scope, Option<String>) {
+    scope_key
+        .strip_prefix("project:")
+        .map(|path| (Scope::Project, Some(path.to_owned())))
+        .unwrap_or((Scope::Global, None))
+}
+
+fn host_members(state: &RuleHostState, tool: &str, scope_key: &str) -> Vec<Member> {
+    let mut group: Vec<Member> = state
+        .placements
+        .iter()
+        .filter(|item| item.tool_id == tool && item.scope_key == scope_key)
+        .map(|item| Member { rule_id: item.rule_id.clone(), position: item.position })
+        .collect();
+    group.sort_by(|left, right| left.position.cmp(&right.position).then(left.rule_id.cmp(&right.rule_id)));
+    group
+}
+
+fn host_composed(items: &[library::LibraryItem], group: &[Member]) -> String {
+    let parts: Vec<(String, String)> = group
+        .iter()
+        .filter_map(|member| {
+            items
+                .iter()
+                .find(|item| item.id == member.rule_id && item.kind == LibraryKind::Rule)
+                .map(|item| (item.title.clone(), item.body.clone()))
+        })
+        .collect();
+    compose(&parts)
+}
+
+fn host_owned<'a>(state: &'a RuleHostState, tool: &str, scope_key: &str) -> Option<&'a str> {
+    state
+        .files
+        .iter()
+        .find(|item| item.tool_id == tool && item.scope_key == scope_key)
+        .map(|item| item.managed_hash.as_str())
+}
+
+fn host_writable(state: &RuleHostState, tool: &str, scope_key: &str, existing: &str) -> bool {
+    existing.is_empty() || host_owned(state, tool, scope_key) == Some(transaction::fingerprint(existing.as_bytes()).as_str())
+}
+
+fn replace_group(state: &mut RuleHostState, tool: &str, scope_key: &str, group: &[Member]) {
+    state.placements.retain(|item| !(item.tool_id == tool && item.scope_key == scope_key));
+    for member in group {
+        state.placements.push(RuleMembership {
+            rule_id: member.rule_id.clone(),
+            tool_id: tool.to_owned(),
+            scope_key: scope_key.to_owned(),
+            position: member.position,
+        });
+    }
+}
+
+fn store_host_hash(state: &mut RuleHostState, tool: &str, scope_key: &str, hash: &str) {
+    if let Some(record) = state.files.iter_mut().find(|item| item.tool_id == tool && item.scope_key == scope_key) {
+        record.managed_hash = hash.to_owned();
+    } else {
+        state.files.push(RuleFileRecord {
+            tool_id: tool.to_owned(),
+            scope_key: scope_key.to_owned(),
+            managed_hash: hash.to_owned(),
+        });
+    }
+}
+
+struct HostPlanned {
+    tool_id: String,
+    scope_key: String,
+    path: String,
+    existing: String,
+    proposed: String,
+    members: Vec<Member>,
+}
+
+pub fn plan_host_rule_sync(
+    items: &[library::LibraryItem],
+    state: &RuleHostState,
+    files: &[HostRuleFile],
+    unresolved: &[RuleSyncResult],
+    rule_id: &str,
+    expected_version: u64,
+    selection: &RuleClientSelection,
+) -> Result<HostRuleSync, String> {
+    let rule = items.iter().find(|item| item.id == rule_id).ok_or_else(|| "资料条目不存在".to_owned())?;
+    if rule.kind != LibraryKind::Rule {
+        return Err("所选资料不是长期规则".into());
+    }
+    if rule.version != expected_version {
+        return Err("规则正文已变化，请重新保存".into());
+    }
+    let key = host_scope_key(selection.scope, selection.project_path.as_deref())?;
+    let mut tools: Vec<String> = selection.tool_ids.iter().filter(|id| !id.is_empty()).cloned().collect();
+    tools.sort();
+    tools.dedup();
+    let mut affected: Vec<(String, String)> = tools.iter().map(|tool| (tool.clone(), key.clone())).collect();
+    for place in &state.placements {
+        if place.rule_id != rule_id {
+            continue;
+        }
+        if place.scope_key != key || !tools.iter().any(|tool| tool == &place.tool_id) {
+            affected.push((place.tool_id.clone(), place.scope_key.clone()));
+        }
+    }
+    affected.sort();
+    affected.dedup();
+    let mut planned = Vec::new();
+    let mut results_early = unresolved.to_vec();
+    for (tool, scope_key) in affected {
+        if unresolved.iter().any(|item| item.tool_id == tool && item.status == "failed") && scope_key == key {
+            continue;
+        }
+        let Some(file) = files.iter().find(|item| item.tool_id == tool && item.scope_key == scope_key) else {
+            results_early.push(RuleSyncResult {
+                tool_id: tool,
+                path: None,
+                status: "failed",
+                detail: "无法读取远程规则文件".into(),
+                existing: String::new(),
+                proposed: String::new(),
+            });
+            continue;
+        };
+        let mut group = host_members(state, &tool, &scope_key);
+        let selected_here = scope_key == key;
+        let included = if selected_here { tools.iter().any(|id| id == &tool) } else { group.iter().any(|member| member.rule_id == rule_id) };
+        if selected_here {
+            if included {
+                if !group.iter().any(|member| member.rule_id == rule_id) {
+                    let position = group.iter().map(|member| member.position).max().unwrap_or(0) + 1;
+                    group.push(Member { rule_id: rule_id.to_owned(), position });
+                }
+            } else {
+                group.retain(|member| member.rule_id != rule_id);
+            }
+        }
+        let proposed = host_composed(items, &group);
+        planned.push(HostPlanned {
+            tool_id: tool,
+            scope_key,
+            path: file.path.clone(),
+            existing: file.existing.clone(),
+            proposed,
+            members: group,
+        });
+    }
+    if !selection.allow_replace {
+        let conflicts: Vec<RuleSyncResult> = planned
+            .iter()
+            .filter(|item| item.existing != item.proposed && !host_writable(state, &item.tool_id, &item.scope_key, &item.existing))
+            .map(|item| RuleSyncResult {
+                tool_id: item.tool_id.clone(),
+                path: Some(item.path.clone()),
+                status: "conflict",
+                detail: "这个规则文件有资料库之外的修改。确认后才会用拼接结果替换。".into(),
+                existing: item.existing.clone(),
+                proposed: item.proposed.clone(),
+            })
+            .collect();
+        if !conflicts.is_empty() {
+            return Ok(HostRuleSync { results: conflicts, writes: Vec::new(), state: state.clone(), commit: false });
+        }
+    }
+    if planned.is_empty() {
+        return Ok(HostRuleSync { results: results_early, writes: Vec::new(), state: state.clone(), commit: false });
+    }
+    let mut next = state.clone();
+    let mut writes = Vec::new();
+    let mut results = results_early;
+    for item in planned {
+        replace_group(&mut next, &item.tool_id, &item.scope_key, &item.members);
+        if item.existing == item.proposed {
+            results.push(RuleSyncResult {
+                tool_id: item.tool_id,
+                path: Some(item.path),
+                status: "unchanged",
+                detail: "拼接结果与当前文件一致".into(),
+                existing: item.existing,
+                proposed: item.proposed,
+            });
+            continue;
+        }
+        store_host_hash(&mut next, &item.tool_id, &item.scope_key, &transaction::fingerprint(item.proposed.as_bytes()));
+        writes.push(HostRuleWrite { path: item.path.clone(), contents: item.proposed.clone() });
+        results.push(RuleSyncResult {
+            tool_id: item.tool_id,
+            path: Some(item.path),
+            status: "written",
+            detail: "已写入拼接后的规则".into(),
+            existing: item.existing,
+            proposed: item.proposed,
+        });
+    }
+    Ok(HostRuleSync { results, writes, state: next, commit: true })
+}
+
+pub fn plan_host_rule_release(items: &[library::LibraryItem], state: &RuleHostState, files: &[HostRuleFile], rule_id: &str) -> HostRuleSync {
+    let mut groups: Vec<(String, String)> = state
+        .placements
+        .iter()
+        .filter(|item| item.rule_id == rule_id)
+        .map(|item| (item.tool_id.clone(), item.scope_key.clone()))
+        .collect();
+    groups.sort();
+    groups.dedup();
+    let mut next = state.clone();
+    let mut writes = Vec::new();
+    for (tool, scope_key) in groups {
+        let Some(file) = files.iter().find(|item| item.tool_id == tool && item.scope_key == scope_key) else { continue; };
+        let mut group = host_members(state, &tool, &scope_key);
+        group.retain(|member| member.rule_id != rule_id);
+        let proposed = host_composed(items, &group);
+        if file.existing != proposed && !host_writable(state, &tool, &scope_key, &file.existing) {
+            continue;
+        }
+        replace_group(&mut next, &tool, &scope_key, &group);
+        if file.existing != proposed {
+            store_host_hash(&mut next, &tool, &scope_key, &transaction::fingerprint(proposed.as_bytes()));
+            writes.push(HostRuleWrite { path: file.path.clone(), contents: proposed });
+        }
+    }
+    let commit = next != *state || !writes.is_empty();
+    HostRuleSync { results: Vec::new(), writes, state: next, commit }
+}
+
+pub fn host_placement_view(items: &[library::LibraryItem], state: &RuleHostState, files: &[HostRuleFile]) -> Vec<RulePlacement> {
+    let mut seen = std::collections::HashMap::<(String, String), &'static str>::new();
+    state
+        .placements
+        .iter()
+        .map(|place| {
+            let cache_key = (place.tool_id.clone(), place.scope_key.clone());
+            let status = if let Some(status) = seen.get(&cache_key) {
+                *status
+            } else {
+                let status = match files.iter().find(|file| file.tool_id == place.tool_id && file.scope_key == place.scope_key) {
+                    None => "unavailable",
+                    Some(file) => {
+                        if host_owned(state, &place.tool_id, &place.scope_key) == Some(transaction::fingerprint(file.existing.as_bytes()).as_str()) {
+                            "current"
+                        } else {
+                            let proposed = host_composed(items, &host_members(state, &place.tool_id, &place.scope_key));
+                            if proposed == file.existing { "current" } else { "drifted" }
+                        }
+                    }
+                };
+                seen.insert(cache_key, status);
+                status
+            };
+            let (scope, project_path) = split_host_scope(&place.scope_key);
+            RulePlacement {
+                context_id: None,
+                rule_id: place.rule_id.clone(),
+                tool_id: place.tool_id.clone(),
+                scope,
+                project_path,
+                state: status,
+            }
+        })
+        .collect()
+}
+
 pub fn release_rule(
     db: &Database,
     credentials: &dyn CredentialStore,

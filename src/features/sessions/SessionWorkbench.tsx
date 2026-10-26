@@ -19,6 +19,7 @@ import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, 
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
+import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
@@ -27,6 +28,8 @@ import { WorkbenchComposer } from './WorkbenchComposer';
 import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
+import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
+import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
 export type WorkbenchRetry =
@@ -37,6 +40,12 @@ export type WorkbenchFailure = { detail: string; retry: WorkbenchRetry };
 
 export function workbenchSessionId(result: LaunchResult): string | null {
   return result.status === 'session_started' && result.sessionId ? result.sessionId : null;
+}
+
+/** A remote session's library prompts come from that host. `null` means the host is not known yet. */
+export function libraryHostId(projectId: string | null | undefined, remoteProjects: RemoteProject[]): string | null {
+  if (!projectId?.startsWith('remote:')) return 'local';
+  return remoteProjects.find((item) => `remote:${item.id}` === projectId)?.targetId ?? null;
 }
 
 /** Desktop launches never become workbench sessions. Only an explicit workbench preference routes a failure onto this page. */
@@ -173,9 +182,14 @@ type MenuState =
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
-export function SessionWorkbench({ active, tools, focusSessionId, focusToken, failure, onFailure, onOpenHome }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome }: {
   active: boolean;
   tools: AdapterDescriptor[];
+  remoteSshEnabled?: boolean;
+  remoteTargetId?: string;
+  /** Hosts the shell already loaded. The workbench list starts empty, and must not treat that gap as "no such host". */
+  syncedRemoteTargets?: RemoteTarget[];
+  onRemoteTargetChange?: (targetId: string) => void;
   focusSessionId: string | null;
   focusToken: number;
   failure: WorkbenchFailure | null;
@@ -185,7 +199,13 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [libraryPrompts, setLibraryPrompts] = useState<LibraryItem[]>([]);
+  const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
+  const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
+  const remoteTargets = loadedRemoteTargets ?? syncedRemoteTargets;
+  const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
+  const [hostManagerOpen, setHostManagerOpen] = useState(false);
+  const [promptsByHost, setPromptsByHost] = useState<Record<string, LibraryItem[]>>({});
+  const loadedPromptHosts = useRef(new Set<string>());
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
   const [loading, setLoading] = useState(nativeAvailable);
@@ -231,6 +251,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [splitRoom, setSplitRoom] = useState(true);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
+  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [launchToolId, setLaunchToolId] = useState('');
   const [workspaceValue, setWorkspaceValue] = useState('__home');
   const [customFolderPath, setCustomFolderPath] = useState('');
@@ -239,6 +260,88 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   const [initialPrompt, setInitialPrompt] = useState('');
   const [launchingNew, setLaunchingNew] = useState(false);
   const [dialogError, setDialogError] = useState('');
+  const [remotePrefillToolId, setRemotePrefillToolId] = useState<string | null>(null);
+  const [remoteQuickLaunch, setRemoteQuickLaunch] = useState(false);
+
+  const scopedSessions = useMemo(() => {
+    if (activeTargetId === 'local') return sessions.filter((item) => !item.projectId?.startsWith('remote:'));
+    const remoteProjectIds = new Set(remoteProjects.filter((item) => item.targetId === activeTargetId).map((item) => `remote:${item.id}`));
+    return sessions.filter((item) => !!item.projectId && remoteProjectIds.has(item.projectId));
+  }, [activeTargetId, remoteProjects, sessions]);
+  useEffect(() => {
+    setSelectedId((current) => current && scopedSessions.some((item) => item.id === current)
+      ? current
+      : scopedSessions.find((item) => item.running)?.id ?? scopedSessions[0]?.id ?? null);
+    setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
+  }, [scopedSessions]);
+
+  useEffect(() => { setActiveTargetId(remoteTargetId); }, [remoteTargetId]);
+  useEffect(() => {
+    const onTarget = (event: Event) => setActiveTargetId((event as CustomEvent<string>).detail || 'local');
+    const onManage = () => { setHostManagerOpen(true); };
+    const onOpenRemote = (event: Event) => {
+      const detail = (event as CustomEvent<{ toolId?: string; targetId?: string; quickLaunch?: boolean; chooseDirectory?: boolean }>).detail;
+      const targetId = detail?.targetId || activeTargetId;
+      if (targetId) setActiveTargetId(targetId);
+      window.setTimeout(() => {
+        const toolId = detail?.toolId && tools.some((item) => item.id === detail.toolId && item.launchForm !== 'desktop' && item.launch?.state !== 'unsupported') ? detail.toolId : undefined;
+        if (!detail?.quickLaunch || !targetId || targetId === 'local') {
+          openNewSessionDialog(toolId ? { toolId } : undefined, targetId);
+          return;
+        }
+        setRemotePrefillToolId(toolId ?? null);
+        setRemoteQuickLaunch(true);
+        const key = `cliora:remote-launch-project:${targetId}:${toolId ?? ''}`;
+        let rememberedId = '';
+        try { rememberedId = localStorage.getItem(key) ?? ''; } catch { /* optional */ }
+        void (async () => {
+          const availableProjects = remoteProjects.length ? remoteProjects : await native.listRemoteProjects().catch(() => [] as RemoteProject[]);
+          const candidate = detail.chooseDirectory
+            ? undefined
+            : (availableProjects.find((item) => item.id === rememberedId && item.targetId === targetId)
+              ?? [...availableProjects].filter((item) => item.targetId === targetId && (!toolId || !item.preferredTool || item.preferredTool === toolId)).sort((a, b) => b.updatedAt - a.updatedAt)[0]);
+          if (candidate && (!toolId || !candidate.preferredTool || candidate.preferredTool === toolId)) {
+            // Left-click quick launch reuses the already attached local tab as
+            // well as the persistent remote tmux/screen session. Starting a
+            // second SSH transport to the same session only creates duplicate
+            // workbench rows and makes input/close state ambiguous.
+            const existing = sessionsRef.current.find((item) => item.projectId === `remote:${candidate.id}` && (!toolId || item.toolId === toolId));
+            if (existing) {
+              setNewDialogOpen(false);
+              setRemoteDialogOpen(false);
+              if (existing.running) {
+                setSelectedId(existing.id);
+                return;
+              }
+              if (existing.reattachable) {
+                setLaunchingNew(true);
+                try {
+                  await native.reattachWorkbenchSession(existing.id);
+                  const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
+                  if (Array.isArray(listed)) setSessions(listed);
+                  setSelectedId(existing.id);
+                  return;
+                } catch {
+                  // The durable remote session may have been removed outside
+                  // Cliora. Fall through and create/reuse it by name below.
+                } finally {
+                  setLaunchingNew(false);
+                }
+              }
+            }
+            void launchRemoteProject(candidate, toolId);
+          } else {
+            setNewDialogOpen(false);
+            setRemoteDialogOpen(true);
+          }
+        })();
+      }, 0);
+    };
+    window.addEventListener('cliora:remote-target-changed', onTarget);
+    window.addEventListener('cliora:manage-hosts', onManage);
+    window.addEventListener('cliora:open-remote-session', onOpenRemote);
+    return () => { window.removeEventListener('cliora:remote-target-changed', onTarget); window.removeEventListener('cliora:manage-hosts', onManage); window.removeEventListener('cliora:open-remote-session', onOpenRemote); };
+  }, [activeTargetId, remoteProjects, tools]);
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
@@ -295,15 +398,15 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     setUnreadIds((current) => visibleIds.some((id) => current.has(id)) ? new Set([...current].filter((id) => !visibleIds.includes(id))) : current);
   }, [visibleIds]);
   useEffect(() => {
-    setSplit((current) => current && current.every((id) => sessions.some((item) => item.id === id)) ? current : null);
-  }, [sessions]);
+    setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
+  }, [scopedSessions]);
 
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  const sessionsRef = useRef(scopedSessions);
+  sessionsRef.current = scopedSessions;
   const findOpenRef = useRef(findOpen);
   findOpenRef.current = findOpen;
   const findQueryRef = useRef(findQuery);
@@ -326,6 +429,9 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   }, []);
 
   const terminalTools = useMemo(
+    // The host switch changes where a CLI runs. It does not change which CLI
+    // choices are available in the launcher. Remote probing is shown on the
+    // quick-start page, but must never hide options from the normal launcher.
     () => tools.filter((item) => item.launchForm !== 'desktop' && item.launch?.state !== 'unsupported'),
     [tools],
   );
@@ -337,10 +443,30 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     () => terminalTools.find((item) => item.id === effectiveLaunchToolId) ?? null,
     [terminalTools, effectiveLaunchToolId],
   );
-  const selected = sessions.find((item) => item.id === selectedId) ?? null;
-  const showEmpty = !loading && !sessions.length;
-  const runningCount = sessions.filter((item) => item.running).length;
-  const endedCount = sessions.length - runningCount;
+  const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
+  const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
+  const dialogHostId = newDialogOpen ? libraryHostId(workspaceValue.startsWith('remote:') ? workspaceValue : null, remoteProjects) : null;
+  const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
+  const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
+  useEffect(() => {
+    if (!active || !nativeAvailable) return;
+    const hosts = [composerHostId, dialogHostId].filter((host): host is string => !!host);
+    for (const hostId of hosts) {
+      if (loadedPromptHosts.current.has(hostId)) continue;
+      loadedPromptHosts.current.add(hostId);
+      const request = hostId === 'local'
+        ? native.listLibraryItems('prompt', null, '')
+        : native.listRemoteLibraryItems(hostId, 'prompt', '');
+      void request.then((items) => {
+        setPromptsByHost((current) => ({ ...current, [hostId]: Array.isArray(items) ? items : [] }));
+      }).catch(() => {
+        setPromptsByHost((current) => ({ ...current, [hostId]: [] }));
+      });
+    }
+  }, [active, composerHostId, dialogHostId]);
+  const showEmpty = !loading && !scopedSessions.length;
+  const runningCount = scopedSessions.filter((item) => item.running).length;
+  const endedCount = scopedSessions.length - runningCount;
 
   function flashCopied(state: 'path' | 'output' | 'selection' | 'empty') {
     window.clearTimeout(copyTimerRef.current);
@@ -457,11 +583,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   }, []);
 
   useEffect(() => {
-    if (!active || !sessions.some((item) => item.running)) return;
+    if (!active || !scopedSessions.some((item) => item.running)) return;
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 15_000);
     return () => window.clearInterval(timer);
-  }, [active, sessions]);
+  }, [active, scopedSessions]);
 
   useEffect(() => {
     if (!nativeAvailable) { setLoading(false); return; }
@@ -509,22 +635,29 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     void Promise.all([
       native.listWorkbenchSessions(),
       native.listProjects().catch(() => [] as Project[]),
-      native.listRemoteProjects().catch(() => [] as Array<{ id: string; preferredTool?: string | null }>),
-      native.listRemoteSessions().catch(() => []),
-      native.listLibraryItems('prompt', null, '').catch(() => [] as LibraryItem[]),
+      remoteSshEnabled ? native.listRemoteProjects().catch(() => [] as RemoteProject[]) : Promise.resolve([] as RemoteProject[]),
+      remoteSshEnabled ? native.listRemoteTargets().catch(() => null) : Promise.resolve([] as RemoteTarget[]),
+      remoteSshEnabled ? native.listRemoteSessions().catch(() => []) : Promise.resolve([]),
       native.getLaunchSettings().catch(() => null),
-    ]).then(([listed, listedProjects, remoteProjects, remoteSessions, prompts, settings]) => {
+    ]).then(([listed, listedProjects, listedRemoteProjects, listedRemoteTargets, remoteSessions, settings]) => {
       if (!alive) return;
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
       for (const item of next) if (!firstSeenAt.current.has(item.id)) firstSeenAt.current.set(item.id, item.startedAt ?? now);
       setSessions(next);
       setProjects(Array.isArray(listedProjects) ? listedProjects : []);
-      setLibraryPrompts(Array.isArray(prompts) ? prompts : []);
+      setRemoteProjects(Array.isArray(listedRemoteProjects) ? listedRemoteProjects : []);
+      // A disabled SSH flag before preferences load resolves to an empty list. That is not
+      // evidence the saved host was removed, so only a real target query may replace the shell list.
+      if (remoteSshEnabled && Array.isArray(listedRemoteTargets)) setLoadedRemoteTargets(listedRemoteTargets);
       if (settings) setLaunchSettings(settings);
       if (!next.length && !autoRemoteReattachAttempted.current) {
         autoRemoteReattachAttempted.current = true;
-        const indexed = Array.isArray(remoteSessions) ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId) : [];
+        const validProjectIds = new Set((Array.isArray(listedRemoteProjects) ? listedRemoteProjects : []).map((item) => item.id));
+        const validTargetIds = new Set((Array.isArray(listedRemoteTargets) ? listedRemoteTargets : []).filter((item) => item.enabled).map((item) => item.id));
+        const indexed = Array.isArray(remoteSessions)
+          ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
+          : [];
         const requests = indexed.length
           ? indexed.map((item) => native.launchCli({
               toolId: item.toolId,
@@ -536,7 +669,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
               resumeLatest: false,
             }))
           : (() => {
-              const candidate = Array.isArray(remoteProjects) ? remoteProjects.find((item) => item?.id && item.preferredTool) : null;
+              const candidate = Array.isArray(listedRemoteProjects) ? listedRemoteProjects.find((item) => item?.id && item.preferredTool) : null;
               return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
             })();
         if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
@@ -560,7 +693,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (alive) setListError(formatFailure(value, t('sessions.listFailed'), t('sessions.listNext')));
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [active, focusToken, focusSessionId, reload, t]);
+  }, [active, focusToken, focusSessionId, reload, remoteSshEnabled, t]);
 
   useEffect(() => {
     if (!selectedLaunchTool?.yoloAvailable && launchMode === 'yolo') setLaunchMode('normal');
@@ -731,7 +864,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       await native.closeWorkbenchSession(session.id);
       forgetSession(session.id);
       const rest = sessionsRef.current.filter((item) => item.id !== session.id);
-      setSessions(rest);
+      setSessions((current) => current.filter((item) => item.id !== session.id));
       setSelectedId((current) => current === session.id ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext')));
@@ -753,7 +886,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   }
 
   async function clearEndedSessions() {
-    const ended = sessions.filter((item) => !item.running);
+    const ended = scopedSessions.filter((item) => !item.running);
     if (!ended.length || busy) return;
     setBusy('__clear_ended');
     setActionError('');
@@ -764,8 +897,8 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         closedIds.add(session.id);
         forgetSession(session.id);
       }
-      const rest = sessions.filter((item) => !closedIds.has(item.id));
-      setSessions(rest);
+      const rest = scopedSessions.filter((item) => !closedIds.has(item.id));
+      setSessions((current) => current.filter((item) => !closedIds.has(item.id)));
       if (railFilter === 'ended') setRailFilter('all');
       setSelectedId((current) => current && closedIds.has(current) ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
@@ -784,7 +917,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       if (opened) {
         onFailure(null);
         setSelectedId(opened);
-        const listed = await native.listWorkbenchSessions().catch(() => sessions);
+        const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
         if (Array.isArray(listed)) setSessions(listed);
         return;
       }
@@ -795,8 +928,15 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     } finally { setRetrying(false); }
   }
 
-  function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }) {
+  function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }, targetOverride?: string) {
     setDialogError('');
+    const targetId = targetOverride || activeTargetId;
+    if (targetId !== 'local' && remoteSshEnabled && !prefill?.projectId) {
+      setRemotePrefillToolId(prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId) ? prefill.toolId : null);
+      setNewDialogOpen(false);
+      setRemoteDialogOpen(true);
+      return;
+    }
     let nextToolId = effectiveLaunchToolId;
     if (prefill?.projectId) {
       const project = projects.find((item) => item.id === prefill.projectId);
@@ -809,6 +949,70 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
       const nextTool = terminalTools.find((item) => item.id === nextToolId);
       setLaunchMode(preferredLaunchMode(launchSettings, prefill.projectId ? 'project' : 'cli', !!nextTool?.yoloAvailable));
     }
+    setNewDialogOpen(true);
+  }
+
+  async function launchRemoteProject(project: RemoteProject, toolOverride?: string) {
+    const toolId = toolOverride && terminalTools.some((item) => item.id === toolOverride)
+      ? toolOverride
+      : project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
+        ? project.preferredTool
+        : effectiveLaunchToolId;
+    if (!toolId) return;
+    setLaunchingNew(true);
+    setDialogError('');
+    setActionError('');
+    setNotice('');
+    try {
+      const tool = terminalTools.find((item) => item.id === toolId);
+      const mode = preferredLaunchMode(launchSettings, 'project', !!tool?.yoloAvailable);
+      const result = await native.launchCli({
+        toolId,
+        projectId: `remote:${project.id}`,
+        sessionId: null,
+        mode,
+        directory: null,
+        initialPrompt: null,
+        resumeLatest: false,
+      });
+      try { localStorage.setItem(`cliora:remote-launch-project:${project.targetId}:${toolId}`, project.id); } catch { /* optional */ }
+      const opened = workbenchSessionId(result);
+      if (opened) {
+        setRemoteQuickLaunch(false);
+        setRemotePrefillToolId(null);
+        onFailure(null);
+        setNewDialogOpen(false);
+        setRemoteDialogOpen(false);
+        setSelectedId(opened);
+        const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
+        if (Array.isArray(listed)) setSessions(listed);
+      } else {
+        setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
+      }
+    } catch (value) {
+      setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
+    } finally { setLaunchingNew(false); }
+  }
+
+  function handleRemoteProjectSaved(project: RemoteProject) {
+    setRemoteProjects((current) => [...current.filter((item) => item.id !== project.id), project]);
+    setWorkspaceValue(`remote:${project.id}`);
+    const preferredTool = remotePrefillToolId && terminalTools.some((item) => item.id === remotePrefillToolId)
+      ? remotePrefillToolId
+      : project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
+        ? project.preferredTool
+        : effectiveLaunchToolId;
+    if (preferredTool) setLaunchToolId(preferredTool);
+    const nextTool = terminalTools.find((item) => item.id === preferredTool);
+    setLaunchMode(preferredLaunchMode(launchSettings, 'project', !!nextTool?.yoloAvailable));
+    setRemoteDialogOpen(false);
+    if (remoteQuickLaunch) {
+      void launchRemoteProject(project, preferredTool);
+      setRemoteQuickLaunch(false);
+      setRemotePrefillToolId(null);
+      return;
+    }
+    setRemotePrefillToolId(null);
     setNewDialogOpen(true);
   }
 
@@ -834,7 +1038,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
         if (updated) setLaunchSettings(updated);
       }
-      const projectId = workspaceValue.startsWith('project:') ? workspaceValue.slice('project:'.length) : null;
+      const projectId = workspaceValue.startsWith('project:')
+        ? workspaceValue.slice('project:'.length)
+        : workspaceValue.startsWith('remote:')
+          ? workspaceValue
+          : null;
       const directory = workspaceValue.startsWith('custom:') ? workspaceValue.slice('custom:'.length) : null;
       const promptText = initialPrompt.trim() || null;
       const request: LaunchRequest = {
@@ -965,7 +1173,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
 
   const filteredSessions = useMemo(() => {
     const query = railSearch.trim().toLowerCase();
-    return sessions.filter((session) => {
+    return scopedSessions.filter((session) => {
       if (railFilter === 'running' && !session.running) return false;
       if (railFilter === 'ended' && session.running) return false;
       if (!query) return true;
@@ -974,7 +1182,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
         || placeOf(session).toLowerCase().includes(query)
         || (session.directory ?? '').toLowerCase().includes(query);
     });
-  }, [sessions, railFilter, railSearch, projects, tools, titles]);
+  }, [scopedSessions, railFilter, railSearch, projects, tools, titles]);
 
   const arrangedSessions = useMemo(() => {
     const present = new Set(filteredSessions.map((session) => session.id));
@@ -1079,6 +1287,16 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
   }
 
   const availableProjects = useMemo(() => projects.filter((item) => item.available && item.path), [projects]);
+  const availableRemoteProjects = useMemo(() => activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId), [activeTargetId, remoteProjects]);
+  useEffect(() => {
+    // An empty list means "not loaded yet" until either this screen or the shell has hosts.
+    // Resetting earlier snaps a selected SSH host back to this computer while the sidebar stays put.
+    if (activeTargetId === 'local') return;
+    if (loadedRemoteTargets === null && syncedRemoteTargets.length === 0) return;
+    if (remoteTargets.some((target) => target.enabled && target.id === activeTargetId)) return;
+    setActiveTargetId('local');
+    onRemoteTargetChange?.('local');
+  }, [activeTargetId, loadedRemoteTargets, remoteTargets, syncedRemoteTargets]);
 
   useEffect(() => {
     if (!active || newDialogOpen) return;
@@ -1169,10 +1387,11 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
       ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
+      ...(remoteSshEnabled ? availableRemoteProjects.map((project) => ({ value: `remote:${project.id}`, label: project.name, detail: `${remoteTargets.find((target) => target.id === project.targetId)?.name ?? project.targetId} · ${project.path}`, icon: <Icon name="globe" size={14} /> })) : []),
     ];
     if (customFolderPath) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [availableProjects, customFolderPath, t]);
+  }, [availableProjects, availableRemoteProjects, customFolderPath, remoteSshEnabled, remoteTargets, t]);
 
   const railSessions: RailSession[] = arrangedSessions.map((session) => ({
     session,
@@ -1198,14 +1417,14 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
     return tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
   }
 
-  const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
+  const mountedSessions = scopedSessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
 
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-rail-slim={(railSlim && !narrowFrame) || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
     {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><button type="button" className={styles.ghostButton} onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button></div>}
 
     <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as CSSProperties}>
-      <SessionRail sessions={railSessions} total={sessions.length} running={runningCount} ended={endedCount} filter={railFilter} search={railSearch} selectedId={selectedId} narrow={narrowFrame} slim={railSlim} busy={!!busy} canLaunch={terminalTools.length > 0}
+      <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} filter={railFilter} search={railSearch} selectedId={selectedId} narrow={narrowFrame} slim={railSlim} busy={!!busy} canLaunch={terminalTools.length > 0}
         onFilter={setRailFilter} onSearch={setRailSearch} onSelect={setSelectedId} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRailSlim} />
       <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
@@ -1233,7 +1452,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
             .filter((label) => label !== endLabel);
           const grid = grids.get(selected.id);
-          const canSplit = splitRoom && sessions.length > 1;
+          const canSplit = splitRoom && scopedSessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
           return <>
             <header className={styles.stageBar}>
@@ -1292,7 +1511,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 onContextMenu={(event) => {
                   event.preventDefault();
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
-                  openTerminalMenu(sessions.find((item) => item.id === id) ?? selected, event.clientX, event.clientY);
+                  openTerminalMenu(scopedSessions.find((item) => item.id === id) ?? selected, event.clientX, event.clientY);
                 }}>
                 {mountedSessions.map((session) => {
                   const pane = visibleIds.indexOf(session.id);
@@ -1321,7 +1540,7 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
               </div>
-              {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={libraryPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={composerPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               <footer className={styles.statusBar}>
                 <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
@@ -1332,15 +1551,15 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
                 {split && <span className={styles.statusItem}><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
                 {grid && <span className={styles.statusItem} data-mono title={t('sessions.gridSize', { cols: grid.cols, rows: grid.rows })}>{grid.cols}×{grid.rows}</span>}
                 <span className={styles.statusItem} data-mono title={t('sessions.fontSize')}>{fontSize}px</span>
-                <span className={styles.statusItem} title={t('sessions.terminalInputHint')}><Icon name="lock" size={12} />{t('sessions.localSessions')}</span>
+                {(() => { const remoteProject = selected.projectId?.startsWith('remote:') ? remoteProjects.find((project) => `remote:${project.id}` === selected.projectId) : undefined; const host = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined; const label = selected.projectId?.startsWith('remote:') ? host?.name ?? 'SSH' : t('common.host.local'); return <span className={styles.statusItem} title={`${t('common.host.label')}：${label}${host ? ` · ${host.user}@${host.host}` : ''}`}><Icon name={selected.projectId?.startsWith('remote:') ? 'server' : 'monitor'} size={12} />{label}</span>; })()}
                 <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((current) => !current); }} onClose={closeShortcuts} />
               </footer>
             </div>
           </>;
         })()}
 
-        {loading && !sessions.length && <div className={styles.loading}><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
-        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
+        {loading && !scopedSessions.length && <div className={styles.loading}><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
+        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
 
@@ -1388,12 +1607,15 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={(value) => {
             setLaunchToolId(value);
             const nextTool = terminalTools.find((item) => item.id === value);
-            setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
+            setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
           }} /></div>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
             if (value.startsWith('project:')) {
               const project = availableProjects.find((item) => 'project:' + item.id === value);
+              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
+            } else if (value.startsWith('remote:')) {
+              const project = availableRemoteProjects.find((item) => 'remote:' + item.id === value);
               if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
             }
           }} /></div>
@@ -1402,10 +1624,12 @@ export function SessionWorkbench({ active, tools, focusSessionId, focusToken, fa
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} />{libraryPrompts.length > 0 && <div className={styles.dialogPrompts}><span className={styles.dialogPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>{libraryPrompts.slice(0, 6).map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => setInitialPrompt(prompt.body)}>{prompt.title}</button>)}</div>}</div>
-        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} />{dialogPrompts.length > 0 && <div className={styles.dialogPrompts}><span className={styles.dialogPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>{dialogPrompts.slice(0, 6).map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => setInitialPrompt(prompt.body)}>{prompt.title}</button>)}</div>}</div>
+        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
         <div className={styles.dialogActions}><button type="button" className="button" onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</button><button type="button" className="button primary" data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()}><Icon name="play" size={14} /><span>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</span></button></div>
       </div>
     </GuideDialog>
+    <RemoteProjectDialog open={remoteDialogOpen} targets={remoteTargets.filter((target) => target.enabled)} projects={remoteProjects} tools={terminalTools} initialTargetId={activeTargetId === 'local' ? undefined : activeTargetId} onClose={() => { setRemoteDialogOpen(false); if (remoteQuickLaunch) { setRemoteQuickLaunch(false); setRemotePrefillToolId(null); } else setNewDialogOpen(true); }} onSaved={handleRemoteProjectSaved} />
+    <GuideDialog open={hostManagerOpen} title={t('sessions.manageHosts')} hint={t('settings.remoteSsh.description')} onClose={() => { setHostManagerOpen(false); setReload((value) => value + 1); }}><RemoteSshSettings enabled={remoteSshEnabled} busy={false} onChange={() => {}} showHosts showToggle={false} /></GuideDialog>
   </div>;
 }

@@ -105,6 +105,8 @@ async function install(page, initialTheme, empty = false) {
       { id: 'cliora', name: '栖点 · 桌面工具', path: 'C:\\Projects\\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
       { id: 'site', name: '个人网站', path: 'C:\\Projects\\personal-site', available: true, preferredTool: 'claude_code', lastOpened: 1790738800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
     ];
+    const remoteTargets = [{ id: 'remote-prod', name: '测试远程主机', host: '212.60.153.19', port: 22, user: 'root', authMethod: 'key', identityFile: 'C:/Users/demo/.ssh/id_ed25519', sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: now, updatedAt: now }];
+    const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
       { id: 's2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', running: true, exitCode: null, startedAt: now - 3 * 60 * 1000 },
@@ -119,13 +121,19 @@ async function install(page, initialTheme, empty = false) {
         transformCallback: (callback) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command, args = {}) => {
           if (command === 'get_bootstrap' || command === 'set_theme') {
-            return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: command === 'set_theme' ? args.theme : theme, tool_icons: {} }, tools: [] };
+            return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: command === 'set_theme' ? args.theme : theme, tool_icons: {}, remote_ssh_enabled: true }, tools: [] };
           }
           if (command === 'list_cli_adapters') return {
             registered: Object.keys(names).map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: facet, launch: facet, resume: facet, resources: facet, history: facet })),
             managedIds: Object.keys(names), preservedUnknown: [],
           };
           if (command === 'list_projects') return projects;
+          if (command === 'list_remote_targets') return remoteTargets;
+          if (command === 'list_remote_projects') return remoteProjects;
+          if (command === 'probe_remote_cli') return { targetId: args.targetId, toolId: args.toolId, executable: args.toolId === 'pi' ? 'pi' : args.toolId, installed: true, version: '0.164.0', detail: null };
+          if (command === 'list_remote_directories') return ['/srv/project', '/srv/services', '/srv/tools'];
+          if (command === 'create_remote_directory') return null;
+          if (command === 'save_remote_project') { const saved = { ...args.project, id: args.project.id || 'remote-created', updatedAt: Date.now() }; remoteProjects.splice(0, remoteProjects.length, ...remoteProjects.filter((item) => item.id !== saved.id), saved); return saved; }
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
@@ -226,6 +234,15 @@ for (const width of widths) {
   await shot('workbench-dialog-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('新建会话', 'New session') }).click();
   });
+  await shot('workbench-remote-dialog-' + theme + '-' + width, theme, width, async (page) => {
+    const host = page.getByRole('button', { name: new RegExp('^' + copy('运行位置', 'Runs on')) }).first();
+    if (await host.count()) {
+      await host.click();
+      await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
+    }
+    await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('新建会话', 'New session') }).click();
+    await page.getByRole('dialog', { name: copy('添加远程项目', 'Add remote project') }).waitFor();
+  });
   await shot('workbench-attention-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__bell());
     await page.getByRole('tab', { name: /Claude Code/ }).click();
@@ -281,7 +298,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的长标题会话栏、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
+  '捕获工作台的长标题会话栏、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与目录选择流程和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
   '',
   '执行：',
   '',

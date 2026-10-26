@@ -406,7 +406,7 @@ fn candidates(adapter: &dyn CliAdapter, home: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> Option<String> {
+pub(crate) fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> Option<String> {
     let basename = path.file_stem()?.to_str()?.to_ascii_lowercase();
     let lower = output.to_ascii_lowercase();
     let identity = adapter.version_identity(&basename, &lower);

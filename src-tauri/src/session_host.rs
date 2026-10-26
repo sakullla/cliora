@@ -125,6 +125,7 @@ struct Session {
     remote: bool,
     remote_session_id: Option<String>,
     remote_end_args: Option<Vec<String>>,
+    environment: Vec<(String, String)>,
     connection_lost: AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<process_tree::Job>>,
@@ -153,6 +154,13 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         command.cwd(&directory);
     }
     command.args(args);
+    // Windows OpenSSH sends TERM=dumb when Cliora itself has no TERM
+    // environment variable. That makes interactive remote CLIs such as
+    // Codex prompt for a fallback or exit before the workbench can attach.
+    // The PTY is a real xterm-compatible terminal, so advertise it explicitly.
+    if remote {
+        command.env("TERM", "xterm-256color");
+    }
     apply_environment(&mut command, &plan, credential);
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
     let reader = match pair.master.try_clone_reader() {
@@ -192,6 +200,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         remote,
         remote_session_id: plan.remote_session_id.clone(),
         remote_end_args: plan.remote_end_args.clone(),
+        environment: plan.environment.clone(),
         connection_lost: AtomicBool::new(false),
         #[cfg(windows)]
         job: Mutex::new(job),
@@ -284,6 +293,12 @@ pub fn close(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Return the persistent remote session name before the local transport is
+/// removed. Commands use it to remove the durable index entry as well.
+pub fn remote_session_id(id: &str) -> Option<String> {
+    sessions().get(id).and_then(|session| session.remote_session_id.clone())
+}
+
 /// Reattach a disconnected SSH transport to the persistent tmux/screen session.
 /// The remote process is never recreated; only the local PTY attachment changes.
 pub fn reattach(id: &str) -> Result<(), String> {
@@ -302,6 +317,10 @@ pub fn reattach(id: &str) -> Result<(), String> {
     let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).map_err(|error| format!("无法创建重新附着终端：{error}"))?;
     let mut command = CommandBuilder::new(executable);
     command.args(args);
+    command.env("TERM", "xterm-256color");
+    for (key, value) in &session.environment {
+        command.env(key, value);
+    }
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法重新附着远程会话：{error}"))?;
     let reader = pair.master.try_clone_reader().map_err(|error| { let _ = child.kill(); format!("无法读取重新附着输出：{error}") })?;
     let writer = pair.master.take_writer().map_err(|error| { let _ = child.kill(); format!("无法写入重新附着会话：{error}") })?;
@@ -332,7 +351,18 @@ fn end_child(session: &Session, explicit_end: bool) {
     if explicit_end && session.remote {
         if let Some(args) = session.remote_end_args.as_ref() {
             let binary = std::env::var_os("CLIORA_SSH_BINARY").unwrap_or_else(|| "ssh".into());
-            let _ = std::process::Command::new(binary).args(args).status();
+            let mut command = std::process::Command::new(binary);
+            command.args(args);
+            command.envs(session.environment.iter().map(|(key, value)| (key, value)));
+            // Ending a remote session is a background control operation. On
+            // Windows, OpenSSH otherwise inherits the desktop application's
+            // console policy and briefly opens a black cmd window.
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            let _ = command.status();
         }
     }
     if let Ok(mut child) = session.child.lock() {
@@ -454,6 +484,9 @@ fn apply_environment(command: &mut CommandBuilder, plan: &LaunchPlan, credential
         for (key, value) in &context.environment {
             command.env(key, value);
         }
+    }
+    for (key, value) in &plan.environment {
+        command.env(key, value);
     }
     if let Some((name, value)) = credential {
         command.env(name, value);
@@ -581,6 +614,7 @@ fn ending_a_session_terminates_the_process_tree() {
         credential: None,
         remote_session_id: None,
         remote_end_args: None,
+        environment: Vec::new(),
     };
     let result = start(plan, None).expect("session started");
     let id = result.session_id.expect("session id");

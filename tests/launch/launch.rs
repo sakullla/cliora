@@ -221,6 +221,7 @@ fn sample(terminal: TerminalId) -> LaunchPlan {
         credential: None,
         remote_session_id: None,
         remote_end_args: None,
+        environment: Vec::new(),
     }
 }
 
@@ -897,6 +898,7 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
         credential: None,
         remote_session_id: None,
         remote_end_args: None,
+        environment: Vec::new(),
     };
     let started = spawn(&db, plan).unwrap();
     assert_eq!(started.status, "session_started");

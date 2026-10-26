@@ -326,6 +326,16 @@ impl CliAdapter for Codex {
             })
             .collect()
     }
+    fn remote_skill_directories(&self) -> &'static [super::RemoteSkillDirectory] {
+        use super::RemoteSkillDirectory;
+        const BUNDLED: &str = "Codex 捆绑 Skill，只读";
+        &[
+            RemoteSkillDirectory { relative: ".codex/skills", read_only: false, detail: "远程主机目录" },
+            RemoteSkillDirectory { relative: ".codex/skills/.system", read_only: true, detail: BUNDLED },
+            RemoteSkillDirectory { relative: ".agents/skills", read_only: false, detail: "远程主机目录" },
+            RemoteSkillDirectory { relative: ".agents/skills/.system", read_only: true, detail: BUNDLED },
+        ]
+    }
     fn rule_path(
         &self,
         scope: Scope,
@@ -341,6 +351,10 @@ impl CliAdapter for Codex {
             .join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
+    }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        // Remote Codex reads `$HOME/.codex` and does not honor a local CODEX_HOME.
+        crate::adapters::remote_rule_file(Some(".codex/AGENTS.md"), Some("AGENTS.md"), scope)
     }
     fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
         crate::native::adapter::ConnectionPolicy {
@@ -578,6 +592,9 @@ impl CliAdapter for Codex {
     fn history_supported(&self) -> bool {
         true
     }
+    fn native_history_relative(&self) -> Option<&'static str> {
+        Some(".codex")
+    }
     // Checked rollouts have no parent/child evidence. parentId, delegationDepth,
     // agentPreset and source=agent are not links.
     fn history_association(&self) -> Option<crate::adapters::Facet> {
@@ -646,6 +663,9 @@ mod tests {
         assert_eq!(project_rows.len(), 1);
         assert_eq!(project_rows[0].root, project.join(".agents/skills/.system"));
         assert!(Codex.skill_observations(Scope::Project, home, None).is_empty());
+        let remote = Codex.remote_skill_directories();
+        assert!(remote.iter().any(|item| item.relative == ".codex/skills/.system" && item.read_only));
+        assert!(remote.iter().any(|item| item.relative == ".agents/skills" && !item.read_only));
     }
 
     #[test]

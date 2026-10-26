@@ -21,6 +21,7 @@ pub(crate) mod models_dev;
 mod report;
 pub(crate) mod usage;
 pub(crate) mod source_cache;
+pub(crate) mod remote_native;
 
 pub use report::{usage_report, UsageReport};
 

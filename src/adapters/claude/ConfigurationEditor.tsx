@@ -42,7 +42,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     const presentation: FieldPresentation = {
       ...claudeFieldPresentation(id),
       origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin,
-      ...(isModel ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), ...roles.map(([key]) => values[`${key}.model`]), values['default.model']].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}),
+      ...(isModel ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch, error: catalog.error } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), ...roles.map(([key]) => values[`${key}.model`]), values['default.model']].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}),
       ...(id.endsWith('.name') && typeof roleModel === 'string' && roleModel.trim() ? { placeholder: t('tools.adapters.claude.sameAsModel', { model: roleModel }) } : {}),
     };
     return <ConfigurationField resetEpoch={rawResetEpoch} presentation={presentation} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}

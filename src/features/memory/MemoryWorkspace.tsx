@@ -15,7 +15,7 @@ import { writeClipboard } from '../../lib/clipboard';
 import { useFeedback } from '../../lib/toast';
 import { modLabel, withMod } from '../../lib/shortcut';
 import { displayPath } from '../../lib/paths';
-import type { MemoryAggregate, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
+import type { MemoryAggregate, MemoryDocument, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
 import { createTemplate, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
 import { memoryLinks } from './memoryLinks';
 import styles from './MemoryWorkspace.module.css';
@@ -75,13 +75,14 @@ function Switch({ checked, label, disabled, onChange }: { checked: boolean; labe
   return <button type="button" role="switch" className={doc.switch} aria-checked={checked} aria-label={label} title={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
 
-export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedProjectPath, projects = [], onDirtyChange }: {
+export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedProjectPath, projects = [], remoteTargetId = null, onDirtyChange }: {
   toolId: string;
   toolName?: string;
   memory: MemoryManagement;
   active: boolean;
   suggestedProjectPath: string | null;
   projects?: MemoryProject[];
+  remoteTargetId?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -110,9 +111,20 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const [query, setQuery] = useState('');
   const [source, setSource] = useState('all');
   const [kind, setKind] = useState('all');
+  const remoteDocuments = useRef<Record<string, MemoryDocument>>({});
 
   const can = (operation: MemoryOperation) => memory.operations.includes(operation);
   const limitation = (memory.limitation || '').trim();
+
+  async function readRemoteMemoryStore() {
+    if (!remoteTargetId) return { aggregate: null as MemoryAggregate | null, documents: {} as Record<string, MemoryDocument> };
+    const value = await native.getRemoteResourceStore(remoteTargetId, toolId, 'memory') as { aggregate?: MemoryAggregate; documents?: Record<string, MemoryDocument> };
+    return { aggregate: value.aggregate ?? null, documents: value.documents ?? {} };
+  }
+  async function writeRemoteMemoryStore(aggregate: MemoryAggregate, documents: Record<string, MemoryDocument>) {
+    if (!remoteTargetId) return;
+    await native.saveRemoteResourceStore(remoteTargetId, toolId, 'memory', { aggregate, documents });
+  }
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setPropertiesOpen(false); }, [selected]);
@@ -129,6 +141,18 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   };
   // Two bounded batches in flight; unchanged fingerprints retain parsed bodies.
   const loadDocs = useCallback(async (value: MemoryAggregate, epoch: number) => {
+    if (remoteTargetId) {
+      const next: Record<string, Doc | null> = {};
+      for (const entry of value.entries) {
+        const key = `${storeKey(entry.target)}:${entry.id}`;
+        const document = remoteDocuments.current[key];
+        if (document) next[key] = documentCache(entry.id, document.text, document.fingerprint);
+        else if (entry.previewText !== undefined) next[key] = documentCache(entry.id, entry.previewText, entry.fingerprint);
+      }
+      publishDocs(next);
+      setDocErrors({});
+      return;
+    }
     const next: Record<string, Doc | null> = {};
     const pending: MemoryStoreEntry[] = [];
     for (const entry of value.entries) {
@@ -182,7 +206,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       }
     };
     await Promise.all([refreshFocused(), worker(), worker()]);
-  }, [publishDocs, t]);
+  }, [publishDocs, t, remoteTargetId]);
 
   const reload = useCallback(async (): Promise<MemoryAggregate | null> => {
     const epoch = ++loadEpoch.current;
@@ -190,7 +214,11 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setReading(false);
     setRefreshing(true);
     try {
-      const value = await native.listAllMemories(toolId);
+      const remote = remoteTargetId ? await readRemoteMemoryStore() : null;
+      if (remoteTargetId && remote) remoteDocuments.current = remote.documents;
+      const value = remoteTargetId
+        ? (remote?.aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false })
+        : await native.listAllMemories(toolId);
       if (!mounted.current || epoch !== loadEpoch.current) return null;
       // An externally deleted entry must not make an unsaved editor disappear.
       setMissingDraft(false);
@@ -200,7 +228,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         if (retained) { value.entries.push(retained); setMissingDraft(true); }
       }
       setAggregate(value);
-      aggregateCache.set(toolId, { value, at: Date.now() });
+      aggregateCache.set(`${remoteTargetId ?? 'local'}:${toolId}`, { value, at: Date.now() });
       setListFailure(null);
       void loadDocs(value, epoch);
       return value;
@@ -209,7 +237,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       setListFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: async () => { await reload(); } });
       return null;
     } finally { if (mounted.current && epoch === loadEpoch.current) setRefreshing(false); }
-  }, [toolId, t, loadDocs]);
+  }, [toolId, t, loadDocs, remoteTargetId]);
 
   useEffect(() => {
     ++loadEpoch.current; ++readEpoch.current; docRevision.current = {};
@@ -218,7 +246,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [toolId, publishDocs]);
   useEffect(() => {
     if (!active) return;
-    const cached = aggregateCache.get(toolId);
+    const cached = aggregateCache.get(`${remoteTargetId ?? 'local'}:${toolId}`);
     if (cached && Date.now() - cached.at < MEMORY_CACHE_TTL) {
       const epoch = ++loadEpoch.current;
       setAggregate(cached.value);
@@ -346,7 +374,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setCompose(null);
     setReading(true);
     try {
-      const value = await native.readMemory(row.entry.target, row.entry.id);
+      const value = remoteTargetId
+        ? remoteDocuments.current[row.key] ?? { id: row.entry.id, path: row.entry.path, text: row.entry.previewText ?? '', fingerprint: row.entry.fingerprint, enabled: row.entry.enabled, inUse: row.entry.inUse, detail: row.entry.detail }
+        : await native.readMemory(row.entry.target, row.entry.id);
       if (!mounted.current || epoch !== readEpoch.current) return;
       setOpened({ key: row.key, target: row.entry.target, id: value.id, text: value.text, fingerprint: value.fingerprint });
       cacheDocument(row.key, row.entry.id, value.text, value.fingerprint);
@@ -390,6 +420,18 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setReading(false);
     setBusy(true);
     try {
+      if (remoteTargetId) {
+        const remote = await readRemoteMemoryStore();
+        const saved: MemoryDocument = { id: target.id, path: target.target.storeDirectory ? `${target.target.storeDirectory}/${target.id}` : target.id, text, fingerprint: `remote:${Date.now()}`, enabled: aggregate?.entries.find(item => storeKey(item.target) === storeKey(target.target) && item.id === target.id)?.enabled ?? true, inUse: true, detail: '远程主机资源' };
+        const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
+        const nextEntries = nextAggregate.entries.map(entry => entry.id === target.id && storeKey(entry.target) === storeKey(target.target) ? { ...entry, path: saved.path, fingerprint: saved.fingerprint, previewText: text, readError: undefined } : entry);
+        const next = { ...nextAggregate, entries: nextEntries };
+        const documents = { ...remote.documents, [target.key]: saved };
+        remoteDocuments.current = documents;
+        await writeRemoteMemoryStore(next, documents);
+        if (!mounted.current) return;
+        setOpened({ ...target, text, fingerprint: saved.fingerprint }); cacheDocument(target.key, saved.id, text, saved.fingerprint); setDraft(value => value === text ? text : value); setMode('read'); setFailure(null); await reload(); return;
+      }
       let writeExternal = confirmExternal;
       if (!writeExternal) {
         const fresh = await native.readMemory(target.target, target.id);
@@ -466,6 +508,22 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setReading(false);
     setBusy(true);
     try {
+      if (remoteTargetId) {
+        const remote = await readRemoteMemoryStore();
+        const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
+        const target = destination.target;
+        const path = target.storeDirectory ? `${target.storeDirectory}/${id}` : `$HOME/.cliora/memory/${id}`;
+        const fingerprint = `remote:${Date.now()}`;
+        const entry: MemoryStoreEntry = { id, path, enabled: true, fingerprint, sourceLabel: path, target, inUse: true, detail: '远程主机资源', previewText: text };
+        const saved: MemoryDocument = { id, path, text, fingerprint, enabled: true, inUse: true, detail: '远程主机资源' };
+        const next = { ...nextAggregate, entries: [...nextAggregate.entries, entry] };
+        const key = `${storeKey(target)}:${id}`;
+        const documents = { ...remote.documents, [key]: saved };
+        remoteDocuments.current = documents;
+        await writeRemoteMemoryStore(next, documents);
+        if (!mounted.current) return;
+        setCompose(null); setFailure(null); await reload(); return;
+      }
       const saved = await native.saveMemory({ target: destination.target, id, text, baseline: '', confirmExternal });
       if (!mounted.current) return;
       setCompose(null);
@@ -503,6 +561,16 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setReading(false);
     setBusy(true);
     try {
+      if (remoteTargetId) {
+        const remote = await readRemoteMemoryStore();
+        const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
+        const next = { ...nextAggregate, entries: nextAggregate.entries.filter(entry => !(entry.id === row.entry.id && storeKey(entry.target) === storeKey(row.entry.target))) };
+        const documents = { ...remote.documents }; delete documents[row.key];
+        remoteDocuments.current = documents;
+        await writeRemoteMemoryStore(next, documents);
+        if (!mounted.current) return;
+        setFailure(null); await reload(); return;
+      }
       await native.deleteMemory({ target: row.entry.target, id: row.entry.id, baseline });
       if (!mounted.current) return;
       if (selected === row.key) {
@@ -535,7 +603,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     if (!baseline) {
       setBusy(true);
       try {
-        const fresh = await native.readMemory(row.entry.target, row.entry.id);
+        const fresh = remoteTargetId
+          ? remoteDocuments.current[row.key] ?? { id: row.entry.id, path: row.entry.path, text: row.entry.previewText ?? '', fingerprint: row.entry.fingerprint, enabled: row.entry.enabled, inUse: row.entry.inUse, detail: row.entry.detail }
+          : await native.readMemory(row.entry.target, row.entry.id);
         if (!mounted.current) return;
         baseline = fresh.text;
       } catch (error) {
@@ -552,6 +622,14 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setReading(false);
     setBusy(true);
     try {
+      if (remoteTargetId) {
+        const remote = await readRemoteMemoryStore();
+        const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
+        const next = { ...nextAggregate, entries: nextAggregate.entries.map(entry => !id || (entry.id === id && storeKey(entry.target) === storeKey(target)) ? { ...entry, enabled } : entry) };
+        const documents = { ...remote.documents }; Object.values(documents).forEach(document => { if (!id || document.id === id) document.enabled = enabled; });
+        remoteDocuments.current = documents;
+        await writeRemoteMemoryStore(next, documents); if (!mounted.current) return; setFailure(null); await reload(); return;
+      }
       await native.setMemoryEnabled({ target, id: id ?? null, enabled });
       if (!mounted.current) return;
       setFailure(null);
@@ -567,6 +645,12 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     ++loadEpoch.current; ++readEpoch.current;
     setBusy(true);
     try {
+      if (remoteTargetId) {
+        const remote = await readRemoteMemoryStore();
+        const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
+        const next = { ...nextAggregate, switchGroups: (nextAggregate.switchGroups ?? []).map(group => group.id === groupId ? { ...group, enabled } : group) };
+        await writeRemoteMemoryStore(next, remote.documents); if (!mounted.current) return; setFailure(null); await reload(); return;
+      }
       await native.setMemorySwitchGroup(toolId, groupId, enabled);
       if (!mounted.current) return;
       setFailure(null);

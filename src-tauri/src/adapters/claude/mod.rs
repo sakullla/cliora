@@ -231,6 +231,9 @@ impl CliAdapter for Claude {
             Scope::Project => project?.join("CLAUDE.md"),
         })
     }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        crate::adapters::remote_rule_file(Some(".claude/CLAUDE.md"), Some("CLAUDE.md"), scope)
+    }
     fn auth_env_name(&self, connection: &Connection) -> Option<String> {
         connection.auth_env_var.clone().or_else(|| {
             connection

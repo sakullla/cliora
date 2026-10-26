@@ -215,6 +215,9 @@ impl CliAdapter for Pi {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn remote_rule_relative(&self, scope: Scope) -> Option<String> {
+        crate::adapters::remote_rule_file(Some(".pi/agent/AGENTS.md"), Some("AGENTS.md"), scope)
+    }
     fn mcp_location(
         &self,
         scope: Scope,

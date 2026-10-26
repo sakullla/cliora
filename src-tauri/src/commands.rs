@@ -1085,6 +1085,64 @@ pub async fn delete_library_item(
 }
 
 #[tauri::command]
+pub async fn list_remote_library_items(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    kind: library::LibraryKind,
+    search: String,
+) -> Result<Vec<library::LibraryItem>, ApiError> {
+    let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
+    blocking(move || crate::remote::list_library(&target, kind, &search).map_err(|error| native_error(error.to_string()))).await
+}
+
+#[tauri::command]
+pub async fn save_remote_library_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    draft: library::LibraryDraft,
+) -> Result<library::LibraryItem, ApiError> {
+    let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
+    blocking(move || crate::remote::save_library(&target, draft).map_err(|error| native_error(error.to_string()))).await
+}
+
+#[tauri::command]
+pub async fn delete_remote_library_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
+    blocking(move || crate::remote::delete_library(&target, &id, expected_version).map_err(|error| native_error(error.to_string()))).await
+}
+
+#[tauri::command]
+pub async fn list_remote_rule_placements(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<Vec<resources::rules::RulePlacement>, ApiError> {
+    let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
+    blocking(move || crate::remote::list_rule_placements(&target).map_err(|error| native_error(error.to_string()))).await
+}
+
+#[tauri::command]
+pub async fn sync_remote_rule_clients(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    rule_id: String,
+    expected_version: u64,
+    selection: resources::rules::RuleClientSelection,
+) -> Result<Vec<resources::rules::RuleSyncResult>, ApiError> {
+    let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
+    blocking(move || crate::remote::sync_rules(&target, &rule_id, expected_version, selection).map_err(|error| native_error(error.to_string()))).await
+}
+
+#[tauri::command]
 pub async fn list_mcp_definitions(
     app: AppHandle,
 ) -> Result<Vec<resources::mcp::McpDefinition>, ApiError> {
@@ -3281,6 +3339,40 @@ pub async fn maintain_registered_cli(
     .await
 }
 
+/// Run an adapter-declared lifecycle command on the selected SSH target.
+/// Remote maintenance never touches the local installation registry.
+#[tauri::command]
+pub async fn maintain_remote_cli(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    action: String,
+    source: Option<String>,
+    version: Option<String>,
+) -> Result<crate::native::maintenance::MaintenanceResult, ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database)
+            .map_err(|error| native_error(error.to_string()))?
+            .into_iter()
+            .find(|item| item.id == target_id && item.enabled)
+            .ok_or_else(|| native_error("远程目标不存在或已停用".into()))?;
+        let adapter = adapters::Registry::builtins()
+            .get(&tool_id)
+            .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
+        let result = match action.as_str() {
+            "install" | "install_native" => adapter.remote_install(&target),
+            "upgrade" | "upgrade_major" => adapter.remote_upgrade(&target, source.as_deref().unwrap_or("npm_shim")),
+            "uninstall_npm" => adapter.remote_uninstall(&target),
+            _ => Err("不支持的远程维护操作".into()),
+        }.map_err(native_error)?;
+        let stdout = result.stdout;
+        let output = if result.stderr.trim().is_empty() { stdout.clone() } else { format!("{}\n{}", stdout, result.stderr) };
+        Ok(crate::native::maintenance::MaintenanceResult { output, version: version.or_else(|| stdout.lines().find(|line| !line.trim().is_empty()).map(ToOwned::to_owned)) })
+    }).await
+}
+
 #[tauri::command]
 pub fn cancel_cli_maintenance(tool_id: String) {
     crate::native::maintenance::cancel(&tool_id);
@@ -3300,8 +3392,66 @@ pub fn list_workbench_sessions() -> Vec<crate::session_host::SessionSnapshot> {
 }
 
 #[tauri::command]
-pub async fn list_remote_sessions(app: AppHandle) -> Result<Vec<crate::launch::RemoteSessionIndexEntry>, ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| launch::list_remote_sessions(db).map_err(native_error))).await
+pub async fn list_remote_sessions(
+    app: AppHandle,
+) -> Result<Vec<crate::launch::RemoteSessionIndexEntry>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::list_remote_sessions(db).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_remote_history(
+    app: AppHandle,
+) -> Result<Vec<crate::launch::RemoteSessionIndexEntry>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::list_remote_history(db).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_remote_native_history(
+    app: AppHandle,
+    target_id: String,
+    refresh: bool,
+) -> Result<Vec<history::HistorySession>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            let target = enabled_target(db, &target_id)?;
+            history::remote_native::list(&adapters::Registry::builtins(), &target, refresh).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_remote_native_history(
+    app: AppHandle,
+    target_id: String,
+    id: String,
+) -> Result<history::HistoryDetail, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            let target = enabled_target(db, &target_id)?;
+            history::remote_native::detail(&adapters::Registry::builtins(), &target, &id).map_err(native_error)
+        })
+    })
+    .await
+}
+
+fn enabled_target(db: &crate::database::Database, target_id: &str) -> Result<crate::remote::RemoteTarget, ApiError> {
+    crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+    crate::remote::list_targets(db)
+        .map_err(|error| native_error(error.to_string()))?
+        .into_iter()
+        .find(|item| item.id == target_id && item.enabled)
+        .ok_or_else(|| native_error("远程主机不可用".into()))
 }
 
 #[tauri::command]
@@ -3329,8 +3479,15 @@ pub async fn resize_workbench_session(
 }
 
 #[tauri::command]
-pub async fn close_workbench_session(session_id: String) -> Result<(), ApiError> {
-    blocking(move || crate::session_host::close(&session_id).map_err(native_error)).await
+pub async fn close_workbench_session(app: AppHandle, session_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let remote_id = crate::session_host::remote_session_id(&session_id);
+        crate::session_host::close(&session_id).map_err(native_error)?;
+        if let Some(remote_id) = remote_id {
+            if let Ok(database) = app.state::<AppState>().database(&app) { let _ = crate::launch::forget_remote_session(&database, &remote_id); }
+        }
+        Ok(())
+    }).await
 }
 
 #[tauri::command]
@@ -3383,8 +3540,13 @@ pub(crate) fn launch_now_with_stage(
     let project_id = request.project_id.clone();
     let launch_tool_id = request.tool_id.clone();
     let launch_mode = request.mode;
+    // Remote projects live in the remote_projects table and are resolved by
+    // launch::remote_launch_plan. Do not send their `remote:<id>` key through
+    // the local project lookup, otherwise a valid remote project is reported
+    // as “项目不存在” before the remote launch planner runs.
     let project = project_id
         .as_deref()
+        .filter(|id| !id.starts_with("remote:"))
         .map(|id| {
             app.state::<AppState>()
                 .with_database(app, |db| projects::get(db, id).map_err(native_error))
@@ -3442,13 +3604,21 @@ pub(crate) fn launch_now_with_stage(
         .map_err(|error| LaunchFailure::new(LaunchStage::Terminal, error))?;
     let result = launch::spawn(&db, plan)
         .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
-    if let (Some(project_id), Some(remote_session_id)) = (project_id.as_deref(), result.remote_session_id.as_deref()) {
+    if let (Some(project_id), Some(remote_session_id)) =
+        (project_id.as_deref(), result.remote_session_id.as_deref())
+    {
         if project_id.starts_with("remote:") {
-            launch::remember_remote_session(&db, project_id, &launch_tool_id, launch_mode, remote_session_id)
-                .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
+            launch::remember_remote_session(
+                &db,
+                project_id,
+                &launch_tool_id,
+                launch_mode,
+                remote_session_id,
+            )
+            .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
         }
     }
-    if let Some(project_id) = &project_id {
+    if let Some(project_id) = project_id.as_deref().filter(|id| !id.starts_with("remote:")) {
         if let Err(error) = app.state::<AppState>().with_database(app, |db| {
             projects::touch(db, project_id).map_err(native_error)
         }) {
@@ -4060,11 +4230,33 @@ pub fn save_remote_target(
     app: AppHandle,
     state: State<'_, AppState>,
     target: crate::remote::RemoteTarget,
+    password: Option<String>,
 ) -> Result<crate::remote::RemoteTarget, ApiError> {
-    state.with_database(&app, |database| {
+    let saved = state.with_database(&app, |database| {
         crate::remote::save_target(database, target)
             .map_err(|error| native_error(error.to_string()))
-    })
+    })?;
+    // The secret goes straight to the system credential store; SQLite keeps
+    // only the target record.
+    crate::remote::password::apply_save_request(&crate::credentials::SystemCredentialStore, &saved, password.as_deref())
+        .map_err(|error| native_error(format!("主机已保存，但密码未能写入系统凭据：{error}")))?;
+    Ok(saved)
+}
+
+/// Ids of targets that have a saved password. The secrets never cross IPC.
+#[tauri::command]
+pub fn list_remote_saved_passwords(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, ApiError> {
+    let targets = state.with_database(&app, |database| {
+        crate::remote::list_targets(database).map_err(|error| native_error(error.to_string()))
+    })?;
+    Ok(targets
+        .into_iter()
+        .filter(|target| target.auth_method == "password" && crate::remote::password::is_saved(&crate::credentials::SystemCredentialStore, &target.id))
+        .map(|target| target.id)
+        .collect())
 }
 
 #[tauri::command]
@@ -4075,7 +4267,9 @@ pub fn delete_remote_target(
 ) -> Result<(), ApiError> {
     state.with_database(&app, |database| {
         crate::remote::delete_target(database, &id).map_err(|error| native_error(error.to_string()))
-    })
+    })?;
+    let _ = crate::remote::password::forget(&crate::credentials::SystemCredentialStore, &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -4088,6 +4282,48 @@ pub fn list_remote_projects(
         crate::remote::list_projects(database, target_id.as_deref())
             .map_err(|error| native_error(error.to_string()))
     })
+}
+
+#[tauri::command]
+pub async fn list_remote_directories(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    parent: String,
+) -> Result<Vec<String>, ApiError> {
+    let _ = state;
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database)
+            .map_err(|error| native_error(error.to_string()))?
+            .into_iter()
+            .find(|item| item.id == target_id)
+            .ok_or_else(|| native_error("远程目标不存在".into()))?;
+        crate::remote::list_directories(&target, &parent)
+            .map_err(|error| native_error(error.to_string()))
+    }).await
+}
+
+#[tauri::command]
+pub async fn create_remote_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: String,
+    path: String,
+) -> Result<(), ApiError> {
+    let _ = state;
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database)
+            .map_err(|error| native_error(error.to_string()))?
+            .into_iter()
+            .find(|item| item.id == target_id)
+            .ok_or_else(|| native_error("远程目标不存在".into()))?;
+        crate::remote::create_directory(&target, &path)
+            .map_err(|error| native_error(error.to_string()))
+    }).await
 }
 
 #[tauri::command]
@@ -4118,14 +4354,230 @@ pub fn delete_remote_project(
 pub async fn test_remote_target(
     app: AppHandle,
     target: crate::remote::RemoteTarget,
+    password: Option<String>,
 ) -> Result<crate::remote::RemoteProbe, ApiError> {
     blocking(move || {
         let database = app.state::<AppState>().database(&app)?;
         crate::remote::ensure_enabled(&database)
             .map_err(|error| native_error(error.to_string()))?;
-        crate::remote::probe_target(&target).map_err(|error| native_error(error.to_string()))
+        let typed = password.filter(|value| !value.is_empty() && target.auth_method == "password");
+        let Some(typed) = typed else {
+            return crate::remote::probe_target(&target).map_err(|error| native_error(error.to_string()));
+        };
+        // Test a password that is not saved yet under a throwaway credential id,
+        // then remove it, so "test before save" never persists the secret.
+        let store = crate::credentials::SystemCredentialStore;
+        let mut probe_target = target.clone();
+        probe_target.id = uuid::Uuid::new_v4().to_string();
+        crate::remote::password::save(&store, &probe_target.id, &typed)
+            .map_err(|error| native_error(error.to_string()))?;
+        let result = crate::remote::probe_target(&probe_target);
+        let _ = crate::remote::password::forget(&store, &probe_target.id);
+        result
+            .map(|mut probe| { probe.target_id = target.id.clone(); probe })
+            .map_err(|error| native_error(error.to_string()))
     })
     .await
+}
+
+/// Probe one registered CLI on the selected remote target. A missing remote
+/// executable is a per-CLI result so the UI can keep rendering the rest of
+/// the target instead of treating one missing tool as a connection failure.
+#[tauri::command]
+pub async fn probe_remote_cli(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+) -> Result<crate::remote::RemoteCliProbe, ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database)
+            .map_err(|error| native_error(error.to_string()))?
+            .into_iter()
+            .find(|item| item.id == target_id && item.enabled)
+            .ok_or_else(|| native_error("远程目标不存在或已停用".into()))?;
+        let adapter = crate::adapters::Registry::builtins()
+            .get(&tool_id)
+            .ok_or_else(|| native_error("未注册的 CLI 不能探测".into()))?;
+        let executable = adapter.command().to_owned();
+        match adapter.remote_probe(&target) {
+            Ok(result) => Ok(crate::remote::RemoteCliProbe {
+                target_id: target.id,
+                tool_id,
+                executable,
+                installed: true,
+                version: result.stdout.lines().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned),
+                detail: None,
+            }),
+            Err(detail) => Ok(crate::remote::RemoteCliProbe {
+                target_id: target.id,
+                tool_id,
+                executable,
+                installed: false,
+                version: None,
+                detail: Some(detail),
+            }),
+        }
+    }).await
+}
+
+#[tauri::command]
+pub async fn probe_remote_clis(
+    app: AppHandle,
+    target_id: String,
+    tool_ids: Vec<String>,
+) -> Result<Vec<crate::remote::RemoteCliProbe>, ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database)
+            .map_err(|error| native_error(error.to_string()))?
+            .into_iter()
+            .find(|item| item.id == target_id && item.enabled)
+            .ok_or_else(|| native_error("远程目标不存在或已停用".into()))?;
+        let registry = adapters::Registry::builtins();
+        let tools = tool_ids.into_iter().filter_map(|tool_id| registry.get(&tool_id).map(|adapter| (tool_id, adapter.command().to_owned()))).collect::<Vec<_>>();
+        crate::remote::probe_clis(&target, &tools).map_err(|error| native_error(error.to_string()))
+    }).await
+}
+
+#[tauri::command]
+pub async fn get_remote_tool_store(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+) -> Result<crate::remote::RemoteToolStore, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::load_tool_store(&target, &tool_id).map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn save_remote_tool_store(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    store: crate::remote::RemoteToolStore,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn delete_remote_tool_profile(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    profile_id: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::delete_tool_profile(&target, &tool_id, &profile_id).map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn get_remote_resource_store(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    kind: String,
+) -> Result<serde_json::Value, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::load_resource_store(&target, &tool_id, &kind)
+                .map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn list_remote_resource_stores(
+    app: AppHandle,
+    target_id: String,
+    tool_ids: Vec<String>,
+    kind: String,
+) -> Result<serde_json::Value, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::load_resource_stores(&target, &tool_ids, &kind)
+                .map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn save_remote_resource_store(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    kind: String,
+    value: serde_json::Value,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+            let target = crate::remote::list_targets(db)
+                .map_err(|error| native_error(error.to_string()))?
+                .into_iter()
+                .find(|item| item.id == target_id && item.enabled)
+                .ok_or_else(|| native_error("远程主机不可用".into()))?;
+            crate::remote::save_resource_store(&target, &tool_id, &kind, &value)
+                .map_err(|error| native_error(error.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn import_remote_skill_directory(
+    app: AppHandle,
+    target_id: String,
+    tool_id: String,
+    source: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+        let target = crate::remote::list_targets(&database).map_err(|error| native_error(error.to_string()))?.into_iter().find(|item| item.id == target_id && item.enabled).ok_or_else(|| native_error("远程主机不可用".into()))?;
+        crate::remote::import_skill_directory(&target, &tool_id, &source).map_err(|error| native_error(error.to_string()))
+    }).await
 }
 
 #[tauri::command]
@@ -4473,13 +4925,33 @@ pub fn replace_configuration_text(
 #[tauri::command]
 pub async fn begin_configuration_draft(
     app: AppHandle,
-    request: crate::native::workspace::ConfigurationBeginRequest,
+    mut request: crate::native::workspace::ConfigurationBeginRequest,
 ) -> Result<crate::native::configuration::ConfigurationDraft, ApiError> {
     blocking(move || {
         let home = home()?;
         let project = checked_project(request.scope, request.project_path.clone())?;
         app.state::<AppState>().with_database(&app, |db| {
             let registry = adapters::Registry::builtins();
+            if let Some(target_id) = request.remote_target_id.clone() {
+                crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+                let target = crate::remote::list_targets(db)
+                    .map_err(|error| native_error(error.to_string()))?
+                    .into_iter()
+                    .find(|item| item.id == target_id && item.enabled)
+                    .ok_or_else(|| native_error("远程主机不可用".into()))?;
+                let store = crate::remote::load_tool_store(&target, &request.tool_id)
+                    .map_err(|error| native_error(error.to_string()))?;
+                request.remote_files = store.current_files;
+                request.remote_common = store.common;
+                return app.state::<AppState>().workspace.begin(
+                    &registry,
+                    db,
+                    request,
+                    None,
+                    Vec::new(),
+                    None,
+                ).map_err(native_error);
+            }
             app.state::<AppState>()
                 .workspace
                 .begin_registered(&registry, db, request, &home, project.as_deref())
@@ -4589,13 +5061,10 @@ pub async fn list_configuration_models(
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
             let workspace = &app.state::<AppState>().workspace;
-            let (connection, credential) = workspace
-                .request_directory(&draft, &SystemCredentialStore)
-                .map_err(native_error)?;
-            let directory =
-                models::list_models_guarded(db, &credential, &connection, force, &query, || {
-                    !workspace.is_current(&draft)
-                })
+            // Remote and local drafts both ask the provider written in the draft.
+            // The secret is the draft lease or the saved connection secret.
+            let directory = workspace
+                .provider_directory(db, &draft, &SystemCredentialStore, force, &query)
                 .map_err(native_error)?;
             workspace.finish_request(&draft).map_err(native_error)?;
             Ok(ConfigurationDirectoryResult {
@@ -4623,6 +5092,17 @@ pub async fn check_configuration_connection(
     allow_model_request: bool,
 ) -> Result<ConfigurationCheckResult, ApiError> {
     blocking(move || {
+        if let Some(target_id) = draft.remote_target_id.clone() {
+            return app.state::<AppState>().with_database(&app, |db| {
+                crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+                let target = crate::remote::list_targets(db).map_err(|error| native_error(error.to_string()))?.into_iter().find(|item| item.id == target_id && item.enabled).ok_or_else(|| native_error("远程主机不可用".into()))?;
+                let check = match crate::remote::probe_target(&target) {
+                    Ok(_) => models::ConnectionCheck { format: models::CheckStep { state: "passed", message: "远程 CLI 配置格式由所选主机维护".into() }, connectivity: models::CheckStep { state: "passed", message: "SSH 已连接到所选远程主机".into() }, model_request: models::CheckStep { state: "skipped", message: if allow_model_request { "模型请求需由远端 CLI 会话执行，未在本机发起".into() } else { "未发送模型请求".into() } } },
+                    Err(error) => models::ConnectionCheck { format: models::CheckStep { state: "passed", message: "远程 CLI 配置格式由所选主机维护".into() }, connectivity: models::CheckStep { state: "failed", message: error.to_string() }, model_request: models::CheckStep { state: "skipped", message: "连接检查未通过".into() } },
+                };
+                Ok(ConfigurationCheckResult { session_id: draft.session_id, revision: draft.revision, request_generation: draft.request_generation, check })
+            });
+        }
         let workspace = &app.state::<AppState>().workspace;
         let (mut connection, credential) = workspace
             .request(&draft, &SystemCredentialStore)
@@ -4664,6 +5144,121 @@ pub async fn save_configuration_draft(
     app: AppHandle,
     draft: crate::native::configuration::ConfigurationDraft,
 ) -> Result<crate::native::workspace::ConfigurationSaveResult, ApiError> {
+    if let Some(target_id) = draft.remote_target_id.clone() {
+        let tool_id = draft.profile.tool.clone();
+        return blocking(move || {
+            app.state::<AppState>().with_database(&app, |db| {
+                crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
+                let target = crate::remote::list_targets(db)
+                    .map_err(|error| native_error(error.to_string()))?
+                    .into_iter()
+                    .find(|item| item.id == target_id && item.enabled)
+                    .ok_or_else(|| native_error("远程主机不可用".into()))?;
+                let mut store = crate::remote::load_tool_store(&target, &tool_id)
+                    .map_err(|error| native_error(error.to_string()))?;
+                let mut next = draft.clone();
+                let registry = adapters::Registry::builtins();
+                // The key typed into this draft is written into the remote file
+                // by the same adapter writer a local save uses. The CLI reads
+                // that file directly. A missing lease must not be saved as a
+                // config that looks connected and then returns 401.
+                let entered = match app.state::<AppState>().workspace.draft_secret(&draft) {
+                    Ok(value) => value,
+                    Err(error) => return Err(native_error(error)),
+                };
+                if entered.is_none()
+                    && matches!(
+                        draft.credential,
+                        Some(crate::native::workspace::ConfigurationCredential::ApiKey {
+                            secret_ref: Some(_),
+                            remove: false
+                        })
+                    )
+                {
+                    return Err(native_error("远程 API 密钥已失效，请重新输入".into()));
+                }
+                let mut staged_secrets: Option<crate::native::apply::NativeSecrets> = None;
+                if let Some(secret) = entered {
+                    let secret_ref = match draft.credential.as_ref() {
+                        Some(crate::native::workspace::ConfigurationCredential::ApiKey {
+                            secret_ref: Some(id),
+                            remove: false,
+                        }) => id.clone(),
+                        _ => return Err(native_error("远程 API 密钥已失效，请重新输入".into())),
+                    };
+                    let secrets = crate::native::workspace::remote_connection_secrets(
+                        &registry,
+                        &draft.profile,
+                        draft.scope,
+                        draft.draft_connection.as_ref(),
+                        &secret_ref,
+                        &secret,
+                    )
+                    .map_err(native_error)?;
+                    let adapter = registry.get(&tool_id).ok_or_else(|| native_error("适配器未注册".into()))?;
+                    for (role, text) in &mut next.profile.files {
+                        let kind = adapter.file_kind(role).map_err(native_error)?;
+                        *text = secrets.apply_text(role, kind, std::mem::take(text)).map_err(native_error)?;
+                    }
+                    if let Some(connection) = next.profile.connection.as_mut() {
+                        connection.secret_ref = None;
+                        connection.auth_env_var = None;
+                    }
+                    staged_secrets = Some(secrets);
+                }
+                match draft.subject.unwrap_or(crate::adapters::configuration::ConfigurationSubject::Profile) {
+                    crate::adapters::configuration::ConfigurationSubject::Current => {
+                        let mut files = app.state::<AppState>().workspace.remote_current_contents(&registry, &draft, &draft.profile.files).map_err(native_error)?;
+                        if let (Some(secrets), Some(adapter)) = (&staged_secrets, registry.get(&tool_id)) {
+                            for (role, text) in files.iter_mut() {
+                                let kind = adapter.file_kind(role).map_err(native_error)?;
+                                *text = secrets.apply_text(role, kind, std::mem::take(text)).map_err(native_error)?;
+                            }
+                        }
+                        store.current_files = files;
+                        crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
+                        next.revision = next.revision.saturating_add(1);
+                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: None, application: None });
+                    }
+                    crate::adapters::configuration::ConfigurationSubject::Common => {
+                        let common = crate::native::profile::RegisteredCommon { tool: tool_id.clone(), version: next.profile.version, revision: next.profile.revision.clone(), files: next.profile.files.clone() };
+                        store.common = Some(common.clone());
+                        store.current_files = next.profile.files.clone();
+                        crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
+                        next.revision = next.revision.saturating_add(1);
+                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: Some(common), application: None });
+                    }
+                    _ => {
+                        let mut profile = next.profile.clone();
+                        if staged_secrets.is_none() {
+                            if !profile.id.is_empty() {
+                                if let Some(previous) = store.profiles.iter().find(|item| item.id == profile.id) {
+                                    profile.files = crate::native::workspace::preserve_withheld_credentials(&registry, &tool_id, &profile.files, &previous.files).map_err(native_error)?;
+                                }
+                            }
+                            if !store.current_files.is_empty() {
+                                profile.files = crate::native::workspace::preserve_withheld_credentials(&registry, &tool_id, &profile.files, &store.current_files).map_err(native_error)?;
+                            }
+                        }
+                        if profile.id.is_empty() { profile.id = format!("remote-{}", uuid::Uuid::new_v4()); }
+                        // The value is in the native file. Never persist the
+                        // local draft lease ID in the remote metadata store.
+                        if let Some(connection) = profile.connection.as_mut() {
+                            connection.secret_ref = None;
+                        }
+                        profile.version = profile.version.saturating_add(1);
+                        profile.revision = uuid::Uuid::new_v4().to_string();
+                        store.profiles.retain(|item| item.id != profile.id);
+                        store.profiles.push(profile.clone());
+                        store.current_files = profile.files.clone();
+                        crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
+                        next.revision = next.revision.saturating_add(1);
+                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: Some(profile), common: None, application: None });
+                    }
+                };
+            })
+        }).await;
+    }
     let notify = app.clone();
     let tool = draft.profile.tool.clone();
     let result = blocking(move || {

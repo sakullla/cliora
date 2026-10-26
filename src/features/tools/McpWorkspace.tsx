@@ -26,11 +26,12 @@ function errorText(error: unknown) {
 const SEARCH_THRESHOLD = 6;
 const emptyRows = () => editableRowsOf({});
 
-export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange, onOpenLibrary }: {
+export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, onOpenLibrary }: {
   toolId: string;
   scope: Scope;
   projectPath: string;
   contextId?: string | null;
+  remoteTargetId?: string | null;
   onDirtyChange?: (dirty: boolean) => void;
   onOpenLibrary?: (definitionId: string) => void;
 }) {
@@ -89,7 +90,9 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const request = ++loadSequence.current;
     setListLoading(true);
     try {
-      const value = await native.listNativeMcp(readTarget);
+      const value = remoteTargetId
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[] }).entries ?? [])
+        : await native.listNativeMcp(readTarget);
       if (!mounted.current || request !== loadSequence.current) return;
       setNativeEntries(value); setLoadError(''); setStale(false);
     } catch (value) {
@@ -98,9 +101,18 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     } finally {
       if (mounted.current && request === loadSequence.current) setListLoading(false);
     }
-  }, [toolId, scope, project, readTarget, nativeEntries.length]);
-  useEffect(() => { void refreshNative(); }, [toolId, scope, project, contextId]);
-  useEffect(() => { void native.listMcpDefinitions().then(setDefinitions).catch(value => setError(errorText(value))); }, []);
+  }, [toolId, scope, project, readTarget, nativeEntries.length, remoteTargetId]);
+  useEffect(() => { void refreshNative(); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative]);
+  useEffect(() => {
+    if (remoteTargetId) {
+      void native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp').then(value => {
+        const store = value as { definitions?: McpDefinition[] };
+        setDefinitions(store.definitions ?? []);
+      }).catch(value => setError(errorText(value)));
+      return;
+    }
+    void native.listMcpDefinitions().then(setDefinitions).catch(value => setError(errorText(value)));
+  }, [remoteTargetId, toolId]);
 
   const libraryFor = (name: string) => definitions.find(item => item.name === name.trim() && item.inLibrary !== false);
   const linked = definitions.find(item => item.id === draft.id) ?? definitions.find(item => item.name === draft.name.trim());
@@ -150,7 +162,18 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     if (scope === 'project' && !project) { setError(t('tools.mcp.pickProject')); return; }
     if (hasMcpIssues(mcpDraftIssues(draft))) { setShowIssues(true); return; }
     setBusy(true); setError('');
-    try { setPreview(await native.previewMcpDraft(normalizedDraft(), [{ ...target, enabled }])); setAllowReplace(false); setCommitResults(null); }
+    try {
+      const next = normalizedDraft();
+      if (remoteTargetId) {
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: false };
+        const entries = [...(current.entries ?? []).filter(item => item.name !== entry.name), entry];
+        const definition: McpDefinition = { id: next.id ?? crypto.randomUUID(), name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, version: (current.definitions ?? []).find(item => item.id === next.id)?.version ?? 1 };
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { entries, definitions: [...(current.definitions ?? []).filter(item => item.id !== definition.id), definition] });
+        await refreshNative(); setDefinitions(value => [...value.filter(item => item.id !== definition.id), definition]); setComposing(false); setMode('read'); setNotice(t('tools.mcp.written')); return;
+      }
+      setPreview(await native.previewMcpDraft(next, [{ ...target, enabled }])); setAllowReplace(false); setCommitResults(null);
+    }
     catch (value) { setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
@@ -203,9 +226,14 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     if (!await confirmAction(message, () => mounted.current, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
-      await native.removeNativeMcp({ ...readTarget, enabled: item.enabled }, item.name);
-      if (!inLibrary && found) await native.deleteMcpDefinition(found.id, found.version);
-      setDefinitions(await native.listMcpDefinitions());
+      if (remoteTargetId) {
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { entries: (current.entries ?? []).filter(entry => entry.name !== item.name), definitions: (current.definitions ?? []).filter(entry => entry.name !== item.name) });
+      } else {
+        await native.removeNativeMcp({ ...readTarget, enabled: item.enabled }, item.name);
+      }
+      if (!remoteTargetId && !inLibrary && found) await native.deleteMcpDefinition(found.id, found.version);
+      if (!remoteTargetId) setDefinitions(await native.listMcpDefinitions());
       await refreshNative(); setComposing(false); setMode('read'); setNotice(t('tools.mcp.deleted'));
     } catch (value) { setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }

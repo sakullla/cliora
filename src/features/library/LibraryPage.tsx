@@ -80,7 +80,7 @@ type LibrarySection = LibraryKind | 'mcp' | 'skill';
 export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
 export type LibraryMcpSpotlight = { id: string; token: number; source: 'connections' };
 
-export function LibraryPage({ managedTools = [], active = true, spotlight = null, mcpSpotlight = null, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null; mcpSpotlight?: LibraryMcpSpotlight | null; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function LibraryPage({ managedTools = [], remoteTargetId = 'local', active = true, spotlight = null, mcpSpotlight = null, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; remoteTargetId?: string; active?: boolean; spotlight?: LibrarySpotlight | null; mcpSpotlight?: LibraryMcpSpotlight | null; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
@@ -109,6 +109,9 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
   const [launchText, setLaunchText] = useState('');
   const [launchError, setLaunchError] = useState('');
   const [launchBusy, setLaunchBusy] = useState(false);
+  // Host switching changes the execution target. Keep the same library/tool
+  // choices as the local view; availability is resolved only when launching.
+  const scopedTools = managedTools;
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
@@ -131,19 +134,36 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
 
   useEffect(() => {
     if (!nativeAvailable || !active) return;
+    if (remoteTargetId !== 'local') {
+      setProjects([]);
+      let live = true;
+      void native.listRemoteRulePlacements(remoteTargetId).then((rows) => { if (live) setRulePlacements(Array.isArray(rows) ? rows : []); }).catch(() => { if (live) setRulePlacements([]); });
+      return () => { live = false; };
+    }
     void native.listProjects().then(setProjects).catch((value) => showError(formatFailure(value, t('library.page.projectsFailed'), t('library.page.projectsFailedNext'))));
     void native.listRulePlacements().then((rows) => setRulePlacements(Array.isArray(rows) ? rows : [])).catch(() => setRulePlacements([]));
-  }, [active]);
+  }, [active, remoteTargetId]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
+    if (remoteTargetId !== 'local') {
+      let live = true;
+      void Promise.all([native.listRemoteLibraryItems(remoteTargetId, 'prompt', ''), native.listRemoteLibraryItems(remoteTargetId, 'rule', '')]).then(([prompts, rules]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length, mcp: 0, skill: 0 }); }).catch(() => { if (live) setCounts({ prompt: 0, rule: 0, mcp: 0, skill: 0 }); });
+      return () => { live = false; };
+    }
     let live = true;
     void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, ''), native.listMcpDefinitions(), native.listSkillPackages()])
       .then(([prompts, rules, mcps, skills]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length, mcp: mcps.filter((item) => item.inLibrary !== false).length, skill: skills.filter((item) => item.inLibrary !== false).length }); })
       .catch(() => {});
     return () => { live = false; };
-  }, [active, countStamp]);
+  }, [active, countStamp, remoteTargetId]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
+    if (remoteTargetId !== 'local') {
+      let live = true;
+      setListLoading(true);
+      const timer = window.setTimeout(() => { void native.listRemoteLibraryItems(remoteTargetId, kind, search).then((result) => { if (live) { setItems(result); setListLoading(false); } }).catch((value) => { if (live) { setItems([]); setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } }); }, search ? 180 : 0);
+      return () => { live = false; window.clearTimeout(timer); };
+    }
     let live = true;
     setListLoading(true);
     // Search keystrokes debounce like Records (180ms) so fast typing merges into one
@@ -153,7 +173,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
         .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
     }, search ? 180 : 0);
     return () => { live = false; window.clearTimeout(timer); };
-  }, [active, kind, search]);
+  }, [active, kind, search, remoteTargetId]);
   // Spotlight from the command palette: settle the section and filters first, then
   // open the entry's edit dialog (its view/copy surface) once the list shows it.
   // Waiting is event-driven: the reveal simply fires when a matching item arrives.
@@ -198,7 +218,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     setSection(next); setDraft(null); setSavedText(''); toasts.setNotice(null); toasts.setError(null); clearDialogResult();
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
-  async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
+  async function refresh(nextKind = kind) { setItems(await (remoteTargetId === 'local' ? native.listLibraryItems(nextKind, null, search) : native.listRemoteLibraryItems(remoteTargetId, nextKind, search))); }
   function keepSaved(saved: LibraryItem) {
     setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
   }
@@ -206,7 +226,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     if (!draft || busy || !nativeAvailable) return;
     setBusy(true); clearDialogResult();
     try {
-      const saved = await native.saveLibraryItem(draft);
+      const saved = await (remoteTargetId === 'local' ? native.saveLibraryItem(draft) : native.saveRemoteLibraryItem(remoteTargetId, draft));
       setCountStamp((value) => value + 1);
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));
@@ -228,7 +248,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
         return;
       }
       setDraft(null); setSavedText(''); clearDialogResult();
-      showNotice(t('library.page.saved'));
+      showNotice(t(remoteTargetId === 'local' ? 'library.page.saved' : 'library.page.remoteSaved'));
     } catch (value) { showDialogError(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
     finally { setBusy(false); }
   }
@@ -237,9 +257,18 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     const detail = raw.trim().replace(/[。！？\s]+$/, '') || t('library.page.writeIncomplete');
     return t('library.page.ruleFailed', { detail, hint });
   }
+  function syncRuleSelection(id: string, version: number, toolIds: string[], scope: Scope, projectPath: string | null, allowReplace: boolean) {
+    const selection = { toolIds, scope, projectPath, allowReplace };
+    return remoteTargetId === 'local'
+      ? native.syncRuleClients(id, version, selection)
+      : native.syncRemoteRuleClients(remoteTargetId, id, version, selection);
+  }
+  function reloadRulePlacements() {
+    return remoteTargetId === 'local' ? native.listRulePlacements() : native.listRemoteRulePlacements(remoteTargetId);
+  }
   async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
     try {
-      const synced = await native.syncRuleClients(id, version, { toolIds, scope: 'global', projectPath: null, allowReplace });
+      const synced = await syncRuleSelection(id, version, toolIds, 'global', null, allowReplace);
       const rows = Array.isArray(synced) ? synced : [];
       if (!allowReplace && rows.some((item) => item.status === 'conflict')) {
         const started = latest.current;
@@ -251,7 +280,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
       }
       const failed = rows.find((item) => item.status === 'failed');
       if (failed) { showDialogError(ruleFailure({ message: failed.detail })); return false; }
-      const listed = await native.listRulePlacements().catch(() => rulePlacements);
+      const listed = await reloadRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
       return true;
     } catch (value) { showDialogError(ruleFailure(value)); return false; }
@@ -260,28 +289,28 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     if (busy) return;
     const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
-    const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
+    const toolName = scopedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     setBusy(true); toasts.setError(null); toasts.setNotice(null);
     try {
-      let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
+      let rows = await syncRuleSelection(item.id, item.version, next, scope, projectPath, false);
       rows = Array.isArray(rows) ? rows : [];
       if (rows.some((row) => row.status === 'conflict')) {
         const started = latest.current;
         if (!await confirmAction(t('library.page.confirmReplaceTool', { title: item.title, tool: toolName }), () => mounted.current && latest.current === started, { title: t('library.page.replaceTitle'), confirmLabel: t('library.page.replaceAction') })) return;
-        rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: true });
+        rows = await syncRuleSelection(item.id, item.version, next, scope, projectPath, true);
         rows = Array.isArray(rows) ? rows : [];
       }
       const failed = rows.find((row) => row.status === 'failed');
       if (failed) { showError(ruleFailure({ message: failed.detail }, t('library.page.ruleFailedRetryIcon'))); return; }
-      const listed = await native.listRulePlacements().catch(() => rulePlacements);
+      const listed = await reloadRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
       showNotice(next.includes(toolId) ? t('library.page.written', { where, tool: toolName }) : t('library.page.removed', { where, tool: toolName }));
     } catch (value) { showError(ruleFailure(value, t('library.page.ruleFailedRetryIcon'))); }
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
-    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(managedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
+    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(scopedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
   }
   async function startSession() {
     if (!launchItem || !launchTool || launchBusy) return;
@@ -294,7 +323,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
       if (opened) { onWorkbenchSession?.(opened); return; }
       showNotice(t('library.page.sessionStarted'));
     } catch (value) {
-      const desktop = managedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
+      const desktop = scopedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
       if (await failedInWorkbench(desktop)) {
         setLaunchItem(null);
         onWorkbenchFailure?.({ detail: formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext')), retry: { kind: 'launch', request } });
@@ -308,7 +337,8 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
     setBusy(true); clearDialogResult();
     try {
-      await native.deleteLibraryItem(draft.id, draft.expectedVersion);
+      if (remoteTargetId === 'local') await native.deleteLibraryItem(draft.id, draft.expectedVersion);
+      else await native.deleteRemoteLibraryItem(remoteTargetId, draft.id, draft.expectedVersion);
       setCountStamp((value) => value + 1);
       setDraft(null); setSavedText('');
       try { await refresh(); }
@@ -316,7 +346,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
         toasts.showMixed(t('library.page.deleted'), formatFailure(value, t('library.page.listFailed'), t('library.page.listNext')));
         return;
       }
-      showNotice(t('library.page.deleted'));
+      showNotice(t(remoteTargetId === 'local' ? 'library.page.deleted' : 'library.page.remoteDeleted'));
     } catch (value) { showDialogError(formatFailure(value, t('library.page.deleteFailed'), t('library.page.deleteFailedNext'))); }
     finally { setBusy(false); }
   }
@@ -345,7 +375,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
   }
 
   if (!nativeAvailable) return <EmptyState icon="library" title={t('library.page.nativeOnly')} />;
-  return <section className={styles.page} aria-label={t('library.page.label')}><ToastScope toasts={toasts}>
+  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><ToastScope toasts={toasts}>
     <div className={styles.libraryBar}>
       <div className={styles.tabs} role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}><span className={styles.tabIcon} aria-hidden="true"><Icon name="sparkle" size={15} /></span><span className={styles.tabLabel}>{t('library.page.prompt')}</span>{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
@@ -357,8 +387,8 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
         <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
       </div>
     </div>
-    {section === 'mcp' && <LibraryMcp active={active} tools={managedTools} projects={projects} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
-    {section === 'skill' && <LibraryResources active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
+    {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
+    {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
@@ -389,7 +419,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
           }}>{item.title}</button>
           <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : t('library.page.emptyBody')}</p>
           <div className={styles.cardBar}>
-            {kind === 'rule' ? <ScopeMarks label={t('library.page.cliMarks', { title: item.title })} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = managedTools.find(tool => tool.id === toolId)?.management?.rules; if (!support) return null; if (scope === 'project' && support.catalog) return t('library.page.ruleCatalog'); if (!support[scope]) return (scope === 'global' ? support.globalReason : support.projectReason) || t('library.page.ruleUnsupported', { scope: scope === 'global' ? t('tools.apply.global') : t('tools.accounts.scopeProject') }); return null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
+            {kind === 'rule' ? <ScopeMarks label={t('library.page.cliMarks', { title: item.title })} tools={scopedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = scopedTools.find(tool => tool.id === toolId)?.management?.rules; if (!support) return null; if (scope === 'project' && support.catalog) return t('library.page.ruleCatalog'); if (!support[scope]) return (scope === 'global' ? support.globalReason : support.projectReason) || t('library.page.ruleUnsupported', { scope: scope === 'global' ? t('tools.apply.global') : t('tools.accounts.scopeProject') }); return null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: t('library.page.markUnavailable') };
@@ -427,7 +457,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
       {launchItem && <div className={styles.editor}>
         {launchError && <div className={styles.error} role="alert">{launchError}</div>}
         <div className={styles.fields}>
-          <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(managedTools)} placeholder={t('library.page.noCli')} disabled={!managedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
+          <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
           <label>{t('library.page.launchProjectLabel')}<FilterSelect label={t('library.page.launchProject')} value={launchProject} options={[{ value: '', label: t('library.page.noProject') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={setLaunchProject} /></label>
         </div>
         <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
