@@ -834,9 +834,12 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
 
 const TITLE_LIMIT = 80;
 
-/** Keep the CLI's own title text. Drop only C0 controls so the workbench title stays one line. */
+/** Drop a leading braille spinner and C0 controls. Emoji and the rest of the CLI title stay. */
 export function cleanTerminalTitle(raw: string): string {
-  const text = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  const text = raw
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/^(?:[\u2800-\u28ff]+\s*)+/, '')
+    .trim();
   return text.length > TITLE_LIMIT ? text.slice(0, TITLE_LIMIT - 1).trimEnd() + '\u2026' : text;
 }
 

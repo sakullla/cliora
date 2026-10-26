@@ -2478,15 +2478,17 @@ mod tests {
     }
 
     fn exit_status(code: u32) -> std::process::ExitStatus {
+        // Unix packs the exit code in the high byte of a wait status (`i32`).
+        // Windows `from_raw` takes the process exit code itself (`u32`).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw((code << 8) as i32)
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::ExitStatusExt;
             std::process::ExitStatus::from_raw(code)
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            std::process::ExitStatus::from_raw(code << 8)
         }
     }
 
