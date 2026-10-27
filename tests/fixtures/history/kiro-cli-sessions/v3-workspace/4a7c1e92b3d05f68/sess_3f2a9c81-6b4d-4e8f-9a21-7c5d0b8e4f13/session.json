@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13",
+  "title": "界面改版方案讨论",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "C:\\Users\\example\\project\\demo"
+  ],
+  "rootPaths": [
+    "C:\\Users\\example\\project\\demo"
+  ],
+  "createdAt": "2026-10-27T08:00:00Z",
+  "lastModifiedAt": "2026-10-27T08:03:00Z",
+  "modelId": "claude-opus-5.5",
+  "autopilot": true,
+  "workflowLaunch": "when-asked",
+  "effortLevel": "medium",
+  "contextSnapshotModelDisplay": {
+    "modelId": "claude-opus-5.5",
+    "display": "claude-opus-5.5"
+  },
+  "semanticReviewEnabled": true,
+  "disableAutoCompaction": false,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "memoryConfig": {
+    "mode": "disabled",
+    "reflection": false
+  },
+  "memoryConfigSource": "explicit",
+  "description": "已整理改版要点并记录到设计文档。",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "memory": {
+          "mode": "disabled",
+          "reflection": false
+        },
+        "userMemoryOptIn": {
+          "enabled": false
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

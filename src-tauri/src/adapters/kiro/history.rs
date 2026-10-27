@@ -1,32 +1,54 @@
-//! Kiro CLI session sources: legacy `sessions/cli/<uuid>.jsonl` and current
-//! `<data-root>/<workspace>/sess_<id>/messages.jsonl`.
+//! Kiro CLI session sources: legacy `sessions/cli/<uuid>.jsonl`, V2
+//! `<data-root>/<workspace>/sess_<id>/messages.jsonl` and V3
+//! `<data-root>/sessions/<workspace-hash>/sess_<id>/messages.jsonl`
+//! (recursive discovery covers both current layouts unchanged).
 //!
-//! [RE] Evidence class (02-technical-solution ADR-2): `kiro-cli` is
-//! closed-source and not installed locally; the layout below comes from
-//! community reverse engineering (agentsview kiro.go, threadle) cross-checked
-//! with AWS Builder blog material (01-exploration.md §4). Per the [RE] policy
-//! an unknown row kind or malformed shape degrades to `partial` and is never
-//! guessed; compatibility is declared only for the shapes recorded here.
+//! [RE] Evidence class: the legacy and V2 layouts come from community
+//! reverse engineering (agentsview kiro.go, threadle) cross-checked with AWS
+//! Builder blog material; the V3 shapes below were read off a real local
+//! install (kiro-cli 2.34.2, `chat.agentEngine: v3`; 01-exploration.md §2)
+//! and are recorded as observed evidence. Per the [RE] policy an unknown row
+//! kind or malformed shape degrades to `partial` and is never guessed;
+//! compatibility is declared only for the shapes recorded here.
 //!
 //! * Legacy sessions live in `<root>/sessions/cli/<uuid>.jsonl` with a sibling
 //!   `<uuid>.json` metadata file `{session_id, cwd, title, created_at,
 //!   updated_at}`; rows are `{kind, data}` with kind ∈ Prompt |
 //!   AssistantMessage | ToolResults and content blocks text | toolUse |
 //!   toolResult. Only text blocks are conversation turns.
-//! * Current sessions live in `<data-root>/<workspace>/sess_<id>/` holding
-//!   `messages.jsonl` plus a sibling `session.json` `{title, createdAt,
-//!   lastModifiedAt, workspacePaths}`; rows are `{payload, timestamp}` with
-//!   payload types user | assistant | tool_call | tool_result and the
-//!   assistant model in `reasoningModelId`.
+//! * Current sessions (V2 and V3) hold `messages.jsonl` plus a sibling
+//!   `session.json` `{title, createdAt, lastModifiedAt, workspacePaths,
+//!   modelId}`; rows are `{id, payload, timestamp}` with payload types user |
+//!   assistant | tool_call | tool_result | session_metadata | usage_summary
+//!   plus the structural kinds below. The assistant model rides in
+//!   `reasoningModelId`; `session.json.modelId` is only the fallback when no
+//!   row ever carried one.
+//! * V3 `session_metadata` rows `{key, value, executionId}` with key
+//!   `contextUsage` carry `value.usagePercentage`, the context occupancy
+//!   percent of the session; it is emitted as a native usage event with unit
+//!   `context-usage-percent` (never converted to tokens or money). No token
+//!   field exists in any format, so no token usage is ever produced. Other
+//!   `session_metadata` keys have no recorded shape.
+//! * V3 `usage_summary` rows `{promptTurnSummaries: [{unit, unitPlural,
+//!   usage, usedTools}], elapsedTime, status, ...}` carry per-turn native
+//!   credit consumption; each entry with a usable `unit`/`usage` becomes a
+//!   native usage event (aggregate, request count unknown). No token or
+//!   monetary field exists in any format.
+//! * V3 structural/metadata rows that never enter the conversation timeline
+//!   and are ignored as known shapes: `agent_note` (internal session-context
+//!   snapshot), `turn_start`, `turn_end`, `session_start` (system prompt),
+//!   `session_event`, `steering_inclusion`, `pending_interaction`,
+//!   `interaction_resolved`.
 //! * `.history` and `.snapshots` directories are internal rollups, never
-//!   session sources.
+//!   session sources. The V3 snapshot rollup is a dotless `snapshots/`
+//!   directory of hash-named subdirectories holding file snapshots and a
+//!   `.hash` marker; observed shapes contain no `messages.jsonl`, so they
+//!   never become session sources.
 //! * `data.sqlite3` (`conversations_v2`) is a persistent archive; its table
 //!   shape (key/conversation_id/value/created_at/updated_at) was read off a
 //!   real Windows install, but that install holds zero rows, so the `value`
 //!   payload shape has no evidence. It is deliberately NOT indexed (known
 //!   limitation recorded in the adapter descriptor; never guessed).
-//! * None of the three formats carries token fields, so no usage events are
-//!   ever produced; the usage dimension stays hidden with that reason.
 
 use std::path::{Path, PathBuf};
 
@@ -35,12 +57,14 @@ use serde_json::Value;
 use crate::history::{
     check_cancelled, discover_jsonl_controlled, read_jsonl_controlled,
     source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
-    ParsedSession,
+    NativeUsage, ParsedSession, UsageEvent,
 };
 
 /// Parser/fingerprint version: existing indexes are rebuilt once per parser
-/// change even when the native files themselves have not changed.
-const FINGERPRINT_PREFIX: &str = "kiro-session-v1";
+/// change even when the native files themselves have not changed. v2 adds the
+/// V3 `session_metadata` row kind (contextUsage native usage) and the
+/// `session.json.modelId` fallback.
+const FINGERPRINT_PREFIX: &str = "kiro-session-v2";
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
@@ -280,6 +304,16 @@ fn parse_current(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
             }
             session.started_at = meta.get("createdAt").and_then(timestamp);
             session.updated_at = meta.get("lastModifiedAt").and_then(timestamp);
+            // Fallback only: a later `reasoningModelId` row overwrites it.
+            if session.model.is_none() {
+                if let Some(model) = meta
+                    .get("modelId")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.trim().is_empty())
+                {
+                    session.model = Some(model.to_owned());
+                }
+            }
         }
         Some(None) => session.partial = true,
         None => {}
@@ -315,6 +349,111 @@ fn parse_current(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
             }
             // Tool traffic never carries conversation turns.
             "tool_call" | "tool_result" => {}
+            // V3 structural rows: internal snapshots, turn/session
+            // boundaries, system prompts and approval bookkeeping. Known
+            // shapes that never enter the conversation timeline.
+            "agent_note" | "turn_start" | "turn_end" | "session_start"
+            | "session_event" | "steering_inclusion" | "pending_interaction"
+            | "interaction_resolved" => {}
+            // V3 session-level metadata; only the contextUsage shape is
+            // recorded (see the module header for its evidence class).
+            "session_metadata" => match payload.get("key").and_then(Value::as_str) {
+                Some("contextUsage") => match payload
+                    .get("value")
+                    .and_then(|value| value.get("usagePercentage"))
+                    .and_then(Value::as_f64)
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                {
+                    Some(percent) => {
+                        // Row ids are session-scoped counters, never assumed
+                        // globally unique across sessions.
+                        let scope = session
+                            .native_id
+                            .clone()
+                            .unwrap_or_else(|| source.key());
+                        let row_id = row
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| valid_native_id(id))
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("line-{line}"));
+                        session.usage.push(UsageEvent {
+                            native_usage: Some(NativeUsage {
+                                unit: "context-usage-percent".into(),
+                                value: percent,
+                                original_value: None,
+                                billable: None,
+                            }),
+                            request_count: None,
+                            id: format!("context:{scope}:{row_id}"),
+                            model: None,
+                            timestamp: time,
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            input_includes_cache: false,
+                            attributions: Vec::new(),
+                        });
+                    }
+                    // A contextUsage row without a finite percentage is a new
+                    // native shape; never guessed.
+                    None => session.partial = true,
+                },
+                // Other metadata keys have no recorded shape.
+                _ => session.partial = true,
+            },
+            // V3 per-turn native credit consumption; an aggregate summary, so
+            // the request count stays unknown. Each entry needs a usable
+            // native `unit` and finite non-negative `usage`; anything else is
+            // a new native shape and is never guessed.
+            "usage_summary" => match payload.get("promptTurnSummaries") {
+                Some(Value::Array(summaries)) => {
+                    for (index, entry) in summaries.iter().enumerate() {
+                        let unit = entry.get("unit").and_then(Value::as_str);
+                        let value = entry
+                            .get("usage")
+                            .and_then(Value::as_f64)
+                            .filter(|value| value.is_finite() && *value >= 0.0);
+                        match (unit.filter(|unit| !unit.trim().is_empty()), value) {
+                            (Some(unit), Some(value)) => {
+                                // Row ids are session-scoped counters, never
+                                // assumed globally unique across sessions.
+                                let scope = session
+                                    .native_id
+                                    .clone()
+                                    .unwrap_or_else(|| source.key());
+                                let row_id = row
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .filter(|id| valid_native_id(id))
+                                    .map(str::to_owned)
+                                    .unwrap_or_else(|| format!("line-{line}"));
+                                session.usage.push(UsageEvent {
+                                    native_usage: Some(NativeUsage {
+                                        unit: unit.to_owned(),
+                                        value,
+                                        original_value: None,
+                                        billable: None,
+                                    }),
+                                    request_count: None,
+                                    id: format!("usage:{scope}:{row_id}-{index}"),
+                                    model: None,
+                                    timestamp: time,
+                                    input: None,
+                                    output: None,
+                                    cache_read: None,
+                                    cache_write: None,
+                                    input_includes_cache: false,
+                                    attributions: Vec::new(),
+                                });
+                            }
+                            _ => session.partial = true,
+                        }
+                    }
+                }
+                _ => session.partial = true,
+            },
             // Unknown payload types are future/native shapes without [RE]
             // evidence.
             _ => session.partial = true,
@@ -354,6 +493,8 @@ mod tests {
             &fixtures().join("demo-workspace"),
             &home.path().join(".kiro/demo-workspace"),
         );
+        // V3 workspace-hash layout sits directly under `sessions/`.
+        copy_tree(&fixtures().join("v3-workspace"), &home.path().join(".kiro/sessions"));
         home
     }
 
@@ -400,16 +541,29 @@ mod tests {
         )
         .unwrap();
         let sources = sources(home.path()).unwrap();
-        assert_eq!(sources.len(), 2, "{sources:?}");
+        assert_eq!(sources.len(), 3, "{sources:?}");
         let ids: Vec<&str> = sources
             .iter()
             .filter_map(|source| source.native_id.as_deref())
             .collect();
         assert!(ids.contains(&"6f5813aa-9d04-4d7b-b3e2-5c1f0a67d2e4"), "{ids:?}");
         assert!(ids.contains(&"sess_a1b2c3d4e5f67890"), "{ids:?}");
+        assert!(
+            ids.contains(&"sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13"),
+            "{ids:?}"
+        );
         assert!(sources
             .iter()
-            .all(|source| source.fingerprint.starts_with("kiro-session-v1|")));
+            .all(|source| source.fingerprint.starts_with("kiro-session-v2|")));
+        // The V3 dotless `snapshots` rollup directory is not an excluded name;
+        // its observed hash-named subdirectories hold no `messages.jsonl`, so
+        // it must still never produce a session source.
+        assert!(
+            sources.iter().all(|source| !source.path.components().any(
+                |component| component.as_os_str().to_str() == Some("snapshots")
+            )),
+            "无点 snapshots 目录不得产生会话源：{sources:?}"
+        );
     }
 
     #[test]
@@ -466,7 +620,7 @@ mod tests {
             .iter()
             .all(|message| !message.text.is_empty()));
         assert!(!session.partial);
-        // No format carries token fields: no usage events, ever.
+        // The legacy format carries no usage fields of any kind.
         assert!(session.usage.is_empty());
         assert_unlinked(&session);
     }
@@ -500,7 +654,167 @@ mod tests {
             .all(|message| !message.text.is_empty()));
         assert!(session.messages.iter().all(|message| message.timestamp.is_some()));
         assert!(!session.partial);
-        assert!(session.usage.is_empty(), "三种格式均无 token 字段");
+        assert!(session.usage.is_empty(), "无 session_metadata 行的会话不产生用量");
+        assert_unlinked(&session);
+    }
+
+    #[test]
+    fn v3_fixture_parses_context_usage_without_partial() {
+        let source = source_for(fixtures().join(
+            "v3-workspace/4a7c1e92b3d05f68/sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13/messages.jsonl",
+        ));
+        let session = parse(&source).unwrap();
+        assert_eq!(
+            session.native_id.as_deref(),
+            Some("sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13")
+        );
+        assert_eq!(session.title, "界面改版方案讨论");
+        assert_eq!(session.cwd.as_deref(), Some(r"C:\Users\example\project\demo"));
+        // 行内 reasoningModelId 优先于 session.json 的 modelId 回退。
+        assert_eq!(session.model.as_deref(), Some("qdev::claude-opus-5.5"));
+        assert_eq!(session.started_at, Some(1793088000000));
+        assert_eq!(session.updated_at, Some(1793088180000));
+        assert!(
+            !session.partial,
+            "session_metadata/contextUsage、usage_summary 与结构行都是已核对形状，不得标 partial"
+        );
+        let roles: Vec<&str> = session
+            .messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect();
+        // 结构行（agent_note/turn_*/session_start/session_event/
+        // steering_inclusion/pending_interaction/interaction_resolved）不进时间线。
+        assert_eq!(roles, vec!["user", "assistant", "user", "assistant"]);
+        let expected: [(&str, &str, f64, i64); 5] = [
+            (
+                "context:sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13:a1b2c3d4-2222-4aaa-8bbb-cccc2222dddd",
+                "context-usage-percent",
+                3.2563,
+                1793088030888,
+            ),
+            (
+                "context:sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13:a1b2c3d4-4444-4aaa-8bbb-cccc4444dddd",
+                "context-usage-percent",
+                30.2031,
+                1793088090000,
+            ),
+            (
+                "usage:sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13:05f2547e-70a9-47fa-b7a7-000000000001-usage-0",
+                "credit",
+                0.9504849316749585,
+                1793088100000,
+            ),
+            (
+                "usage:sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13:1c8a4030-6c80-40f7-91da-000000000002-usage-0",
+                "credit",
+                45.54515652271972,
+                1793088175000,
+            ),
+            (
+                "context:sess_3f2a9c81-6b4d-4e8f-9a21-7c5d0b8e4f13:a1b2c3d4-7777-4aaa-8bbb-cccc7777dddd",
+                "context-usage-percent",
+                42.5,
+                1793088180000,
+            ),
+        ];
+        assert_eq!(session.usage.len(), expected.len());
+        for (event, (id, unit, value, time)) in session.usage.iter().zip(expected) {
+            assert_eq!(event.id, id);
+            assert_eq!(event.model, None, "原生单位用量不携带模型");
+            assert_eq!(event.timestamp, Some(time), "取行时间");
+            assert_eq!(event.request_count, None, "聚合摘要的请求数未知");
+            let usage = event
+                .native_usage
+                .as_ref()
+                .expect("每条用量行都有原生用量");
+            assert_eq!(usage.unit, unit);
+            assert!((usage.value - value).abs() < 1e-9);
+            assert_eq!(usage.original_value, None);
+            assert_eq!(usage.billable, None);
+        }
+        assert_unlinked(&session);
+    }
+
+    #[test]
+    fn v3_model_falls_back_to_session_model_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp
+            .path()
+            .join(".kiro/sessions/4a7c1e92b3d05f68/sess_9d8e7f6a-5b4c-4d3e-9f01-87654321abcd");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("session.json"),
+            concat!(
+                r#"{"title":"无行内模型的会话","createdAt":"2026-10-27T08:00:00Z","lastModifiedAt":"2026-10-27T08:00:10Z","#,
+                r#""workspacePaths":["C:\\work\\demo"],"modelId":"claude-opus-5.5"}"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("messages.jsonl"),
+            concat!(
+                r#"{"id":"b1b2c3d4-8888-4aaa-8bbb-cccc8888dddd","timestamp":"2026-10-27T08:00:05Z","payload":{"type":"user","content":"问"}}"#,
+                "\n",
+                r#"{"id":"b1b2c3d4-9999-4aaa-8bbb-cccc9999dddd","timestamp":"2026-10-27T08:00:10Z","payload":{"type":"assistant","content":"答"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let sources = sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 1, "{sources:?}");
+        let session = parse(&sources[0]).unwrap();
+        assert_eq!(
+            session.model.as_deref(),
+            Some("claude-opus-5.5"),
+            "无 reasoningModelId 行时以 session.json.modelId 回退"
+        );
+        assert!(!session.partial);
+        assert!(session.usage.is_empty());
+    }
+
+    #[test]
+    fn unknown_session_metadata_shapes_stay_partial() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp
+            .path()
+            .join(".kiro/sessions/4a7c1e92b3d05f68/sess_0e1f2a3b-4c5d-4e6f-8a90-1234567890ab");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("session.json"),
+            r#"{"title":"含未知元数据的会话","workspacePaths":["C:\\work\\demo"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("messages.jsonl"),
+            concat!(
+                r#"{"id":"c1b2c3d4-1111-4aaa-8bbb-cccc1111dddd","timestamp":"2026-10-27T08:00:00Z","payload":{"type":"user","content":"问"}}"#,
+                "\n",
+                // displayError 等其它 key 的 value 形状未核对。
+                r#"{"id":"c1b2c3d4-2222-4aaa-8bbb-cccc2222dddd","timestamp":"2026-10-27T08:00:01Z","payload":{"type":"session_metadata","key":"displayError","value":{"message":"x"},"executionId":"e1"}}"#,
+                "\n",
+                r#"{"id":"c1b2c3d4-3333-4aaa-8bbb-cccc3333dddd","timestamp":"2026-10-27T08:00:02Z","payload":{"type":"session_metadata","key":"futureKey"}}"#,
+                "\n",
+                // contextUsage 但缺少可用的 usagePercentage：不猜。
+                r#"{"id":"c1b2c3d4-4444-4aaa-8bbb-cccc4444dddd","timestamp":"2026-10-27T08:00:03Z","payload":{"type":"session_metadata","key":"contextUsage","value":{}}}"#,
+                "\n",
+                // usage_summary 条目缺 usage 或缺 unit、以及整行缺
+                // promptTurnSummaries：均为未核对形状。
+                r#"{"id":"c1b2c3d4-5555-4aaa-8bbb-cccc5555dddd","timestamp":"2026-10-27T08:00:04Z","payload":{"type":"usage_summary","promptTurnSummaries":[{"unit":"credit","usedTools":[]}]}}"#,
+                "\n",
+                r#"{"id":"c1b2c3d4-6666-4aaa-8bbb-cccc6666dddd","timestamp":"2026-10-27T08:00:05Z","payload":{"type":"usage_summary","promptTurnSummaries":[{"usage":1.5}]}}"#,
+                "\n",
+                r#"{"id":"c1b2c3d4-7777-4aaa-8bbb-cccc7777dddd","timestamp":"2026-10-27T08:00:06Z","payload":{"type":"usage_summary"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let sources = sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 1, "{sources:?}");
+        let session = parse(&sources[0]).unwrap();
+        assert!(session.partial, "未知 key 与畸形形状必须标 partial");
+        assert_eq!(session.messages.len(), 1, "已知行仍须进入时间线");
+        assert!(session.usage.is_empty(), "畸形用量行不得造出用量");
         assert_unlinked(&session);
     }
 
