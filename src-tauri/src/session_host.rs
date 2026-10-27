@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::adapters::LaunchMode;
 use crate::launch::{LaunchPlan, LaunchResult, TerminalId};
+use crate::terminal_replay::ReplayBuffer;
 
 const REPLAY_LIMIT: usize = 256 * 1024;
 /// PTY reads arrive as thousands of small chunks; one IPC event per read floods the
@@ -99,6 +100,18 @@ pub struct SessionSnapshot {
 struct SessionBytes {
     session_id: String,
     data_base64: String,
+    /// Stream offset of the first byte, so a view can skip what its replay already held.
+    offset: u64,
+}
+
+/// Recent output for a view that mounts after the session started.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaySnapshot {
+    /// Mode prelude plus the retained output.
+    pub data_base64: String,
+    /// Stream offset just past the newest byte in `data_base64`.
+    pub end_offset: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -121,7 +134,7 @@ struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
-    replay: Mutex<VecDeque<u8>>,
+    replay: Mutex<ReplayBuffer>,
     remote: bool,
     remote_session_id: Option<String>,
     remote_end_args: Option<Vec<String>>,
@@ -196,7 +209,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
         child: Mutex::new(child),
-        replay: Mutex::new(VecDeque::new()),
+        replay: Mutex::new(ReplayBuffer::new(REPLAY_LIMIT)),
         remote,
         remote_session_id: plan.remote_session_id.clone(),
         remote_end_args: plan.remote_end_args.clone(),
@@ -256,9 +269,13 @@ pub fn list() -> Vec<SessionSnapshot> {
 }
 
 pub fn replay(id: &str) -> Result<String, String> {
+    Ok(replay_snapshot(id)?.data_base64)
+}
+
+pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
     let session = lookup(id)?;
-    let bytes: Vec<u8> = session.replay.lock().map_err(|_| "会话状态不可用")?.iter().copied().collect();
-    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    let (bytes, end_offset) = session.replay.lock().map_err(|_| "会话状态不可用")?.snapshot();
+    Ok(ReplaySnapshot { data_base64: base64::engine::general_purpose::STANDARD.encode(bytes), end_offset })
 }
 
 pub fn write(id: &str, data_base64: &str) -> Result<(), String> {
@@ -409,17 +426,14 @@ fn coalesce_output(receiver: Receiver<(String, Vec<u8>)>) {
 
 fn flush_output(id: &str, bytes: &[u8]) {
     let Ok(session) = lookup(id) else { return };
-    {
+    let offset = {
         let Ok(mut replay) = session.replay.lock() else { return };
-        replay.extend(bytes);
-        let overflow = replay.len().saturating_sub(REPLAY_LIMIT);
-        if overflow > 0 {
-            replay.drain(..overflow);
-        }
-    }
+        replay.push(bytes)
+    };
     emit(OUTPUT_EVENT, SessionBytes {
         session_id: id.to_owned(),
         data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        offset,
     });
 }
 

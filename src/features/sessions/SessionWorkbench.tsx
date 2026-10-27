@@ -15,12 +15,12 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchSession } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
-import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailFilter, type RailSession, type SessionTone } from './SessionRail';
@@ -362,8 +362,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const firstSeenAt = useRef(new Map<string, number>());
   const autoRemoteReattachAttempted = useRef(false);
   const [clock, setClock] = useState(() => Date.now());
-  const writers = useRef(new Map<string, (data: string) => void>());
-  const pending = useRef(new Map<string, string[]>());
+  const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
+  const pending = useRef(new Map<string, OutputChunk[]>());
   const pendingBytes = useRef(new Map<string, number>());
   const handles = useRef(new Map<string, TerminalHandle>());
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
@@ -593,26 +593,26 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!nativeAvailable) { setLoading(false); return; }
     let alive = true;
     const stops: Array<() => void> = [];
-    const push = (sessionId: string, data: string) => {
+    const push = (sessionId: string, chunk: OutputChunk) => {
       const write = writers.current.get(sessionId);
-      if (write) write(data);
+      if (write) write(chunk);
       else {
         const queued = pending.current.get(sessionId) ?? [];
         let bytes = pendingBytes.current.get(sessionId) ?? 0;
-        queued.push(data);
-        bytes += data.length;
+        queued.push(chunk);
+        bytes += chunk.data.length;
         // A terminal that is not mounted can still receive output while the
         // session list is loading. Keep only a bounded tail; replay() supplies
         // the complete recent output when the terminal mounts.
         while (bytes > MAX_PENDING_OUTPUT_BYTES && queued.length > 1) {
-          bytes -= queued.shift()?.length ?? 0;
+          bytes -= queued.shift()?.data.length ?? 0;
         }
         pending.current.set(sessionId, queued);
         pendingBytes.current.set(sessionId, bytes);
       }
     };
-    void listen<{ sessionId: string; dataBase64: string }>('cliora:session-output', (event) => {
-      if (alive) push(event.payload.sessionId, event.payload.dataBase64);
+    void listen<WorkbenchOutput>('cliora:session-output', (event) => {
+      if (alive) push(event.payload.sessionId, { data: event.payload.dataBase64, offset: typeof event.payload.offset === 'number' ? event.payload.offset : undefined });
     }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
     void listen<{ sessionId: string; exitCode: number | null }>('cliora:session-exit', (event) => {
       if (!alive) return;

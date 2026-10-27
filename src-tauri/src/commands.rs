@@ -3455,8 +3455,8 @@ fn enabled_target(db: &crate::database::Database, target_id: &str) -> Result<cra
 }
 
 #[tauri::command]
-pub async fn replay_workbench_session(session_id: String) -> Result<String, ApiError> {
-    blocking(move || crate::session_host::replay(&session_id).map_err(native_error)).await
+pub async fn replay_workbench_session(session_id: String) -> Result<crate::session_host::ReplaySnapshot, ApiError> {
+    blocking(move || crate::session_host::replay_snapshot(&session_id).map_err(native_error)).await
 }
 
 #[tauri::command]

@@ -16,9 +16,9 @@ async function installWorkbenchMock(page: Page) {
       __writeBytes: writeBytes,
       __writeLog: writeLog,
       __opened: opened,
-      __output: (text: string, sessionId = 's1') => {
+      __output: (text: string, sessionId = 's1', offset?: number) => {
         const bytes = new TextEncoder().encode(text);
-        bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: btoa(String.fromCharCode(...bytes)) } });
+        bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: btoa(String.fromCharCode(...bytes)), ...(offset === undefined ? {} : { offset }) } });
       },
       __exit: (exitCode: number | null, sessionId = 's1') => {
         bridge.handlers[bridge.listens['cliora:session-exit']]?.({ payload: { sessionId, exitCode } });
@@ -483,6 +483,29 @@ test('a replayed session with long output opens scrolled to the latest line', as
   await expect(latest).toBeVisible();
   await latest.click();
   await expect.poll(() => page.locator('.xterm-viewport:visible').evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+});
+
+test('numbered output that overlaps the replay is written once', async ({ page }) => {
+  await installWorkbenchMock(page);
+  // The host replay ends at stream offset 40; a live event re-sends its last bytes.
+  await page.addInitScript((encoded) => {
+    Object.assign(window, { __replayOverride: { dataBase64: encoded, endOffset: 40 } });
+  }, btoa('replayed-head\r\nshared-tail'));
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const tree = page.locator('.xterm-accessibility-tree').first();
+  await expect(tree).toContainText('shared-tail');
+  await page.evaluate(() => {
+    const output = (window as unknown as { __output: (text: string, sessionId?: string, offset?: number) => void }).__output;
+    output('-tail', 's1', 35); // bytes 35..39 were already replayed: only 40.. is new, which is empty here
+    output('shared-tail=fresh-line', 's1', 29); // 29..39 duplicate, '=fresh-line' is new
+    output('stale', 's1', 10); // entirely inside the replay
+  });
+  await expect(tree).toContainText('shared-tail=fresh-line');
+  const text = await tree.innerText();
+  expect(text.match(/shared-tail/g)?.length).toBe(1);
+  expect(text).not.toContain('-tail-tail');
+  expect(text).not.toContain('stale');
 });
 
 test('find opens over the terminal without resizing the PTY canvas', async ({ page }) => {
