@@ -806,7 +806,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
     bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's1', dataBase64: btoa(String.fromCharCode(...bytes)) } });
   });
   await expect(codex.locator('strong')).toHaveText('修复登录');
-  await expect(codex).toContainText('Codex · Alpha');
+  await expect(codex.locator('[class*="sessionPlace"]')).toHaveText('Alpha');
   await expect(stage).toContainText('修复登录');
   // User-facing emoji in an OSC title survives the spinner cleanup. This is
   // important for remote CLIs that use emoji to indicate the active task.

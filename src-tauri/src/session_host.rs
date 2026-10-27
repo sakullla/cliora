@@ -327,6 +327,13 @@ pub fn resize(id: &str, cols: u16, rows: u16) -> Result<(), String> {
         return Err("会话已经结束".into());
     }
     let master = session.master.lock().map_err(|_| "会话状态不可用")?;
+    // A resize to the grid the PTY already has is not a no-op for the CLI: ConPTY and
+    // SIGWINCH both make full-screen CLIs redraw their live region, and switching back to
+    // a session re-sends its unchanged grid. Inline TUIs (Kiro, Ink-based CLIs) then
+    // repaint below the previous frame and the status lines appear twice.
+    if master.get_size().is_ok_and(|size| size.cols == cols && size.rows == rows) {
+        return Ok(());
+    }
     master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|error| format!("无法调整会话尺寸：{error}"))

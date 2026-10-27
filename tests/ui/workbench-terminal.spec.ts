@@ -12,8 +12,10 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
     const writeBytes: number[][] = [];
     const writeLog: Array<{ sessionId: string; text: string }> = [];
     const opened: string[] = [];
+    const resizes: Array<{ sessionId: string; cols: number; rows: number }> = [];
     Object.assign(window, {
       isTauri: true,
+      __resizes: resizes,
       __writes: writes,
       __writeBytes: writeBytes,
       __writeLog: writeLog,
@@ -52,7 +54,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             writeLog.push({ sessionId: args.sessionId, text });
             return null;
           }
-          if (command === 'resize_workbench_session') return null;
+          if (command === 'resize_workbench_session') { resizes.push({ sessionId: args.sessionId, cols: args.cols, rows: args.rows }); return null; }
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
           return [];
@@ -930,6 +932,26 @@ test('Ctrl+Tab cycles sessions and background output marks a card unread', async
   await page.keyboard.press('Control+Shift+Tab');
   await expect(codex).toHaveAttribute('aria-selected', 'true');
   expect(await writes(page)).toEqual([]);
+});
+
+test('switching back to a session does not resend its unchanged grid', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const codex = page.getByRole('tab', { name: /Codex/ });
+  const claude = page.getByRole('tab', { name: /Claude Code/ });
+  const resizes = (id: string) => page.evaluate((sessionId) => (window as unknown as { __resizes: Array<{ sessionId: string }> }).__resizes.filter((item) => item.sessionId === sessionId).length, id);
+  await expect.poll(() => resizes('s1')).toBeGreaterThan(0);
+  await page.waitForTimeout(300);
+  const settled = await resizes('s1');
+  // Every resize makes an inline TUI repaint its live region; a repeat stacks the status lines.
+  for (let round = 0; round < 3; round += 1) {
+    await claude.click();
+    await expect(claude).toHaveAttribute('aria-selected', 'true');
+    await codex.click();
+    await expect(codex).toHaveAttribute('aria-selected', 'true');
+  }
+  await page.waitForTimeout(300);
+  expect(await resizes('s1')).toBe(settled);
 });
 
 test('find can match case, line spacing persists, shortcuts are listed, and the rail collapses to icons', async ({ page }) => {
