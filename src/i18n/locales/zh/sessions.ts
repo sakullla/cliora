@@ -206,6 +206,10 @@ export default {
   kbZoomReset: '重置字号',
   findCase: '区分大小写',
   scrolledBack: '正在查看历史',
-  gridSize: '终端尺寸：{{cols}} 列 × {{rows}} 行',
+  gitBranch: 'Git 分支 {{name}}',
+  gitDetached: 'Git 未在分支上（{{commit}}）',
+  gitWorktree: '工作树 {{name}}',
+  gitWorktreeShort: '工作树',
+  gitRepository: '仓库 {{name}}',
   openBeside: '与 {{name}} 并排显示',
 };

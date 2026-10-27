@@ -102,7 +102,7 @@
 .rowActions > button { min-height: var(--control-h-sm); }
 /* Five identical solid buttons compete with each other. Launch stays tinted at rest and fills in
    for the row under the pointer or keyboard focus, so the active row reads as the next action. */
-.rowActions .launch { min-width: 0; border-color: var(--accent-line); background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 82%, var(--surface)) 0%, var(--accent-soft) 100%); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
+.rowActions .launch { min-width: 0; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
 .row:hover .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent); }
 .row:focus-within .rowActions .launch:not(:disabled) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rowActions .launch:hover:not(:disabled), .row .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: var(--on-accent); }

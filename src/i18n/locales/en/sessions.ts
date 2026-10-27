@@ -206,6 +206,10 @@ export default {
   kbZoomReset: 'Reset font size',
   findCase: 'Match case',
   scrolledBack: 'Reading history',
-  gridSize: 'Terminal size: {{cols}} columns × {{rows}} rows',
+  gitBranch: 'Git branch {{name}}',
+  gitDetached: 'Git detached at {{commit}}',
+  gitWorktree: 'Worktree {{name}}',
+  gitWorktreeShort: 'worktree',
+  gitRepository: 'Repository {{name}}',
   openBeside: 'Show beside {{name}}',
 };

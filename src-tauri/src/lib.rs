@@ -84,6 +84,7 @@ mod external;
 pub mod history;
 pub mod launch;
 pub mod library;
+pub mod git_context;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../../tests/platform/macos.rs"]
 mod macos_tests;
@@ -314,6 +315,7 @@ pub fn run() {
             commands::list_remote_native_history,
             commands::get_remote_native_history,
             commands::replay_workbench_session,
+            commands::workbench_git_context,
             commands::write_workbench_session,
             commands::resize_workbench_session,
             commands::close_workbench_session,

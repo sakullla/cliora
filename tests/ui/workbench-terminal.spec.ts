@@ -916,7 +916,8 @@ test('find can match case, line spacing persists, shortcuts are listed, and the 
   await expect(find).toBeFocused();
   await page.keyboard.press('Escape');
 
-  await expect(stage.locator('footer')).toContainText(/\d+×\d+/);
+  // Grid size and font size are noise in the status bar; font size lives in 终端显示.
+  await expect(stage.locator('footer')).not.toContainText(/\d+×\d+|\d+px/);
   await stage.getByRole('button', { name: '终端显示', exact: true }).click();
   const appearance = page.getByRole('dialog', { name: '终端显示' });
   await appearance.getByRole('radio', { name: '宽松', exact: true }).click();

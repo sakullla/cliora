@@ -700,7 +700,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .home-secondary .subtle-panel .empty-symbol { margin-bottom: 2px; }
 .home-secondary .subtle-panel strong { font-size: var(--fs-title); font-weight: var(--fw-semibold); color: var(--text); }
 .home-secondary .subtle-panel p { max-width: 28ch; margin-top: 0; }
-.subtle-panel { padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: linear-gradient(160deg, color-mix(in srgb, var(--surface) 88%, var(--accent-soft)) 0%, var(--surface) 62%); box-shadow: var(--shadow-sm); }
+.subtle-panel { padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); }
 .subtle-panel strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
 .subtle-panel p { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); margin-top: 4px; line-height: 1.6; }
 
@@ -733,7 +733,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .tool-state strong { display: block; font-size: var(--fs-control); font-weight: var(--fw-semibold); }
 .tool-identity small, .tool-state small { display: block; font-size: var(--fs-caption); color: var(--text-2); }
 .tool-state { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.tool-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%); border: 1px solid var(--line); box-shadow: var(--shadow-xs); }
+.tool-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); box-shadow: none; }
 .tool-row .button { justify-self: end; }
 
 /* Empty & loading */
