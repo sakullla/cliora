@@ -309,8 +309,17 @@ impl CliAdapter for Kiro {
     fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
         let mut dirs = vec![home.join(".local/bin")];
         #[cfg(windows)]
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            dirs.push(PathBuf::from(program_files).join("Kiro-Cli"));
+        {
+            if let Some(program_files) = std::env::var_os("ProgramFiles") {
+                dirs.push(PathBuf::from(program_files).join("Kiro-Cli"));
+            }
+            // The official PowerShell installer currently uses the per-user
+            // LocalAppData location even though its completion text mentions
+            // Program Files. Keep both locations so a successful install is
+            // immediately discoverable by the app.
+            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                dirs.push(PathBuf::from(local_app_data).join("Kiro-Cli"));
+            }
         }
         dirs
     }
@@ -464,6 +473,8 @@ mod tests {
         assert!(Kiro.recognizes_native_install_path(Path::new("C:/Program Files/Kiro-Cli/kiro-cli.exe")));
         #[cfg(windows)]
         assert!(Kiro.recognizes_native_install_path(Path::new(r"C:\Program Files\Kiro-Cli\kiro-cli.exe")));
+        #[cfg(windows)]
+        assert!(Kiro.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\Kiro-Cli\kiro-cli.exe")));
         assert!(Kiro.recognizes_native_install_path(Path::new("/home/example/.local/bin/kiro-cli")));
         assert!(!Kiro.recognizes_native_install_path(Path::new("C:/npm/kiro-cli.cmd")));
         #[cfg(windows)]
