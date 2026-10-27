@@ -214,3 +214,31 @@ fn remote_rule_plan_removes_one_section_without_wiping_another() {
     assert_eq!(blocked.results[0].status, "conflict");
     assert_eq!(blocked.state.placements.len(), 2);
 }
+
+#[test]
+fn empty_create_bodies_follow_the_native_file_layout() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let project = home.join("project"); std::fs::create_dir_all(&project).unwrap();
+    let db = Database::open(&home.join("create.db")).unwrap();
+    let registry = Registry::builtins(); let store = MemoryStore(Mutex::new(HashMap::new()));
+    // Cursor .mdc keeps the historical frontmatter template.
+    let cursor = RuleTarget { context_id: None, tool_id: "cursor".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    create_file(&db, &store, &registry, home, &cursor, "review", "").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join(".cursor/rules/review.mdc")).unwrap(),
+        "---\ndescription: \"\"\nalwaysApply: false\n---\n"
+    );
+    // Kiro steering .md files are plain markdown: no Cursor-style
+    // alwaysApply frontmatter is injected into a format Kiro does not read.
+    let kiro = RuleTarget { context_id: None, tool_id: "kiro".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    create_file(&db, &store, &registry, home, &kiro, "security", "").unwrap();
+    let created = std::fs::read_to_string(project.join(".kiro/steering/security.md")).unwrap();
+    assert_eq!(created, "# security\n");
+    assert!(!created.contains("alwaysApply"));
+    // The new file appears in the catalog under its own extension and both
+    // stay whole-file editable through the shared service.
+    let files = list_files(&db, &registry, home, &kiro).unwrap();
+    let names: Vec<&str> = files.iter().map(|file| file.name.as_str()).collect();
+    assert!(names.contains(&"security.md"), "{names:?}");
+    assert!(files.iter().all(|file| file.kind != "inert"));
+}

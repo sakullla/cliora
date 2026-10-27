@@ -9,10 +9,11 @@
 //! (`partial`) instead of being guessed.
 //!
 //! * **Paths**: `KIRO_HOME` relocates the whole root; otherwise `~/.kiro`
-//!   holds `settings/cli.json`, `settings/mcp.json` and the legacy
-//!   `sessions/cli/<uuid>.jsonl` logs. The Windows data root was resolved
-//!   against a real local install: kiro-cli keeps its data in
-//!   `%LOCALAPPDATA%\kiro-cli` (`data.sqlite3` + `tui.js`, no `~/.kiro`);
+//!   holds `settings/cli.json`, `settings/mcp.json`, the session stores
+//!   (legacy `sessions/cli/<uuid>.jsonl` through the V3
+//!   `sessions/<workspace-hash>/` layout), `workspace-roots/` and
+//!   `powers/`. The current local install (2.34.2, V3 engine active) keeps
+//!   its binary and `data.sqlite3` under `%LOCALAPPDATA%\kiro-cli`;
 //!   `data_root` prefers an existing `~/.kiro`, then that directory.
 //! * **MCP**: user-level `~/.kiro/settings/mcp.json` and workspace
 //!   `.kiro/settings/mcp.json` (`mcpServers` root). Kiro merges both by name
@@ -41,14 +42,35 @@
 //!   (`~/.kiro/steering/AGENTS.md` and `<project>/AGENTS.md`). The global
 //!   steering directory is not cataloged — the shared catalog port is
 //!   project-scope only — and that absence stays recorded (see `rules`).
-//! * **Sessions**: legacy `sessions/cli/<uuid>.jsonl` plus current
-//!   `<data-root>/<workspace>/sess_<id>/messages.jsonl` (see `history`).
+//!   The same project catalog also lists the V3 workspace permissions file
+//!   `~/.kiro/workspace-roots/<hash>/permissions.yaml` when the hash maps to
+//!   the selected project through `session.json` `workspacePaths`
+//!   (read-only probe; whole-file YAML editing; unmapped hashes hidden).
+//! * **Powers**: open Agent Plugins packages installed by
+//!   `kiro-cli powers install <name|path>` into
+//!   `~/.kiro/powers/installed/<name>/` with the ledger
+//!   `~/.kiro/powers/installed.json` (both verified on the local 2.34.2
+//!   install). Listing reads that storage; install/uninstall are the native
+//!   commands, failures pass through untranslated and unretried (see
+//!   `powers`).
+//! * **Memory**: V3 keeps memories per user account, shared between the IDE
+//!   and the CLI on one machine, but no storage family exists locally yet
+//!   (`memoryConfig` disabled) and the path is unpublished; the declaration
+//!   degrades with the in-session `/memories` enable guidance (see `memory`).
+//! * **Sessions**: legacy `sessions/cli/<uuid>.jsonl`, the current
+//!   `sess_<id>/messages.jsonl` layout and the V3
+//!   `sessions/<workspace-hash>/sess_<id>/` layout (session.json metadata,
+//!   `session_metadata` rows) are indexed (see `history`).
 //!   `data.sqlite3` (`conversations_v2` key/conversation_id/value/
 //!   created_at/updated_at — schema read off the real local install, zero
 //!   rows there) is a persistent archive whose `value` payload shape has no
 //!   row evidence; it is not indexed (known limitation, never guessed).
-//! * **Usage**: none of the three session formats carries token fields, so
-//!   the usage dimension is absent with that recorded reason.
+//! * **Usage**: no session format carries token fields; the only verified
+//!   native datum is the V3 `session_metadata` contextUsage percentage,
+//!   collected as the `context-usage-percent` native usage unit (an
+//!   instantaneous gauge — dashboards aggregate it by maximum, never a sum).
+//!   The official quota is web-only (credits on app.kiro.dev), so no quota
+//!   port is declared.
 //! * **Credentials**: `KIRO_API_KEY` (ksk_ prefix, Pro+) is an OS environment
 //!   channel only — cli.json carries no key fields in any evidence. The
 //!   managed value stays in the system credential store and is injected at
@@ -59,6 +81,7 @@
 pub(crate) mod agents;
 pub mod history;
 pub(crate) mod memory;
+pub(crate) mod powers;
 pub(crate) mod rules;
 
 use std::collections::BTreeMap;
@@ -138,6 +161,9 @@ impl CliAdapter for Kiro {
     fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
         Some(self)
     }
+    fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "kiro"
     }
@@ -153,9 +179,9 @@ impl CliAdapter for Kiro {
     fn latest_version_url(&self) -> Option<String> {
         Some("https://prod.download.cli.kiro.dev/stable/latest/manifest.json".into())
     }
-    /// No verified `--version` transcript exists (the CLI is not installed
-    /// locally); identity only accepts the documented command name with a
-    /// self-named or bare semver response.
+    /// Verified transcript: the local 2.34.2 install prints
+    /// `kiro-cli 2.34.2`. Identity only accepts the documented command name
+    /// with a self-named or bare semver response.
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         // Only kiro-cli names identify the CLI; a bare `kiro` binary may be
         // the Kiro IDE launcher and never verifies identity here.
@@ -243,13 +269,19 @@ impl CliAdapter for Kiro {
     fn rule_file_specs(
         &self,
         scope: Scope,
-        _home: &Path,
+        home: &Path,
         project: Option<&Path>,
     ) -> Result<Vec<RuleFileSpec>, String> {
         if scope != Scope::Project {
             return Err(rules::GLOBAL_CATALOG_REASON.into());
         }
-        rules::list_steering_specs(project.ok_or("请选择项目目录")?)
+        let project = project.ok_or("请选择项目目录")?;
+        let mut specs = rules::list_steering_specs(project)?;
+        // The V3 workspace permissions file joins the same project catalog
+        // when its hash maps to this project (read-only probe; unmapped
+        // hashes produce no entry).
+        specs.extend(rules::workspace_permissions_specs(home, project));
+        Ok(specs)
     }
     fn rule_create_path(&self, project: &Path, name: &str) -> Result<PathBuf, String> {
         rules::steering_create_path(project, name)
@@ -488,7 +520,7 @@ impl CliAdapter for Kiro {
             launch_form: self.launch_form(),
             native_config: Facet {
                 state: "available",
-                reason: "已登记官方命令身份，可编辑用户级 ~/.kiro/settings/cli.json（JSON；KIRO_HOME 覆盖整个根目录）",
+                reason: "已登记官方命令身份（本机 2.34.2 实装于 %LOCALAPPDATA%\\kiro-cli，V3 引擎已启用），可编辑用户级 ~/.kiro/settings/cli.json（JSON；KIRO_HOME 覆盖整个根目录）",
             },
             launch: Facet {
                 state: "available",
@@ -500,11 +532,11 @@ impl CliAdapter for Kiro {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；规则：项目 .kiro/steering 目录可清单与整文件编辑（product.md/tech.md/structure.md 等，四种 frontmatter 模式为文件内容不解析），AGENTS.md 单文件在全局 ~/.kiro/steering/AGENTS.md 与项目根可编辑；全局 steering 目录清单受共享目录型端口仅项目范围的限制，原因已记录",
+                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载为 CLI 行为，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；Powers 为 ~/.kiro/powers（本机实测 installed/ 目录 + installed.json 清单，install/uninstall 走原生命令、失败透传不重试）；规则：项目 .kiro/steering 目录可清单与整文件编辑（product.md/tech.md/structure.md 等，四种 frontmatter 模式为文件内容不解析），已映射工作区的 ~/.kiro/workspace-roots/<hash>/permissions.yaml 整文件编辑（未映射哈希不展示），AGENTS.md 单文件在全局 ~/.kiro/steering/AGENTS.md 与项目根可编辑；全局 steering 目录清单受共享目录型端口仅项目范围的限制，原因已记录",
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 legacy sessions/cli/<uuid>.jsonl 与现行 sess_<id>/messages.jsonl（[RE] 证据，缺字段降级 partial）；legacy/现行/data.sqlite3 三种格式均无 token 字段，用量维度不交付；data.sqlite3 conversations_v2 归档表结构已实测但无消息行样本，未索引",
+                reason: "只读索引 legacy sessions/cli/<uuid>.jsonl、现行 sess_<id>/messages.jsonl 与 V3 sessions/<workspace-hash>/sess_<id>/（session.json 元数据；session_metadata 行已核对形状，缺字段降级 partial）；V3 会话内 contextUsage 以 context-usage-percent 进入用量（瞬时采样，报表取最大值），三种会话格式均无 token 字段；官方配额为网页 credits 制（app.kiro.dev 账号设置），不接入；data.sqlite3 conversations_v2 归档表结构已实测但无消息行样本，未索引",
             },
             login: None,
             management: ManagementCapabilities {
@@ -512,8 +544,10 @@ impl CliAdapter for Kiro {
                 mcp: self.supports_mcp(),
                 skills: self.supports_skills(),
                 agents: self.agents().is_some_and(|port| port.capability().supported),
-                plugins: false,
-                project_plugins: false,
+                plugins: self
+                    .plugins()
+                    .is_some_and(|port| !port.capability().actions.is_empty()),
+                project_plugins: self.plugins().is_some_and(|port| port.capability().project),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
             },
@@ -902,23 +936,31 @@ mod tests {
     fn delivered_dimensions_declare_no_fabricated_ports() {
         assert!(Kiro.history_supported());
         assert!(Kiro.supports_mcp());
-        // Skills/agents/steering now follow the official docs evidence; the
-        // plugins (powers) port, accounts/login flows and the official quota
-        // (web-only) stay undelivered with reasons.
+        // Skills/agents/steering/powers follow the official docs plus the
+        // local 2.34.2 evidence; memory degrades with the enable guidance,
+        // and accounts/login flows plus the official quota (web-only) stay
+        // undelivered with reasons.
         assert!(Kiro.supports_skills());
         assert!(Kiro
             .agents()
             .is_some_and(|port| port.capability().supported));
-        assert!(Kiro.plugins().is_none());
+        let powers = Kiro.plugins().expect("powers 端口随实测证据交付");
+        assert_eq!(powers.capability().actions, vec!["list", "install", "uninstall"]);
+        // Unverified memory storage publishes no management entry.
+        assert!(Kiro.memory().is_some());
+        assert!(Kiro.published_memory().is_none());
         assert!(Kiro.accounts().is_none());
         assert!(Kiro.official_usage().is_none());
         assert!(Kiro.configuration().is_none());
         let descriptor = Kiro.descriptor();
         assert_eq!(descriptor.native_config.state, "available");
+        assert!(descriptor.native_config.reason.contains("2.34.2"));
         assert_eq!(descriptor.launch.state, "available");
         assert_eq!(descriptor.resume.state, "available");
         assert_eq!(descriptor.resources.state, "available");
+        assert!(descriptor.resources.reason.contains("permissions.yaml"));
         assert_eq!(descriptor.history.state, "available");
+        assert!(descriptor.history.reason.contains("context-usage-percent"));
         assert_eq!(descriptor.launch_form, LaunchForm::Terminal);
         assert!(descriptor.yolo_available);
         assert!(descriptor.login.is_none());
@@ -926,10 +968,12 @@ mod tests {
         assert!(descriptor.management.mcp);
         assert!(descriptor.management.skills);
         assert!(descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
+        assert!(descriptor.management.plugins);
+        assert!(!descriptor.management.project_plugins);
+        assert!(descriptor.management.memory.is_none());
         assert!(descriptor.management.rules.global);
         assert!(descriptor.management.rules.project);
-        // The recorded usage absence reason stays part of the descriptor.
+        // The recorded token-absence reason stays part of the descriptor.
         assert!(descriptor.history.reason.contains("无 token 字段"));
         assert_eq!(
             Kiro.install_guidance().0,

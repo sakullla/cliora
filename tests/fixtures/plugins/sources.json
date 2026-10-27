@@ -18,7 +18,7 @@
     "devin": "3000.11.3 (plugins dimension not delivered)",
     "command_code": "1.73.4 (plugins dimension not delivered)",
     "antigravity": "1.3.1 (plugins dimension not delivered)",
-    "kiro": "kiro-cli (plugins dimension not delivered)"
+    "kiro": "2.34.2 (powers dimension delivered 2026-10-27)"
   },
   "sources": [
     "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/config/src/plugin_edit.rs",
@@ -40,9 +40,9 @@
     "Devin 3000.11.3 (local verified): devin --help — no plugin management surface documented; dimension absent",
     "Command Code 1.73.4 (local verified, npm command-code): shipped bundle — no plugin layout evidence; dimension absent",
     "Antigravity 1.3.1 (local probes + [RE] codeburn): `agy plugin` exists but its storage is undocumented in every evidence class; dimension absent",
-    "Kiro ([RE] agentsview/threadle + cli.kiro.dev docs): no plugin contract in any evidence class; dimension absent"
+    "Kiro 2.34.2 (2026-10-27, local probe + official docs): kiro.dev docs/powers and docs/powers/installation document the Agent Plugins package and the native commands; the storage layout was verified with a temporary local probe power (install copies to ~/.kiro/powers/installed/<name> and records it in ~/.kiro/powers/installed.json; uninstall removes both)"
   ],
-  "pluginDimension20261007": "None of the six 2026-10-07 default-off additions (docs/sakullla-workflow/2026-10-07-新增客户端完整支持与用量统计修复) delivers a plugins dimension: every adapter declares no plugin port and the per-client reasons above record the missing evidence. No plugin fixtures were added for the six.",
+  "pluginDimension20261007": "None of the six 2026-10-07 default-off additions (docs/sakullla-workflow/2026-10-07-新增客户端完整支持与用量统计修复) delivered a plugins dimension at that date: every adapter declared no plugin port and the per-client reasons above recorded the missing evidence. No plugin fixtures were added for the six. Superseded for kiro on 2026-10-27: the powers port is delivered (see nativeSequences.kiro_2026_10_27).",
   "nativeSequences": {
     "claude_code": "marketplace add local --json; install fixture@market --scope user --json; list --json; disable --scope user --json; list enabled=false; enable --scope user --json; update --scope user --json; uninstall --scope user --json; list empty. All exit 0.",
     "codex": "marketplace add local; add fixture@market --json; list --json; remove --json; list empty. All exit 0.",
@@ -51,7 +51,8 @@
     "zcode_2026_10_04": "Read-only listing only: installed_plugins.json parsed from the real ~/.zcode/cli/plugins tree (sanitized fixture from the 3.14.4 install). No install/uninstall verbs exercised; management verbs stay with the in-session /plugins of the bundled agent.",
     "qoder_2026_10_04": "qoder plugins list (plural subcommand, verified exit 0 on the local 1.1.63 install); enable/disable/update/uninstall routed through the same qoder plugins subcommands per docs; project-scope state stays in the project settings.local.json enabledPlugins field.",
     "kimi_code_2026_10_04": "Read-only listing only: plugins/managed/<id> manifests parsed from the locally verified 0.31.1 data root. Management verbs stay in-session (/plugins).",
-    "codebuddy_2026_10_04": "codebuddy plugin list --json (singular subcommand, exit 0 verified on the local 2.161.1 install); enable/disable delivered as project-level enabledPlugins configuration transactions only; install/uninstall stay with the native /plugin interface."
+    "codebuddy_2026_10_04": "codebuddy plugin list --json (singular subcommand, exit 0 verified on the local 2.161.1 install); enable/disable delivered as project-level enabledPlugins configuration transactions only; install/uninstall stay with the native /plugin interface.",
+    "kiro_2026_10_27": "kiro-cli powers install <local-dir> on the local 2.34.2 install copied the probe package to ~/.kiro/powers/installed/<name>/ and appended {\"name\":…} to ~/.kiro/powers/installed.json; kiro-cli powers uninstall <name> removed both (empty installed directory and ledger file remain). Neither subcommand takes a confirmation flag and both ran prompt-free under stdin-null. Listing is file-backed (ledger + manifests); no native list subcommand exists."
   },
   "repairRegressions": {
     "piNative": "Rust-generated disabled declaration evaluated by installed Pi 0.99.2 dedupePackages/collectPackageResources. Original false; old empty delta true; replacement autoload:true false. npm scoped/user, npm project, Git HTTPS/user+project and SSH installed paths match native getInstalledPath.",

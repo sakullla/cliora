@@ -233,6 +233,18 @@ pub fn save_file(
     )
 }
 
+/// Default body for a newly created catalog rule when the caller passes no
+/// text. The historical template is the Cursor `.mdc` frontmatter; layouts
+/// whose native files are plain markdown (Kiro steering `.md`) get a plain
+/// heading instead of tool-specific frontmatter their CLI does not interpret.
+fn default_create_template(path: &Path, name: &str) -> String {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("mdc") {
+        "---\ndescription: \"\"\nalwaysApply: false\n---\n".to_owned()
+    } else {
+        format!("# {name}\n")
+    }
+}
+
 pub fn create_file(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -250,24 +262,24 @@ pub fn create_file(
         target.project_path.as_deref().map(Path::new),
     )?;
     crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let path = adapter.rule_create_path(&project, name)?;
     let text = if text.is_empty() {
-        "---\ndescription: \"\"\nalwaysApply: false\n---\n"
+        default_create_template(&path, name)
     } else {
-        text
+        text.to_owned()
     };
     if text.len() > 1024 * 1024 {
         return Err("规则内容超过 1 MiB".into());
     }
-    let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let path = adapter.rule_create_path(&project, name)?;
     transaction::apply_files(
         db,
         credentials,
         &[FileMutation {
             path,
             baseline: None,
-            contents: Some(text.to_owned()),
+            contents: Some(text),
         }],
         |_| Ok(()),
     )

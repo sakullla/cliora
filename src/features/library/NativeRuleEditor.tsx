@@ -136,7 +136,9 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       await native.createNativeRuleFile(target, name, '');
       setCreateName('');
       const value = await native.listNativeRuleFiles(target);
-      const created = value.find(file => file.name === `${name}.mdc`) ?? value[0];
+      // Rule names cannot contain dots, so the stem identifies the new file
+      // under whichever extension the current tool uses (.mdc, .md, …).
+      const created = value.find(file => file.name === name || file.name.startsWith(`${name}.`)) ?? value[0];
       setFiles(value);
       setSelectedId(created?.id ?? '');
       setText(created?.text ?? '');
@@ -157,7 +159,11 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       showFailure(value, t('library.nativeRule.saveFailed'), t('library.nativeRule.saveFailedNext'));
     } finally { setBusy(false); }
   }
-  const kindLabel = (kind: string) => kind === 'mdc' ? t('library.nativeRule.kindMdc') : kind === 'agents' ? t('library.nativeRule.kindAgents') : t('library.nativeRule.kindInert');
+  const kindLabel = (kind: string) => kind === 'mdc' ? t('library.nativeRule.kindMdc')
+    : kind === 'md' ? t('library.nativeRule.kindMd')
+    : kind === 'permissions' ? t('library.nativeRule.kindPermissions')
+    : kind === 'agents' ? t('library.nativeRule.kindAgents')
+    : t('library.nativeRule.kindInert');
   return <>
     <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</button>
     {status && !open && <p className="native-rule-message" role="status">{status}</p>}
