@@ -24,6 +24,7 @@ import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, t
 import { SessionActivityIcon } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailFilter, type RailSession, type SessionTone } from './SessionRail';
+import { railPlace, railTaskTitle } from './railTitle';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
@@ -860,9 +861,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function taskTitle(session: WorkbenchSession): string {
-    const title = titles.get(session.id) ?? '';
-    const name = toolName(session);
-    return title && title.toLowerCase() !== name.toLowerCase() ? title : '';
+    const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
+    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+  }
+
+  function railPlaceOf(session: WorkbenchSession): string {
+    const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
+    return railPlace(project?.name, session.directory) || placeOf(session);
   }
 
   function modeLabel(mode: LaunchMode): string {
@@ -1445,7 +1450,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     session,
     name: toolName(session),
     title: taskTitle(session),
-    place: placeOf(session),
+    place: railPlaceOf(session),
     directory: session.directory ? displayPath(session.directory) : '',
     elapsed: formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock),
     tone: sessionTone(session),

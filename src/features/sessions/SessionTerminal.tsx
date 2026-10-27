@@ -253,6 +253,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   // The last grid sent to the PTY. A one-row proposal with no real height change is glyph
   // measurement noise; applying it makes a live TUI redraw and the view jumps.
   const fitLockRef = useRef({ cols: 0, rows: 0, height: 0 });
+  // The grid the PTY last received. Switching back to a session must not re-send an
+  // unchanged grid: the CLI treats every resize as a reason to redraw.
+  const ptyGridRef = useRef({ cols: 0, rows: 0 });
   const webglRef = useRef<WebglAddon | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
@@ -729,6 +732,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (changed && !awayFromBottom) scrollToLatest();
       reportScroll();
       if (!changed || !runningRef.current) return;
+      ptyGridRef.current = { cols: term.cols, rows: term.rows };
       void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
     };
     let resizeFrame = 0;
@@ -839,6 +843,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     term.options.disableStdin = !active || !running;
     term.options.fontSize = fontSize;
     term.options.lineHeight = lineHeight;
+    // A reattached transport opens a fresh PTY at its default grid.
+    if (!running) ptyGridRef.current = { cols: 0, rows: 0 };
     // Hidden terminals can reset their viewport; reveal the latest output on re-entry.
     const becameActive = active && !wasActiveRef.current;
     wasActiveRef.current = active;
@@ -871,7 +877,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         } catch { /* No WebGL here: the DOM renderer stays. */ }
       }
       if (becameActive) handles.current.get(sessionId)?.scrollToBottom();
-      if (term.cols >= 2 && term.rows >= 1 && running) {
+      const sent = ptyGridRef.current;
+      if (term.cols >= 2 && term.rows >= 1 && running && (sent.cols !== term.cols || sent.rows !== term.rows)) {
+        ptyGridRef.current = { cols: term.cols, rows: term.rows };
         void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
       }
       if (running && focusedRef.current && !document.querySelector('dialog[open]')) term.focus();

@@ -100,6 +100,8 @@ test('a CLI spinner in front of the terminal title is not part of the session na
   const emit = (text: string) => page.evaluate((value) => (window as unknown as { __emitOutput: (text: string) => void }).__emitOutput(value), text);
   await emit('\u001b]0;\u2733 develop分支更新\u0007');
   await expect(tab.locator('strong')).toHaveText('develop分支更新');
+  // The task title leads the card; the folder name sits underneath it.
+  await expect(tab.locator('[class*="sessionPlace"]')).toHaveText('home');
   await emit('\u001b]0;\u25d1 \u2736 修复登录\u0007');
   await expect(tab.locator('strong')).toHaveText('修复登录');
 });

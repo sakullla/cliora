@@ -97,7 +97,7 @@
   --radius-2xl: 18px;
   /* The floating page canvas inside the window frame. */
   --canvas-gap: 8px;
-  --canvas-radius: 14px;
+  --canvas-radius: 16px;
 
   /* Elevation: hairline + soft ambient, never a heavy drop. */
   --shadow-xs: 0 1px 1px rgb(16 24 20 / 4%);
@@ -470,10 +470,10 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
   justify-content: flex-start;
   gap: 10px;
   width: 100%;
-  min-height: 36px;
+  min-height: 38px;
   padding: 0 10px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
   font-size: var(--fs-body);
@@ -485,7 +485,9 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
 }
 .nav button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); box-shadow: none; }
 .nav button.active,
-.nav button.active:hover:not(:disabled) { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
+.nav button.active:hover:not(:disabled) { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, transparent); }
+/* A short leaf-green bar marks the current page in both the full and the icon sidebar. */
+.nav button.active::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: -4px; width: 3px; border-radius: 99px; background: var(--accent); }
 .nav-glyph { display: grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--text-3); transition: color var(--fast) var(--ease); }
 .nav button:hover .nav-glyph { color: var(--text-2); }
 .nav button.active .nav-glyph { color: var(--accent); }
@@ -586,7 +588,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 
 .page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; margin-bottom: 20px; }
 .page-head > * { min-width: 0; }
-.page-head h1 { font-size: var(--fs-page); line-height: 1.25; letter-spacing: -.4px; font-weight: var(--fw-bold); }
+.page-head h1 { font-size: 26px; line-height: 1.2; letter-spacing: -.6px; font-weight: var(--fw-bold); }
 .page-head h1:focus { outline: none; }
 .page-head > div { position: relative; }
 .page-head p { margin-top: 4px; max-width: 62ch; color: var(--text-3); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
@@ -1063,7 +1065,7 @@ label.setting-row:hover { background: var(--surface-2); }
   .shell[data-sidebar-collapsed="true"] .host-switcher-trigger .host-switcher-caret { display: none; }
   .shell[data-sidebar-collapsed="true"] .nav { width: 100%; align-items: center; }
   .shell[data-sidebar-collapsed="true"] .nav-group { align-items: center; }
-  .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; width: 40px; padding: 0; min-height: 40px; }
+  .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; width: 40px; padding: 0; min-height: 40px; border-radius: 11px; }
   .shell[data-sidebar-collapsed="true"] .sidebar-command { width: 40px; min-height: 40px; margin: 0 auto 12px; padding: 0; justify-content: center; }
   .shell[data-sidebar-collapsed="true"] .sidebar-foot { width: 100%; justify-items: center; }
   .shell[data-sidebar-collapsed="true"] .sidebar-update { width: 40px; min-height: 40px; padding: 0; justify-content: center; }

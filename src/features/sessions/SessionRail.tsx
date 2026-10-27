@@ -87,7 +87,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
     const { session } = item;
     const selected = session.id === selectedId;
     const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
-    const tooltip = [item.title ? item.title + ' · ' + item.name : item.name, item.directory || item.place, activityLabel(item)].filter(Boolean).join('\n');
+    const tooltip = [item.title, item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
         onClick={() => onSelect(session.id)}
@@ -99,23 +99,22 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
             onOpenMenu(session, rect.left + 24, rect.bottom - 6);
           }
         }}>
-        <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={compact ? 20 : 18} /><SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} /></span>
+        <span className={styles.sessionIconWrap}><ToolIcon toolId={session.toolId} size={compact ? 20 : 18} /><SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} />{session.mode === 'yolo' && <span className={styles.yoloBadge} title={t('sessions.modeYolo')} aria-hidden="true"><Icon name="sparkle" size={9} /></span>}</span>
         <span className={styles.sessionBody}>
           <span className={styles.sessionTop}>
             {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={12} /></span>}
-            <strong>{item.title || item.name}</strong>
+            <strong>{item.title || item.place}</strong>
             {item.unread && <span className={styles.unreadDot} title={t('sessions.unread')} aria-label={t('sessions.unread')} />}
-            <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
           </span>
           <span className={styles.sessionSub}>
-            <span className={styles.sessionPlace}>{item.title ? item.name + ' · ' + item.place : item.place}</span>
+            <span className={styles.sessionPlace}>{item.title ? item.place : item.name}</span>
             {item.pane != null && <span className={styles.paneTag} title={t('sessions.splitView')}><Icon name="columns" size={11} />{item.pane + 1}</span>}
             {item.attention && <span className={styles.attentionTag}>{t('sessions.bellBadge')}</span>}
             {failed && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
-            {session.mode === 'yolo' && <span className={styles.modeTag} data-mode="yolo"><Icon name="sparkle" size={11} />{t('sessions.modeYolo')}</span>}
           </span>
-          <span className={styles.srOnly}>{activityLabel(item)}</span>
+          <span className={styles.srOnly}>{[item.title ? item.name : '', session.mode === 'yolo' ? t('sessions.modeYolo') : '', activityLabel(item)].filter(Boolean).join(' · ')}</span>
         </span>
+        <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
       </button>
       <div className={styles.rowActions}>
         <button type="button" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} onClick={(event) => {
@@ -145,7 +144,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
         <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} />
         {search && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => onSearch('')}><Icon name="close" size={12} /></button>}
       </div>}
-      {total > 1 && !compact && <div className={styles.segmented} role="group" aria-label={t('sessions.filterLabel')}>
+      {total > 1 && !compact && (ended > 0 || filter !== 'all') && <div className={styles.segmented} role="group" aria-label={t('sessions.filterLabel')}>
         <button type="button" aria-pressed={filter === 'all'} onClick={() => onFilter('all')}><span>{t('sessions.filterAll')}</span><em>{total}</em></button>
         <button type="button" aria-pressed={filter === 'running'} onClick={() => onFilter('running')}><span>{t('sessions.filterRunning')}</span><em>{running}</em></button>
         {ended > 0 && <button type="button" aria-pressed={filter === 'ended'} onClick={() => onFilter('ended')}><span>{t('sessions.filterEnded')}</span><em>{ended}</em></button>}
@@ -154,15 +153,15 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
 
     <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onListKeyDown}>
       {groups.map((group) => <div key={group.key} className={styles.sessionGroup} role="presentation">
-        <div className={styles.groupLabel} role="presentation"><span>{group.label}</span><span className={styles.groupCount}>{group.items.length}</span></div>
+        {groups.length > 1 && <div className={styles.groupLabel} role="presentation"><span>{group.label}</span><span className={styles.groupCount}>{group.items.length}</span></div>}
         {group.items.map(renderSession)}
       </div>)}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.ghostButton} onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</button></div>}
     </div>
 
-    {total > 0 && !compact && <div className={styles.railFoot}>
+    {ended > 0 && !compact && <div className={styles.railFoot}>
       <span className={styles.railSummary}>{t('sessions.summary', { running, ended })}</span>
-      {ended > 0 && <button type="button" className={styles.clearEndedBtn} disabled={busy} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEnded')}</span></button>}
+      <button type="button" className={styles.clearEndedBtn} disabled={busy} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEnded')}</span></button>
     </div>}
   </aside>;
 }

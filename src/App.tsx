@@ -80,13 +80,25 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [page, setPage] = useState<Page>('home');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem('cliora:sidebar-collapsed') === 'true'; } catch { return false; }
+  // The workbench already has its own session rail, so the app navigation keeps a separate
+  // collapsed state there (icon rail by default) and the full sidebar elsewhere.
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    const read = (key: string, fallback: boolean) => {
+      try { const value = localStorage.getItem(key); return value === null ? fallback : value === 'true'; } catch { return fallback; }
+    };
+    return { pages: read('cliora:sidebar-collapsed', false), workbench: read('cliora:sidebar-collapsed-workbench', true) };
   });
+  const navContext: 'workbench' | 'pages' = page === 'sessions' ? 'workbench' : 'pages';
+  const sidebarCollapsed = navCollapsed[navContext];
+  const navContextRef = useRef(navContext);
+  navContextRef.current = navContext;
   function toggleSidebar() {
-    const next = !sidebarCollapsed;
-    setSidebarCollapsed(next);
-    try { localStorage.setItem('cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
+    const context = navContextRef.current;
+    setNavCollapsed((old) => {
+      const next = !old[context];
+      try { localStorage.setItem(context === 'workbench' ? 'cliora:sidebar-collapsed-workbench' : 'cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
+      return { ...old, [context]: next };
+    });
   }
   // First-run checklist (R5): visibility is decided once per launch from the truly-empty
   // state; step completion then follows live data until the card is closed or finished.
@@ -329,11 +341,7 @@ export default function App() {
       if (withMod(event) && event.key === '\\' && !event.repeat) {
         if (document.querySelector('dialog[open]') || isEditableTarget(event.target)) return;
         event.preventDefault();
-        setSidebarCollapsed((value) => {
-          const next = !value;
-          try { localStorage.setItem('cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
-          return next;
-        });
+        toggleSidebar();
         return;
       }
       if (event.key === '?' && !withMod(event) && !event.altKey && !isEditableTarget(event.target)) {
@@ -569,7 +577,7 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand">
