@@ -2566,9 +2566,19 @@ mod tests {
 
     #[test]
     fn a_command_that_does_not_exit_is_stopped() {
-        let mut command = Command::new("ping");
-        command.args(["-n", "30", "127.0.0.1"]);
+        const CHILD_MARKER: &str = "CLIORA_TEST_REMOTE_TIMEOUT_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        // Run only this test in a child that waits beyond the deadline. Unlike
+        // ping, the fixture needs no network permissions or platform-specific flags.
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "remote::tests::a_command_that_does_not_exit_is_stopped"])
+            .env(CHILD_MARKER, "1");
         let error = wait_for_output(&mut command, Duration::from_millis(200)).unwrap_err();
+        assert!(matches!(&error, RemoteError::Transport { stage: "timeout", .. }), "{error}");
         let message = error.to_string();
         assert!(message.contains("远程连接超时"), "{message}");
     }
