@@ -359,6 +359,7 @@ impl CliAdapter for Cline {
                 project_plugins: false,
                 rules: RuleSupport::bare(false, false),
                 memory: self.published_memory(),
+                memory_reason: "",
             },
         }
     }

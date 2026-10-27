@@ -51,8 +51,8 @@
 //!   `~/.kiro/powers/installed/<name>/` with the ledger
 //!   `~/.kiro/powers/installed.json` (both verified on the local 2.34.2
 //!   install). Listing reads that storage; install/uninstall are the native
-//!   commands, failures pass through untranslated and unretried (see
-//!   `powers`).
+//!   commands — a failure is never retried and is reported through the
+//!   process exit code (see `powers`).
 //! * **Memory**: V3 keeps memories per user account, shared between the IDE
 //!   and the CLI on one machine, but no storage family exists locally yet
 //!   (`memoryConfig` disabled) and the path is unpublished; the declaration
@@ -65,12 +65,13 @@
 //!   created_at/updated_at — schema read off the real local install, zero
 //!   rows there) is a persistent archive whose `value` payload shape has no
 //!   row evidence; it is not indexed (known limitation, never guessed).
-//! * **Usage**: no session format carries token fields; the only verified
-//!   native datum is the V3 `session_metadata` contextUsage percentage,
-//!   collected as the `context-usage-percent` native usage unit (an
-//!   instantaneous gauge — dashboards aggregate it by maximum, never a sum).
-//!   The official quota is web-only (credits on app.kiro.dev), so no quota
-//!   port is declared.
+//! * **Usage**: no session format carries token fields; two native data are
+//!   collected — the V3 `session_metadata` contextUsage percentage as the
+//!   `context-usage-percent` unit (an instantaneous gauge — dashboards
+//!   aggregate it by maximum, never a sum) and the V3 `usage_summary`
+//!   per-turn credit consumption as native `credit` usage events (aggregate
+//!   summaries; see `history`). The official quota is web-only (credits on
+//!   app.kiro.dev), so no quota port is declared.
 //! * **Credentials**: `KIRO_API_KEY` (ksk_ prefix, Pro+) is an OS environment
 //!   channel only — cli.json carries no key fields in any evidence. The
 //!   managed value stays in the system credential store and is injected at
@@ -532,11 +533,11 @@ impl CliAdapter for Kiro {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载为 CLI 行为，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；Powers 为 ~/.kiro/powers（本机实测 installed/ 目录 + installed.json 清单，install/uninstall 走原生命令、失败透传不重试）；规则：项目 .kiro/steering 目录可清单与整文件编辑（product.md/tech.md/structure.md 等，四种 frontmatter 模式为文件内容不解析），已映射工作区的 ~/.kiro/workspace-roots/<hash>/permissions.yaml 整文件编辑（未映射哈希不展示），AGENTS.md 单文件在全局 ~/.kiro/steering/AGENTS.md 与项目根可编辑；全局 steering 目录清单受共享目录型端口仅项目范围的限制，原因已记录",
+                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载为 CLI 行为，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；Powers 为 ~/.kiro/powers（本机实测 installed/ 目录 + installed.json 清单，install/uninstall 走原生命令、失败不重试并以退出码如实上报）；规则：项目 .kiro/steering 目录可清单与整文件编辑（product.md/tech.md/structure.md 等，四种 frontmatter 模式为文件内容不解析），已映射工作区的 ~/.kiro/workspace-roots/<hash>/permissions.yaml 整文件编辑（未映射哈希不展示），AGENTS.md 单文件在全局 ~/.kiro/steering/AGENTS.md 与项目根可编辑；全局 steering 目录清单受共享目录型端口仅项目范围的限制，原因已记录",
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 legacy sessions/cli/<uuid>.jsonl、现行 sess_<id>/messages.jsonl 与 V3 sessions/<workspace-hash>/sess_<id>/（session.json 元数据；session_metadata 行已核对形状，缺字段降级 partial）；V3 会话内 contextUsage 以 context-usage-percent 进入用量（瞬时采样，报表取最大值），三种会话格式均无 token 字段；官方配额为网页 credits 制（app.kiro.dev 账号设置），不接入；data.sqlite3 conversations_v2 归档表结构已实测但无消息行样本，未索引",
+                reason: "只读索引 legacy sessions/cli/<uuid>.jsonl、现行 sess_<id>/messages.jsonl 与 V3 sessions/<workspace-hash>/sess_<id>/（session.json 元数据；session_metadata 行已核对形状，缺字段降级 partial）；V3 会话内 contextUsage 以 context-usage-percent 进入用量（瞬时采样，报表取最大值），usage_summary 的逐轮 credit 消耗以原生 credit 单位进入用量（聚合摘要，无请求计数）；三种会话格式均无 token 字段；官方配额为网页 credits 制（app.kiro.dev 账号设置），不接入；data.sqlite3 conversations_v2 归档表结构已实测但无消息行样本，未索引",
             },
             login: None,
             management: ManagementCapabilities {
@@ -550,6 +551,10 @@ impl CliAdapter for Kiro {
                 project_plugins: self.plugins().is_some_and(|port| port.capability().project),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
+                // The V3 memory feature exists but local storage is not
+                // verified; the recorded reason (with the native enable
+                // guidance) reaches the shared UI instead of a hidden tab.
+                memory_reason: memory::UNVERIFIED_REASON,
             },
         }
     }
@@ -946,7 +951,8 @@ mod tests {
             .is_some_and(|port| port.capability().supported));
         let powers = Kiro.plugins().expect("powers 端口随实测证据交付");
         assert_eq!(powers.capability().actions, vec!["list", "install", "uninstall"]);
-        // Unverified memory storage publishes no management entry.
+        // Unverified memory storage publishes no management entry; the
+        // recorded reason is checked against the descriptor below.
         assert!(Kiro.memory().is_some());
         assert!(Kiro.published_memory().is_none());
         assert!(Kiro.accounts().is_none());
@@ -971,6 +977,19 @@ mod tests {
         assert!(descriptor.management.plugins);
         assert!(!descriptor.management.project_plugins);
         assert!(descriptor.management.memory.is_none());
+        // The unverified reason reaches the shared UI through the descriptor
+        // so the memory tab shows "unavailable + reason" instead of hiding.
+        assert_eq!(descriptor.management.memory_reason, memory::UNVERIFIED_REASON);
+        assert!(descriptor.management.memory_reason.contains("/memories"));
+        // Adapters without a memory verdict keep the field empty: their
+        // memory tabs stay hidden exactly as before.
+        for id in ["claude_code", "cline", "kimi_code"] {
+            let other = crate::adapters::Registry::builtins()
+                .get(id)
+                .unwrap()
+                .descriptor();
+            assert_eq!(other.management.memory_reason, "", "{id} 不受影响");
+        }
         assert!(descriptor.management.rules.global);
         assert!(descriptor.management.rules.project);
         // The recorded token-absence reason stays part of the descriptor.

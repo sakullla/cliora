@@ -242,6 +242,13 @@ pub struct ManagementCapabilities {
     /// recorded unverified reason stays on the port and does not create an entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<super::memory::MemoryManagement>,
+    /// Recorded absence reason when no `memory` entry is published (e.g. the
+    /// feature exists natively but local storage is not verified). Shared UI
+    /// then shows an unavailable memory view carrying this text instead of
+    /// hiding the tab. Empty keeps the historical hidden behavior, so
+    /// adapters without a memory verdict do not change.
+    #[serde(default, skip_serializing_if = "str::is_empty")]
+    pub memory_reason: &'static str,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1353,6 +1360,7 @@ pub trait CliAdapter: Sync {
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
+                memory_reason: "",
             },
             login: self.login_args().map(|_| LoginCapability {
                 hint: self.login_hint(),
