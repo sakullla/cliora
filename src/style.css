@@ -50,7 +50,7 @@
   --accent-soft: #e5f3eb;
   --accent-line: #bddfca;
   --accent-ring: rgb(15 113 72 / 16%);
-  --selection: #d0e4fa;
+  --selection: #d3e8dc;
 
   /* Status */
   --danger: #a62f2a;
@@ -147,7 +147,7 @@
   --accent-soft: #15291e;
   --accent-line: #2a5039;
   --accent-ring: rgb(111 220 159 / 24%);
-  --selection: #173557;
+  --selection: #19382d;
 
   --danger: #fcd6d0;
   --danger-soft: #3a2422;
@@ -1059,14 +1059,16 @@ label.setting-row:hover { background: var(--surface-2); }
   .shell[data-sidebar-collapsed="true"] .sidebar-toggle:hover .sidebar-toggle-icon,
   .shell[data-sidebar-collapsed="true"] .sidebar-toggle:focus-visible .sidebar-toggle-icon { opacity: 1; }
   .shell[data-sidebar-collapsed="true"] .sidebar-host { width: 40px; }
-  .shell[data-sidebar-collapsed="true"] .host-switcher-trigger { justify-content: center; width: 40px; min-height: 40px; padding: 0; border-color: transparent; background: transparent; box-shadow: none; }
-  .shell[data-sidebar-collapsed="true"] .host-switcher-trigger:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
-  .shell[data-sidebar-collapsed="true"] .host-switcher-trigger .host-switcher-copy,
-  .shell[data-sidebar-collapsed="true"] .host-switcher-trigger .host-switcher-caret { display: none; }
+  /* Only the sidebar's own switcher collapses to a glyph; the workbench chip keeps its label. */
+  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger { justify-content: center; width: 40px; min-height: 40px; padding: 0; border-color: transparent; background: transparent; box-shadow: none; }
+  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger .host-switcher-copy,
+  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger .host-switcher-caret { display: none; }
   .shell[data-sidebar-collapsed="true"] .nav { width: 100%; align-items: center; }
   .shell[data-sidebar-collapsed="true"] .nav-group { align-items: center; }
   .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; width: 40px; padding: 0; min-height: 40px; border-radius: 11px; }
-  .shell[data-sidebar-collapsed="true"] .sidebar-command { width: 40px; min-height: 40px; margin: 0 auto 12px; padding: 0; justify-content: center; }
+  .shell[data-sidebar-collapsed="true"] .sidebar-command { width: 40px; min-height: 40px; margin: 0 auto 12px; padding: 0; justify-content: center; border-color: transparent; background: transparent; box-shadow: none; }
+  .shell[data-sidebar-collapsed="true"] .sidebar-command:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
   .shell[data-sidebar-collapsed="true"] .sidebar-foot { width: 100%; justify-items: center; }
   .shell[data-sidebar-collapsed="true"] .sidebar-update { width: 40px; min-height: 40px; padding: 0; justify-content: center; }
   .shell[data-sidebar-collapsed="true"] .theme-switch { grid-template-columns: 1fr; width: 34px; }

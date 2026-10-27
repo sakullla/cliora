@@ -162,7 +162,7 @@ async function install(page, initialTheme, empty = false) {
       },
     });
   }, { theme: initialTheme, transcripts: {
-    s1: b64(Array.from({ length: 70 }, (_, index) => '  \u001b[2m历史输出 ' + String(index + 1).padStart(2, '0') + ' · session replay preserved\u001b[0m').join('\r\n') + '\r\n\u001b]0;重构终端工作区与多会话交互体验\u0007' + transcript),
+    s1: b64(Array.from({ length: 70 }, (_, index) => '  \u001b[2m历史输出 ' + String(index + 1).padStart(2, '0') + ' · session replay preserved\u001b[0m').join('\r\n') + '\r\n\u001b]0;⠋ 重构终端工作区与多会话交互体验\u0007' + transcript),
     s2: b64('\u001b]0;实现文章目录与移动端折叠\u0007' + claudeTranscript),
     s3: b64(finished),
     s4: b64(openCodeTranscript),

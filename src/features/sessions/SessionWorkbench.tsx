@@ -249,6 +249,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const rootRef = useRef<HTMLDivElement>(null);
   const [narrowFrame, setNarrowFrame] = useState(false);
   const [compactFrame, setCompactFrame] = useState(false);
+  const [tightFrame, setTightFrame] = useState(false);
+  const stageRef = useRef<HTMLElement | null>(null);
   const [splitRoom, setSplitRoom] = useState(true);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
@@ -419,13 +421,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!node) return;
     const update = () => {
       const width = node.clientWidth;
+      const stageWidth = stageRef.current?.clientWidth ?? width;
       setNarrowFrame((current) => current === width <= 720 ? current : width <= 720);
       setCompactFrame((current) => current === width <= 620 ? current : width <= 620);
+      // The header lives in the stage column, so its room depends on the stage, not the window.
+      setTightFrame((current) => current === stageWidth <= 700 ? current : stageWidth <= 700);
       setSplitRoom((current) => current === width >= 860 ? current : width >= 860);
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(node);
+    if (stageRef.current) observer.observe(stageRef.current);
     return () => observer.disconnect();
   }, []);
 
@@ -1472,7 +1478,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const mountedSessions = scopedSessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
 
-  return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-rail-slim={(railSlim && !narrowFrame) || undefined}>
+  return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-slim={(railSlim && !narrowFrame) || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
     {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><button type="button" className={styles.ghostButton} onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</button></div>}
 
@@ -1484,7 +1490,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }
       }} />
 
-      <section className={styles.stage} aria-label={t('sessions.stageLabel')}>
+      <section ref={stageRef} className={styles.stage} aria-label={t('sessions.stageLabel')}>
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><button type="button" className="button primary" onClick={() => void retry()} disabled={retrying}><Icon name="refresh" size={14} /><span>{retrying ? t('sessions.loading') : t('sessions.retry')}</span></button><button type="button" className={styles.ghostButton} onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</button></div></div>}
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><button type="button" className={styles.ghostButton} onClick={() => setActionError('')} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button></div>}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><button type="button" className={styles.ghostButton} onClick={() => setNotice('')} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button></div>}
@@ -1513,7 +1519,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           return <>
             <header className={styles.stageBar}>
               <div className={styles.stageLead}>
-                <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>
+                <button type="button" className={styles.focusBtn} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} onClick={() => setFocusMode((current) => !current)}><Icon name={focusMode ? 'sidebarOpen' : 'minimize'} size={16} /></button>
                 <span className={styles.stageIcon} data-tone={tone}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
                   <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><span className={styles.statusChip} data-tone={tone}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span></div>
@@ -1531,12 +1537,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <button type="button" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind}><Icon name="search" size={16} /><span>{t('sessions.findOutput')}</span></button>
                   <button type="button" className={styles.toolButton} aria-label={t('sessions.copyOutput')} title={t('sessions.copyOutput')} onClick={() => void copyTerminalOutput(selected)}><Icon name="copy" size={16} /><span>{t('sessions.copyOutput')}</span></button>
                   <span className={styles.runningActions} data-running={selected.running || undefined} aria-hidden={selected.running ? undefined : true}>
-                    <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!selected.running} onClick={() => toggleComposer()}><Icon name="pencil" size={16} /><span>{t('sessions.composerShort')}</span></button>
+                    <button type="button" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!selected.running} onClick={() => toggleComposer()}><Icon name="pencil" size={15} /><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></button>
                     <button type="button" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!selected.running} onClick={() => void sendToSession(selected, '\x03')}><Icon name="square" size={14} /><span>{t('sessions.interruptShort')}</span></button>
                   </span>
                   <span className={styles.toolDivider} aria-hidden="true" />
                   {selected.reattachable && <button type="button" className={styles.toolButton} aria-label="重新附着远程会话" title="重新附着远程会话" disabled={!!busy} onClick={() => void reattachSession(selected)}><Icon name="refresh" size={16} /><span>{busy === 'reattach:' + selected.id ? '附着中…' : '继续会话'}</span></button>}
-                  {splitRoom && <button type="button" className={styles.toolButton} aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit}><Icon name="columns" size={16} /><span>{splitLabel}</span></button>}
+                  {splitRoom && <button type="button" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit}><Icon name="columns" size={16} /><span>{splitLabel}</span></button>}
                   <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
                   <button type="button" className={`${styles.toolButton} ${styles.moreButton}`} aria-label={t('sessions.moreActions')} title={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }}><Icon name="more" size={16} /></button>
                 </div>
