@@ -143,12 +143,14 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const [resumeError, setResumeError] = useState<{ key: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [backgroundScanning, setBackgroundScanning] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
   const [initialListSettled, setInitialListSettled] = useState(false);
   const [scanMetadataReady, setScanMetadataReady] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ running: boolean; toolId: string; completedSources: number; totalSources: number } | null>(null);
   const scanRequest = useRef(0);
   const scanningRef = useRef(false);
+  const backgroundScanningRef = useRef(false);
   const lastScan = useRef(0);
   const toasts = useToasts();
   const [copyFlash, setCopyFlash] = useState(0);
@@ -171,6 +173,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const request = useRef(0);
   const detailRequest = useRef(0);
   useEffect(() => {
+    // A host switch invalidates any local scan UI. The native worker may finish
+    // later, but its result must not keep the newly selected host blocked.
+    scanRequest.current++;
+    scanningRef.current = false;
+    backgroundScanningRef.current = false;
+    setScanning(false); setBackgroundScanning(false); setScanProgress(null);
     initialized.current = false;
     loadedFilter.current = '';
     setInitialListSettled(false);
@@ -328,63 +336,68 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   }, [childPath, selected, openedTrail]);
 
   useEffect(() => {
-    if (!scanning || !active) return;
+    if (!(scanning || backgroundScanning) || !active) return;
     const poll = () => { void native.getHistoryScanProgress().then(setScanProgress).catch(() => {}); };
     poll(); const timer = window.setInterval(poll, 700);
     return () => window.clearInterval(timer);
-  }, [scanning, active]);
+  }, [scanning, backgroundScanning, active]);
+
+  useEffect(() => {
+    if (!backgroundScanning || !active) return;
+    // Refreshes commit bounded batches while the native scan is running. Read the
+    // index periodically so a cold scan can show its first sessions immediately.
+    const timer = window.setInterval(() => { void load(filterRef.current); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [backgroundScanning, active, load]);
+
   async function refresh(announce = true, auto = false) {
-    if (!nativeAvailable || scanningRef.current) return;
+    if (!nativeAvailable || scanningRef.current || backgroundScanningRef.current) return;
     if (remoteTargetId !== 'local') {
       await load(filterRef.current, !auto);
       if (!auto) setScanVersion((value) => value + 1);
       if (announce) showNotice(t('records.page.remoteRefreshed'));
       return;
     }
-    const sequence = ++scanRequest.current; scanningRef.current = true; lastScan.current = Date.now();
+    const sequence = ++scanRequest.current; scanningRef.current = true;
     setScanning(true); setScanMode(auto ? 'auto' : 'manual');
     if (!auto) { toasts.clear(); }
-    // Keep the visible list responsive: reload the indexed rows immediately and
-    // let native log discovery continue in the background. The old flow waited
-    // for a full filesystem scan before showing any updated records.
-    if (!auto) {
-      try {
-        await load(filterRef.current);
-        if (sequence !== scanRequest.current) return;
-        scanningRef.current = false;
-        setScanning(false);
-        setScanProgress(null);
-        if (announce) showNotice(t('records.page.refreshed'));
-        void native.refreshHistory().then((reports) => {
-          if (sequence !== scanRequest.current) return;
-          setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
-          // The scan writes the index in the background. Read the new snapshot
-          // immediately so sessions discovered by this refresh appear without
-          // waiting for the next periodic refresh or a page revisit.
-          void load(filterRef.current);
-        }).catch(() => {});
-      } catch (value) { if (sequence === scanRequest.current) showError(value); scanningRef.current = false; setScanning(false); }
-      return;
-    }
     try {
-      const reports = await native.refreshHistory();
+      // Keep the visible list responsive: read the saved index first and let
+      // native log discovery continue in the background. This applies to the
+      // automatic refresh as well, whose cold scan can take minutes on a large
+      // local history directory.
+      await load(filterRef.current);
       if (sequence !== scanRequest.current) return;
-      setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
-      // Scanning is the operation represented by the toolbar button. The index
-      // list may still need a disk read, but that work is tracked by
-      // filterLoading so the refresh control becomes responsive as soon as the
-      // native scan has finished.
       scanningRef.current = false;
       setScanning(false);
       setScanProgress(null);
-      const loaded = await load(filterRef.current);
-      if (sequence !== scanRequest.current || !loaded || !announce) return;
-      showNotice(t('records.page.refreshed'));
-    } catch (value) { if (sequence === scanRequest.current && !auto) showError(value); }
-    finally { if (sequence === scanRequest.current) { scanningRef.current = false; setScanning(false); setScanProgress(null); } }
+      if (!auto && announce) showNotice(t('records.page.refreshed'));
+      backgroundScanningRef.current = true;
+      setBackgroundScanning(true);
+      void native.refreshHistory().then((reports) => {
+        if (sequence !== scanRequest.current) return;
+        setScans(reports); lastScan.current = Date.now(); setLastScanAt(lastScan.current); setScanVersion((value) => value + 1);
+        // The scan writes the index in batches. Read the completed snapshot so
+        // newly discovered sessions appear without waiting for the next visit.
+        void load(filterRef.current);
+      }).catch((value) => { if (sequence === scanRequest.current && !auto) showError(value); })
+        .finally(() => {
+          if (sequence === scanRequest.current) {
+            backgroundScanningRef.current = false;
+            setBackgroundScanning(false);
+            setScanProgress(null);
+          }
+        });
+    } catch (value) {
+      if (sequence === scanRequest.current) showError(value);
+      scanningRef.current = false;
+      setScanning(false);
+      setScanProgress(null);
+    }
   }
   async function cancelScan() {
-    scanRequest.current++; scanningRef.current = false; setScanning(false); setScanProgress(null); toasts.clear();
+    scanRequest.current++; scanningRef.current = false; backgroundScanningRef.current = false;
+    setScanning(false); setBackgroundScanning(false); setScanProgress(null); toasts.clear();
     try { await native.cancelHistoryRefresh(); showNotice(t('records.page.scanStopped')); }
     catch (value) { showError(value); }
   }
@@ -535,7 +548,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label={t('records.page.typesAria')} onKeyDown={navigateChoices}>
       <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={16} />{t('records.page.sessions')}{initialized.current ? <span className="count-chip">{sessions.length}</span> : null}</button>
       <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={16} />{t('records.page.usage')}</button>
-    </div><button type="button" className={styles.refresh} disabled={scanning} aria-label={t('records.page.refreshAria')} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={16} />}<span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></button></div>
+    </div><button type="button" className={styles.refresh} disabled={scanning || backgroundScanning} aria-label={t('records.page.refreshAria')} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={16} />}<span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><button type="button" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</button></p>}
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
@@ -565,7 +578,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
           {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <em className={styles.flag}>{t('records.page.partial')}</em>}{item.stale && <em className={styles.flag} data-tone="muted">{t('records.page.stale')}</em>}</small>}
         </button>),
       ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading ? t('records.page.loading') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading ? t('records.page.loadingHint') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{tool.name}：{tool.history.reason}</p>)}{listError ? <button type="button" onClick={() => void load(filter)}>{t('records.page.retryList')}</button> : activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button>}</div>}</div>
-        <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
+        <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning || backgroundScanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
       </aside>
       <div className={styles.detail} ref={detailRef}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
@@ -604,7 +617,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
     <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
-      scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
+      scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
     </div>
   </section>;
 }
