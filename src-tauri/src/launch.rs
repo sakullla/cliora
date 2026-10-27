@@ -1102,33 +1102,24 @@ fn plan_with_stage_at(
             ),
         ));
     }
-    // Launch validation only consumes the selected executable and its version.
-    // Reuse the quick summary probe from the launcher instead of re-walking all
-    // sibling shims and native documents on every click.
-    let probe = adapter::probe_registered_summary_cached(
+    let installation = adapter::probe_registered_launch(
         registry,
         &request.tool_id,
         custom_cli_path(db, &request.tool_id)
             .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?
             .as_deref(),
         home,
-        (scope == Scope::Project).then_some(directory.as_path()),
-        scope,
-        false,
     )
     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
     crate::accounts::selection::validate_oauth_files(registry,&request.tool_id,home,(scope==Scope::Project).then_some(directory.as_path())).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?;
-    let selected_path = probe.selected_path.as_deref().ok_or_else(|| {
+    let installation = installation.ok_or_else(|| {
         LaunchPlanError::new(
             LaunchStage::Tool,
             "CLI 未确认安装，请在工具页检查安装路径".into(),
         )
     })?;
-    let installation_version = probe
-        .installations
-        .iter()
-        .find(|item| item.path == selected_path && item.status == "available")
-        .and_then(|item| item.version.as_deref());
+    let selected_path = installation.path.as_str();
+    let installation_version = installation.version.as_deref();
     // Desktop install markers are authoritative without a readable version;
     // terminal launches keep requiring a confirmed version.
     if launch_form == LaunchForm::Terminal && installation_version.is_none() {

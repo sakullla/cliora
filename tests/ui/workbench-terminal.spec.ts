@@ -1,8 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /** Synthetic native IPC shared by the workbench terminal tests. */
-async function installWorkbenchMock(page: Page) {
-  await page.addInitScript(() => {
+async function installWorkbenchMock(page: Page, holdStartup = false) {
+  await page.addInitScript((holdStartup) => {
+    let releaseStartup = () => {};
+    const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }];
     if ((window as unknown as { __twoSessions?: boolean }).__twoSessions) sessions.push({ id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/a-long-project-directory/for-the-second-session', mode: 'yolo', running: true, exitCode: null, startedAt: Date.now() });
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
@@ -16,6 +18,7 @@ async function installWorkbenchMock(page: Page) {
       __writeBytes: writeBytes,
       __writeLog: writeLog,
       __opened: opened,
+      __releaseStartup: releaseStartup,
       __output: (text: string, sessionId = 's1', offset?: number) => {
         const bytes = new TextEncoder().encode(text);
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: btoa(String.fromCharCode(...bytes)), ...(offset === undefined ? {} : { offset }) } });
@@ -27,10 +30,12 @@ async function installWorkbenchMock(page: Page) {
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (holdStartup && ['list_projects', 'get_launch_settings', 'list_remote_targets', 'list_remote_sessions'].includes(command)) await startupReady;
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light', remote_ssh_enabled: holdStartup }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: args.theme }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'set_workbench_directory') return args.directory;
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'open_external_url') {
@@ -54,8 +59,32 @@ async function installWorkbenchMock(page: Page) {
         },
       },
     });
-  });
+  }, holdStartup);
 }
+
+test('CLI output and terminal replies do not wait for project, host or settings discovery', async ({ page }) => {
+  await installWorkbenchMock(page, true);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b[6n'));
+  await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+  // Auxiliary data finishing later must not overwrite an exit received meanwhile.
+  await page.evaluate(() => (window as unknown as { __exit: (code: number) => void }).__exit(0));
+  await page.evaluate(() => (window as unknown as { __releaseStartup: () => void }).__releaseStartup());
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('此会话进程已结束');
+});
+
+test('shell current-directory metadata updates the visible path without parsing ordinary output', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('C:/work');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b]7;file:///C:/cliora%20project\x07'));
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('C:\\cliora project');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('ordinary text C:/ignored'));
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('C:\\cliora project');
+});
 
 async function openWorkbench(page: Page, english = false) {
   await installWorkbenchMock(page);

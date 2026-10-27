@@ -243,6 +243,7 @@ export const native = {
   getRemoteNativeHistory: (targetId: string, id: string) => command<HistoryDetail>('get_remote_native_history', { targetId, id }),
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
+  setWorkbenchDirectory: (sessionId: string, directory: string) => command<string>('set_workbench_directory', { sessionId, directory }),
   writeWorkbenchSession: (sessionId: string, dataBase64: string) => command<void>('write_workbench_session', { sessionId, dataBase64 }),
   resizeWorkbenchSession: (sessionId: string, cols: number, rows: number) => command<void>('resize_workbench_session', { sessionId, cols, rows }),
   closeWorkbenchSession: (sessionId: string) => command<void>('close_workbench_session', { sessionId }),
