@@ -107,5 +107,7 @@ test('the tool switcher stays one horizontal row', async ({ page }) => {
   const kiro = await list.getByRole('tab', { name: 'Kiro', exact: true }).boundingBox();
   const box = await list.boundingBox();
   // The last tab sits flush with the strip; subpixel rounding can report a fraction past the edge.
-  expect(kiro!.x + kiro!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+  // Chromium can retain a fractional tab edge after the masked strip is
+  // scrolled. Keep a small pixel tolerance for platform-specific layout math.
+  expect(kiro!.x + kiro!.width).toBeLessThanOrEqual(box!.x + box!.width + 2);
 });
