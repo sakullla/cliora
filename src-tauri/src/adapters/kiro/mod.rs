@@ -1,13 +1,12 @@
 //! Kiro CLI (AWS, `kiro-cli`) adapter.
 //!
-//! Registered default-off through the non-enumerated stable id `kiro`. The CLI
-//! is closed-source and not installed locally, so dimensions follow the
-//! evidence classes of 02-technical-solution ADR-2: official docs for the
-//! command surface (`cli.kiro.dev`, `chat` with `-r/--resume`,
-//! `--resume-id <ID>`, `--resume-picker`, `--trust-all-tools`) and [RE]
-//! community reverse engineering (agentsview kiro.go, threadle) for the
-//! settings/session layout recorded in 01-exploration.md §4. [RE] shapes
-//! degrade strictly (`partial`) instead of being guessed.
+//! Registered default-off through the non-enumerated stable id `kiro`.
+//! Evidence classes per 01-exploration.md: official kiro.dev docs for the
+//! command and resource surfaces (`cli.kiro.dev`, `chat` with `-r/--resume`,
+//! `--resume-id <ID>`, `--resume-picker`, `--trust-all-tools`), plus the real
+//! local install (2.34.2, V3 engine active) for the data layout. Earlier [RE]
+//! community shapes (agentsview kiro.go, threadle) degrade strictly
+//! (`partial`) instead of being guessed.
 //!
 //! * **Paths**: `KIRO_HOME` relocates the whole root; otherwise `~/.kiro`
 //!   holds `settings/cli.json`, `settings/mcp.json` and the legacy
@@ -18,10 +17,27 @@
 //! * **MCP**: user-level `~/.kiro/settings/mcp.json` and workspace
 //!   `.kiro/settings/mcp.json` (`mcpServers` root). Kiro merges both by name
 //!   with workspace precedence; Cliora manages each file through its own
-//!   scope. stdio entries are `{command, args, env}` — `env` values may carry
-//!   `${VAR}` references that kiro expands at launch, which stay verbatim
-//!   (read-only, never resolved or rewritten here); remote entries are
-//!   `{url, headers, oauth}`; `disabled` and `autoApprove` are native flags.
+//!   scope, and the CLI hot-reloads a saved file. stdio entries are
+//!   `{command, args, env}` — `env` values may carry `${VAR}` references that
+//!   kiro expands at launch, which stay verbatim (read-only, never resolved
+//!   or rewritten here); remote entries are `{url, headers, oauth}`; native
+//!   flags `disabled`/`autoApprove` and newer fields such as `disabledTools`
+//!   and `oauth`/`oauthScopes` are kept from the existing entry (see
+//!   `mcp_document`).
+//! * **Skills**: user-level `~/.kiro/skills/` and workspace `.kiro/skills/`
+//!   (a same-named workspace skill overrides the user-level one in the CLI);
+//!   each skill directory carries a `SKILL.md` whose frontmatter `name` must
+//!   match the directory name, so `skill_requires_manifest` is set and the
+//!   shared SKILL.md parser applies unchanged.
+//! * **Agents**: `~/.kiro/agents/[name].md|.json` and workspace
+//!   `.kiro/agents/…` (nested directories form `team/planner` names);
+//!   definitions are whole-file content (see `agents`).
+//! * **Rules**: steering lives in `~/.kiro/steering/` and
+//!   `<project>/.kiro/steering/` (base files product.md/tech.md/
+//!   structure.md; the four frontmatter modes are file content the CLI
+//!   interprets, never parsed here). The managed single document is the
+//!   always-included AGENTS.md standard: `~/.kiro/steering/AGENTS.md` and
+//!   `<project>/AGENTS.md` (see `rules`).
 //! * **Sessions**: legacy `sessions/cli/<uuid>.jsonl` plus current
 //!   `<data-root>/<workspace>/sess_<id>/messages.jsonl` (see `history`).
 //!   `data.sqlite3` (`conversations_v2` key/conversation_id/value/
@@ -37,8 +53,10 @@
 //! * **Login**: Builder ID/Google/GitHub/IAM IdC flows stay with the product;
 //!   no accounts port is declared and no login state is adopted.
 
+pub(crate) mod agents;
 pub mod history;
 pub(crate) mod memory;
+pub(crate) mod rules;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -49,7 +67,6 @@ use serde_json::{json, Value};
 use super::{
     file, project_root, AdapterDescriptor, CliAdapter, Facet, InspectionFields,
     HISTORY_ASSOCIATION_UNAVAILABLE_REASON, LaunchMode, ManagementCapabilities, McpLocation,
-    RuleSupport,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -114,6 +131,9 @@ impl CliAdapter for Kiro {
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
+    fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "kiro"
     }
@@ -176,6 +196,38 @@ impl CliAdapter for Kiro {
     fn supports_mcp(&self) -> bool {
         true
     }
+    fn supports_skills(&self) -> bool {
+        true
+    }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        // Official skills layout: user-level ~/.kiro/skills and workspace
+        // .kiro/skills; a same-named workspace skill overrides the user-level
+        // one in the CLI, and each scope stays managed on its own root.
+        Some(match scope {
+            Scope::Global => kiro_root(home).join("skills"),
+            Scope::Project => project?.join(".kiro").join("skills"),
+        })
+    }
+    fn skill_requires_manifest(&self) -> bool {
+        // A skill is a directory with SKILL.md (frontmatter name must match
+        // the directory name); directories without it are not skills.
+        true
+    }
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        // The managed document is the always-included AGENTS.md standard;
+        // the steering directory itself stays a native location (see rules).
+        rules::rule_path(scope, home, project)
+    }
     fn mcp_location(
         &self,
         scope: Scope,
@@ -201,10 +253,13 @@ impl CliAdapter for Kiro {
         enabled: bool,
         existing: Option<&Value>,
     ) -> Result<Option<Value>, String> {
-        // Shapes pinned by the [RE] evidence: stdio {command, args, env} —
-        // `${VAR}` env values expand natively at launch and stay verbatim —
-        // and remote {url, headers, oauth}; `disabled`/`autoApprove` are
-        // native flags kept from the existing entry.
+        // Shapes pinned by official docs plus the [RE] evidence: stdio
+        // {command, args, env} — `${VAR}` env values expand natively at
+        // launch and stay verbatim — and remote {url, headers, oauth}. The
+        // shared builders start from the existing entry, so native flags and
+        // newer fields survive a rewrite: `disabled`/`autoApprove`,
+        // `disabledTools`, and the remote `oauth{clientId, clientSecret,
+        // redirectUri, clientMetadataUrl, oauthScopes}`/`oauthScopes` group.
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
             McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
@@ -404,7 +459,7 @@ impl CliAdapter for Kiro {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开）",
+                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；规则为 ~/.kiro/steering 与 .kiro/steering（含恒包含的 AGENTS.md，四种 frontmatter 模式为文件内容不解析）",
             },
             history: Facet {
                 state: "available",
@@ -413,12 +468,12 @@ impl CliAdapter for Kiro {
             login: None,
             management: ManagementCapabilities {
                 accounts: false,
-                mcp: true,
-                skills: false,
-                agents: false,
+                mcp: self.supports_mcp(),
+                skills: self.supports_skills(),
+                agents: self.agents().is_some_and(|port| port.capability().supported),
                 plugins: false,
                 project_plugins: false,
-                rules: RuleSupport::bare(false, false),
+                rules: self.rule_support(),
                 memory: self.published_memory(),
             },
         }
@@ -530,11 +585,28 @@ mod tests {
         // ${VAR} references stay verbatim: kiro expands them at launch.
         assert_eq!(stdio["env"]["API_KEY"], "${EXAMPLE_KEY}");
         assert_eq!(stdio["autoApprove"], json!(["list_tools", "read_file"]));
+        assert_eq!(
+            stdio["disabledTools"],
+            json!(["write_file", "apply_patch"]),
+            "原生 disabledTools 列表原样读出"
+        );
         assert_eq!(stdio["disabled"], false);
         let remote = &entries["example-remote"];
         assert_eq!(remote["url"], "https://mcp.example.com/mcp");
         assert_eq!(remote["headers"]["X-Example"], "fixture");
-        assert_eq!(remote["oauth"], true);
+        assert_eq!(
+            remote["oauth"]["clientId"], "fixture-client",
+            "oauth 组为原生对象"
+        );
+        assert_eq!(
+            remote["oauth"]["oauthScopes"],
+            json!(["read", "write"])
+        );
+        assert_eq!(
+            remote["oauth"]["clientSecret"], "${OAUTH_CLIENT_SECRET}",
+            "oauth 凭据引用保持原样"
+        );
+        assert_eq!(remote["oauthScopes"], json!(["read"]));
         assert_eq!(remote["disabled"], true);
     }
 
@@ -562,13 +634,52 @@ mod tests {
         assert_eq!(enabled["env"]["API_KEY"], "${EXAMPLE_KEY}");
         assert_eq!(enabled["disabled"], false);
         assert!(enabled.get("enabled").is_none(), "Kiro 用 disabled 标志，无 enabled 字段");
+        // Rewriting an existing stdio entry keeps the native disabledTools
+        // list and autoApprove flag; only disabled follows the toggle.
+        let stdio_existing = json!({
+            "command": "old-runner",
+            "args": ["-y", "old"],
+            "env": {"API_KEY": "${OLD_KEY}"},
+            "autoApprove": ["list_tools"],
+            "disabledTools": ["write_file", "apply_patch"],
+            "disabled": true
+        });
+        let rewritten = Kiro
+            .mcp_document(&definition, true, Some(&stdio_existing))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rewritten["command"], "fixture-runner");
+        assert_eq!(rewritten["env"]["API_KEY"], "${EXAMPLE_KEY}");
+        assert_eq!(rewritten["disabled"], false);
+        assert_eq!(
+            rewritten["disabledTools"],
+            json!(["write_file", "apply_patch"]),
+            "原生 disabledTools 保留"
+        );
+        assert_eq!(
+            rewritten["autoApprove"],
+            json!(["list_tools"]),
+            "原生 autoApprove 标志保留"
+        );
         let remote_definition = McpDefinition {
             transport: McpTransport::Http,
             url: "https://mcp.example.com/mcp".into(),
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition
         };
-        let existing = json!({"autoApprove": ["list_tools"], "disabled": false});
+        let existing = json!({
+            "url": "https://old.example.com/mcp",
+            "autoApprove": ["list_tools"],
+            "oauth": {
+                "clientId": "fixture-client",
+                "clientSecret": "${OAUTH_CLIENT_SECRET}",
+                "redirectUri": "https://mcp.example.com/oauth/callback",
+                "clientMetadataUrl": "https://mcp.example.com/.well-known/oauth-authorization-server",
+                "oauthScopes": ["read", "write"]
+            },
+            "oauthScopes": ["read"],
+            "disabled": false
+        });
         let disabled = Kiro
             .mcp_document(&remote_definition, false, Some(&existing))
             .unwrap()
@@ -581,6 +692,19 @@ mod tests {
             json!(["list_tools"]),
             "原生 autoApprove 标志保留"
         );
+        assert_eq!(
+            disabled["disabledTools"],
+            Value::Null,
+            "远端条目无 disabledTools，不凭空生成"
+        );
+        // The oauth group and sibling oauthScopes survive a rewrite verbatim.
+        assert_eq!(disabled["oauth"]["clientId"], "fixture-client");
+        assert_eq!(disabled["oauth"]["clientSecret"], "${OAUTH_CLIENT_SECRET}");
+        assert_eq!(
+            disabled["oauth"]["oauthScopes"],
+            json!(["read", "write"])
+        );
+        assert_eq!(disabled["oauthScopes"], json!(["read"]));
         assert_eq!(
             Kiro.mcp_disabled_description(),
             Some("停用会写入 disabled: true，原生条目保留")
@@ -696,14 +820,48 @@ mod tests {
     }
 
     #[test]
+    fn skill_and_rule_roots_cover_the_official_dual_scope_layout() {
+        let temp = tempfile::tempdir().unwrap();
+        let global = Kiro.skill_root(Scope::Global, temp.path(), None).unwrap();
+        assert_eq!(global, temp.path().join(".kiro/skills"));
+        let project = Path::new("/work/demo");
+        assert_eq!(
+            Kiro.skill_root(Scope::Project, temp.path(), Some(project)).unwrap(),
+            project.join(".kiro/skills")
+        );
+        assert!(Kiro.skill_root(Scope::Project, temp.path(), None).is_none());
+        assert!(
+            Kiro.skill_requires_manifest(),
+            "无 SKILL.md 的目录不是 Kiro skill"
+        );
+        // The managed rule document is the always-included AGENTS.md standard;
+        // the steering directory itself stays a native location without a
+        // catalog.
+        assert_eq!(
+            Kiro.rule_path(Scope::Global, temp.path(), None).unwrap(),
+            temp.path().join(".kiro/steering/AGENTS.md")
+        );
+        assert_eq!(
+            Kiro.rule_path(Scope::Project, temp.path(), Some(project)).unwrap(),
+            project.join("AGENTS.md")
+        );
+        let support = Kiro.rule_support();
+        assert!(support.global);
+        assert!(support.project);
+        assert!(!support.catalog, "steering 目录不作为目录型规则目录交付");
+    }
+
+    #[test]
     fn delivered_dimensions_declare_no_fabricated_ports() {
         assert!(Kiro.history_supported());
         assert!(Kiro.supports_mcp());
-        // Skills/agents/plugins directories under ~/.kiro are referenced by
-        // official docs without verified locations; accounts/login flows and
-        // the official quota (web-only) stay undelivered with reasons.
-        assert!(!Kiro.supports_skills());
-        assert!(Kiro.agents().is_none());
+        // Skills/agents/steering now follow the official docs evidence; the
+        // plugins (powers) port, accounts/login flows and the official quota
+        // (web-only) stay undelivered with reasons.
+        assert!(Kiro.supports_skills());
+        assert!(Kiro
+            .agents()
+            .is_some_and(|port| port.capability().supported));
         assert!(Kiro.plugins().is_none());
         assert!(Kiro.accounts().is_none());
         assert!(Kiro.official_usage().is_none());
@@ -719,11 +877,11 @@ mod tests {
         assert!(descriptor.login.is_none());
         assert!(!descriptor.management.accounts);
         assert!(descriptor.management.mcp);
-        assert!(!descriptor.management.skills);
-        assert!(!descriptor.management.agents);
+        assert!(descriptor.management.skills);
+        assert!(descriptor.management.agents);
         assert!(!descriptor.management.plugins);
-        assert!(!descriptor.management.rules.global);
-        assert!(!descriptor.management.rules.project);
+        assert!(descriptor.management.rules.global);
+        assert!(descriptor.management.rules.project);
         // The recorded usage absence reason stays part of the descriptor.
         assert!(descriptor.history.reason.contains("无 token 字段"));
         assert_eq!(
