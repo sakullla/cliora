@@ -323,7 +323,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
             {preview ? <button type="button" className={styles.primary} disabled={busy || preview.targets.some(item => item.status === 'conflict') && !allowReplace || preview.targets.every(item => item.status !== 'ready' && item.status !== 'conflict')} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</button>
               : <button type="button" className={styles.primary} title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button>}
           </DocumentFoot>
-        </> : nativeOrigin && <div className={doc.body}><McpDetails key={nativeOrigin.name} item={{ ...nativeOrigin, enabled }} /></div>}
+        </> : nativeOrigin && <div className={doc.body}><McpDetails key={nativeOrigin.name} statusInHeader item={{ ...nativeOrigin, enabled }} /></div>}
       </article> : null}
     />
     <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeCompose()}>

@@ -15,38 +15,41 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Palette: sage-tinted neutrals around the leaf brandmark (#366b49).
+  /* Palette: clean neutrals with the faintest leaf undertone, around the brandmark (#366b49).
      The accent is the leaf green; success leans teal so status stays distinct from brand. */
 
-  /* Surfaces: near-neutral greys with a faint leaf warmth, so cards read as white paper
-     on a calm desk instead of a tinted wash. */
-  --bg: #f4f5f3;
-  --sidebar: #eceeea;
+  /* Surfaces. The window frame (--sidebar) holds the navigation; pages sit on a lighter
+     canvas (--bg) that floats inside the frame; cards are white paper on that canvas. */
+  --bg: #f7f8f6;
+  --sidebar: #edefec;
   --surface: #ffffff;
-  --surface-2: #f5f6f4;
-  --surface-3: #ebeeea;
-  --overlay: rgb(12 18 14 / 38%);
-  --wash-a: rgb(31 122 79 / 5%);
+  --surface-2: #f4f5f3;
+  --surface-3: #ebedea;
+  --overlay: rgb(12 18 14 / 34%);
+  --wash-a: rgb(31 122 79 / 4%);
   --wash-b: rgb(78 116 160 / 3%);
-  --surface-glass: rgb(255 255 255 / 78%);
+  --surface-glass: rgb(255 255 255 / 80%);
 
   /* Text */
-  --text: #141915;
+  --text: #131715;
   --text-2: #3b443e;
   --text-3: #5b665e;
 
   /* Lines */
-  --line: #e1e5e0;
-  --line-strong: #b9c2bb;
+  --line: #e4e7e3;
+  --line-strong: #c8cfca;
+  /* Control outlines sit between the hairline and the strong line. */
+  --control-line: #d3d9d4;
+  --control-line-hover: #aab3ad;
 
   /* Brand */
-  --accent: #0d6b45;
-  --accent-hover: #0a5838;
+  --accent: #0f7148;
+  --accent-hover: #0b5d3b;
   --accent-bright: #22a06b;
   --on-accent: #f6fcf8;
-  --accent-soft: #e4f3ea;
-  --accent-line: #b9dcc7;
-  --accent-ring: rgb(13 107 69 / 18%);
+  --accent-soft: #e5f3eb;
+  --accent-line: #bddfca;
+  --accent-ring: rgb(15 113 72 / 16%);
   --selection: #d0e4fa;
 
   /* Status */
@@ -70,7 +73,7 @@
   --fs-body: 14px;     /* reading text, inputs, nav, menus       · icon 16 */
   --fs-title: 15px;    /* section and card titles                · icon 16 */
   --fs-heading: 16px;  /* dialog and detail headings             · icon 18 */
-  --fs-page: 26px;     /* page title                             · icon 20+ */
+  --fs-page: 24px;     /* page title                             · icon 20+ */
 
   /* Weights: Microsoft YaHei / PingFang only ship 400 and 700 (plus 500/600 on macOS),
      so steps in between render inconsistently for CJK. Keep to four. */
@@ -90,16 +93,20 @@
   --radius-sm: 8px;
   --radius: 10px;
   --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 20px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  /* The floating page canvas inside the window frame. */
+  --canvas-gap: 8px;
+  --canvas-radius: 14px;
 
   /* Elevation: hairline + soft ambient, never a heavy drop. */
-  --shadow-xs: 0 1px 2px rgb(16 24 20 / 4%);
-  --shadow-sm: 0 1px 2px rgb(16 24 20 / 4%), 0 2px 6px -2px rgb(16 24 20 / 6%);
-  --shadow-md: 0 10px 24px -12px rgb(13 24 18 / 16%), 0 2px 6px rgb(13 24 18 / 4%);
+  --shadow-xs: 0 1px 1px rgb(16 24 20 / 4%);
+  --shadow-sm: 0 1px 2px rgb(16 24 20 / 4%), 0 2px 8px -3px rgb(16 24 20 / 7%);
+  --shadow-md: 0 12px 28px -14px rgb(13 24 18 / 18%), 0 2px 6px rgb(13 24 18 / 4%);
   --shadow-lg: 0 28px 70px -24px rgb(9 20 14 / 28%), 0 10px 28px -14px rgb(9 20 14 / 16%), 0 0 0 1px rgb(9 20 14 / 5%);
-  --shadow-accent: 0 1px 2px rgb(13 107 69 / 20%), 0 4px 12px -6px rgb(13 107 69 / 42%);
-  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 16%);
+  --shadow-accent: 0 1px 2px rgb(15 113 72 / 22%), 0 4px 12px -6px rgb(15 113 72 / 40%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
+  --shadow-canvas: 0 0 0 1px rgb(16 24 20 / 5%), 0 1px 2px rgb(16 24 20 / 4%), 0 8px 24px -16px rgb(16 24 20 / 14%);
 
   /* Controls */
   --control-h: 36px;
@@ -114,22 +121,24 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0c0e0d;
-  --sidebar: #101311;
-  --surface: #151917;
-  --surface-2: #1b201d;
+  --bg: #121514;
+  --sidebar: #0b0d0c;
+  --surface: #171b19;
+  --surface-2: #1c211e;
   --surface-3: #252b27;
   --overlay: rgb(0 0 0 / 60%);
-  --wash-a: rgb(94 219 154 / 5%);
+  --wash-a: rgb(94 219 154 / 4%);
   --wash-b: rgb(108 154 210 / 3%);
-  --surface-glass: rgb(21 25 23 / 80%);
+  --surface-glass: rgb(23 27 25 / 82%);
 
   --text: #edf2ee;
   --text-2: #c5cec8;
   --text-3: #99a39c;
 
   --line: #262d29;
-  --line-strong: #4a554e;
+  --line-strong: #444f48;
+  --control-line: #333b36;
+  --control-line-hover: #56625a;
 
   --accent: #6fdc9f;
   --accent-hover: #95ebbb;
@@ -163,6 +172,7 @@
   --shadow-lg: 0 36px 90px -30px rgb(0 0 0 / 80%), 0 8px 28px -12px rgb(0 0 0 / 40%);
   --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px -10px rgb(123 227 167 / 40%);
   --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 6%);
+  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 5%), 0 10px 30px -18px rgb(0 0 0 / 70%);
 
   --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a39c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
@@ -175,11 +185,7 @@ html, body, #root { height: 100%; margin: 0; min-height: 0; overflow: hidden; }
 #root { display: flow-root; }
 body {
   color: var(--text);
-  background:
-    radial-gradient(1100px 620px at 92% -12%, var(--wash-a), transparent 62%),
-    radial-gradient(820px 520px at -8% 6%, var(--wash-b), transparent 58%),
-    var(--bg);
-  background-attachment: fixed;
+  background: var(--sidebar);
 }
 h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); }
@@ -227,7 +233,7 @@ kbd { display: inline-block; min-width: 19px; padding: 0 5px; border: 1px solid 
      so author hover backgrounds never replace the resting color. */
   appearance: none;
   -webkit-appearance: none;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
@@ -238,13 +244,13 @@ kbd { display: inline-block; min-width: 19px; padding: 0 5px; border: 1px solid 
   box-shadow: var(--shadow-xs);
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-:where(button:not([role="tab"]):not([role="radio"])):hover:not(:disabled) { background: var(--surface-2); border-color: var(--text-3); box-shadow: var(--shadow-sm); }
+:where(button:not([role="tab"]):not([role="radio"])):hover:not(:disabled) { background: var(--surface-2); border-color: var(--control-line-hover); box-shadow: var(--shadow-sm); }
 :where(button:not([role="tab"]):not([role="radio"])):active:not(:disabled) { transform: translateY(.5px); box-shadow: none; }
 
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
   min-height: var(--control-h);
   padding: 0 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
@@ -260,7 +266,7 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, tex
 /* One ring, not two: the outline sits on the border and a soft halo carries the focus outward. */
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus { box-shadow: 0 0 0 4px var(--accent-ring); }
-:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--text-3); }
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--control-line-hover); }
 
 :where(select) {
   appearance: none;
@@ -383,9 +389,8 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 14px 12px 12px;
+  padding: 14px 10px 12px 12px;
   background: var(--sidebar);
-  border-right: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 2px 0 6px; margin-bottom: 10px; }
 .brand-name { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
@@ -552,11 +557,19 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
 .theme-switch button[aria-pressed="true"],
 .theme-switch button[aria-pressed="true"]:hover:not(:disabled) { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
 
+/* Pages float on a rounded canvas inside the window frame; the frame carries navigation. */
 .content {
   min-width: 0;
+  min-height: 0;
+  margin: var(--canvas-gap) var(--canvas-gap) var(--canvas-gap) 0;
   overflow: auto;
   scrollbar-gutter: stable;
-  background: transparent;
+  border-radius: var(--canvas-radius);
+  background:
+    radial-gradient(1100px 620px at 100% -12%, var(--wash-a), transparent 62%),
+    radial-gradient(820px 520px at 0% 0%, var(--wash-b), transparent 58%),
+    var(--bg);
+  box-shadow: var(--shadow-canvas);
 }
 .content-locked { display: flex; flex-direction: column; overflow: hidden; }
 .content-locked > .content-inner { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: 16px; max-width: none; }
@@ -567,16 +580,16 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .content-workbench > .content-inner > .environment-banner { margin: 10px 12px 0; }
 .records-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .records-shell[hidden] { display: none; }
-.content-inner { width: 100%; max-width: 1320px; margin: 0 auto; padding: 32px 40px 56px; }
+.content-inner { width: 100%; max-width: 1440px; margin: 0 auto; padding: 28px 36px 48px; }
 .content-inner > * { animation: page-in 240ms var(--ease); }
 .content-inner > div:not(.environment-banner) { min-width: 0; }
 
-.page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px 20px; margin-bottom: 24px; }
+.page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; margin-bottom: 20px; }
 .page-head > * { min-width: 0; }
-.page-head h1 { font-size: var(--fs-page); line-height: 1.2; letter-spacing: -.5px; font-weight: var(--fw-bold); }
+.page-head h1 { font-size: var(--fs-page); line-height: 1.25; letter-spacing: -.4px; font-weight: var(--fw-bold); }
 .page-head h1:focus { outline: none; }
 .page-head > div { position: relative; }
-.page-head p { margin-top: 6px; max-width: 62ch; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
+.page-head p { margin-top: 4px; max-width: 62ch; color: var(--text-3); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
 .page-head[data-compact] { align-items: center; margin-bottom: 14px; }
 .page-head[data-compact] h1 { font-size: 22px; letter-spacing: -.25px; }
 .page-head[data-compact] p { margin-top: 2px; font-size: var(--fs-body); }
@@ -649,8 +662,8 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .text-button { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 9px; border: 0; background: none; color: var(--accent); font-size: var(--fs-control); font-weight: var(--fw-semibold); box-shadow: none; border-radius: var(--radius-sm); }
 .text-button:hover:not(:disabled) { background: var(--accent-soft); }
 
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--control-h-sm); padding: 0 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-medium); white-space: nowrap; box-shadow: var(--shadow-xs); transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease); }
-.button:hover:not(:disabled) { background: var(--surface-3); border-color: var(--text-3); }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--control-h-sm); padding: 0 14px; border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-medium); white-space: nowrap; box-shadow: var(--shadow-xs); transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease); }
+.button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--control-line-hover); }
 .button.primary, .button.primary:hover:not(:disabled) { border-radius: var(--radius-sm); background: var(--accent); border-color: color-mix(in srgb, var(--accent) 86%, black); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
 .button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 
@@ -1071,6 +1084,7 @@ label.setting-row:hover { background: var(--surface-2); }
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .sidebar { flex-flow: row wrap; align-items: center; gap: 6px 8px; max-width: 100%; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .content { margin: 0; border-radius: 0; box-shadow: none; }
   .brand { flex: none; min-height: 32px; margin: 0; padding: 0 2px; }
   .brandmark { width: 24px; height: 24px; }
   .brand-name, .sidebar-toggle { display: none; }

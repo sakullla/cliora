@@ -101,9 +101,11 @@
 
 .header { display: grid; flex: none; gap: 4px; min-width: 0; padding: 12px 14px 10px 20px; border-bottom: 1px solid var(--line); }
 .titleRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; min-height: 32px; }
-.titleRow > h3 { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--text); font-family: var(--font-display); font-size: 19px; font-weight: var(--fw-semibold); letter-spacing: -.015em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.titleRow > h3 { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--text); font-family: var(--font-display); font-size: 17px; font-weight: var(--fw-semibold); letter-spacing: -.01em; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .badges { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
-.tools { display: inline-flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
+/* The tool group may drop under the title on a narrow pane; it then wraps inside the
+   pane instead of running past its clipped edge. */
+.tools { display: inline-flex; flex: 1 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; max-width: 100%; min-width: 0; margin-left: auto; }
 .metaRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
 .metaText { display: inline-flex; flex: 1 1 200px; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; overflow-wrap: anywhere; }
 .metaActions { display: inline-flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }

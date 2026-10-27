@@ -685,6 +685,7 @@ export default {
       memory: 'Memory',
     },
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
+    railTitle: 'CLI tools',
     scrollToolsBack: 'Show earlier tools',
     scrollToolsForward: 'Show more tools',
     frameCurrent: 'Edit the files in use',

@@ -354,7 +354,7 @@
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   gap: 10px;
   width: 100%;
   min-width: 0;
@@ -408,7 +408,10 @@
 .sessionBody { display: grid; gap: 2px; min-width: 0; }
 .sessionTop,
 .sessionSub { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.sessionTop strong { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+/* Task titles get two lines before they truncate; the badges and time stay on the first. */
+.sessionTop { align-items: flex-start; }
+.sessionTop strong { display: -webkit-box; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); line-height: 1.4; overflow-wrap: anywhere; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.sessionTop > :not(strong) { margin-top: 2px; }
 .sessionTime { flex: none; color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 .row:hover .sessionTime,
 .row:focus-within .sessionTime,
