@@ -2063,6 +2063,8 @@ fn parent_detail_keeps_attribution_and_child_bodies_out_of_list_search_report_an
     assert!(!children_json.contains("UNREADABLE_BODY_SENTINEL"));
     let listed = list(&db, &HistoryFilter::default()).unwrap();
     assert_eq!(listed.len(), 1);
+    let limited = list(&db, &HistoryFilter { limit: Some(1), ..Default::default() }).unwrap();
+    assert_eq!(limited.len(), 1);
     assert_eq!(listed[0].id, id);
     assert_eq!(listed[0].title, "父会话标题");
     for needle in ["CHILD_ONLY_SENTINEL", "GRANDCHILD_ONLY_SENTINEL", "UNREADABLE_BODY_SENTINEL", "reviewer"] {

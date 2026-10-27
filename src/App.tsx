@@ -198,7 +198,7 @@ export default function App() {
     void native.listProjects().then((result) => { if (live && Array.isArray(result)) setPaletteProjects(result); }).catch(() => {});
     // Palette data is read-only: sessions come straight from the indexed DB snapshot
     // (list_history_sessions never scans) and library items from the library tables.
-    void native.listHistorySessions({}).then((result) => {
+    void native.listHistorySessions({ limit: 5 }).then((result) => {
       if (!live || !Array.isArray(result)) return;
       setPaletteSessions([...result].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 5));
     }).catch(() => {});
