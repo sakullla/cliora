@@ -3468,6 +3468,13 @@ pub async fn workbench_git_context(session_id: String) -> Result<Option<crate::g
     }).await
 }
 
+/// Update the visible local working directory from shell integration (OSC 7 /
+/// OSC 1337). The session host validates and canonicalizes the path.
+#[tauri::command]
+pub async fn set_workbench_directory(session_id: String, directory: String) -> Result<String, ApiError> {
+    blocking(move || crate::session_host::set_directory(&session_id, &directory).map_err(native_error)).await
+}
+
 #[tauri::command]
 pub async fn write_workbench_session(
     session_id: String,

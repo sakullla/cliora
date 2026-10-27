@@ -83,6 +83,29 @@ export function textFromOsc52(payload: string): string | null {
   }
 }
 
+/** Parse shell integration's OSC 7 or OSC 1337 current-directory value. */
+export function terminalWorkingDirectory(payload: string): string | null {
+  const value = payload.trim().replace(/^CurrentDir=/i, '').trim();
+  if (!value) return null;
+  const windows = /Windows/i.test(navigator.userAgent || navigator.platform);
+  try {
+    if (/^file:/i.test(value)) {
+      // URL preserves UNC hosts and percent-decoded path separators.
+      const uri = new URL(value);
+      if (uri.protocol.toLowerCase() !== 'file:') return null;
+      if (uri.username || uri.password || uri.port || uri.search || uri.hash) return null;
+      let path = decodeURIComponent(uri.pathname);
+      if (uri.hostname && uri.hostname.toLowerCase() !== 'localhost' && !/^[a-z]:$/i.test(uri.hostname)) path = `//${uri.hostname}${path}`;
+      else if (/^[a-z]:$/i.test(uri.hostname)) path = `${uri.hostname}${path}`;
+      if (windows && /^\/[a-z]:/i.test(path)) path = path.slice(1);
+      return windows ? path.replace(/\//g, '\\') : path.replace(/\\/g, '/');
+    }
+    if (windows && /^[a-z]:[\\/]/i.test(value)) return value.replace(/\//g, '\\');
+    if (!windows && value.startsWith('/')) return value;
+  } catch { /* Malformed shell metadata is ignored. */ }
+  return null;
+}
+
 /** Leave composition and IME-process keys to xterm. Shortcuts must not swallow them. */
 export function terminalYieldsToIme(event: { isComposing?: boolean; keyCode?: number; key?: string }): boolean {
   return !!event.isComposing || event.keyCode === 229 || event.key === 'Process' || event.key === 'Unidentified';
@@ -194,6 +217,7 @@ export type TerminalBridge = {
   scrolled: (sessionId: string, awayFromBottom: boolean) => void;
   copied: () => void;
   grid: (sessionId: string, cols: number, rows: number) => void;
+  directory: (sessionId: string, directory: string) => void;
 };
 
 /**
@@ -668,6 +692,16 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (text) void writeClipboard(text).then((ok) => { if (ok && !disposed) bridge.current.copied(); });
       return true;
     });
+    let reportedDirectory = '';
+    const reportDirectory = (data: string) => {
+      const directory = terminalWorkingDirectory(data);
+      if (!directory || directory === reportedDirectory) return true;
+      reportedDirectory = directory;
+      bridge.current.directory(sessionId, directory);
+      return true;
+    };
+    const osc7 = term.parser.registerOscHandler(7, reportDirectory);
+    const osc1337 = term.parser.registerOscHandler(1337, reportDirectory);
     const fitNow = () => {
       if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
       const dims = fit.proposeDimensions();
@@ -775,6 +809,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       subscription.dispose();
       binarySubscription.dispose();
       osc52.dispose();
+      osc7.dispose();
+      osc1337.dispose();
       textarea?.removeEventListener('compositionstart', onCompositionStart);
       textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
       textarea?.removeEventListener('compositionend', onCompositionEnd);

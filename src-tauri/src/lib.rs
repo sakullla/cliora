@@ -316,6 +316,7 @@ pub fn run() {
             commands::get_remote_native_history,
             commands::replay_workbench_session,
             commands::workbench_git_context,
+            commands::set_workbench_directory,
             commands::write_workbench_session,
             commands::resize_workbench_session,
             commands::close_workbench_session,

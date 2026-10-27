@@ -6,7 +6,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
-import { displayPath, shortPath } from '../../lib/paths';
+import { compactText, displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
 import { confirmAction } from '../../lib/confirm';
 import { modLabel } from '../../lib/shortcut';
@@ -467,7 +467,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const timer = window.setInterval(read, 15_000);
     window.addEventListener('focus', read);
     return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
-  }, [gitTarget]);
+  }, [gitTarget, selected?.directory]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
   const dialogHostId = newDialogOpen ? libraryHostId(workspaceValue.startsWith('remote:') ? workspaceValue : null, remoteProjects) : null;
   const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
@@ -575,6 +575,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }),
     copied: () => flashCopied('selection'),
     grid: () => {},
+    directory: (id, directory) => {
+      void native.setWorkbenchDirectory(id, directory).then((canonical) => {
+        setSessions((current) => current.map((item) => item.id === id ? { ...item, directory: canonical } : item));
+        setGitContexts((current) => {
+          if (!current.has(id)) return current;
+          const next = new Map(current);
+          next.delete(id);
+          return next;
+        });
+      }).catch(() => {});
+    },
   };
 
   // A launch elsewhere asks the workbench to focus its new session once. Returning to the
@@ -653,48 +664,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!active || !nativeAvailable) return;
     let alive = true;
     setLoading(true);
-    void Promise.all([
-      native.listWorkbenchSessions(),
-      native.listProjects().catch(() => [] as Project[]),
-      remoteSshEnabled ? native.listRemoteProjects().catch(() => [] as RemoteProject[]) : Promise.resolve([] as RemoteProject[]),
-      remoteSshEnabled ? native.listRemoteTargets().catch(() => null) : Promise.resolve([] as RemoteTarget[]),
-      remoteSshEnabled ? native.listRemoteSessions().catch(() => []) : Promise.resolve([]),
-      native.getLaunchSettings().catch(() => null),
-    ]).then(([listed, listedProjects, listedRemoteProjects, listedRemoteTargets, remoteSessions, settings]) => {
+    // Attach the terminal as soon as its in-memory session is available. Project
+    // directory checks and host/settings discovery can finish after CLI output.
+    const listedSessions = native.listWorkbenchSessions();
+    void listedSessions.then((listed) => {
       if (!alive) return;
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
       for (const item of next) if (!firstSeenAt.current.has(item.id)) firstSeenAt.current.set(item.id, item.startedAt ?? now);
       setSessions(next);
-      setProjects(Array.isArray(listedProjects) ? listedProjects : []);
-      setRemoteProjects(Array.isArray(listedRemoteProjects) ? listedRemoteProjects : []);
-      // A disabled SSH flag before preferences load resolves to an empty list. That is not
-      // evidence the saved host was removed, so only a real target query may replace the shell list.
-      if (remoteSshEnabled && Array.isArray(listedRemoteTargets)) setLoadedRemoteTargets(listedRemoteTargets);
-      if (settings) setLaunchSettings(settings);
-      if (!next.length && !autoRemoteReattachAttempted.current) {
-        autoRemoteReattachAttempted.current = true;
-        const validProjectIds = new Set((Array.isArray(listedRemoteProjects) ? listedRemoteProjects : []).map((item) => item.id));
-        const validTargetIds = new Set((Array.isArray(listedRemoteTargets) ? listedRemoteTargets : []).filter((item) => item.enabled).map((item) => item.id));
-        const indexed = Array.isArray(remoteSessions)
-          ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
-          : [];
-        const requests = indexed.length
-          ? indexed.map((item) => native.launchCli({
-              toolId: item.toolId,
-              projectId: `remote:${item.projectId}`,
-              sessionId: `__remote_reattach__:${item.remoteSessionId}`,
-              mode: item.mode ?? 'normal',
-              directory: item.directory ?? null,
-              initialPrompt: null,
-              resumeLatest: false,
-            }))
-          : (() => {
-              const candidate = Array.isArray(listedRemoteProjects) ? listedRemoteProjects.find((item) => item?.id && item.preferredTool) : null;
-              return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
-            })();
-        if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
-      }
       setListError('');
       const takeFocus = !!focusSessionId && appliedFocusToken.current !== focusToken && next.some((item) => item.id === focusSessionId);
       if (takeFocus) appliedFocusToken.current = focusToken;
@@ -715,6 +693,53 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }).catch((value) => {
       if (alive) setListError(formatFailure(value, t('sessions.listFailed'), t('sessions.listNext')));
     }).finally(() => { if (alive) setLoading(false); });
+    void native.listProjects().then((listed) => {
+      if (alive) setProjects(Array.isArray(listed) ? listed : []);
+    }).catch(() => {});
+    void native.getLaunchSettings().then((settings) => {
+      if (alive && settings) setLaunchSettings(settings);
+    }).catch(() => {});
+    const listedRemoteProjects = remoteSshEnabled ? native.listRemoteProjects().catch(() => [] as RemoteProject[]) : Promise.resolve([] as RemoteProject[]);
+    const listedRemoteTargets = remoteSshEnabled ? native.listRemoteTargets().catch(() => null) : Promise.resolve([] as RemoteTarget[]);
+    void listedRemoteProjects.then((listed) => {
+      if (alive) setRemoteProjects(Array.isArray(listed) ? listed : []);
+    });
+    void listedRemoteTargets.then((listed) => {
+      // Keep the shell's saved hosts until a real query finishes.
+      if (alive && remoteSshEnabled && Array.isArray(listed)) setLoadedRemoteTargets(listed);
+    });
+    void Promise.all([
+      listedSessions,
+      listedRemoteProjects,
+      listedRemoteTargets,
+      remoteSshEnabled ? native.listRemoteSessions().catch(() => []) : Promise.resolve([]),
+    ]).then(([listed, remoteProjects, remoteTargets, remoteSessions]) => {
+      if (!alive) return;
+      const next = Array.isArray(listed) ? listed : [];
+      if (!next.length && !sessionsRef.current.length && !autoRemoteReattachAttempted.current) {
+        autoRemoteReattachAttempted.current = true;
+        const validProjectIds = new Set((Array.isArray(remoteProjects) ? remoteProjects : []).map((item) => item.id));
+        const validTargetIds = new Set((Array.isArray(remoteTargets) ? remoteTargets : []).filter((item) => item.enabled).map((item) => item.id));
+        const indexed = Array.isArray(remoteSessions)
+          ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
+          : [];
+        const requests = indexed.length
+          ? indexed.map((item) => native.launchCli({
+              toolId: item.toolId,
+              projectId: `remote:${item.projectId}`,
+              sessionId: `__remote_reattach__:${item.remoteSessionId}`,
+              mode: item.mode ?? 'normal',
+              directory: item.directory ?? null,
+              initialPrompt: null,
+              resumeLatest: false,
+            }))
+          : (() => {
+              const candidate = Array.isArray(remoteProjects) ? remoteProjects.find((item) => item?.id && item.preferredTool) : null;
+              return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
+            })();
+        if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
+      }
+    }).catch(() => { /* Session list failures are reported by the attachment above. */ });
     return () => { alive = false; };
   }, [active, focusToken, focusSessionId, reload, remoteSshEnabled, t]);
 
@@ -1476,6 +1501,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             .filter((label) => label !== endLabel);
           const git = gitContexts.get(selected.id) ?? null;
           const gitLabel = git ? git.branch ?? git.commit ?? '' : '';
+          const worktreeLabel = git?.worktree ? compactText(git.worktree, 18) : '';
           const gitTitle = git ? [git.branch ? t('sessions.gitBranch', { name: git.branch }) : t('sessions.gitDetached', { commit: git.commit }), git.worktree ? t('sessions.gitWorktree', { name: git.worktree }) : '', git.repository ? t('sessions.gitRepository', { name: git.repository }) : ''].filter(Boolean).join(' · ') : '';
           const canSplit = splitRoom && scopedSessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
@@ -1569,8 +1595,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               <footer className={styles.statusBar}>
                 <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
-                {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{displayPath(selected.directory)}</span></span>}
-                {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree}>{t('sessions.gitWorktreeShort')}</span>}</span>}
+                {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{shortPath(displayPath(selected.directory))}</span></span>}
+                {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
             {selected.projectId?.startsWith('remote:') && <span className={styles.statusItem} data-tone={selected.connectionState === 'disconnected' ? 'error' : undefined} title={selected.exitReason === 'connection_lost' ? 'SSH 连接中断，可重新附着远程会话' : '远程 SSH 会话'}>SSH · {selected.connectionState === 'disconnected' ? (selected.reattachable ? '已断开，可重新附着' : '连接中断') : selected.running ? '已连接' : '已结束'}{selected.remoteSessionId ? ` · ${selected.remoteSessionId}` : ''}</span>}
                 <span className={styles.statusSpacer} />
                 {scrolledIds.has(selected.id) && <span className={styles.statusItem} data-tone="scrolled"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</span>}

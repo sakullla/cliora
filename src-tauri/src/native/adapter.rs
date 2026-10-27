@@ -849,6 +849,32 @@ fn finish_probe(
     let adapter = registry
         .get(id)
         .ok_or("未注册的 CLI 适配器，不能探测或写入")?;
+    let installations = registered_installations(registry, id, custom_path, home, stop_at_first)?;
+    finish_installation_probe(adapter, id, installations, home, project, scope, include_native_files)
+}
+
+/// Launch needs only executable identity/version. Keep dependency processes,
+/// native configuration and install/upgrade metadata off the launch path. The
+/// version cache is shared with page probes, but rechecks the executable stamp
+/// on every click, independently of project or account scope.
+pub(crate) fn probe_registered_launch(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+) -> Result<Option<Installation>, String> {
+    Ok(registered_installations(registry, id, custom_path, home, true)?
+        .into_iter().find(|item| item.status == "available"))
+}
+
+fn registered_installations(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    stop_at_first: bool,
+) -> Result<Vec<Installation>, String> {
+    let adapter = registry.get(id).ok_or("未注册的 CLI 适配器，不能探测或写入")?;
     let markers = adapter.native_installations(home);
     let mut paths = if adapter.launch_form() == adapters::LaunchForm::Desktop {
         markers.iter().map(|item| PathBuf::from(&item.path)).collect()
@@ -871,7 +897,7 @@ fn finish_probe(
             probe_installations(paths.clone(), adapter, stop_at_first)
         }
     };
-    let installations = {
+    Ok({
         #[cfg(test)]
         {
             if let Some(fixture) = registry.fixture_installations.get(id).cloned() {
@@ -884,7 +910,18 @@ fn finish_probe(
         {
             discover()
         }
-    };
+    })
+}
+
+fn finish_installation_probe(
+    adapter: &dyn CliAdapter,
+    id: &str,
+    installations: Vec<Installation>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+    include_native_files: bool,
+) -> Result<ToolProbe, String> {
     let selected = installations.iter().find(|item| item.status == "available");
     let writable = selected
         .and_then(|item| item.version.as_deref())
@@ -1092,13 +1129,48 @@ mod tests {
         let counter = temp.path().join("calls.txt");
         let write = |version: &str| std::fs::write(&path, format!("@echo off\r\necho call>>\"%~dp0calls.txt\"\r\necho {version}\r\n")).unwrap();
         write("2.1.1");
+        let registry = Registry::builtins();
         std::thread::scope(|scope| {
-            for _ in 0..4 { scope.spawn(|| assert_eq!(run_version(&path, &adapters::KIMI_CODE).version.as_deref(), Some("2.1.1"))); }
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    let installation = probe_registered_launch(&registry, "kimi_code", Some(&path), temp.path()).unwrap().unwrap();
+                    assert_eq!(installation.path, path.display().to_string());
+                    assert_eq!(installation.version.as_deref(), Some("2.1.1"));
+                });
+            }
         });
+        let page = probe_registered_summary(&registry, "kimi_code", Some(&path), temp.path(), None, Scope::Global).unwrap();
+        assert_eq!(page.selected_path.as_deref(), path.to_str());
         assert_eq!(std::fs::read_to_string(&counter).unwrap().lines().count(), 1);
         write("2.1.123");
-        assert_eq!(run_version(&path, &adapters::KIMI_CODE).version.as_deref(), Some("2.1.123"));
+        assert_eq!(probe_registered_launch(&registry, "kimi_code", Some(&path), temp.path()).unwrap().unwrap().version.as_deref(), Some("2.1.123"));
         assert_eq!(std::fs::read_to_string(&counter).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    #[ignore = "read-only local launch probe benchmark; requires installed CLI"]
+    fn performance_launch_probe() {
+        let registry = Registry::builtins();
+        let home = dirs::home_dir().unwrap();
+        let tool = std::env::var("CLIORA_BENCH_TOOL").unwrap_or_else(|_| "codex".into());
+        let page = probe_registered_summary(&registry, &tool, None, &home, None, Scope::Global).unwrap();
+        assert!(page.selected_path.is_some(), "install the benchmark CLI first");
+        let mut summary_ms = Vec::new();
+        let mut launch_ms = Vec::new();
+        for _ in 0..7 {
+            // Before: a directory-scoped launch misses the home page's summary
+            // cache, but shares the already verified executable/version.
+            let start = Instant::now();
+            let before = probe_registered_summary(&registry, &tool, None, &home, Some(&home), Scope::Project).unwrap();
+            summary_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            let start = Instant::now();
+            let after = probe_registered_launch(&registry, &tool, None, &home).unwrap().unwrap();
+            launch_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(before.selected_path.as_deref(), Some(after.path.as_str()));
+        }
+        summary_ms.sort_by(f64::total_cmp);
+        launch_ms.sort_by(f64::total_cmp);
+        eprintln!("launch probe {tool}: before_median_ms={:.2} after_median_ms={:.2}", summary_ms[3], launch_ms[3]);
     }
 
     #[test]

@@ -127,7 +127,7 @@ struct Session {
     started_at: u64,
     tool_id: String,
     project_id: Option<String>,
-    directory: String,
+    directory: Mutex<String>,
     mode: LaunchMode,
     running: AtomicBool,
     exit_code: Mutex<Option<i32>>,
@@ -202,7 +202,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         started_at,
         tool_id: plan.tool_id.clone(),
         project_id: plan.project_id.clone(),
-        directory,
+        directory: Mutex::new(directory),
         mode: plan.mode,
         running: AtomicBool::new(true),
         exit_code: Mutex::new(None),
@@ -275,10 +275,29 @@ pub fn replay(id: &str) -> Result<String, String> {
 /// Working directory of a local session. Remote sessions run elsewhere, so they have none here.
 pub fn local_directory(id: &str) -> Result<Option<std::path::PathBuf>, String> {
     let session = lookup(id)?;
-    if session.remote || session.directory.trim().is_empty() {
+    let directory = session.directory.lock().map_err(|_| "会话状态不可用")?.clone();
+    if session.remote || directory.trim().is_empty() {
         return Ok(None);
     }
-    Ok(Some(std::path::PathBuf::from(&session.directory)))
+    Ok(Some(std::path::PathBuf::from(directory)))
+}
+
+/// Accept a shell-reported current directory for local sessions. The path is
+/// canonicalized before it becomes visible to the workbench, so OSC directory
+/// metadata cannot make the UI display a missing or malformed location.
+pub fn set_directory(id: &str, directory: &str) -> Result<String, String> {
+    let session = lookup(id)?;
+    if session.remote {
+        return Err("远程会话的目录由远端终端管理".into());
+    }
+    let path = std::path::Path::new(directory);
+    let canonical = path.canonicalize().map_err(|_| "终端报告的工作目录不存在或无法访问".to_owned())?;
+    if !canonical.is_dir() {
+        return Err("终端报告的路径不是目录".into());
+    }
+    let value = crate::launch::terminal_path(&canonical)?;
+    *session.directory.lock().map_err(|_| "会话状态不可用")? = value.clone();
+    Ok(value)
 }
 
 pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
@@ -522,7 +541,7 @@ impl Session {
             id: self.id.clone(),
             tool_id: self.tool_id.clone(),
             project_id: self.project_id.clone(),
-            directory: self.directory.clone(),
+            directory: self.directory.lock().map(|value| value.clone()).unwrap_or_default(),
             mode: self.mode,
             running: self.running.load(Ordering::SeqCst),
             exit_code: self.exit_code.lock().ok().and_then(|code| *code),
