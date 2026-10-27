@@ -94,6 +94,7 @@ pub mod projects;
 pub mod remote;
 pub mod resources;
 pub mod session_host;
+pub mod terminal_replay;
 pub mod tray;
 pub mod usage;
 mod windows_registry;

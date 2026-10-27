@@ -26,6 +26,10 @@ export type Project = {
 
 export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null };
+/** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
+export type WorkbenchReplay = { dataBase64: string; endOffset: number };
+/** `cliora:session-output` payload. `offset` numbers the first byte within the session stream. */
+export type WorkbenchOutput = { sessionId: string; dataBase64: string; offset?: number };
 export type WorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; running: boolean; exitCode: number | null; startedAt?: number; connectionState?: 'connected' | 'disconnected' | 'closed'; exitReason?: 'running' | 'process_exit' | 'connection_lost'; reattachable?: boolean; remoteSessionId?: string | null };
 export type TrayStatus = { available: boolean; error: string | null };
 

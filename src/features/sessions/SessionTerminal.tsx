@@ -13,6 +13,25 @@ import styles from './SessionWorkbench.module.css';
 
 export type TerminalMatch = { row: number; col: number; length: number };
 
+/** One output event. `offset` is the stream position of its first byte when the host reports it. */
+export type OutputChunk = { data: string; offset?: number };
+
+/** Replay from the host: the current contract carries the stream end, older mocks send bare base64. */
+export type ReplayPayload = string | { dataBase64: string; endOffset: number };
+
+/**
+ * Keep only the bytes of `bytes` (starting at stream `offset`) that lie past `end`.
+ * Returns the new stream end alongside. Without offsets nothing can be proven duplicate.
+ */
+export function bytesPastEnd(bytes: Uint8Array, offset: number | undefined, end: number | null): { bytes: Uint8Array; end: number | null } {
+  if (offset === undefined || !Number.isFinite(offset)) return { bytes, end };
+  const chunkEnd = offset + bytes.length;
+  if (end === null) return { bytes, end: chunkEnd };
+  if (chunkEnd <= end) return { bytes: new Uint8Array(), end };
+  const kept = offset >= end ? bytes : bytes.subarray(end - offset);
+  return { bytes: kept, end: chunkEnd };
+}
+
 export type TerminalHandle = {
   focus: () => void;
   clear: () => void;
@@ -195,8 +214,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   header?: ReactNode;
   overlay?: ReactNode;
   footer?: ReactNode;
-  writers: MutableRefObject<Map<string, (data: string) => void>>;
-  pending: MutableRefObject<Map<string, string[]>>;
+  writers: MutableRefObject<Map<string, (chunk: OutputChunk) => void>>;
+  pending: MutableRefObject<Map<string, OutputChunk[]>>;
   handles: MutableRefObject<Map<string, TerminalHandle>>;
   bridge: MutableRefObject<TerminalBridge>;
 }) {
@@ -315,7 +334,10 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     let acceptLive = false;
     let liveStreaming = false;
     let liveTimer = 0;
-    const queued: string[] = [];
+    // Stream offset past the newest byte already written. Live events and the replay
+    // overlap around mount; offsets let each byte reach xterm exactly once.
+    let streamEnd: number | null = null;
+    const queued: OutputChunk[] = [];
     const links = registerTerminalLinks(term, {
       mac: MAC,
       hint: () => linkHintRef.current,
@@ -367,17 +389,18 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         if (!disposed) bridge.current.outputActive(sessionId, false);
       }, 1500);
     };
-    const writeEncoded = (encoded: string, isLive = false) => {
-      if (!encoded || disposed) return;
+    const writeChunk = (chunk: OutputChunk, isLive = false) => {
+      if (!chunk.data || disposed) return;
       try {
-        const decoded = decodeBase64(encoded);
-        if (isLive && decoded.length > 0) markLiveOutput();
-        scheduleWriteBytes(decoded);
+        const fresh = bytesPastEnd(decodeBase64(chunk.data), chunk.offset, streamEnd);
+        streamEnd = fresh.end;
+        if (isLive && fresh.bytes.length > 0) markLiveOutput();
+        scheduleWriteBytes(fresh.bytes);
       } catch { /* Malformed bytes stay out of the terminal. */ }
     };
-    const publish = (encoded: string) => {
-      if (acceptLive) writeEncoded(encoded, true);
-      else queued.push(encoded);
+    const publish = (chunk: OutputChunk) => {
+      if (acceptLive) writeChunk(chunk, true);
+      else queued.push(chunk);
     };
     writers.current.set(sessionId, publish);
 
@@ -680,19 +703,36 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       resizeFrame = requestAnimationFrame(fitNow);
     });
     observer.observe(node);
-    void native.replayWorkbenchSession(sessionId).then((encoded) => {
+    void native.replayWorkbenchSession(sessionId).then((payload: ReplayPayload) => {
       if (disposed) return;
+      const encoded = typeof payload === 'string' ? payload : typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : '';
+      const replayEnd = typeof payload === 'object' && payload && Number.isFinite(payload.endOffset) ? payload.endOffset : null;
       let snapshot = new Uint8Array(0);
-      try { snapshot = Uint8Array.from(decodeBase64(typeof encoded === 'string' ? encoded : '')); }
+      try { snapshot = Uint8Array.from(decodeBase64(encoded)); }
       catch { snapshot = new Uint8Array(0); }
       const earlier = (pending.current.get(sessionId) ?? []).splice(0);
       pending.current.delete(sessionId);
       const arrived = queued.splice(0);
-      const queuedBytes = concatBytes([...earlier, ...arrived].flatMap((part) => {
-        try { return [decodeBase64(part)]; }
-        catch { return []; }
-      }));
-      const suffix = queuedAfterSnapshot(snapshot, queuedBytes);
+      const chunks = [...earlier, ...arrived];
+      let suffix: Uint8Array;
+      if (replayEnd !== null && chunks.every((chunk) => chunk.offset !== undefined)) {
+        // The host numbers every byte, so the overlap with the replay is exact.
+        streamEnd = replayEnd;
+        suffix = concatBytes(chunks.flatMap((chunk) => {
+          try {
+            const fresh = bytesPastEnd(decodeBase64(chunk.data), chunk.offset, streamEnd);
+            streamEnd = fresh.end;
+            return [fresh.bytes];
+          } catch { return []; }
+        }));
+      } else {
+        const queuedBytes = concatBytes(chunks.flatMap((chunk) => {
+          try { return [decodeBase64(chunk.data)]; }
+          catch { return []; }
+        }));
+        suffix = queuedAfterSnapshot(snapshot, queuedBytes);
+        streamEnd = null;
+      }
       acceptLive = true;
       try {
         if (snapshot.length) term.write(snapshot);
@@ -705,8 +745,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       });
     }).catch(() => {
       acceptLive = true;
-      queued.splice(0).forEach((item) => writeEncoded(item));
-      (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeEncoded(item));
+      (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeChunk(item));
+      queued.splice(0).forEach((item) => writeChunk(item));
       pending.current.delete(sessionId);
     });
     return () => {
