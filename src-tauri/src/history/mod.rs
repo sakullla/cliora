@@ -755,6 +755,10 @@ pub struct HistoryFilter {
     pub to_ms: Option<i64>,
     pub favorite_only: bool,
     pub tools: Option<Vec<String>>,
+    /// Optional result cap for lightweight consumers such as the command palette.
+    /// The records page leaves this unset so its existing infinite rendering and
+    /// filtering behavior stays unchanged.
+    pub limit: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1359,9 +1363,12 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
             sql.push_str(&format!(" AND tool IN ({placeholders})"));
         }
         sql.push_str(" ORDER BY favorite DESC, updated_at DESC, id");
+        let limit = filter.limit.map(|value| value.clamp(1, 5_000) as i64);
+        if limit.is_some() { sql.push_str(" LIMIT ?"); }
         let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
         let mut values: Vec<&dyn rusqlite::ToSql> = vec![&filter.tool_id, &filter.project_id, &search, &filter.from_ms, &filter.to_ms, &filter.favorite_only, &model];
         for tool in &tools { values.push(*tool); }
+        if let Some(limit) = &limit { values.push(limit); }
         let rows = statement
             .query_map(rusqlite::params_from_iter(values), row_session)
             .map_err(|error| error.to_string())?;

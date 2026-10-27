@@ -1102,7 +1102,10 @@ fn plan_with_stage_at(
             ),
         ));
     }
-    let probe = adapter::probe_registered(
+    // Launch validation only consumes the selected executable and its version.
+    // Reuse the quick summary probe from the launcher instead of re-walking all
+    // sibling shims and native documents on every click.
+    let probe = adapter::probe_registered_summary_cached(
         registry,
         &request.tool_id,
         custom_cli_path(db, &request.tool_id)
@@ -1111,6 +1114,7 @@ fn plan_with_stage_at(
         home,
         (scope == Scope::Project).then_some(directory.as_path()),
         scope,
+        false,
     )
     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
     crate::accounts::selection::validate_oauth_files(registry,&request.tool_id,home,(scope==Scope::Project).then_some(directory.as_path())).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?;

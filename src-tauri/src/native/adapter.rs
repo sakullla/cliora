@@ -789,7 +789,7 @@ pub fn probe_registered_summary_cached(
             return Ok(probe);
         }
     }
-    let probe = finish_probe(registry, id, custom_path, home, project, scope, true)?;
+    let probe = finish_probe(registry, id, custom_path, home, project, scope, true, false)?;
     #[cfg(not(test))]
     store_probe(summary_cache(), key, &probe);
     Ok(probe)
@@ -833,7 +833,7 @@ pub fn probe_registered(
     project: Option<&Path>,
     scope: Scope,
 ) -> Result<ToolProbe, String> {
-    finish_probe(registry, id, custom_path, home, project, scope, false)
+    finish_probe(registry, id, custom_path, home, project, scope, false, true)
 }
 
 fn finish_probe(
@@ -844,6 +844,7 @@ fn finish_probe(
     project: Option<&Path>,
     scope: Scope,
     stop_at_first: bool,
+    include_native_files: bool,
 ) -> Result<ToolProbe, String> {
     let adapter = registry
         .get(id)
@@ -918,7 +919,7 @@ fn finish_probe(
         tool: id.to_owned(),
         selected_path: selected.map(|item| item.path.clone()),
         installations,
-        native_files: adapter.native_files(scope, home, project, writable),
+        native_files: include_native_files.then(|| adapter.native_files(scope, home, project, writable)).unwrap_or_default(),
         native_writes,
         interface_formats: if writable {
             adapter.interface_formats().to_vec()

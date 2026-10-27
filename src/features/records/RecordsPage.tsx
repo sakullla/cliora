@@ -358,6 +358,10 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
         void native.refreshHistory().then((reports) => {
           if (sequence !== scanRequest.current) return;
           setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
+          // The scan writes the index in the background. Read the new snapshot
+          // immediately so sessions discovered by this refresh appear without
+          // waiting for the next periodic refresh or a page revisit.
+          void load(filterRef.current);
         }).catch(() => {});
       } catch (value) { if (sequence === scanRequest.current) showError(value); scanningRef.current = false; setScanning(false); }
       return;

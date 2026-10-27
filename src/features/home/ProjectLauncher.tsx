@@ -253,7 +253,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
-      if (opened) { onWorkbenchSession?.(opened); await refresh(); return; }
+      if (opened) { onWorkbenchSession?.(opened); return; }
       const launchedTool = managed.find((item) => item.id === toolId);
       const message = launchedTool?.launchForm === 'desktop'
         ? t('home.tools.launchedDesktop', { name: launchedTool.name })
@@ -262,7 +262,9 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
         showDialogFeedback(message);
         setFeedback(message);
       } else showPageFeedback(message);
-      await refresh();
+      // launch_cli emits projects-changed after touching the project. The
+      // listener above refreshes the card asynchronously, so the terminal can
+      // become interactive as soon as the spawn IPC returns.
     } catch (value) {
       const desktop = managed.find((item) => item.id === toolId)?.launchForm === 'desktop';
       if (await failedInWorkbench(desktop)) {
