@@ -653,23 +653,27 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             true
         )
         .is_empty());
-    // kiro (official docs + [RE] agentsview/threadle + real local data root
-    // %LOCALAPPDATA%\kiro-cli, 2.34.2/V3): cli.json editing, --resume-id,
-    // dual-scope MCP, Skills (~/.kiro/skills + .kiro/skills), agents
-    // (~/.kiro/agents + .kiro/agents .md/.json), steering rules
-    // (~/.kiro/steering + .kiro/steering, managed AGENTS.md), legacy + sess_
-    // session index; none of the three session formats carries token fields,
-    // so usage stays absent with that recorded reason; KIRO_API_KEY is the
-    // frozen env channel.
+    // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
+    // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
+    // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents
+    // .md/.json), steering rules (~/.kiro/steering + .kiro/steering, managed
+    // AGENTS.md, mapped workspace-roots permissions.yaml), powers
+    // (~/.kiro/powers, storage verified by a local install probe), legacy +
+    // sess_ + V3 workspace-hash session index with contextUsage percent
+    // usage; no session format carries token fields, so that recorded reason
+    // stays; KIRO_API_KEY is the frozen env channel.
     let kiro = registry.get("kiro").unwrap();
     assert!(kiro.supports_skills());
     assert!(kiro.configuration().is_none());
     assert!(kiro.agents().is_some_and(|port| port.capability().supported));
+    assert!(kiro
+        .plugins()
+        .is_some_and(|port| port.capability().actions.contains(&"install")));
     let kiro_management = &kiro.descriptor().management;
     assert!(kiro_management.skills);
     assert!(kiro_management.agents);
     assert!(kiro_management.rules.global && kiro_management.rules.project);
-    assert!(!kiro_management.plugins);
+    assert!(kiro_management.plugins);
     assert!(kiro.descriptor().yolo_available);
     assert!(kiro
         .launch_args(Some("abc123"), crate::adapters::LaunchMode::Normal)

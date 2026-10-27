@@ -706,6 +706,55 @@ fn native_units_roundtrip_filter_group_deduplicate_and_export_without_token_pric
 }
 
 #[test]
+fn percent_gauge_units_aggregate_by_maximum_instead_of_summing() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("gauges.db")).unwrap();
+    // context-usage-percent rows are instantaneous samples of one session's
+    // context occupancy; adding them would exceed 100% and misreport usage.
+    let sample = |id: &str, at, value| UsageEvent {
+        native_usage: Some(NativeUsage { unit: "context-usage-percent".into(), value, original_value: None, billable: None }),
+        id: id.into(), model: None, timestamp: Some(at), request_count: Some(1),
+        input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
+    };
+    let day = FIXTURE_DAY;
+    store_events(&db, "kiro", "gauge-session", None, vec![
+        sample("gauge-a", day, 3.25),
+        sample("gauge-b", day + 1_000, 97.5),
+        sample("gauge-c", day + 2_000, 12.0),
+    ]);
+    // Additive native units in the same report keep summing.
+    let credit = UsageEvent {
+        native_usage: Some(NativeUsage { unit: "credits".into(), value: 2.0, original_value: None, billable: Some(true) }),
+        id: "credit-a".into(), model: None, timestamp: Some(day), request_count: Some(1),
+        input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
+    };
+    let credit_again = UsageEvent {
+        native_usage: Some(NativeUsage { unit: "credits".into(), value: 3.0, original_value: None, billable: Some(true) }),
+        id: "credit-b".into(),
+        timestamp: Some(day + 3_000),
+        ..credit.clone()
+    };
+    store_events(&db, "kiro", "credit-session", None, vec![credit, credit_again]);
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    let gauge = report.totals.native_usage.iter()
+        .find(|usage| usage.unit == "context-usage-percent")
+        .expect("gauge 单位进入报表");
+    assert_eq!(gauge.value, 97.5, "多采样取最大值");
+    assert_eq!(gauge.records, 3, "采样条数仍逐一计数");
+    let credits = report.totals.native_usage.iter()
+        .find(|usage| usage.unit == "credits")
+        .expect("加性单位进入报表");
+    assert_eq!(credits.value, 5.0, "credits 等加性单位仍求和");
+    // Per-bucket timelines take the maximum inside each bucket.
+    let bucketed = usage_report(&db, &HistoryFilter { from_ms: Some(day), to_ms: Some(day + DAY), ..Default::default() }).unwrap();
+    let gauge_buckets: Vec<f64> = bucketed.timeline.iter()
+        .filter_map(|bucket| bucket.totals.native_usage.iter().find(|usage| usage.unit == "context-usage-percent").map(|usage| usage.value))
+        .collect();
+    assert_eq!(gauge_buckets.len(), 1);
+    assert_eq!(gauge_buckets[0], 97.5);
+}
+
+#[test]
 fn database_v22_native_usage_migration_preserves_legacy_tokens_and_json() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("legacy.db");

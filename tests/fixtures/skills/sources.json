@@ -64,17 +64,17 @@
       "format": "Personal antigravity-cli/skills/<dir>/SKILL.md under ~/.gemini plus the open-standard project .agents/skills."
     },
     "kiro": {
-      "version": "kiro-cli (data root verified locally)",
-      "checkedAt": "2026-10-07",
-      "evidence": "[RE] agentsview/threadle + official docs + local data root",
-      "ref": "agentsview kiro.go / threadle; cli.kiro.dev docs; %LOCALAPPDATA%\\kiro-cli inspected read-only",
-      "limitation": "No Skills directory name appears in any evidence class; the skills dimension stays absent with the descriptor reason recorded."
+      "version": "kiro-cli 2.34.2 (local verified)",
+      "checkedAt": "2026-10-27",
+      "evidence": "official kiro.dev docs/skills + local 2.34.2 install",
+      "ref": "kiro.dev docs/skills (user ~/.kiro/skills and workspace .kiro/skills, SKILL.md frontmatter name must match the directory); cli.kiro.dev docs",
+      "limitation": "Skills directories were not present on the local machine yet (feature not exercised there); delivery follows the official documented layout, directory creation happens on first use."
     }
   },
   "acceptanceLimits": [
     "Directory contracts verified from official documentation or desktop sources; no live skill execution acceptance performed.",
     "Windows development host only; macOS/Linux not exercised.",
     "Skill package install/update/remove flows through the shared pipeline are covered by the existing synthetic fixtures, not per-CLI live samples.",
-    "The 2026-10-07 six were checked on Windows only; skills are delivered for mimo_code/cline/command_code/antigravity, while devin and kiro stay absent for lack of a documented directory contract."
+    "The 2026-10-07 six were checked on Windows only; skills are delivered for mimo_code/cline/command_code/antigravity and (since 2026-10-27, per official docs on the local 2.34.2 install) kiro; devin stays absent for lack of a documented directory contract."
   ]
 }

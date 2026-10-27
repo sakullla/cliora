@@ -327,6 +327,14 @@ struct Tally {
     last_session: Option<usize>,
 }
 
+/// Percent units are instantaneous gauge samples, not additive quantities:
+/// a set of readings aggregates to its maximum, never a sum (which could
+/// exceed 100%, e.g. the kiro `context-usage-percent` context samples).
+/// Everything else (credits, work units) stays additive.
+fn gauge_unit(unit: &str) -> bool {
+    unit.ends_with("-percent")
+}
+
 impl Tally {
     fn add(&mut self, call: &Call) {
         let totals = &mut self.totals;
@@ -340,10 +348,18 @@ impl Tally {
                 totals.native_usage.push(NativeUsageTotal { unit: native.unit.clone(), billable: native.billable, ..Default::default() });
                 totals.native_usage.last_mut().unwrap()
             };
-            total.value += native.value;
+            if gauge_unit(&native.unit) {
+                total.value = total.value.max(native.value);
+                if let Some(value) = native.original_value {
+                    let slot = total.original_value.get_or_insert(value);
+                    *slot = (*slot).max(value);
+                } else { total.unknown_original_records += 1; }
+            } else {
+                total.value += native.value;
+                if let Some(value) = native.original_value { *total.original_value.get_or_insert(0.0) += value; }
+                else { total.unknown_original_records += 1; }
+            }
             total.records += 1;
-            if let Some(value) = native.original_value { *total.original_value.get_or_insert(0.0) += value; }
-            else { total.unknown_original_records += 1; }
         }
         totals.input += call.input;
         totals.cache_read += call.cache_read;

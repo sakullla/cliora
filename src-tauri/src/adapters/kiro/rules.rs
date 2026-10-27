@@ -18,15 +18,34 @@
 //! catalog port is project-scope only (a shared-service boundary this adapter
 //! does not change); that absence stays recorded in `GLOBAL_CATALOG_REASON`
 //! and in the descriptor instead of silently defaulting.
+//!
+//! The same project catalog also lists the V3 workspace permissions file
+//! `~/.kiro/workspace-roots/<hash>/permissions.yaml` (a `rules` array plus
+//! `workspaceTrusted`, both read off the real local install) when the hash
+//! directory maps to the selected project: the mapping is probed read-only
+//! from `sessions/*/sess_*/session.json` `workspacePaths` (verified reversible
+//! on both local hashes). The YAML file is listed and edited whole-file, so a
+//! `rules` edit never drops `workspaceTrusted` or sibling fields; hash
+//! directories without a session mapping to the selected project are never
+//! shown.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use serde_json::Value;
 
 use crate::adapters::RuleFileSpec;
 use crate::native::adapter::Scope;
 
 /// Scan budget for one steering directory, mirroring the cursor catalog.
 const MAX_STEERING_FILES: usize = 128;
+
+/// Read budget for the hash→workspace mapping probe (session.json reads).
+const MAX_SESSION_PROBES: usize = 64;
+
+/// Detail line for the workspace permissions entries.
+const PERMISSIONS_DETAIL: &str =
+    "V3 能力权限文件（rules + workspaceTrusted），整文件编辑保存；只列已映射到所选项目的哈希目录";
 
 /// Recorded reason for the global-scope catalog absence (shared port limit).
 pub(crate) const GLOBAL_CATALOG_REASON: &str =
@@ -107,6 +126,111 @@ pub(crate) fn list_steering_specs(project: &Path) -> Result<Vec<RuleFileSpec>, S
     }
     specs.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(specs)
+}
+
+/// Normalized workspace text for the mapping probe: forward slashes become
+/// separators, the Windows verbatim prefixes from `canonicalize`
+/// (`\\?\C:\…`, `\\?\UNC\server\share\…`) collapse back to the plain drive
+/// and UNC forms native session records carry, and trailing separators drop.
+fn workspace_text(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let text = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        text.strip_prefix(r"\\?\")
+            .map(str::to_owned)
+            .unwrap_or(text)
+    };
+    text.trim_end_matches('\\').to_owned()
+}
+
+/// Same-workspace comparison for the mapping probe. `session.json` records
+/// Windows paths whose letter case is not stable, so the normalized texts
+/// compare case-insensitively on Windows and exactly elsewhere.
+fn same_workspace(left: &Path, right: &Path) -> bool {
+    let left = workspace_text(left);
+    let right = workspace_text(right);
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(&right)
+    } else {
+        left == right
+    }
+}
+
+/// Workspace permissions entries mapped to the selected project. The
+/// hash→workspace mapping is probed read-only from
+/// `~/.kiro/sessions/<hash>/sess_*/session.json` `workspacePaths`; only hash
+/// directories whose `workspace-roots/<hash>/permissions.yaml` exists and
+/// whose sessions map to `project` produce an entry. Nothing is created or
+/// cached here, and unmapped hashes are never exposed.
+pub(crate) fn workspace_permissions_specs(home: &Path, project: &Path) -> Vec<RuleFileSpec> {
+    let root = super::kiro_root(home);
+    let mut specs = Vec::new();
+    let Ok(hashes) = fs::read_dir(root.join("sessions")) else {
+        return specs;
+    };
+    let mut probes = 0usize;
+    for hash in hashes.flatten() {
+        if specs.len() >= MAX_STEERING_FILES || probes >= MAX_SESSION_PROBES {
+            break;
+        }
+        // The legacy `sessions/cli` layout has no workspace mapping.
+        if !hash.file_type().is_ok_and(|kind| kind.is_dir()) || hash.file_name() == "cli" {
+            continue;
+        }
+        let hash_name = hash.file_name().to_string_lossy().into_owned();
+        let Ok(sessions) = fs::read_dir(hash.path()) else {
+            continue;
+        };
+        let mut mapped = false;
+        for session in sessions.flatten() {
+            if probes >= MAX_SESSION_PROBES {
+                break;
+            }
+            let session_json = session.path().join("session.json");
+            if !session_json.is_file() {
+                continue;
+            }
+            probes += 1;
+            let Ok(text) = fs::read_to_string(&session_json) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let Some(paths) = value.get("workspacePaths").and_then(Value::as_array) else {
+                continue;
+            };
+            if paths
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|path| same_workspace(Path::new(path), project))
+            {
+                mapped = true;
+                break;
+            }
+        }
+        if !mapped {
+            continue;
+        }
+        let permissions = root
+            .join("workspace-roots")
+            .join(&hash_name)
+            .join("permissions.yaml");
+        if !permissions.is_file() {
+            continue;
+        }
+        specs.push(RuleFileSpec {
+            id: format!("permissions:{hash_name}"),
+            path: permissions,
+            name: "permissions.yaml".into(),
+            kind: "permissions",
+            enabled: true,
+            writable: true,
+            detail: PERMISSIONS_DETAIL,
+        });
+    }
+    specs
 }
 
 /// New steering documents land as `<project>/.kiro/steering/<name>.md`.
@@ -268,5 +392,122 @@ mod tests {
             .replace('\\', "/")
             .ends_with(".kiro/steering/security.md"));
         assert!(steering_create_path(&project, "bad/name").is_err());
+    }
+
+    #[test]
+    fn workspace_permissions_list_only_for_mapped_hashes_and_save_whole_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let project = temp.path().join("work").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let kiro = home.join(".kiro");
+        // Two hash directories: one maps to the selected project, the other
+        // belongs to a different workspace; the legacy `cli` layout carries
+        // no mapping at all.
+        let mapped = kiro.join("sessions/6156ed8f99646ea5/sess_demo-1");
+        let other = kiro.join("sessions/0000000000000000/sess_demo-2");
+        let legacy = kiro.join("sessions/cli");
+        for (dir, workspace) in [
+            (&mapped, project.display().to_string()),
+            (&other, r"C:\Elsewhere\other".to_owned()),
+        ] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(
+                dir.join("session.json"),
+                serde_json::json!({"workspacePaths": [workspace]}).to_string(),
+            )
+            .unwrap();
+        }
+        fs::create_dir_all(&legacy).unwrap();
+        for hash in ["6156ed8f99646ea5", "0000000000000000"] {
+            let roots = kiro.join("workspace-roots").join(hash);
+            fs::create_dir_all(&roots).unwrap();
+            fs::write(
+                roots.join("permissions.yaml"),
+                "rules: []\nworkspaceTrusted: true\n",
+            )
+            .unwrap();
+        }
+        // The selected project is not yet selected through the shared service
+        // target: the probe maps only the hash whose sessions name it.
+        let specs = workspace_permissions_specs(home, &project);
+        assert_eq!(specs.len(), 1, "{specs:?}");
+        let spec = &specs[0];
+        assert_eq!(spec.kind, "permissions");
+        assert!(spec.writable);
+        assert!(spec
+            .path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("workspace-roots/6156ed8f99646ea5/permissions.yaml"));
+        // An unrelated project sees nothing: unmapped hashes stay hidden.
+        assert!(workspace_permissions_specs(home, Path::new(r"C:\Elsewhere\other"))
+            .len() == 1);
+        assert!(workspace_permissions_specs(home, Path::new(r"C:\Nowhere")).is_empty());
+        // A hash without workspace-roots content produces no entry even when
+        // the sessions map.
+        let unmapped_roots = kiro.join("workspace-roots/1111111111111111");
+        fs::create_dir_all(&unmapped_roots).unwrap();
+        let extra = kiro.join("sessions/1111111111111111/sess_demo-3");
+        fs::create_dir_all(&extra).unwrap();
+        fs::write(
+            extra.join("session.json"),
+            serde_json::json!({"workspacePaths": [project.display().to_string()]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(workspace_permissions_specs(home, &project).len(), 1);
+        // Windows path case is not stable across native records.
+        let case_variant = project.display().to_string().to_uppercase();
+        assert_eq!(
+            workspace_permissions_specs(home, Path::new(&case_variant)).len(),
+            1
+        );
+        // Whole-file save through the shared catalog keeps workspaceTrusted.
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = crate::adapters::Registry::builtins();
+        let target = crate::resources::rules::RuleTarget {
+            context_id: None,
+            tool_id: "kiro".into(),
+            scope: Scope::Project,
+            project_path: Some(project.display().to_string()),
+            baseline_hash: None,
+        };
+        let mut files =
+            crate::resources::rules::list_files(&db, &registry, home, &target).unwrap();
+        let names: Vec<_> = files.iter().map(|file| file.name.as_str()).collect();
+        assert!(names.contains(&"permissions.yaml"), "{names:?}");
+        let permissions = files
+            .iter_mut()
+            .find(|file| file.name == "permissions.yaml")
+            .unwrap();
+        assert_eq!(permissions.text, "rules: []\nworkspaceTrusted: true\n");
+        struct TestKeys;
+        impl crate::credentials::CredentialStore for TestKeys {
+            fn put(&self, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn get(&self, _: &str) -> Result<String, String> {
+                Err("missing".into())
+            }
+            fn delete(&self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        crate::resources::rules::save_file(
+            &db,
+            &TestKeys,
+            &registry,
+            home,
+            &target,
+            &permissions.path,
+            &permissions.text,
+            "rules:\n- sandboxes: []\nworkspaceTrusted: true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&permissions.path).unwrap(),
+            "rules:\n- sandboxes: []\nworkspaceTrusted: true\n",
+            "整文件保存保留 workspaceTrusted"
+        );
     }
 }
