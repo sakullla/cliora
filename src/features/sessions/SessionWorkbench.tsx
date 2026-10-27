@@ -15,7 +15,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchGitContext, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -230,7 +230,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [railSlim, setRailSlim] = useState<boolean>(readStoredRailSlim);
   const [split, setSplit] = useState<[string, string] | null>(null);
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
-  const [grids, setGrids] = useState<Map<string, { cols: number; rows: number }>>(() => new Map());
+  const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [findCase, setFindCase] = useState(false);
   const terminalMode: TerminalTheme = themePreference === 'auto' ? appTheme : themePreference;
@@ -444,6 +444,30 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     [terminalTools, effectiveLaunchToolId],
   );
   const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
+  // Git branch is a quiet, best-effort hint for local sessions. Agents switch branches
+  // and create worktrees mid-session, so the visible session re-reads it now and then.
+  const gitTarget = active && selected && !selected.projectId?.startsWith('remote:') ? selected.id : null;
+  useEffect(() => {
+    if (!nativeAvailable || !gitTarget) return;
+    let alive = true;
+    const read = () => {
+      if (document.visibilityState === 'hidden') return;
+      void native.workbenchGitContext(gitTarget).then((value) => {
+        if (!alive) return;
+        const next = value && (value.branch || value.commit) ? value : null;
+        setGitContexts((current) => {
+          if (current.has(gitTarget) && JSON.stringify(current.get(gitTarget)) === JSON.stringify(next)) return current;
+          const map = new Map(current);
+          map.set(gitTarget, next);
+          return map;
+        });
+      }).catch(() => {});
+    };
+    read();
+    const timer = window.setInterval(read, 15_000);
+    window.addEventListener('focus', read);
+    return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
+  }, [gitTarget]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
   const dialogHostId = newDialogOpen ? libraryHostId(workspaceValue.startsWith('remote:') ? workspaceValue : null, remoteProjects) : null;
   const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
@@ -550,15 +574,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return next;
     }),
     copied: () => flashCopied('selection'),
-    grid: (id, cols, rows) => setGrids((current) => {
-      const known = current.get(id);
-      if (known && known.cols === cols && known.rows === rows) return current;
-      const next = new Map(current);
-      next.set(id, { cols, rows });
-      return next;
-    }),
+    grid: () => {},
   };
 
+  // A launch elsewhere asks the workbench to focus its new session once. Returning to the
+  // page later must keep whatever the user selected since, not jump back to that launch.
+  const appliedFocusToken = useRef<number | null>(null);
   useEffect(() => { if (focusSessionId) setSelectedId(focusSessionId); }, [focusSessionId, focusToken]);
 
   useEffect(() => {
@@ -675,8 +696,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
       }
       setListError('');
+      const takeFocus = !!focusSessionId && appliedFocusToken.current !== focusToken && next.some((item) => item.id === focusSessionId);
+      if (takeFocus) appliedFocusToken.current = focusToken;
       setSelectedId((current) => {
-        if (focusSessionId && next.some((item) => item.id === focusSessionId)) return focusSessionId;
+        if (takeFocus) return focusSessionId;
         if (current && next.some((item) => item.id === current)) return current;
         return next.find((item) => item.running)?.id ?? next[0]?.id ?? null;
       });
@@ -835,7 +858,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setScrolledIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setAttentionIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setUnreadIds((current) => toggleInSet(current, id, false));
-    setGrids((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setGitContexts((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setComposerDrafts((current) => {
       if (!(id in current)) return current;
       const next = { ...current };
@@ -1451,7 +1474,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const endLabel = busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort');
           const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
             .filter((label) => label !== endLabel);
-          const grid = grids.get(selected.id);
+          const git = gitContexts.get(selected.id) ?? null;
+          const gitLabel = git ? git.branch ?? git.commit ?? '' : '';
+          const gitTitle = git ? [git.branch ? t('sessions.gitBranch', { name: git.branch }) : t('sessions.gitDetached', { commit: git.commit }), git.worktree ? t('sessions.gitWorktree', { name: git.worktree }) : '', git.repository ? t('sessions.gitRepository', { name: git.repository }) : ''].filter(Boolean).join(' · ') : '';
           const canSplit = splitRoom && scopedSessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
           return <>
@@ -1545,12 +1570,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <span className={styles.statusState} data-tone={tone}><SessionActivityIcon tone={tone} slot="footer" className={styles.footerDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></span>
                 <span className={styles.statusItem}><ToolIcon toolId={selected.toolId} size={12} />{toolName(selected)}</span>
                 {selected.directory && <span className={styles.statusPath} title={displayPath(selected.directory)}><Icon name="folder" size={12} /><span>{displayPath(selected.directory)}</span></span>}
+                {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree}>{t('sessions.gitWorktreeShort')}</span>}</span>}
             {selected.projectId?.startsWith('remote:') && <span className={styles.statusItem} data-tone={selected.connectionState === 'disconnected' ? 'error' : undefined} title={selected.exitReason === 'connection_lost' ? 'SSH 连接中断，可重新附着远程会话' : '远程 SSH 会话'}>SSH · {selected.connectionState === 'disconnected' ? (selected.reattachable ? '已断开，可重新附着' : '连接中断') : selected.running ? '已连接' : '已结束'}{selected.remoteSessionId ? ` · ${selected.remoteSessionId}` : ''}</span>}
                 <span className={styles.statusSpacer} />
                 {scrolledIds.has(selected.id) && <span className={styles.statusItem} data-tone="scrolled"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</span>}
                 {split && <span className={styles.statusItem}><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
-                {grid && <span className={styles.statusItem} data-mono title={t('sessions.gridSize', { cols: grid.cols, rows: grid.rows })}>{grid.cols}×{grid.rows}</span>}
-                <span className={styles.statusItem} data-mono title={t('sessions.fontSize')}>{fontSize}px</span>
                 {(() => { const remoteProject = selected.projectId?.startsWith('remote:') ? remoteProjects.find((project) => `remote:${project.id}` === selected.projectId) : undefined; const host = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined; const label = selected.projectId?.startsWith('remote:') ? host?.name ?? 'SSH' : t('common.host.local'); return <span className={styles.statusItem} title={`${t('common.host.label')}：${label}${host ? ` · ${host.user}@${host.host}` : ''}`}><Icon name={selected.projectId?.startsWith('remote:') ? 'server' : 'monitor'} size={12} />{label}</span>; })()}
                 <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((current) => !current); }} onClose={closeShortcuts} />
               </footer>

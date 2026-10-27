@@ -3459,6 +3459,15 @@ pub async fn replay_workbench_session(session_id: String) -> Result<crate::sessi
     blocking(move || crate::session_host::replay_snapshot(&session_id).map_err(native_error)).await
 }
 
+/// Branch and worktree of a local session directory; `None` when it is not in a repository or runs remotely.
+#[tauri::command]
+pub async fn workbench_git_context(session_id: String) -> Result<Option<crate::git_context::GitContext>, ApiError> {
+    blocking(move || {
+        let directory = crate::session_host::local_directory(&session_id).map_err(native_error)?;
+        Ok(directory.and_then(|path| crate::git_context::read(&path)))
+    }).await
+}
+
 #[tauri::command]
 pub async fn write_workbench_session(
     session_id: String,

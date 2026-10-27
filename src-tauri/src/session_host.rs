@@ -272,6 +272,15 @@ pub fn replay(id: &str) -> Result<String, String> {
     Ok(replay_snapshot(id)?.data_base64)
 }
 
+/// Working directory of a local session. Remote sessions run elsewhere, so they have none here.
+pub fn local_directory(id: &str) -> Result<Option<std::path::PathBuf>, String> {
+    let session = lookup(id)?;
+    if session.remote || session.directory.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(std::path::PathBuf::from(&session.directory)))
+}
+
 pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
     let session = lookup(id)?;
     let (bytes, end_offset) = session.replay.lock().map_err(|_| "会话状态不可用")?.snapshot();

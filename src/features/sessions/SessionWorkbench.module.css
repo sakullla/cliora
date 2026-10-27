@@ -377,7 +377,8 @@
   background: var(--wb-row-selected);
   box-shadow: var(--shadow-xs);
 }
-.session[aria-selected='true']::before { content: ''; position: absolute; top: 12px; bottom: 12px; left: -1px; width: 3px; border-radius: 0 99px 99px 0; background: var(--accent); }
+.session[aria-selected='true']::before { content: ''; position: absolute; top: 14px; bottom: 14px; left: 3px; width: 3px; border-radius: 99px; background: var(--accent); }
+.session[aria-selected='true'] { padding-left: 12px; }
 .row:hover .session,
 .row:focus-within .session,
 .row[data-selected] .session { padding-right: 36px; }
@@ -393,11 +394,11 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 9px;
   background: var(--surface);
 }
-.session[aria-selected='true'] .sessionIconWrap { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.session[aria-selected='true'] .sessionIconWrap { border-color: color-mix(in srgb, var(--line) 70%, transparent); background: var(--surface-2); }
 .sessionStateDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--wb-rail-bg); }
 .session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); background: var(--wb-row-selected); }
 .sessionStateDot[data-tone='live'],
@@ -446,7 +447,7 @@
 .rail[data-slim] .railHead { justify-items: center; padding: 12px 8px 8px; }
 .rail[data-slim] .railTitleRow { flex-direction: column; gap: 6px; }
 .rail[data-slim] .railHeadActions { flex-direction: column-reverse; gap: 6px; margin: 0; }
-.rail[data-slim] .newSessionBtn { width: 36px; height: 36px; padding: 0; border-radius: 10px; }
+.rail[data-slim] .newSessionBtn { width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 10px; box-shadow: none; }
 .rail[data-slim] .newSessionBtn > span { display: none; }
 .rail[data-slim] .list { align-items: center; padding: 2px 8px 10px; }
 .rail[data-slim] .sessionGroup { justify-items: center; }
@@ -454,8 +455,12 @@
 .rail[data-slim] .sessionGroup:first-child .groupLabel { display: none; }
 .rail[data-slim] .row { width: 46px; }
 .rail[data-slim] .session { display: grid; place-items: center; width: 46px; height: 46px; padding: 0 !important; }
-.rail[data-slim] .session[aria-selected='true']::before { top: 12px; bottom: 12px; left: -5px; }
-.rail[data-slim] .sessionIconWrap { width: 34px; height: 34px; }
+.rail[data-slim] .session[aria-selected='true'],
+.rail[data-slim] .session[aria-selected='true']:hover:not(:disabled) { border-color: transparent; background: var(--wb-row-selected); box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 90%, transparent), var(--shadow-xs); }
+.rail[data-slim] .session[aria-selected='true']::before { top: 14px; bottom: 14px; left: -8px; }
+.rail[data-slim] .sessionIconWrap,
+.rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { width: 34px; height: 34px; border-color: transparent; background: transparent; }
+.rail[data-slim] .sessionStateDot { right: -2px; bottom: -2px; }
 .rail[data-slim] .sessionBody,
 .rail[data-slim] .rowActions { display: none; }
 .rail[data-slim] .row[data-attention] .sessionIconWrap::after,
@@ -994,6 +999,11 @@
 .statusPath > :global(svg),
 .statusItem > :global(svg),
 .statusItem > :global(img) { flex: none; }
+/* Git hint: same muted tone as the path, truncates before anything else. */
+.statusGit { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 5px; min-width: 0; max-width: 260px; overflow: hidden; white-space: nowrap; opacity: .86; }
+.statusGit > :global(svg) { flex: none; }
+.statusGit > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 10.5px; }
+.statusWorktree { flex: none; padding: 0 5px; border: 1px solid var(--term-float-line); border-radius: 999px; font-size: 10px; line-height: 15px; }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
 .footerDot { width: 10px; height: 10px; color: var(--term-text-3); }
 .footerDot[data-tone='live'],
@@ -1302,6 +1312,8 @@
 .root[data-compact] .statusPath,
 .root[data-compact] .statusItem:not([data-tone]) { display: none; }
 .root[data-compact] .pathChip { max-width: 120px; }
+.root[data-compact] .statusGit { max-width: 140px; }
+.root[data-compact] .statusWorktree { display: none; }
 .root[data-compact] .stageTail { gap: 6px; }
 .root[data-compact] .terminalActions { gap: 0; padding: 2px; }
 .root[data-compact] .toolButton { width: 27px; }

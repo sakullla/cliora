@@ -138,6 +138,7 @@ async function install(page, initialTheme, empty = false) {
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'replay_workbench_session') return transcripts[args.sessionId] ?? transcripts.s1;
+          if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
           if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
           if (command === 'list_library_items') return args.kind === 'prompt' ? [
             { id: 'p1', kind: 'prompt', title: '代码审查', body: '检查代码变更是否正确、安全、易于维护。', category: '开发', projectId: null, version: 1, updatedAt: 1 },
@@ -240,8 +241,11 @@ for (const width of widths) {
       await host.click();
       await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
     }
-    await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('新建会话', 'New session') }).click();
-    await page.getByRole('dialog', { name: copy('添加远程项目', 'Add remote project') }).waitFor();
+    // A host without sessions shows the launchpad instead of the rail.
+    const railNew = page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('新建会话', 'New session') });
+    const newSession = await railNew.isVisible() ? railNew : page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('新建会话', 'New session') }).first();
+    await newSession.click();
+    await page.getByRole('dialog').first().waitFor();
   });
   await shot('workbench-attention-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__bell());

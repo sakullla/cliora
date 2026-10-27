@@ -49,8 +49,8 @@
   padding: 15px 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  background: linear-gradient(180deg, var(--surface) 0%, color-mix(in srgb, var(--surface-2) 52%, var(--surface)) 100%);
-  box-shadow: var(--shadow-xs);
+  background: var(--surface);
+  box-shadow: none;
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease), background-color var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) both;
 }
@@ -58,7 +58,7 @@
 .project:nth-child(3) { animation-delay: 60ms; }
 .project:nth-child(4) { animation-delay: 90ms; }
 .project:nth-child(5) { animation-delay: 120ms; }
-.project:hover { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.project:hover { border-color: var(--line-strong); background: var(--surface); box-shadow: var(--shadow-sm); }
 .project:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-ring); }
 /* One ring on the card's own edge plus a soft halo, never a second outline floating outside the border. */
 .repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring), var(--shadow-sm); }
