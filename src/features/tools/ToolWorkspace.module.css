@@ -1,4 +1,8 @@
-.workspace { display: grid; gap: 12px; min-width: 0; color: var(--text); }
+/* Narrow windows: the CLI strip and the task tabs read as one panel on top.
+   Wide windows: the CLIs move into a vertical rail beside the work area, so any
+   number of tools stays visible without a sideways-scrolling strip. */
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 0; min-width: 0; color: var(--text); }
+.main { display: grid; gap: 12px; min-width: 0; align-content: start; }
 .chrome {
   position: sticky;
   top: 0;
@@ -8,10 +12,14 @@
   margin: 0;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-top: 0;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow-xs), 0 0 0 8px var(--bg);
 }
+.chromeTitle { display: none; }
+.railHead { display: none; }
+.toolName { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Shared button variants ---------- */
 .primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
@@ -19,7 +27,9 @@
 .secondary { background: var(--surface); }
 
 /* ---------- Tool switcher: one rail inside the chrome panel ---------- */
-.toolbar { display: grid; width: 100%; min-width: 0; padding: 4px 4px 2px; container-type: inline-size; }
+.toolbar { display: grid; width: 100%; min-width: 0; padding: 4px 4px 2px; container-type: inline-size; border: 1px solid var(--line); border-bottom: 0; border-radius: var(--radius-xl) var(--radius-xl) 0 0; background: var(--surface); }
+.toolbar + .main > .chrome .taskBar { border-top: 1px solid var(--line); }
+
 .toolSwitcher {
   display: grid;
   grid-auto-flow: column;
@@ -467,6 +477,8 @@ div > .feedback { margin-bottom: 12px; }
 .profileFact { overflow: hidden; color: var(--text-2); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
 .profileMeta > .profileModel { max-width: min(320px, 100%); overflow: hidden; padding: 2px 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
 .profileRow > section:not([data-empty="true"]) {
+  /* The quota panel declares width:100%; with side margins that overflows the card. */
+  width: auto;
   margin: 0 12px 12px;
   padding: 10px 12px 8px;
   border: 1px solid var(--line);
@@ -671,4 +683,45 @@ div > .feedback { margin-bottom: 12px; }
   .historyList { display: flex; max-height: 76px; }
   .historyList li { flex: none; }
   .historyList button { width: auto; }
+}
+
+/* ---------- Wide windows: CLI rail beside the work area ---------- */
+@media (min-width: 1200px) {
+  .workspace { grid-template-columns: 60px minmax(0, 1fr); column-gap: 16px; align-items: start; }
+  .toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: calc(100dvh - 150px);
+    padding: 8px 6px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xs);
+    scrollbar-width: none;
+    container-type: normal;
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .switcherFrame { width: 100%; }
+  .toolSwitcher { display: flex; flex-direction: column; gap: 4px; overflow: visible; mask-image: none !important; }
+  .toolSwitcher button { justify-content: center; width: 100%; min-height: 44px; padding: 0; border-radius: var(--radius); }
+  .toolSwitcher .toolName { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .toolSwitcher .selected { box-shadow: inset 0 0 0 1px var(--accent-line); }
+  .switcherScroll { display: none; }
+  .chrome { border-top: 1px solid var(--line); border-radius: var(--radius-xl); }
+  .toolbar + .main > .chrome .taskBar { border-top: 1px solid var(--line); }
+  .chromeTitle { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 14px 6px; }
+  .chromeTitle strong { min-width: 0; overflow: hidden; font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; text-overflow: ellipsis; white-space: nowrap; }
+}
+/* Very wide windows have room to name every CLI in the rail. */
+@media (min-width: 1560px) {
+  .workspace { grid-template-columns: 184px minmax(0, 1fr); }
+  .railHead { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 2px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+  .toolSwitcher button { justify-content: flex-start; gap: 10px; min-height: 40px; padding: 0 10px 0 8px; }
+  .toolSwitcher .toolName { position: static; width: auto; height: auto; clip-path: none; }
 }

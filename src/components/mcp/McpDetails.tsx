@@ -20,13 +20,14 @@ function Values({ label, values }: { label: string; values: Record<string, strin
   })}</dl>;
 }
 
-export function McpDetails({ item, children }: { item: McpDefinition | NativeMcpEntry; children?: ReactNode }) {
+/** `statusInHeader` drops the transport and enabled chips when the surrounding title bar already shows them. */
+export function McpDetails({ item, children, statusInHeader = false }: { item: McpDefinition | NativeMcpEntry; children?: ReactNode; statusInHeader?: boolean }) {
   const { t } = useTranslation();
   const enabled = 'enabled' in item ? item.enabled : null;
   return <div className={styles.details}>
     <div className={styles.summary}>
-      <span className={styles.transport} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={15} />{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
-      {enabled !== null && <span className={styles.enabled} data-on={enabled || undefined}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>}
+      {!statusInHeader && <span className={styles.transport} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={15} />{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>}
+      {enabled !== null && !statusInHeader && <span className={styles.enabled} data-on={enabled || undefined}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>}
       {'protectedValues' in item && item.protectedValues && <span className={styles.protected}><Icon name="lock" size={12} />{t('tools.mcp.detailProtected')}</span>}
       <span className={styles.commandPreview} title={mcpCommandLine(item.command, item.args) || item.url || ''}><code>{item.transport === 'http' ? item.url || '—' : mcpCommandLine(item.command, item.args) || '—'}</code></span>
     </div>

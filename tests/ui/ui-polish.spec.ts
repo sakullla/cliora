@@ -222,8 +222,9 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   });
   expect(fitted.items.map((item) => item.name)).toEqual(tools.map((item) => item[1]));
   expect(fitted.items.every((item) => !item.clipped)).toBe(true);
-  expect(new Set(fitted.items.map((item) => item.top)).size).toBe(1);
-  expect(fitted.scrollWidth).toBeGreaterThan(fitted.clientWidth);
+  // A wide window stacks every CLI in a vertical rail: one per row, nothing hidden sideways.
+  expect(new Set(fitted.items.map((item) => item.top)).size).toBe(fitted.items.length);
+  expect(fitted.scrollWidth).toBeLessThanOrEqual(fitted.clientWidth);
   const headingActions = await sharedHeights(page.getByRole('button', { name: /^(启动|通用配置|新建配置)$/ }));
   expect(headingActions.length).toBe(3);
   expect(Math.max(...headingActions) - Math.min(...headingActions)).toBeLessThanOrEqual(1);
@@ -268,8 +269,14 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
       const buttons = [...root.querySelectorAll<HTMLElement>('[role="tab"]')];
       return { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, tops: buttons.map((node) => Math.round(node.getBoundingClientRect().top)) };
     });
-    expect(new Set(narrowTabs.tops).size).toBe(1);
-    expect(narrowTabs.scrollWidth).toBeGreaterThan(narrowTabs.clientWidth);
+    if (width >= 1200) {
+      // Wide: a vertical rail, one CLI per row and no sideways strip.
+      expect(new Set(narrowTabs.tops).size).toBe(narrowTabs.tops.length);
+      expect(narrowTabs.scrollWidth).toBeLessThanOrEqual(narrowTabs.clientWidth);
+    } else {
+      expect(new Set(narrowTabs.tops).size).toBe(1);
+      expect(narrowTabs.scrollWidth).toBeGreaterThan(narrowTabs.clientWidth);
+    }
     await expectNoSideScroll(page);
 
     await nav.getByRole('button', { name: '资料库' }).click();

@@ -105,11 +105,31 @@
 .extra label { display: grid; flex: 1 1 100%; gap: 6px; min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .extra input { width: 100%; min-width: 0; flex: 1 1 200px; }
 
-/* Inside the edit dialog */
-:global(.guide-dialog-body) > .extra:first-child { padding-top: 0; border-top: 0; }
-:global(.guide-dialog-body) > button { margin: 12px 0 0; }
-.projectPath { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.projectPath small { flex: 1; min-width: 0; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); overflow-wrap: anywhere; }
+/* Inside the edit dialog: titled sections, one task each; removal sits apart at the end. */
+.editSections { display: grid; gap: 18px; min-width: 0; }
+.editSections > .error, .editSections > .feedback { margin: 0; }
+.editSection { display: grid; gap: 10px; min-width: 0; }
+.editSection + .editSection { padding-top: 18px; border-top: 1px solid var(--line); }
+.editSection > h3, .dangerZone h3 { margin: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: .02em; }
+.editField { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-medium); }
+.editInline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.editInline > input { flex: 1 1 auto; width: auto; min-width: 0; }
+.editInline > button { flex: none; min-height: var(--control-h); }
+.editRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-width: 0; }
+.editRow > span:first-child { flex: 1 1 220px; min-width: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; }
+.editRow[data-tone="warning"] > span:first-child { color: var(--warning); font-weight: var(--fw-medium); }
+.editRowActions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.projectPath { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-3); }
+.projectPath > svg { flex: none; }
+.projectPath small { flex: 1 1 200px; min-width: 0; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); overflow-wrap: anywhere; }
+.pathActions { display: inline-flex; flex: none; gap: 4px; }
+.pathActions > button { min-height: 28px; padding: 0 9px; font-size: var(--fs-caption); }
+.dangerZone { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 14px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: color-mix(in srgb, var(--danger-soft) 55%, var(--surface)); }
+.dangerZone > div { display: grid; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.dangerZone h3 { color: var(--danger); }
+.dangerZone p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
+.dangerZone > button[data-tone="danger"] { border-color: var(--danger-line); color: var(--danger); }
+.dangerZone > button[data-tone="danger"]:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
 
 /* Feedback */
 .error, .feedback { padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; animation: reveal var(--medium) var(--ease); }

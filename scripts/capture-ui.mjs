@@ -424,9 +424,9 @@ async function captureMcpScreens(page,capture){
  await nav.getByRole('button',{name:'资料库'}).click();
  await page.getByRole('tab',{name:/^MCP/}).click();
  const list=page.getByLabel('MCP 列表');
- await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ await list.getByText('filesystem',{exact:true}).first().waitFor();
  await capture('mcp-library');
- await page.getByRole('button',{name:'修改',exact:true}).click();
+ await list.getByRole('button',{name:'修改',exact:true}).first().click();
  let dialog=page.getByRole('dialog',{name:'修改 MCP'});await dialog.waitFor();await capture('mcp-library-edit');
  await dialog.evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -446,8 +446,8 @@ async function captureMcpScreens(page,capture){
  await review.getByRole('button',{name:'返回',exact:true}).click();
  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
  if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
- await list.getByRole('button',{name:/^filesystem/}).click();
- await page.getByRole('button',{name:'修改',exact:true}).click();dialog=page.getByRole('dialog',{name:'修改 MCP'});await dialog.waitFor();
+ 
+ await list.getByRole('button',{name:'修改',exact:true}).first().click();dialog=page.getByRole('dialog',{name:'修改 MCP'});await dialog.waitFor();
  await page.evaluate(()=>window.__captureMcpConflict=true);
  await dialog.locator('[data-dialog-save]').click();await dialog.locator('[data-conflict="true"]').waitFor();await capture('mcp-library-conflict');
  await dialog.getByRole('button',{name:'保留当前文件',exact:true}).click();
@@ -457,12 +457,12 @@ async function captureMcpScreens(page,capture){
  await page.evaluate(()=>window.__captureMcpEmpty=true);
  await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByText('还没有 MCP',{exact:true}).waitFor();await capture('mcp-library-empty');
  await page.evaluate(()=>window.__captureMcpEmpty=false);
- await page.getByRole('button',{name:'刷新',exact:true}).click();await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await list.getByText('filesystem',{exact:true}).first().waitFor();
  if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
  await page.evaluate(()=>window.__captureMcpReadFailure=true);
  await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByText('最近一次读取失败，已保留上次成功的定义与写入分布。').waitFor();await capture('mcp-library-stale');
  await page.evaluate(()=>window.__captureMcpReadFailure=false);
- await page.getByRole('button',{name:'重试',exact:true}).click();await list.getByRole('button',{name:/^filesystem/}).waitFor();
+ await page.getByRole('button',{name:'重试',exact:true}).click();await list.getByText('filesystem',{exact:true}).first().waitFor();
  if(await closeLibraryDetails.isVisible())await closeLibraryDetails.click();
  await page.getByRole('textbox',{name:'搜索资料'}).fill('missing-mcp');await page.getByText('没有匹配「missing-mcp」的 MCP。').waitFor();await capture('mcp-library-no-match');
  await page.getByRole('button',{name:'清除搜索',exact:true}).click();
@@ -565,7 +565,7 @@ for(const width of widths)for(const theme of themes){
  await captureConnectionScreens(page,capture,width);
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
  await page.getByRole('tab',{name:/^长期规则/}).click();await page.getByRole('button',{name:'项目协作约定',exact:true}).waitFor();await capture('library-rules');
- await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:/^filesystem/}).waitFor();await capture('library-mcp');
+ await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByText('filesystem',{exact:true}).first().waitFor();await capture('library-mcp');
  const closeLibraryOverview=page.getByRole('button',{name:'关闭 MCP 详情',exact:true});if(await closeLibraryOverview.isVisible())await closeLibraryOverview.click();
  await page.getByRole('button',{name:'新建 MCP',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-mcp-editor');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByLabel('Skill 列表').getByRole('button',{name:'code-review',exact:true}).waitFor();await capture('library-skills');

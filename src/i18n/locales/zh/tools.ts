@@ -759,6 +759,7 @@ export default {
       memory: '记忆',
     },
     discardMessage: '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？',
+    railTitle: 'CLI 工具',
     scrollToolsBack: '向左查看更多工具',
     scrollToolsForward: '向右查看更多工具',
     frameCurrent: '修改正在使用的文件',
