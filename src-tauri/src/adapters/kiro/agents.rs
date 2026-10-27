@@ -99,8 +99,10 @@ impl AgentAdapter for Kiro {
 
 /// Inventory `[name].json` definitions under one agents directory. Names come
 /// from the path below the directory (`team/planner`), matching the native
-/// loader; unreadable or invalid files surface through the entry detail
-/// instead of failing the whole scan.
+/// loader. The scan is fail-closed: an unreadable file fails the whole scan
+/// with an error, while a readable but invalid definition only degrades to
+/// the entry detail. Collecting silently stops once 512 files are held
+/// (`MAX_JSON_DEFINITIONS`); nesting deeper than 12 levels is an error.
 fn scan_json_definitions(
     tool: &str,
     dir: &Path,

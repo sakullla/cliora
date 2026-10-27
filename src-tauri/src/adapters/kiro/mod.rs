@@ -35,9 +35,12 @@
 //! * **Rules**: steering lives in `~/.kiro/steering/` and
 //!   `<project>/.kiro/steering/` (base files product.md/tech.md/
 //!   structure.md; the four frontmatter modes are file content the CLI
-//!   interprets, never parsed here). The managed single document is the
-//!   always-included AGENTS.md standard: `~/.kiro/steering/AGENTS.md` and
-//!   `<project>/AGENTS.md` (see `rules`).
+//!   interprets, never parsed here). The project steering directory is a
+//!   project-scope catalog (every `.md` listed and editable); the single-file
+//!   port manages the always-included AGENTS.md standard
+//!   (`~/.kiro/steering/AGENTS.md` and `<project>/AGENTS.md`). The global
+//!   steering directory is not cataloged — the shared catalog port is
+//!   project-scope only — and that absence stays recorded (see `rules`).
 //! * **Sessions**: legacy `sessions/cli/<uuid>.jsonl` plus current
 //!   `<data-root>/<workspace>/sess_<id>/messages.jsonl` (see `history`).
 //!   `data.sqlite3` (`conversations_v2` key/conversation_id/value/
@@ -67,6 +70,7 @@ use serde_json::{json, Value};
 use super::{
     file, project_root, AdapterDescriptor, CliAdapter, Facet, InspectionFields,
     HISTORY_ASSOCIATION_UNAVAILABLE_REASON, LaunchMode, ManagementCapabilities, McpLocation,
+    RuleFileSpec, RuleSupport,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -224,9 +228,46 @@ impl CliAdapter for Kiro {
         home: &Path,
         project: Option<&Path>,
     ) -> Option<PathBuf> {
-        // The managed document is the always-included AGENTS.md standard;
-        // the steering directory itself stays a native location (see rules).
+        // The single-file port manages the always-included AGENTS.md standard
+        // (see rules); the project steering directory is managed through the
+        // catalog port below.
         rules::rule_path(scope, home, project)
+    }
+    fn uses_rule_catalog(&self, scope: Scope) -> bool {
+        // The shared catalog port (list_files/save_file) is project-scope
+        // only, so only <project>/.kiro/steering is cataloged; the global
+        // steering directory stays a described native location with the
+        // recorded reason (see rules::GLOBAL_CATALOG_REASON).
+        scope == Scope::Project
+    }
+    fn rule_file_specs(
+        &self,
+        scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+    ) -> Result<Vec<RuleFileSpec>, String> {
+        if scope != Scope::Project {
+            return Err(rules::GLOBAL_CATALOG_REASON.into());
+        }
+        rules::list_steering_specs(project.ok_or("请选择项目目录")?)
+    }
+    fn rule_create_path(&self, project: &Path, name: &str) -> Result<PathBuf, String> {
+        rules::steering_create_path(project, name)
+    }
+    fn rule_unavailable_reason(&self, scope: Scope) -> Option<&'static str> {
+        (scope == Scope::Global).then_some(rules::GLOBAL_CATALOG_REASON)
+    }
+    fn rule_support(&self) -> RuleSupport {
+        // Derived from the ports above: the AGENTS.md single file on both
+        // scopes plus the project-only steering catalog, with the global
+        // catalog absence recorded instead of silently defaulting.
+        RuleSupport {
+            global: true,
+            project: true,
+            global_reason: rules::GLOBAL_CATALOG_REASON,
+            project_reason: "",
+            catalog: true,
+        }
     }
     fn mcp_location(
         &self,
@@ -459,7 +500,7 @@ impl CliAdapter for Kiro {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；规则为 ~/.kiro/steering 与 .kiro/steering（含恒包含的 AGENTS.md，四种 frontmatter 模式为文件内容不解析）",
+                reason: "MCP 由原生路径提供：用户级 ~/.kiro/settings/mcp.json 与工作区 .kiro/settings/mcp.json（按名合并、工作区优先；${VAR} 由 CLI 原生展开，保存即热重载，disabledTools/oauth 等原生字段保留）；Skills 为 ~/.kiro/skills 与 .kiro/skills（SKILL.md 的 name 须与目录同名）；Agents 为 ~/.kiro/agents 与 .kiro/agents 的 [name].md/.json；规则：项目 .kiro/steering 目录可清单与整文件编辑（product.md/tech.md/structure.md 等，四种 frontmatter 模式为文件内容不解析），AGENTS.md 单文件在全局 ~/.kiro/steering/AGENTS.md 与项目根可编辑；全局 steering 目录清单受共享目录型端口仅项目范围的限制，原因已记录",
             },
             history: Facet {
                 state: "available",
@@ -848,7 +889,13 @@ mod tests {
         let support = Kiro.rule_support();
         assert!(support.global);
         assert!(support.project);
-        assert!(!support.catalog, "steering 目录不作为目录型规则目录交付");
+        // Project steering directory is cataloged; the global one is not,
+        // with the shared-port scope limit recorded instead of silently
+        // defaulting.
+        assert!(Kiro.uses_rule_catalog(Scope::Project));
+        assert!(!Kiro.uses_rule_catalog(Scope::Global));
+        assert!(support.catalog);
+        assert!(support.global_reason.contains("仅项目范围"));
     }
 
     #[test]
