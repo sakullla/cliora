@@ -64,7 +64,7 @@ test('returning to the workbench keeps the session the user selected', async ({ 
   await expect(launched).toHaveAttribute('aria-selected', 'false');
 });
 
-test('a CLI spinner in front of the terminal title is not part of the session name', async ({ page }) => {
+test('the CLI spinner stays in front of the terminal title', async ({ page }) => {
   await page.addInitScript(() => {
     const sessions = [{ id: 's1', toolId: 'claude_code', projectId: null, directory: 'C:/home', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }];
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
@@ -99,9 +99,10 @@ test('a CLI spinner in front of the terminal title is not part of the session na
   await expect(tab).toBeVisible();
   const emit = (text: string) => page.evaluate((value) => (window as unknown as { __emitOutput: (text: string) => void }).__emitOutput(value), text);
   await emit('\u001b]0;\u2733 develop分支更新\u0007');
-  await expect(tab.locator('strong')).toHaveText('develop分支更新');
+  // The CLI spinner is the live activity icon, so it belongs to the title.
+  await expect(tab.locator('strong')).toHaveText('✳ develop分支更新');
   // The task title leads the card; the folder name sits underneath it.
   await expect(tab.locator('[class*="sessionPlace"]')).toHaveText('home');
   await emit('\u001b]0;\u25d1 \u2736 修复登录\u0007');
-  await expect(tab.locator('strong')).toHaveText('修复登录');
+  await expect(tab.locator('strong')).toHaveText('◑ ✶ 修复登录');
 });

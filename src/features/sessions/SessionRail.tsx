@@ -153,7 +153,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
 
     <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onListKeyDown}>
       {groups.map((group) => <div key={group.key} className={styles.sessionGroup} role="presentation">
-        {groups.length > 1 && <div className={styles.groupLabel} role="presentation"><span>{group.label}</span><span className={styles.groupCount}>{group.items.length}</span></div>}
+        {groups.length > 1 && <div className={styles.groupLabel} role="presentation"><span>{group.label}</span></div>}
         {group.items.map(renderSession)}
       </div>)}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.ghostButton} onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</button></div>}

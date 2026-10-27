@@ -918,15 +918,12 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
 
 const TITLE_LIMIT = 80;
 
-/** Drop a leading braille spinner and C0 controls. Emoji and the rest of the CLI title stay. */
+/** Keep the CLI's own title text, including its leading spinner frame. Only C0 controls
+    are dropped so the title stays on one line. */
 export function cleanTerminalTitle(raw: string): string {
-  const text = raw
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    // CLIs animate a spinner in front of the title (Claude Code's "\u2733 ", braille
-    // frames, "\u25d1 "). It is activity, not a name; the rail shows activity itself.
-    // Decorative emoji such as "\u2728" belong to the title and stay.
-    .replace(/^(?:[\u2800-\u28ff]+\s*|[\u2722\u2733\u2736\u273b\u273d\u25cb\u25cf\u25d0-\u25d3\u00b7\u2022\u2219\u22c5*]+\s+)+/, '')
-    .trim();
+  const text = raw.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  // A title made only of spinner frames is activity, not a name; keep the tool-name fallback.
+  if (!text.replace(/[\u2800-\u28ff\s]/g, '')) return '';
   return text.length > TITLE_LIMIT ? text.slice(0, TITLE_LIMIT - 1).trimEnd() + '\u2026' : text;
 }
 
