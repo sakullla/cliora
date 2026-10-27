@@ -102,7 +102,7 @@ export type AdapterDescriptor = {
   history: AdapterFacet;
   association?: AssociationFacet;
   login?: { hint: string } | null;
-  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement };
+  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement; memoryReason?: string };
   remote?: RemoteCapabilities;
 };
 export type AdapterCatalog = {

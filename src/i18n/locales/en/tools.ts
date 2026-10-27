@@ -684,6 +684,7 @@ export default {
       plugins: 'Plugins',
       memory: 'Memory',
     },
+    memoryUnavailable: 'Memory unavailable',
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
     railTitle: 'CLI tools',
     scrollToolsBack: 'Show earlier tools',

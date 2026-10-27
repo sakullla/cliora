@@ -413,6 +413,7 @@ impl CliAdapter for Antigravity {
                 project_plugins: false,
                 rules: RuleSupport::bare(false, false),
                 memory: self.published_memory(),
+                memory_reason: "",
             },
         }
     }

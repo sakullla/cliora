@@ -184,7 +184,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   // loading (or because a local adapter omitted a management flag).
   const supported = isRemote
     ? { config: true, accounts: true, mcp: true, skills: true, agents: true, plugins: true, memory: true }
-    : { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory };
+    : { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory || !!management?.memoryReason };
   useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
   useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
@@ -550,7 +550,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={skillsDirty} />}
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} />}
-    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} remoteTargetId={isRemote ? remoteTargetId : null} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />}
+    {resource === 'memory' && supported.memory && (management?.memory
+      ? <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} remoteTargetId={isRemote ? remoteTargetId : null} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />
+      : management?.memoryReason && <div className={styles.taskEmpty}><Icon name="alert" size={24} /><div><strong>{t('tools.workspace.memoryUnavailable')}</strong><p>{management.memoryReason}</p></div></div>)}
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
     </div>
   </ToastScope></section>;

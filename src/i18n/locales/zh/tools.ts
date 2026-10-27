@@ -758,6 +758,7 @@ export default {
       plugins: '插件',
       memory: '记忆',
     },
+    memoryUnavailable: '记忆暂不可用',
     discardMessage: '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？',
     railTitle: 'CLI 工具',
     scrollToolsBack: '向左查看更多工具',

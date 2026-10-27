@@ -593,6 +593,7 @@ impl CliAdapter for KimiCode {
                 project_plugins: false,
                 rules: self.rule_support(),
                 memory: self.published_memory(),
+                memory_reason: "",
             },
         }
     }

@@ -19,8 +19,10 @@ use crate::adapters::memory::{MemoryAdapter, MemoryDeclaration};
 use crate::native::adapter::Scope;
 
 /// Recorded degradation reason with the native enable guidance. The storage
-/// path stays unverified until a local enable produces evidence.
-const UNVERIFIED_REASON: &str = "Kiro V3 记忆按用户账号本地存储、IDE/CLI 同机共享（官方文档），但本机尚未启用：会话 memoryConfig 为 disabled 且 ~/.kiro 下无记忆存储目录（2026-10-27 实测），官方亦未记载存储路径；请在会话内 /memories → config 设为 read & write 启用（reflection 即 Automatic memory updates），本应用不代为启用、不改写会话内 memoryConfig";
+/// path stays unverified until a local enable produces evidence. Published on
+/// the descriptor (`management.memory_reason`) so the shared UI shows an
+/// unavailable memory view instead of hiding the dimension.
+pub(crate) const UNVERIFIED_REASON: &str = "Kiro V3 记忆按用户账号本地存储、IDE/CLI 同机共享（官方文档），但本机尚未启用：会话 memoryConfig 为 disabled 且 ~/.kiro 下无记忆存储目录（2026-10-27 实测），官方亦未记载存储路径；请在会话内 /memories → config 设为 read & write 启用（reflection 即 Automatic memory updates），本应用不代为启用、不改写会话内 memoryConfig";
 
 impl MemoryAdapter for Kiro {
     fn declaration(&self) -> MemoryDeclaration {

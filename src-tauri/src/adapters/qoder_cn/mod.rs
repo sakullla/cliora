@@ -423,6 +423,7 @@ impl CliAdapter for QoderAdapter {
                 project_plugins: self.plugins().is_some_and(|port| port.capability().project),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
+                memory_reason: "",
             },
             login: None,
             name: self.name(),
