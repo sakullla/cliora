@@ -798,17 +798,17 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codexOutput).toContainText('codex-ready');
   await expect(codexOutput).not.toContainText('codex-readyready');
   const stage = page.getByRole('region', { name: '当前会话' });
-  // A CLI names its task through OSC 0; the rail and header follow it and drop the spinner glyph.
+  // A CLI names its task through OSC 0; the rail and header keep the spinner glyph as the live icon.
   await page.evaluate(() => {
     const bridge = (window as unknown as { __events: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } }).__events;
     const title = String.fromCharCode(0x1b) + ']0;\u280b \u4fee\u590d\u767b\u5f55' + String.fromCharCode(7);
     const bytes = new TextEncoder().encode(title);
     bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's1', dataBase64: btoa(String.fromCharCode(...bytes)) } });
   });
-  await expect(codex.locator('strong')).toHaveText('修复登录');
+  await expect(codex.locator('strong')).toHaveText('⠋ 修复登录');
   await expect(codex.locator('[class*="sessionPlace"]')).toHaveText('Alpha');
   await expect(stage).toContainText('修复登录');
-  // User-facing emoji in an OSC title survives the spinner cleanup. This is
+  // User-facing emoji in an OSC title survives title sanitizing. This is
   // important for remote CLIs that use emoji to indicate the active task.
   await page.evaluate(() => {
     const bridge = (window as unknown as { __events: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } }).__events;
