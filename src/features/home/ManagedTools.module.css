@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;

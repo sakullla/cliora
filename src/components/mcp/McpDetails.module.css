@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .details { display: grid; gap: 18px; min-width: 0; }
 .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
 .transport, .enabled, .protected {

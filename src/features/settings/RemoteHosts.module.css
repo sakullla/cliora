@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .panel { display: grid; gap: 14px; margin-bottom: 20px; }
 .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
 .head h2 { font-size: var(--fs-heading); font-weight: var(--fw-semibold); }

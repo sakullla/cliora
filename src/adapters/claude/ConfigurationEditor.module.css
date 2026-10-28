@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .editor, .fields, .editor fieldset { display: grid; gap: .57em; min-width: 0; }
 .editor summary { cursor: pointer; padding: .57em 0; }
 .editor fieldset { border: 1px solid var(--accent-line); border-radius: var(--radius); padding: .57em .71em; }

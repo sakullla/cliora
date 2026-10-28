@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .filter { display: grid; gap: 8px; min-width: 0; }
 .label { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }

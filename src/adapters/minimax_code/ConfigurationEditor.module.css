@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .editor { display: grid; gap: 14px; min-width: 0; }
 .editor [hidden] { display: none !important; }
 .row { display: flex; gap: 8px; align-items: center; min-width: 0; }

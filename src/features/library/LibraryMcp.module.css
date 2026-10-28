@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 /* ---------- Library MCP list: identity, then the CLI marks you click ---------- */
 
 .primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background-color: var(--accent) !important; background-image: var(--accent) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight) !important; }

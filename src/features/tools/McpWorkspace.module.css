@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .primary, .primary:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); font-weight: var(--fw-semibold); box-shadow: var(--shadow-accent), var(--inner-highlight); }
 .listWrap { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .listWrap > ul { flex: none; overflow: visible; }

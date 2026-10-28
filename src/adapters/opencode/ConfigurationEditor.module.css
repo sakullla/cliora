@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .editor, .fields { display: grid; gap: .86em; min-width: 0; }
 .fields[hidden] { display: none; }
 .editor summary { cursor: pointer; padding: .57em 0; }

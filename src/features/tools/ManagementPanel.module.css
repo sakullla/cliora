@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .panel { display: grid; gap: 18px; padding: 20px 0; min-width: 0; }
 .panel h2, .panel h3, .panel p { margin: 0; }
 .panel h2 { font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; }

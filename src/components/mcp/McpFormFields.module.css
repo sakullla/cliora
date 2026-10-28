@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .form { display: grid; gap: 16px; min-width: 0; container-type: inline-size; }
 .formHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; }
 .formHead h3 { flex: none; margin: 0; color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; }
