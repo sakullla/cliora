@@ -6,6 +6,7 @@ import { CodeEditor } from '../../components/CodeEditor';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { GuideDialog } from '../../components/GuideDialog';
 import { modLabel } from '../../lib/shortcut';
+import { Button } from '../../components/ui';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { NativeRuleFile } from '../../types/resources';
 import type { Project } from '../../types/launch';
@@ -165,7 +166,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     : kind === 'agents' ? t('library.nativeRule.kindAgents')
     : t('library.nativeRule.kindInert');
   return <>
-    <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</button>
+    <Button className="native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</Button>
     {status && !open && <p className="native-rule-message" role="status">{status}</p>}
     <GuideDialog open={open} title={t('library.nativeRule.open')} hint={catalog ? t('library.nativeRule.catalogHint') : t('library.nativeRule.hint')} onClose={() => { void change(() => setOpen(false)); }}>
     <div className="native-rule-editor">
@@ -174,16 +175,16 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       {scope === 'project' && <label>{t('library.nativeRule.project')}<select aria-label={t('library.nativeRule.projectAria')} value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">{t('library.distribute.projectPlaceholder')}</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
     {catalog && <div className="native-rule-controls"><label>{t('library.nativeRule.file')}<select aria-label={t('library.nativeRule.fileAria')} value={selectedId} onChange={event => chooseFile(event.target.value)}><option value="">{files.length ? t('library.nativeRule.pickFile') : t('library.nativeRule.emptyCatalog')}</option>{files.map(file => <option key={file.id} value={file.id}>{file.name} · {kindLabel(file.kind)}</option>)}</select></label>
       <label>{t('library.nativeRule.createName')}<input aria-label={t('library.nativeRule.createName')} value={createName} placeholder={t('library.nativeRule.createPlaceholder')} onChange={event => setCreateName(event.target.value)} /></label>
-      <button type="button" disabled={busy || !project || !createName.trim()} onClick={() => void createRule()}>{t('library.nativeRule.create')}</button></div>}
+      <Button disabled={busy || !project || !createName.trim()} onClick={() => void createRule()}>{t('library.nativeRule.create')}</Button></div>}
     {catalog && selected && <>
       {selected.kind === 'mdc' && <label className="native-rule-enabled"><input type="checkbox" checked={selected.enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label>}
       {selected.detail && <p className="native-rule-message" role="status">{selected.detail}</p>}
       {selected.kind === 'agents' && <p className="native-rule-message">{t('library.nativeRule.agentsNote')}</p>}
       <p className="native-rule-path" title={selected.path}><strong>{selected.name}</strong><small>{selected.path}</small></p>
       <CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" readOnly={!selected.writable || busy} />
-      <div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span>{selected.kind === 'mdc' && <button type="button" disabled={busy} onClick={() => void removeRule()}>{t('library.nativeRule.delete')}</button>}<button type="button" className="button primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty || !selected.writable} onClick={() => void save()}>{t('library.nativeRule.save')}</button></div>
+      <div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span>{selected.kind === 'mdc' && <Button disabled={busy} onClick={() => void removeRule()}>{t('library.nativeRule.delete')}</Button>}<Button variant="primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty || !selected.writable} onClick={() => void save()}>{t('library.nativeRule.save')}</Button></div>
     </>}
-    {!catalog && loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span><button type="button" className="button primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty} onClick={() => void save()}>{t('library.nativeRule.save')}</button></div></>}
+    {!catalog && loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span><Button variant="primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty} onClick={() => void save()}>{t('library.nativeRule.save')}</Button></div></>}
     {conflict !== null && <ConflictCompare title={t('library.nativeRule.conflictTitle')} banner={t('home.conflict.banner')} currentContent={conflict} nextContent={text} format="markdown" busy={busy} onKeepCurrent={() => { if (catalog && selected) { setFiles(old => old.map(file => file.id === selected.id ? { ...file, text: conflict } : file)); setText(conflict); } else { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); } setConflict(null); }} onUseNext={() => void save(conflict)} />}
     {failure && <p className="native-rule-message" role="alert" data-tone="error">{failure}</p>}
     {status && <p className="native-rule-message" role="status">{status}</p>}

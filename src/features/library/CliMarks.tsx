@@ -1,5 +1,6 @@
 import { ToolIcon } from '../../components/ToolIcon';
 import type { Scope } from '../../types/native';
+import { Badge } from '../../components/ui';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -44,7 +45,7 @@ export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath
     const contextId = accountContexts ? sample?.contextId ?? null : null;
     return { key, scope, projectPath, contextId, name: `${scopeLabel(scope, projectPath, projects)}${contextId ? ` · ${contextLabel(contextId)}` : ''}`, items: places.filter((item) => placeKey(item) === key) };
   });
-  return <div className={className ? `${styles.scopeLines} ${className}` : styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><span className={styles.scopeName}>{row.name}</span><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
+  return <div className={className ? `${styles.scopeLines} ${className}` : styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><Badge className={styles.scopeName}>{row.name}</Badge><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
     const item = mark(row.items.find((place) => place.toolId === tool.id));
     const reason = unavailable?.(tool.id, row.scope);
     return <button type="button" key={tool.id} aria-pressed={item.pressed} aria-label={`${tool.name} · ${reason ?? item.status}`} title={`${row.name} · ${tool.name} · ${reason ?? item.status}`} data-state={reason ? 'unavailable' : item.state} disabled={busy || !!reason} onClick={() => onToggle(tool.id, row.scope, row.projectPath, row.contextId)}><ToolIcon toolId={tool.id} size={20} /></button>;

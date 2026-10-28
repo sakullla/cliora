@@ -8,6 +8,7 @@ import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
+import { Badge, Button, Card } from '../../components/ui';
 import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -275,12 +276,12 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
-        return <article className={styles.card} key={item.id}>
+        return <Card className={styles.card} interactive key={item.id}>
           <div className={styles.cardHead}>
             <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
-            <span className={styles.badge}>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
+            <Badge>{t('tools.skills.fileCount', { count: item.fileCount })}</Badge>
           </div>
-          <p>{item.description || t('library.resources.fullPackage')}</p>
+          <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardBar}>
             <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
@@ -288,12 +289,12 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
             }} />
-            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
+            <div className={styles.cardActions}><Button variant="ghost" size="sm" className={styles.danger} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</Button><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button></div>
           </div>
-        </article>;
+        </Card>;
       }) : needle
         ? <div className={styles.empty}><Icon name="search" size={24} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}{!remoteTargetId && <button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} />{t('tools.skills.add')}</button>}</div>}
+        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}{!remoteTargetId && <Button icon={<Icon name="plus" size={14} />} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</Button>}</div>}
     </div>
     <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
       <div className={styles.skillAdd}>
@@ -309,18 +310,18 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
               <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={18} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
               <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy || !!remoteTargetId} onClick={() => void addZip()}><Icon name="archive" size={18} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
             </div>
-            <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} disabled={!!remoteTargetId} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !!remoteTargetId || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
+            <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} disabled={!!remoteTargetId} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><Button disabled={busy || !!remoteTargetId || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</Button></span></label>
           </section>
         </>}
         {archiveSelection && <section className={styles.skillSection}>
           <h3>{t('library.resources.archiveMultiTitle')}</h3>
           <label>{t('library.resources.archiveChoose')}<select aria-label={t('tools.skills.archiveAria')} value={archiveSelection.chosen ?? '__choose__'} onChange={(event) => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">{t('tools.skills.archivePlaceholder')}</option>{archiveSelection.entries.map((entry) => <option key={entry} value={entry}>{entry || t('tools.skills.archiveRoot')}</option>)}</select></label>
-          <div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy || archiveSelection.chosen === null} onClick={() => void addArchive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</button></div>
+          <div className={styles.actions}><Button onClick={() => setArchiveSelection(null)}>{t('library.resources.back')}</Button><Button variant="primary" disabled={busy || archiveSelection.chosen === null} onClick={() => void addArchive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</Button></div>
         </section>}
         {pendingImport && <section className={styles.skillSection} role="group" aria-label={t('tools.skills.importLabel')}>
           <h3>{t('library.resources.existingTitle', { name: pendingImport.preview.name })}</h3>
           <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
-          <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</button></div>
+          <div className={styles.actions}><Button onClick={() => setPendingImport(null)}>{t('library.resources.back')}</Button><Button variant="primary" disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</Button></div>
         </section>}
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
       </div>

@@ -123,3 +123,63 @@ test('library search debounces native queries, clears instantly and counts hits'
   await expect(page.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
   await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
 });
+
+test('library keeps four tabs, one primary action, and every prompt card in the first screen', async ({ page }) => {
+  await page.addInitScript(() => {
+    const body = '检查代码变更是否正确、安全、易于维护。先说明影响用户的行为，再给出具体文件和可执行的建议。优先指出会导致故障的问题。';
+    const library = [
+      { id: 'prompt-1', kind: 'prompt', title: '代码审查', body, category: '开发', projectId: null, version: 1, updatedAt: 1790758800 },
+      { id: 'prompt-2', kind: 'prompt', title: '整理发布说明', body, category: '写作', projectId: null, version: 1, updatedAt: 1790672400 },
+      { id: 'prompt-3', kind: 'prompt', title: '排查问题', body, category: '开发', projectId: 'cliora', version: 1, updatedAt: 1790589600 },
+      { id: 'prompt-4', kind: 'prompt', title: '解释一段代码', body, category: '学习', projectId: null, version: 1, updatedAt: 1790416800 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects') return [{ id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_rule_placements') return [];
+          if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
+          return null;
+        },
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 1000 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await expect(page.getByRole('button', { name: '代码审查', exact: true })).toBeVisible();
+  const tabs = page.getByRole('tablist', { name: '资料类型' });
+  await expect(tabs.getByRole('tab')).toHaveCount(4);
+  const create = page.getByRole('button', { name: '新建提示词', exact: true });
+  await expect(create).toHaveAttribute('data-variant', 'primary');
+  const toolbar = page.locator('[data-toolbar]').filter({ has: tabs });
+  await expect(toolbar.locator('[data-variant="primary"]')).toHaveCount(1);
+  for (const card of await page.getByRole('article').all()) await expect(card.locator('[data-variant="primary"]')).toHaveCount(0);
+  // Same first-screen rule as capture-ui --measure (02 ADR-0): the baseline 资料库 value is 4.
+  const visible = await page.evaluate(() => {
+    const main = document.querySelector('main');
+    if (!main) return 0;
+    const inside = (node: Element) => {
+      const box = node.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0 || box.top < 0 || box.left < 0 || box.bottom > innerHeight || box.right > innerWidth) return false;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+        const clip = parent.getBoundingClientRect();
+        if (box.top < clip.top - 0.5 || box.bottom > clip.bottom + 0.5 || box.left < clip.left - 0.5 || box.right > clip.right + 0.5) return false;
+      }
+      return true;
+    };
+    const nodes = new Set(main.querySelectorAll('[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]'));
+    return [...nodes].filter(inside).length;
+  });
+  expect(visible).toBeGreaterThanOrEqual(4);
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(page.getByRole('button', { name: '新建 MCP', exact: true })).toHaveAttribute('data-variant', 'primary');
+  await expect(toolbar.locator('[data-variant="primary"]')).toHaveCount(1);
+});
