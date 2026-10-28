@@ -26,8 +26,7 @@
 .tabs button::after { display: none; }
 .tabs button:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); }
 .tabs button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
-.tabs :global(.count-chip) { margin-left: 1px; }
-.tabs button[aria-selected="true"] :global(.count-chip) { background: var(--accent-soft); color: var(--accent); }
+.tabCount { margin-left: var(--space-1); }
 .refresh { flex: none; margin-left: auto; color: var(--accent); }
 .refresh:disabled { color: var(--text-3); opacity: 1; }
 

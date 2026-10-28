@@ -11,7 +11,7 @@ body {
 }
 h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); }
-.count-chip, time, .rowContext > span:last-of-type { font-variant-numeric: tabular-nums; }
+time, .rowContext > span:last-of-type { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
 ::selection { background: var(--selection); color: inherit; }
 /* Desktop chrome: navigation, buttons and tabs never pick up a text selection or a drag ghost. */
