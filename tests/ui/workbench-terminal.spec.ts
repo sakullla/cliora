@@ -290,19 +290,42 @@ test('session actions are available from the rail card', async ({ page }) => {
   await expect(page.getByRole('tab', { name: /Codex/ })).toBeFocused();
 });
 
-test('the session rail moves through sessions with vertical arrow keys', async ({ page }) => {
+for (const split of [false, true]) {
+test(`the session rail moves through sessions with vertical arrow keys${split ? ' in split view' : ''}`, async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await openWorkbench(page);
+  if (split) await page.getByRole('button', { name: '分屏', exact: true }).click();
   const codex = page.getByRole('tab', { name: /Codex/ });
   const claude = page.getByRole('tab', { name: /Claude Code/ });
   await codex.focus();
+  await page.evaluate(() => {
+    const targets: string[] = [];
+    Object.assign(window, { __railFocusTargets: targets });
+    document.addEventListener('focusin', (event) => {
+      const target = event.target as HTMLElement;
+      targets.push(target.dataset.sessionId ?? target.tagName);
+    });
+  });
+  // Drain scheduled terminal activation work so transient focus theft cannot
+  // hide behind a later animation frame that restores the tab focus.
+  const settleFocus = () => page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
   await page.keyboard.press('ArrowDown');
   await expect(claude).toBeFocused();
   await expect(claude).toHaveAttribute('aria-selected', 'true');
+  await settleFocus();
+  await expect(claude).toBeFocused();
   await page.keyboard.press('Home');
   await expect(codex).toBeFocused();
   await expect(codex).toHaveAttribute('aria-selected', 'true');
+  await settleFocus();
+  await expect(codex).toBeFocused();
+  expect(await page.evaluate(() => (window as unknown as { __railFocusTargets: string[] }).__railFocusTargets)).toEqual(['s2', 's1']);
+  await claude.click();
+  await expect(page.locator('[data-pane-session="s2"] .xterm-helper-textarea')).toBeFocused();
 });
+}
 
 test('Shift+Enter sends a line feed and Enter still submits', async ({ page }) => {
   await openWorkbench(page);

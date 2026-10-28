@@ -38,7 +38,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
   canLaunch: boolean;
   onFilter: (filter: RailFilter) => void;
   onSearch: (query: string) => void;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, focusTerminal?: boolean) => void;
   onNewSession: () => void;
   onOpenMenu: (session: WorkbenchSession, x: number, y: number) => void;
   onRemove: (session: WorkbenchSession) => void;
@@ -66,12 +66,8 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
         : (current + (event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     const target = tabs[next];
     const sessionId = target.dataset.sessionId;
-    if (sessionId) onSelect(sessionId);
+    if (sessionId) onSelect(sessionId, false);
     target.focus();
-    // The activated terminal focuses itself after render. Keep keyboard navigation on the rail.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (target.isConnected) target.focus({ preventScroll: true });
-    }));
   }
 
   const pinnedSessions = sessions.filter((item) => item.pinned);
