@@ -180,8 +180,16 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   const rows = page.locator('[data-tool-row]');
   await expect(rows.getByRole('button', { name: '启动', exact: true }).first()).toBeVisible();
   await expect(rows.getByRole('button', { name: '重新检测', exact: true }).first()).toBeVisible();
-  await expect(rows.getByRole('button', { name: '编辑配置 →', exact: true }).first()).toBeVisible();
+  // A healthy row keeps 编辑配置 in its row menu; only a not-installed row shows 去安装 → inline.
+  const codexRow = rows.filter({ hasText: 'Codex' });
+  await expect(rows.getByRole('button', { name: '编辑配置 →', exact: true })).toHaveCount(0);
   await expect(rows.getByRole('button', { name: '去安装 →', exact: true }).first()).toBeVisible();
+  await expect(rows.filter({ hasText: 'Grok' }).getByRole('button', { name: '去安装 →', exact: true })).toBeVisible();
+  await expect(codexRow.getByRole('button', { name: '去安装 →', exact: true })).toHaveCount(0);
+  await codexRow.getByRole('button', { name: 'Codex 的更多操作', exact: true }).click();
+  await expect(page.getByRole('menu', { name: 'Codex 的更多操作' }).getByRole('menuitem', { name: '编辑配置', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu', { name: 'Codex 的更多操作' })).toHaveCount(0);
   const edges = await rows.getByRole('button', { name: /^(启动|重新检测)$/ }).evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return `${Math.round(box.left)}-${Math.round(box.right)}`;
@@ -265,7 +273,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await nav.getByRole('button', { name: '快速开始' }).click();
     await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
     await expect(rows.getByRole('button', { name: '启动', exact: true }).first()).toBeVisible();
-    await expect(rows.getByRole('button', { name: '编辑配置 →', exact: true }).first()).toBeVisible();
+    await expect(codexRow.getByRole('button', { name: 'Codex 的更多操作', exact: true })).toBeVisible();
     await expect(rows.getByRole('button', { name: '去安装 →', exact: true }).first()).toBeVisible();
     await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
     await expectNoSideScroll(page);

@@ -6,6 +6,7 @@ import { styleSource } from './style-source.mjs';
 const root = new URL('../../', import.meta.url);
 const style = styleSource();
 const badge = readFileSync(new URL('src/components/ui/Badge.module.css', root), 'utf8');
+const button = readFileSync(new URL('src/components/ui/Button.module.css', root), 'utf8');
 const editor = readFileSync(new URL('src/components/CodeEditor.css', root), 'utf8');
 const domain = readFileSync(new URL('src/types/domain.ts', root), 'utf8');
 const tauriConfig = JSON.parse(readFileSync(new URL('src-tauri/tauri.conf.json', root), 'utf8'));
@@ -129,9 +130,9 @@ test('syntax colors stay distinct and at WCAG 4.5:1 on the editor surface', () =
 });
 
 test('danger buttons and icon strokes follow the text colors', () => {
-  // Filled danger buttons take their label ink from --on-danger in both themes.
-  assert.match(style, /\.confirmation-actions \.destructive[^{]*\{[^}]*color:\s*var\(--on-danger\)/);
-  assert.equal(/:root\[data-theme="dark"\] \.confirmation-actions \.destructive/.test(style), false, 'dark danger label overrides --on-danger');
+  // Filled danger buttons (the shared Button's danger variant, used by the confirmation dialog) take their label ink from --on-danger in both themes.
+  assert.match(button, /\.button\[data-variant="danger"\][^{]*\{[^}]*color:\s*var\(--on-danger\)/);
+  assert.equal(/:root\[data-theme="dark"\][^{]*\[data-variant="danger"\]/.test(style + button), false, 'dark danger label overrides --on-danger');
   assert.equal(light['on-danger'].toLowerCase(), '#fff');
   const darkInkRgb = hexBytes(dark['on-danger']);
   assert.ok(Math.max(...darkInkRgb) <= 80, `dark --on-danger ${dark['on-danger']} is not a dark ink`);

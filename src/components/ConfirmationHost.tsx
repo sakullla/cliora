@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next';
 import { answerConfirmation, confirmationSnapshot, subscribeConfirmation } from '../lib/confirm';
 import { Icon } from './Icon';
+import { Button } from './ui';
 
 export function ConfirmationHost() {
   const { t } = useTranslation();
@@ -34,8 +35,8 @@ export function ConfirmationHost() {
       <p id="confirmation-message">{request.message}</p></div>
     </div>
     <div className="confirmation-actions">
-      <button type="button" className="button" autoFocus onClick={() => answerConfirmation(request.id, false)}>{t('common.dialog.cancel')}</button>
-      <button type="button" className={`button ${request.destructive ? 'destructive' : 'primary'}`} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</button>
+      <Button autoFocus onClick={() => answerConfirmation(request.id, false)}>{t('common.dialog.cancel')}</Button>
+      <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
     </div>
   </dialog>;
 }

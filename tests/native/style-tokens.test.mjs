@@ -2,17 +2,8 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-// Literal rules for colors, corner radii and spacing (02 ADR-1). Files whose first line is the
-// pending marker have not been moved onto the tokens yet and are skipped.
+// Literal rules for colors, corner radii and spacing (02 ADR-1), applied to every stylesheet under src/.
 const root = new URL('../../', import.meta.url);
-const PENDING = '/* style-tokens: pending */';
-
-// Files this rule already covers; they must never carry the pending marker.
-const migrated = [
-  /^src\/styles\/(?!pages\/)[^/]+\.css$/,
-  /^src\/components\/ui\/.+\.css$/,
-  /^src\/components\/(CodeEditor\.css|MarkdownView\.module\.css|RowMenu\.module\.css|FilterSelect\.module\.css)$/,
-];
 
 const namedColors = new Set(('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen').split(' '));
 
@@ -26,9 +17,6 @@ function cssFiles(dir) {
   return files.sort();
 }
 
-function isPending(text) {
-  return text.replace(/^\uFEFF/, '').split(/\r?\n/, 1)[0].trim() === PENDING;
-}
 
 // Split on a separator outside quotes and parentheses.
 function splitTop(text, separator) {
@@ -161,18 +149,9 @@ test('the rules reject literals and accept tokens', () => {
   assert.equal(violations('src/features/sessions/SessionWorkbench.module.css', '.t { --other: #000; }').length, 1);
 });
 
-test('migrated stylesheets carry no pending marker', () => {
-  const covered = files.filter((file) => migrated.some((pattern) => pattern.test(file)));
-  assert.ok(covered.includes('src/styles/tokens.css'), 'src/styles/tokens.css is missing');
-  for (const file of covered) assert.equal(isPending(readFileSync(new URL(file, root), 'utf8')), false, `${file} is marked pending`);
-});
-
-test('stylesheets outside the pending set use tokens for colors, radii and spacing', () => {
+test('every stylesheet uses tokens for colors, radii and spacing', () => {
+  assert.ok(files.includes('src/styles/tokens.css'), 'src/styles/tokens.css is missing');
   const found = [];
-  for (const file of files) {
-    const css = readFileSync(new URL(file, root), 'utf8');
-    if (isPending(css)) continue;
-    found.push(...violations(file, css));
-  }
+  for (const file of files) found.push(...violations(file, readFileSync(new URL(file, root), 'utf8')));
   assert.deepEqual(found, []);
 });
