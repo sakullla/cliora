@@ -17,6 +17,7 @@
 
 .root {
   --wb-rail-bg: color-mix(in srgb, var(--sidebar) 58%, var(--surface));
+  --wb-rail-top: color-mix(in srgb, var(--surface) 72%, var(--sidebar));
   --wb-row-hover: color-mix(in srgb, var(--surface-3) 46%, transparent);
   --wb-row-selected: var(--surface);
   --wb-divider: color-mix(in srgb, var(--line) 86%, transparent);
@@ -31,6 +32,7 @@
 
 :global([data-theme='dark']) .root {
   --wb-rail-bg: color-mix(in srgb, var(--sidebar) 70%, var(--bg));
+  --wb-rail-top: color-mix(in srgb, var(--bg) 82%, var(--sidebar));
   --wb-row-hover: color-mix(in srgb, var(--surface-2) 70%, transparent);
   --wb-row-selected: var(--surface-2);
   --wb-divider: color-mix(in srgb, var(--line) 90%, transparent);
@@ -170,7 +172,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--wb-rail-bg);
+  background: linear-gradient(180deg, var(--wb-rail-top), var(--wb-rail-bg) 220px);
 }
 .railHead { display: grid; flex: none; gap: 10px; padding: 14px 12px 8px; }
 .railTitleRow { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 32px; }
@@ -229,15 +231,17 @@
   padding: 0 12px 0 10px;
   border: 0;
   border-radius: 9px;
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   color: var(--on-accent);
   font-size: var(--fs-control);
   font-weight: var(--fw-semibold);
   box-shadow: var(--shadow-accent), var(--inner-highlight);
   white-space: nowrap;
 }
-.newSessionBtn:hover:not(:disabled) { background: var(--accent-hover); box-shadow: var(--shadow-accent); }
-:global([data-theme='dark']) .newSessionBtn { box-shadow: none; }
+.newSessionBtn:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)); box-shadow: var(--shadow-accent), var(--inner-highlight); transform: translateY(-1px); }
+.newSessionBtn:active:not(:disabled) { transform: translateY(0); }
+.newSessionBtn { transition: background var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease); }
+:global([data-theme='dark']) .newSessionBtn { box-shadow: var(--inner-highlight); }
 
 .railSearchField {
   display: flex;
@@ -245,13 +249,13 @@
   gap: 8px;
   height: 36px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-3) 55%, transparent);
+  background: color-mix(in srgb, var(--surface-3) 42%, transparent);
   color: var(--text-3);
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background-color var(--fast) var(--ease);
 }
-.railSearchField:hover { background: color-mix(in srgb, var(--surface-3) 80%, transparent); }
+.railSearchField:hover { background: color-mix(in srgb, var(--surface-3) 70%, transparent); }
 .railSearchField > :global(svg) { flex: none; }
 .railSearchField:focus-within { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .railSearchField input[type='search']::-webkit-search-cancel-button,
@@ -330,7 +334,10 @@
   flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
-  overflow: auto;
+  min-width: 0;
+  /* Never scroll sideways: decorations (selected bar, badges) sit outside the row box
+     and would otherwise trip a horizontal scrollbar, especially in the slim rail. */
+  overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   padding: 2px 8px 10px;
@@ -374,9 +381,9 @@
 .session[aria-selected='true'],
 .session[aria-selected='true']:hover:not(:disabled) {
   background: var(--wb-row-selected);
-  box-shadow: var(--shadow-xs), inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--line) 85%, transparent);
 }
-.session[aria-selected='true']::before { content: ''; position: absolute; top: 12px; bottom: 12px; left: -5px; width: 3px; border-radius: 99px; background: var(--accent); }
+.session[aria-selected='true']::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: -5px; width: 3px; border-radius: 99px; background: linear-gradient(180deg, var(--accent-bright), var(--accent)); box-shadow: 0 0 10px -2px var(--accent-ring); }
 .row:not([data-running]):hover .session,
 .row:not([data-running]):focus-within .session,
 .row:not([data-running])[data-selected] .session { padding-right: 40px; }
@@ -388,13 +395,15 @@
   position: relative;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, transparent);
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, var(--surface), var(--surface-2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, transparent), var(--shadow-xs);
+  transition: box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-.session[aria-selected='true'] .sessionIconWrap { background: var(--surface-2); }
+.session:hover:not(:disabled) .sessionIconWrap { transform: translateY(-1px); }
+.session[aria-selected='true'] .sessionIconWrap { background: linear-gradient(160deg, var(--surface-2), var(--surface-3)); box-shadow: inset 0 0 0 1px var(--accent-line), var(--shadow-xs); }
 .sessionStateDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--wb-rail-bg); }
 .session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); background: var(--wb-row-selected); }
 .sessionStateDot[data-tone='live'],
@@ -454,7 +463,8 @@
 .rail[data-slim] .sessionGroup:first-child .groupLabel { display: none; }
 .rail[data-slim] .row { width: 44px; }
 .rail[data-slim] .session { display: grid; place-items: center; width: 44px; height: 44px; padding: 0 !important; border-radius: 12px; }
-.rail[data-slim] .session[aria-selected='true']::before { top: 13px; bottom: 13px; left: -8px; }
+.rail[data-slim] .session[aria-selected='true']::before { top: 13px; bottom: 13px; left: -6px; }
+.rail[data-slim] .list { overflow: hidden auto; }
 .rail[data-slim] .sessionIconWrap,
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { width: 32px; height: 32px; background: transparent; box-shadow: none; }
 .rail[data-slim] .sessionStateDot { right: -2px; bottom: -2px; }
@@ -519,8 +529,9 @@
   width: 36px;
   height: 36px;
   border: 1px solid var(--term-frame);
-  border-radius: 10px;
-  background: var(--term-raise);
+  border-radius: 11px;
+  background: linear-gradient(160deg, var(--term-raise), color-mix(in srgb, var(--term-raise) 80%, var(--term-chrome)));
+  box-shadow: 0 1px 0 color-mix(in srgb, #fff 6%, transparent) inset;
 }
 .stageIconDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--term-chrome); border-radius: 50%; background: var(--term-chrome); color: var(--term-text-3); }
 .stageIconDot[data-tone='live'],
@@ -559,7 +570,7 @@
   line-height: 21px;
   white-space: nowrap;
 }
-.statusChip[data-tone='live'] { background: color-mix(in srgb, var(--term-success) 14%, transparent); color: var(--term-success); }
+.statusChip[data-tone='live'] { background: color-mix(in srgb, var(--term-success) 14%, transparent); color: var(--term-success); box-shadow: 0 0 0 1px color-mix(in srgb, var(--term-success) 22%, transparent); }
 .statusChip[data-tone='idle'] { background: color-mix(in srgb, var(--term-success) 9%, transparent); color: var(--term-success); }
 .statusChip[data-tone='bell'] { background: color-mix(in srgb, var(--term-warning) 16%, transparent); color: var(--term-warning); }
 .statusChip[data-tone='error'] { background: color-mix(in srgb, var(--term-danger) 15%, transparent); color: var(--term-danger); }
@@ -843,7 +854,7 @@
   min-width: 0;
   overflow: clip;
   border: 1px solid var(--term-frame);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--term-bg);
   color: var(--term-fg);
   box-shadow: var(--term-card-shadow);
@@ -1168,29 +1179,29 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 56px;
+  min-height: 58px;
   padding: 8px 12px 8px 9px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 13px;
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   color: var(--text);
   text-align: left;
   box-shadow: var(--shadow-xs);
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-.launchToolIcon { display: grid; flex: none; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.launchToolIcon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(160deg, var(--surface), var(--surface-2)); }
 .toolChipName { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .toolChipName strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipAction { position: absolute; top: 50%; right: 9px; display: grid; place-items: center; width: 24px; height: 24px; margin-top: -12px; border-radius: 7px; color: var(--text-3); opacity: 0; transform: translateX(-4px); transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.toolChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.toolChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-md); transform: translateY(-2px); }
 .toolChip:hover:not(:disabled) .toolChipAction,
 .toolChip:focus-visible .toolChipAction { background: var(--accent); color: var(--on-accent); opacity: 1; transform: none; }
 .toolChip[data-more] { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
 .toolChip[data-more] .toolChipAction { display: none; }
 .recentsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.recentCard { display: flex; align-items: center; gap: 11px; min-width: 0; min-height: 52px; padding: 8px 12px 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text); text-align: left; white-space: normal; box-shadow: var(--shadow-xs); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
-.recentCard:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-md); }
+.recentCard { display: flex; align-items: center; gap: 11px; min-width: 0; min-height: 52px; padding: 8px 12px 8px 10px; border: 1px solid var(--line); border-radius: 13px; background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text); text-align: left; white-space: normal; box-shadow: var(--shadow-xs); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease); }
+.recentCard:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-md); transform: translateY(-2px); }
 .recentIcon { display: grid; flex: none; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
 .recentCopy { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .recentCopy strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
@@ -1287,7 +1298,10 @@
   .toolChip,
   .toolChipAction,
   .recentAction,
+  .recentCard,
   .session,
+  .sessionIconWrap,
+  .newSessionBtn,
   .terminalInstance,
   .terminalBody,
   .switchTrack,
