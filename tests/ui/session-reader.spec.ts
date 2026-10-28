@@ -151,8 +151,9 @@ test('refresh updates the open conversation, folds injected context and keeps it
 
 test('custom dates apply atomically, normalize reversed dates and support keyboard selection', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-10-02T12:00:00'));
-  await page.getByText('筛选', { exact: true }).click();
-  await page.getByRole('button', { name: '自定义', exact: true }).click();
+  const range = page.getByRole('group', { name: '会话筛选' }).getByRole('button', { name: '时间范围', exact: true });
+  const pickCustom = async () => { await range.click(); await page.getByRole('listbox', { name: '时间范围' }).getByRole('option', { name: '自定义', exact: true }).click(); };
+  await pickCustom();
   const dialog = page.getByRole('dialog', { name: '自定义时间范围' });
   await expect(dialog.locator('input[type="date"]')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '应用范围' })).toBeDisabled();
@@ -161,7 +162,8 @@ test('custom dates apply atomically, normalize reversed dates and support keyboa
   await expect(dialog.getByRole('status')).toHaveText('已选择 4 天');
   await dialog.getByRole('button', { name: '应用范围' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __reader: { filters: Array<{ fromMs: number; toMs: number }> } }).__reader.filters.at(-1))).toMatchObject({ fromMs: new Date('2026-10-02T00:00:00').getTime(), toMs: new Date('2026-10-06T00:00:00').getTime() });
-  await page.getByRole('button', { name: '自定义', exact: true }).click();
+  await expect(range).toContainText('自定义');
+  await page.getByRole('button', { name: '2026/10/02 — 2026/10/05', exact: true }).click();
   await dialog.getByRole('button', { name: '2026-10-31', exact: true }).click();
   await page.keyboard.press('ArrowRight');
   await expect(dialog.getByRole('button', { name: '2026-11-01', exact: true })).toBeFocused();
@@ -170,13 +172,44 @@ test('custom dates apply atomically, normalize reversed dates and support keyboa
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('button', { name: '2026/10/02 — 2026/10/05', exact: true })).toBeVisible();
   await page.setViewportSize({ width: 640, height: 700 });
-  await page.getByRole('button', { name: '自定义', exact: true }).click();
+  await pickCustom();
   const box = await dialog.boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(640);
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '自定义', exact: true })).toBeFocused();
+  await expect(range).toBeFocused();
+});
+
+test('the session filter bar applies favorite, time and model filters and shows clearable chips', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-02T12:00:00'));
+  const lastFilter = () => page.evaluate(() => (window as unknown as { __reader: { filters: Array<{ favoriteOnly: boolean; fromMs: number | null; toMs: number | null; model: string | null }> } }).__reader.filters.at(-1));
+  const bar = page.getByRole('group', { name: '会话筛选' });
+  const chips = page.getByLabel('已启用的筛选');
+  const favorite = bar.getByRole('button', { name: '只看收藏', exact: true });
+  await favorite.click();
+  await expect(favorite).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await lastFilter())?.favoriteOnly).toBe(true);
+  await favorite.click();
+  await expect.poll(async () => (await lastFilter())?.favoriteOnly).toBe(false);
+
+  await bar.getByRole('button', { name: '时间范围', exact: true }).click();
+  await page.getByRole('listbox', { name: '时间范围' }).getByRole('option', { name: '今天', exact: true }).click();
+  await expect.poll(lastFilter).toMatchObject({ fromMs: new Date('2026-10-02T00:00:00').getTime(), toMs: new Date('2026-10-03T00:00:00').getTime() });
+  await expect(chips.getByRole('button', { name: '时间：今天' })).toBeVisible();
+
+  await bar.getByRole('button', { name: '筛选模型', exact: true }).click();
+  await page.getByRole('listbox', { name: '筛选模型' }).getByRole('option', { name: 'gpt-6-astra', exact: true }).click();
+  await expect.poll(async () => (await lastFilter())?.model).toBe('gpt-6-astra');
+  await expect(chips.getByRole('button', { name: '模型：gpt-6-astra' })).toBeVisible();
+  await expect(bar.getByRole('button', { name: '筛选项目', exact: true })).toBeVisible();
+
+  await chips.getByRole('button', { name: '模型：gpt-6-astra' }).click();
+  await expect.poll(async () => (await lastFilter())?.model).toBeNull();
+  await expect(chips.getByRole('button', { name: '时间：今天' })).toBeVisible();
+  await chips.getByRole('button', { name: '时间：今天' }).click();
+  await expect.poll(lastFilter).toMatchObject({ fromMs: null, toMs: null, model: null, favoriteOnly: false });
+  await expect(chips).toHaveCount(0);
 });
 
 test('long conversations defer distant Markdown and render it when jumping to latest', async ({ page }) => {

@@ -1,6 +1,5 @@
-/* style-tokens: pending */
 /* Usage dashboard chips */
-.quiet-chip { color: var(--text-2); background: var(--surface-2); border: 1px solid var(--line); padding: 4px 9px; border-radius: 99px; font-size: var(--fs-caption); white-space: nowrap; }
+.quiet-chip { color: var(--text-2); background: var(--surface-2); border: 1px solid var(--line); padding: var(--space-1) var(--space-2); border-radius: var(--radius-pill); font-size: var(--fs-caption); white-space: nowrap; }
 @media (max-width: 760px) {
   .quiet-chip { display: none; }
 }
