@@ -144,7 +144,7 @@ async function mock(initialTheme){
 }
 const failures=[];
 const captures=[];
-// Ignore content deliberately clipped by a horizontal scroll container (CLI tabs).
+// Ignore content deliberately clipped by a horizontal scroll or clipping container.
 // A visible element crossing the viewport still fails the same capture check.
 function findOverflow(){
  return [...document.querySelectorAll('main,section,article,input,textarea,select,button')].filter(el=>{
@@ -198,9 +198,14 @@ function countFirstScreen(){
   return rect.top>=top-1&&rect.left>=left-1&&rect.bottom<=bottom+1&&rect.right<=right+1;
  }).length;
 }
+// CLIs are chosen from the sidebar group 受管 CLI under 工具与连接; opening one lands on that page.
+function cliItem(page,name){return page.getByRole('navigation',{name:'页面'}).getByRole('group',{name:'受管 CLI'}).getByRole('button',{name,exact:true});}
+async function openCli(page,name){
+ await cliItem(page,name).click();
+ await page.getByRole('region',{name:'工具与连接'}).getByRole('heading',{level:2,name,exact:true}).waitFor();
+}
 async function captureSkillViews(page,capture){
- const region=page.getByRole('region',{name:'工具与连接'});
- await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
+ await openCli(page,'Codex');
  await page.getByRole('tab',{name:'Skill',exact:true}).click();
  const list=page.getByRole('region',{name:'Skill'});
  const article=()=>page.getByRole('article');
@@ -304,9 +309,8 @@ async function captureHistoryFeatures(){
    await capture('grok-no-usage','history','session without usage records / preserved readable message');
    if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
    await page.getByRole('textbox',{name:'搜索会话'}).fill('Token');
-   await page.locator('summary').filter({hasText:/^筛选/}).click();
-   await page.getByRole('checkbox',{name:'只看收藏'}).check();
-   await page.locator('summary').filter({hasText:/^筛选/}).click();
+   await page.getByRole('group',{name:'会话筛选'}).getByRole('button',{name:'只看收藏',exact:true}).click();
+   await expect(page.getByRole('group',{name:'会话筛选'}).getByRole('button',{name:'只看收藏',exact:true})).toHaveAttribute('aria-pressed','true');
    await page.getByRole('tab',{name:'用量',exact:true}).click();
    const overview=page.getByRole('region',{name:'用量概览'});
    await expect(overview).toContainText('1 条记录次数未知');
@@ -344,7 +348,7 @@ async function captureQoderHistoryFeatures(){
    await capture('qoder-history-detail','native transcript and original/billable credits');
    await page.getByRole('tab',{name:'用量',exact:true}).click();
    await expect(page.getByRole('region',{name:'用量概览'})).toContainText('未知');
-   await expect(page.getByRole('tab',{name:'Credits',exact:true})).toHaveAttribute('aria-selected','true');
+   await expect(page.getByRole('radio',{name:'Credits',exact:true})).toHaveAttribute('aria-checked','true');
    await capture('qoder-history-credits','credits trend with unknown tokens and no invented monetary cost');
    await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();
    await capture('qoder-history-groups','model tool project and session groups retain native units');
@@ -375,9 +379,12 @@ async function captureSessionReading(page,capture,width){
  await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();
  await capture('session-reading');
  if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
- await page.locator('summary').filter({hasText:/^筛选/}).click();
- await capture('session-filters');
- await page.getByRole('button',{name:'自定义',exact:true}).click();
+ // The filter bar is always visible above the list; capture the open 时间范围 menu instead.
+ await page.getByRole('group',{name:'会话筛选'}).getByRole('button',{name:'时间范围',exact:true}).click();
+ const ranges=page.getByRole('listbox',{name:'时间范围'});
+ await ranges.waitFor();
+ await capture('session-range-menu');
+ await ranges.getByRole('option',{name:'自定义',exact:true}).click();
  const calendar=page.getByRole('dialog',{name:'自定义时间范围'});
  await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(4).click();
  await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(11).click();
@@ -412,7 +419,7 @@ async function captureConnectionScreens(page,capture,width){
  const region=page.getByRole('region',{name:'工具与连接'});
  const profiles=region.getByLabel('配置列表');
  for(const name of ['Codex','Claude Code','Grok','Pi','OpenCode']){
-  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name,exact:true}).click();
+  await openCli(page,name);
   await region.getByRole('tab',{name:'配置',exact:true}).click();
   await profiles.waitFor();
   const slug=name.toLowerCase().replace(/\s+/g,'-');
@@ -439,10 +446,8 @@ async function captureConnectionScreens(page,capture,width){
 }
 async function captureMcpScreens(page,capture){
  const nav=page.getByRole('navigation',{name:'页面'});
- const region=page.getByRole('region',{name:'工具与连接'});
  await nav.getByRole('button',{name:'工具与连接'}).click();
- await region.getByRole('tablist',{name:'CLI'}).waitFor();
- await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
+ await openCli(page,'Codex');
  await page.getByRole('tab',{name:'MCP',exact:true}).click();
  const tool=page.getByRole('region',{name:'MCP 服务器'});
  await tool.getByRole('button',{name:/filesystem/}).first().waitFor();
@@ -503,7 +508,7 @@ async function captureMcpScreens(page,capture){
 }
 
 async function capturePluginScreens(page,capture){
- await page.getByRole('tab',{name:'Claude Code',exact:true}).click();
+ await openCli(page,'Claude Code');
  await page.getByRole('tab',{name:'插件',exact:true}).click();
  const list=page.getByRole('list',{name:'插件',exact:true});
  await list.getByRole('button',{name:/Code Review/}).waitFor();await capture('native-plugins');
@@ -544,9 +549,12 @@ async function capturePluginScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
- async function capture(name){await captureImage(page,name,theme,width);}
+ let lastCapture='(before home)';
+ async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
+ // A failed step is recorded with the last completed capture and the remaining widths/themes still run.
+ try{
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
@@ -585,15 +593,15 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'账号',exact:true}).click();await page.getByText('开发账号',{exact:true}).waitFor();await page.getByText('CLI 已登录',{exact:true}).waitFor();await capture('oauth-accounts');await page.getByRole('button',{name:'添加账号',exact:true}).click();await capture('oauth-add-account');
  const accountRow=page.getByRole('listitem').filter({has:page.getByText('开发账号',{exact:true})}).first();
  await accountRow.getByText('管理与关联',{exact:true}).click();await accountRow.getByText('更多账号操作',{exact:true}).click();await accountRow.getByRole('button',{name:'删除账号',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('account-delete-confirmation');await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
- await page.evaluate(()=>window.__captureNativeOnly=true);await page.getByRole('tab',{name:'OpenCode',exact:true}).click();await page.getByRole('tab',{name:'账号',exact:true}).click();await page.getByText(/还没有独立账号/).waitFor();await page.getByText('CLI 已登录',{exact:true}).first().waitFor();await capture('native-cli-login');
+ await page.evaluate(()=>window.__captureNativeOnly=true);await openCli(page,'OpenCode');await page.getByRole('tab',{name:'账号',exact:true}).click();await page.getByText(/还没有独立账号/).waitFor();await page.getByText('CLI 已登录',{exact:true}).first().waitFor();await capture('native-cli-login');
  await page.evaluate(()=>{window.__captureNativeOnly=false;window.__captureLoginPending=true;});await page.getByRole('button',{name:'打开授权页面',exact:true}).waitFor();await capture('oauth-browser-retry');await page.evaluate(()=>window.__captureLoginPending=false);
  await capturePluginScreens(page,capture);
  await page.getByRole('tab',{name:'Agents',exact:true}).click();await page.getByText('reviewer',{exact:true}).waitFor();await capture('native-agents');await page.getByRole('listitem').filter({has:page.getByText('reviewer',{exact:true})}).getByRole('button').click();await page.getByRole('region',{name:'Agent 定义预览'}).waitFor();await capture('agent-reading');await page.getByRole('article',{name:'reviewer'}).getByRole('button',{name:'编辑',exact:true}).click();await page.getByRole('textbox',{name:'原生 Agent 定义',exact:true}).waitFor();await capture('agent-editor');await page.getByRole('button',{name:'完成',exact:true}).click();
  const agentSearch=page.getByLabel('搜索 Agent 定义');if(!await agentSearch.isVisible())await page.getByRole('button',{name:'返回列表',exact:true}).click();
  await agentSearch.fill('missing-agent');await capture('agent-search-empty');await page.getByRole('button',{name:'清除筛选'}).click();await page.getByLabel('Agent 状态筛选').selectOption('readonly');await capture('agent-readonly-filter');await page.getByLabel('Agent 状态筛选').selectOption('all');
- await page.getByRole('tab',{name:'Grok',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'账号',exact:true}).count())throw new Error('Unsupported Grok accounts tab is visible');await capture('grok-capabilities');
- await page.getByRole('tab',{name:'Pi',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'Agents',exact:true}).count())throw new Error('Unsupported Pi agents tab is visible');await capture('pi-capabilities');
- await page.getByRole('tab',{name:'Codex',exact:true}).click();
+ await openCli(page,'Grok');await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'账号',exact:true}).count())throw new Error('Unsupported Grok accounts tab is visible');await capture('grok-capabilities');
+ await openCli(page,'Pi');await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'Agents',exact:true}).count())throw new Error('Unsupported Pi agents tab is visible');await capture('pi-capabilities');
+ await openCli(page,'Codex');
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
  await captureSkillViews(page,capture);
  await captureConnectionScreens(page,capture,width);
@@ -617,6 +625,11 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:/选择配置包文件/}).click();await page.getByRole('dialog').getByRole('button',{name:/backup\.cliora/}).waitFor();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.close();
+ }catch(error){
+  failures.push({type:'scenario',theme,width,after:lastCapture,message:error.message.split('\n')[0]});
+  console.error(`${theme}/${width} after ${lastCapture}: ${error.message.split('\n')[0]}`);
+  await page.close().catch(()=>{});
+ }
 }
 }
 if(workflowsOnly||fullCapture){
