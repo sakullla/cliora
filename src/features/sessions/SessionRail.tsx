@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent } from 'react';
 import { Icon } from '../../components/Icon';
+import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import type { WorkbenchSession } from '../../types/launch';
@@ -113,11 +114,11 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
         <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
       </button>
       <div className={styles.rowActions}>
-        <button type="button" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} onClick={(event) => {
+        <IconButton size="sm" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           onOpenMenu(session, rect.left, rect.bottom + 5);
-        }}><Icon name="more" size={16} /></button>
-        {!session.running && <button type="button" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)}><Icon name="close" size={12} /></button>}
+        }} />
+        {!session.running && <IconButton size="sm" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)} icon={<Icon name="close" size={12} />} />}
       </div>
     </div>;
   };
@@ -129,10 +130,10 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
         {!compact && !narrow && <span className={styles.railLive} title={t('sessions.summary', { running, ended })}><span className={styles.liveDot} data-live={running > 0 || undefined} aria-hidden="true" />{running > 0 ? t('sessions.runningCount', { count: running }) : t('sessions.railQuiet')}</span>}
         <span className={styles.railCompactLabel} aria-hidden="true"><Icon name="terminal" size={16} /></span>
         <span className={styles.railHeadActions}>
-          {!narrow && <button type="button" className={styles.railIconBtn} aria-label={compact ? t('sessions.railExpand') : t('sessions.railCollapse')} title={compact ? t('sessions.railExpand') : t('sessions.railCollapse')} onClick={onToggleSlim}><Icon name={compact ? 'sidebarOpen' : 'sidebarClose'} size={16} /></button>}
-          {canLaunch && <button type="button" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession}>
-            <Icon name="plus" size={14} /><span>{t('sessions.newSessionShort')}</span>
-          </button>}
+          {!narrow && <IconButton size="sm" className={styles.railIconBtn} aria-label={compact ? t('sessions.railExpand') : t('sessions.railCollapse')} onClick={onToggleSlim} icon={<Icon name={compact ? 'sidebarOpen' : 'sidebarClose'} size={16} />} />}
+          {canLaunch && <Button variant="primary" size="sm" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={14} />}>
+            <span className={styles.newSessionLabel}>{t('sessions.newSessionShort')}</span>
+          </Button>}
         </span>
       </div>
       {total > 1 && !compact && <div className={styles.railSearchField}>
@@ -152,12 +153,12 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
         {groups.length > 1 && <div className={styles.groupLabel} role="presentation"><span>{group.label}</span></div>}
         {group.items.map(renderSession)}
       </div>)}
-      {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.ghostButton} onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</button></div>}
+      {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><Button size="sm" onClick={() => { onFilter('all'); onSearch(''); }}>{t('sessions.clearFilter')}</Button></div>}
     </div>
 
     {ended > 0 && !compact && <div className={styles.railFoot}>
       <span className={styles.railSummary}>{t('sessions.summary', { running, ended })}</span>
-      <button type="button" className={styles.clearEndedBtn} disabled={busy} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEnded')}</span></button>
+      <Button variant="ghost" size="sm" className={styles.clearEndedBtn} disabled={busy} title={t('sessions.clearEndedTitle')} onClick={onClearEnded} icon={<Icon name="trash" size={12} />}>{t('sessions.clearEnded')}</Button>
     </div>}
   </aside>;
 }

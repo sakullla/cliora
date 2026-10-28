@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { Button, IconButton } from '../../components/ui';
 import { modLabel } from '../../lib/shortcut';
 import styles from './SessionWorkbench.module.css';
 
@@ -50,9 +51,9 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
   ];
 
   return <div className={styles.shortcuts} ref={root}>
-    <button ref={trigger} type="button" className={styles.statusButton} aria-expanded={open} aria-controls="workbench-shortcuts-panel" aria-label={t('sessions.shortcutsTitle')} title={t('sessions.shortcutsTitle')} onClick={onToggle}><Icon name="keyboard" size={14} /><span>{t('sessions.shortcutsShort')}</span></button>
+    <Button ref={trigger} variant="ghost" size="sm" className={styles.statusButton} aria-expanded={open} aria-controls="workbench-shortcuts-panel" aria-label={t('sessions.shortcutsTitle')} title={t('sessions.shortcutsTitle')} onClick={onToggle} icon={<Icon name="keyboard" size={14} />}>{t('sessions.shortcutsShort')}</Button>
     {open && <div className={styles.shortcutsPanel} id="workbench-shortcuts-panel" role="dialog" aria-label={t('sessions.shortcutsTitle')}>
-      <div className={styles.appearanceHead}><span><Icon name="keyboard" size={14} />{t('sessions.shortcutsTitle')}</span><button type="button" className={styles.iconBtn} aria-label={t('common.dialog.close')} onClick={onClose}><Icon name="close" size={14} /></button></div>
+      <div className={styles.appearanceHead}><span><Icon name="keyboard" size={14} />{t('sessions.shortcutsTitle')}</span><IconButton size="sm" className={styles.iconBtn} aria-label={t('common.dialog.close')} onClick={onClose} icon={<Icon name="close" size={14} />} /></div>
       <div className={styles.shortcutsBody}>
         {groups.map((group) => <section key={group.title} className={styles.shortcutsGroup}>
           <h3>{group.title}</h3>
