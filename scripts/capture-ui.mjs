@@ -14,6 +14,12 @@ const themes=themeOption==='all'?['light','dark']:[themeOption];
 const sizeOption=option('--size','all');
 const widths=sizeOption==='all'?[1360,900,640]:[...new Set(sizeOption.split(',').map(Number))];
 if(!widths.length||widths.some(width=>![1360,900,640].includes(width)))throw new Error('Invalid --size; use 1360,900,640');
+// --measure: count fully visible entries in main for each page scenario at 1360x1000 light (02 ADR-0).
+const measure=process.argv.includes('--measure');
+const measureViewport={width:1360,height:1000};
+const pageScenarioNames=new Set(['home','tools','oauth-accounts','native-plugins','native-agents','mcp','skills','library','library-rules','library-mcp','library-skills','sessions','usage','settings','migration']);
+const firstScreen={};
+if(measure&&(!themes.includes('light')||!widths.includes(measureViewport.width)))throw new Error('--measure needs the light theme and the 1360 width in the capture matrix');
 const onlyOption=option('--only','*');
 const patterns=onlyOption.split(',').map(pattern=>new RegExp('^'+pattern.split('').map(char=>char==='*'?'.*':char==='?'?'.':char.replace(/[\\^$+.[\]{}()|]/g,'\\$&')).join('')+'$'));
 const candidates=(process.argv.includes('--features')||process.argv.includes('--workflows'))&&!process.argv.includes('--only')?configurationScenarios.map(item=>item.name):scenarioNames;
@@ -162,7 +168,35 @@ async function captureImage(page,name,theme,width,metadata={}){
  captures.push({name,theme,width,height:page.viewportSize().height,path,file,category:'general_ui',state:name,...metadata});
  const over=await page.evaluate(findOverflow);
  if(over.length)failures.push({name,theme,width,over});
+ if(measure&&theme==='light'&&width===measureViewport.width&&pageScenarioNames.has(name)&&!(name in firstScreen)){
+  const previous=page.viewportSize();
+  const resize=previous.width!==measureViewport.width||previous.height!==measureViewport.height;
+  if(resize){await page.setViewportSize(measureViewport);await page.waitForTimeout(100);}
+  firstScreen[name]=await page.evaluate(countFirstScreen);
+  captures[captures.length-1].firstScreen=firstScreen[name];
+  if(resize)await page.setViewportSize(previous);
+ }
  console.log(path);
+}
+// Entries fully inside the viewport and every clipping ancestor; querySelectorAll deduplicates elements.
+function countFirstScreen(){
+ const main=document.querySelector('main');
+ if(!main)return 0;
+ return [...main.querySelectorAll('[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]')].filter(el=>{
+  if(!el.getClientRects().length)return false;
+  const style=getComputedStyle(el);
+  if(style.visibility==='hidden'||style.display==='none')return false;
+  const rect=el.getBoundingClientRect();
+  if(rect.width<=0||rect.height<=0)return false;
+  let top=0,left=0,bottom=innerHeight,right=innerWidth;
+  for(let parent=el.parentElement;parent&&parent!==document.documentElement;parent=parent.parentElement){
+   const parentStyle=getComputedStyle(parent);
+   if(['auto','scroll','hidden','clip'].includes(parentStyle.overflowX)||['auto','scroll','hidden','clip'].includes(parentStyle.overflowY)){
+    const box=parent.getBoundingClientRect();top=Math.max(top,box.top);left=Math.max(left,box.left);bottom=Math.min(bottom,box.bottom);right=Math.min(right,box.right);
+   }
+  }
+  return rect.top>=top-1&&rect.left>=left-1&&rect.bottom<=bottom+1&&rect.right<=right+1;
+ }).length;
 }
 async function captureSkillViews(page,capture){
  const region=page.getByRole('region',{name:'工具与连接'});
@@ -332,7 +366,7 @@ const ids=['scenario','theme','width','query'];const controls=ids.map(id=>docume
 </script></body></html>`);
  const rows=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`| ${title} | ${captures.filter(item=>item.name===name).map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
  fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
- fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
+ fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,...(measure?{firstScreen:{viewport:measureViewport,theme:'light',selector:'[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]',counts:firstScreen}}:{}),captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
 // Default full capture includes the screens that used to require --sessions, --connections, or --mcp.
