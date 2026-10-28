@@ -6,6 +6,7 @@ import type { PortableItem } from '../../types/portable';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { formatFailure } from '../../lib/feedback';
+import { Button, Card } from '../../components/ui';
 import styles from './Sync.module.css';
 import { MIN_PASSPHRASE, Notice, PassphraseField, useKindLabel } from './syncParts';
 import { WebdavSettings } from './WebdavSettings';
@@ -146,7 +147,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
     <div className={styles.layout}>
       <WebdavSettings active={active} editing={operation === 'webdav'} onEdit={setWebdavEditing} revision={syncRevision} />
       <aside className={styles.aside}>
-        <section className={styles.card} data-variant="backup" aria-label={t('settings.migration.cardTitle')}>
+        <Card role="region" className={` ${styles.backup}`} aria-label={t('settings.migration.cardTitle')}>
           <header className={styles.backupHead}>
             <span className={styles.backupGlyph} aria-hidden="true"><Icon name="archive" size={22} /></span>
             <div><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p></div>
@@ -172,7 +173,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
             <li><Icon name="lock" size={14} />{t('settings.migration.cardNote')}</li>
             <li><Icon name="info" size={14} />{t('settings.migration.cardLocal')}</li>
           </ul>
-        </section>
+        </Card>
       </aside>
     </div>
     <GuideDialog open={dialogOpen} title={operation === 'import' ? t('settings.migration.import') : t('settings.migration.export')} hint={operation === 'import' ? t('settings.migration.importHint') : t('settings.migration.exportHint')} onClose={closeBundle}>
@@ -189,8 +190,8 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
             onChange={setExportPassword} onEnter={() => void exportBundle()} />
           <div className={styles.callout} data-tone="warning"><Icon name="alert" size={16} /><span>{t('settings.migration.exportKeep')}</span></div>
           <div className={styles.dialogFoot}>
-            <button type="button" className="button" onClick={closeBundle}>{t('common.dialog.cancel')}</button>
-            <button type="button" className="button primary" data-dialog-save disabled={!nativeAvailable || busy || !exportReady} onClick={() => void exportBundle()}><Icon name="download" size={14} />{t('settings.migration.exportBundle')}</button>
+            <Button onClick={closeBundle}>{t('common.dialog.cancel')}</Button>
+            <Button variant="primary" data-dialog-save disabled={!nativeAvailable || busy || !exportReady} icon={<Icon name="download" size={14} />} onClick={() => void exportBundle()}>{t('settings.migration.exportBundle')}</Button>
           </div>
         </>}
       </div>}
@@ -207,8 +208,8 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
         <PassphraseField label={t('settings.migration.password')} value={importPassword} autoComplete="current-password" placeholder={t('settings.migration.importPasswordPlaceholder')} autoFocus
           onChange={setImportPassword} onEnter={() => void importBundle()} />
         <div className={styles.dialogFoot}>
-          <button type="button" className="button" onClick={closeBundle}>{t('common.dialog.cancel')}</button>
-          <button type="button" className="button primary" data-dialog-save disabled={!nativeAvailable || busy || !importPassword} onClick={() => void importBundle()}><Icon name="lock" size={14} />{busy ? t('settings.migration.restoring') : t('settings.migration.unlockRestore')}</button>
+          <Button onClick={closeBundle}>{t('common.dialog.cancel')}</Button>
+          <Button variant="primary" data-dialog-save disabled={!nativeAvailable || busy || !importPassword} icon={<Icon name="lock" size={14} />} onClick={() => void importBundle()}>{busy ? t('settings.migration.restoring') : t('settings.migration.unlockRestore')}</Button>
         </div>
       </div>}
     </GuideDialog>

@@ -8,6 +8,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { Icon, type IconName } from '../../components/Icon';
 import type { ConflictPreview, RestoreBlocker, SyncProgress, SyncStatus, SyncTransfer, WebdavSetup } from '../../types/portable';
 import type { Project } from '../../types/launch';
+import { Badge, Button, Card, StatusBadge, Switch } from '../../components/ui';
 import styles from './Sync.module.css';
 import { MIN_PASSPHRASE, Metric, Notice, PassphraseField, TextField, TransferList, endpointHost, relativeTime, useKindLabel } from './syncParts';
 
@@ -398,9 +399,9 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
       </div>
       {activity && metrics(activity)}
       {conflictCount > 0 && moved > 0 && <p className={styles.note}><Icon name="alert" size={14} />{t('settings.webdav.conflictsLeft', { count: conflictCount })}</p>}
-      {!!received.length && <div className={styles.group}><h3><span>{t('settings.webdav.receivedTitle')}</span><span className={styles.count}>{received.length}</span></h3><TransferList items={received} /></div>}
-      {!!sent.length && <div className={styles.group}><h3><span>{t('settings.webdav.uploadedTitle')}</span><span className={styles.count}>{sent.length}</span></h3><TransferList items={sent} /></div>}
-      <div className={styles.dialogFoot}><button type="button" className="button primary" data-dialog-save onClick={onClose}>{t('settings.webdav.progressClose')}</button></div>
+      {!!received.length && <div className={styles.group}><h3><span>{t('settings.webdav.receivedTitle')}</span><Badge>{received.length}</Badge></h3><TransferList items={received} /></div>}
+      {!!sent.length && <div className={styles.group}><h3><span>{t('settings.webdav.uploadedTitle')}</span><Badge>{sent.length}</Badge></h3><TransferList items={sent} /></div>}
+      <div className={styles.dialogFoot}><Button variant="primary" data-dialog-save onClick={onClose}>{t('settings.webdav.progressClose')}</Button></div>
     </div>;
   }
 
@@ -436,42 +437,40 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
   </span>;
 
   return <section className={styles.column} aria-label={t('settings.webdav.title')}>
-    {status?.configured ? <div className={styles.hero} data-tone={tone}>
+    {status?.configured ? <Card className={styles.hero} data-tone={tone}>
       <div className={styles.heroTop}>
         <span className={styles.glyph} data-tone={tone} aria-hidden="true"><Icon name="cloud" size={24} /><span className={styles.glyphDot} /></span>
         <div className={styles.heroCopy}>
-          <div className={styles.heroTitle}><h2>{t('settings.webdav.title')}</h2><span className={styles.pill} data-tone={tone}>{status.lastError ? t('settings.webdav.statusError') : status.enabled ? t('settings.webdav.syncOn') : t('settings.webdav.syncOff')}</span></div>
+          <div className={styles.heroTitle}><h2>{t('settings.webdav.title')}</h2><StatusBadge dot domain="sync" state={status.lastError ? 'error' : status.enabled ? 'on' : 'off'} /></div>
           <p className={styles.heroMeta}>
             <span className={styles.metaItem} title={last?.absolute}><Icon name="clock" size={14} />{last ? t('settings.webdav.lastSuccess', { time: last.text }) : t('settings.webdav.neverSynced')}</span>
             {host && <span className={styles.metaItem} title={t('settings.webdav.serverTitle')}><Icon name="globe" size={14} />{host}</span>}
           </p>
         </div>
-        <button type="button" role="switch" className={styles.switch} aria-checked={status.enabled} disabled={busy} onClick={() => void toggleEnabled()} title={t('settings.webdav.autoSyncHint')}>
-          <span className={styles.switchText}><strong>{t('settings.webdav.autoSync')}</strong><small>{t('settings.webdav.autoSyncHint')}</small></span>
-          <span className={styles.switchTrack} aria-hidden="true"><span /></span>
-        </button>
+        <Switch className={styles.autoSync} checked={status.enabled} disabled={busy} onChange={() => void toggleEnabled()} title={t('settings.webdav.autoSyncHint')}
+          label={<span className={styles.switchText}><strong>{t('settings.webdav.autoSync')}</strong><small>{t('settings.webdav.autoSyncHint')}</small></span>} />
       </div>
       {status.lastError && <div className={styles.heroError}>
         <Icon name="alert" size={16} />
         <span className={styles.heroErrorText}>{t('settings.webdav.connectionFailed', { error: status.lastError })}</span>
         <span className={styles.actions}>
-          <button className="button" type="button" disabled={busy} onClick={() => void syncNow()}><Icon name="refresh" size={14} />{t('settings.webdav.retry')}</button>
-          <button className="button" type="button" disabled={busy} onClick={() => onEdit(true)}>{t('settings.webdav.editConnection')}</button>
+          <Button disabled={busy} icon={<Icon name="refresh" size={14} />} onClick={() => void syncNow()}>{t('settings.webdav.retry')}</Button>
+          <Button disabled={busy} onClick={() => onEdit(true)}>{t('settings.webdav.editConnection')}</Button>
         </span>
       </div>}
       {!!status.pendingChanges && <p className={styles.heroNote}><Icon name="upload" size={14} />{t('settings.webdav.pendingUpload', { count: status.pendingChanges })}</p>}
       <div className={styles.heroFoot}>
         {readiness}
         {!status.lastError && <span className={styles.actions}>
-          <button className="button" type="button" disabled={busy} onClick={() => onEdit(true)}><Icon name="pencil" size={14} />{t('settings.webdav.editConnection')}</button>
-          <button className="button primary" type="button" disabled={busy} onClick={() => void syncNow()}><span className={styles.spin} data-active={syncing || undefined}><Icon name="refresh" size={14} /></span>{syncing ? t('settings.webdav.syncing') : t('settings.webdav.syncNow')}</button>
+          <Button disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => onEdit(true)}>{t('settings.webdav.editConnection')}</Button>
+          <Button variant="primary" disabled={busy} icon={<span className={styles.spin} data-active={syncing || undefined}><Icon name="refresh" size={14} /></span>} onClick={() => void syncNow()}>{syncing ? t('settings.webdav.syncing') : t('settings.webdav.syncNow')}</Button>
         </span>}
       </div>
-    </div> : <div className={styles.hero} data-tone="idle" data-intro="">
+    </Card> : <Card className={styles.hero} data-tone="idle" data-intro="">
       <div className={styles.heroTop}>
         <span className={styles.glyph} data-tone="idle" aria-hidden="true"><Icon name="cloud" size={24} /></span>
         <div className={styles.heroCopy}>
-          <div className={styles.heroTitle}><h2>{t('settings.webdav.title')}</h2><span className={styles.pill} data-tone="idle">{t('settings.webdav.notConnected')}</span></div>
+          <div className={styles.heroTitle}><h2>{t('settings.webdav.title')}</h2><StatusBadge dot domain="sync" state="not_connected" /></div>
           <p className={styles.heroLead}>{t('settings.webdav.description')}</p>
         </div>
       </div>
@@ -482,60 +481,60 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
       </ul>
       <div className={styles.heroFoot}>
         {itemIssues ? readiness : <small className={styles.footHint}>{t('settings.webdav.notConnectedHint')}</small>}
-        <span className={styles.actions}><button className="button primary" type="button" onClick={() => onEdit(true)}><Icon name="link" size={14} />{t('settings.webdav.configure')}</button></span>
+        <span className={styles.actions}><Button variant="primary" icon={<Icon name="link" size={14} />} onClick={() => onEdit(true)}>{t('settings.webdav.configure')}</Button></span>
       </div>
-    </div>}
+    </Card>}
 
     {error && <Notice tone="error" onDismiss={() => setError('')}>{error}</Notice>}
     {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
 
-    {itemIssues && <div className={styles.card} data-tone="warning">
+    {itemIssues && <Card className={styles.card} data-tone="warning">
       <header className={styles.cardHead}>
         <span className={styles.cardIcon} data-tone="warning" aria-hidden="true"><Icon name="alert" size={16} /></span>
-        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><span className={styles.count}>{issueCount}</span></h3><p>{t('settings.webdav.actionsHint')}</p></div>
+        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><Badge tone="warning">{issueCount}</Badge></h3><p>{t('settings.webdav.actionsHint')}</p></div>
       </header>
       <ul className={styles.issues}>
         {missingProjects.map((project) => <li className={styles.issue} key={project.id}>
           <span className={styles.issueIcon} aria-hidden="true"><Icon name="folder" size={16} /></span>
-          <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{project.name}</strong><span className={styles.tag}>{t('settings.webdav.tagDirectory')}</span></span><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small></span>
-          <button className="button" type="button" disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</button>
+          <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{project.name}</strong><Badge>{t('settings.webdav.tagDirectory')}</Badge></span><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small></span>
+          <Button disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</Button>
         </li>)}
         {blockers.map((blocker) => {
           const chosen = !!selectedDirectory(blocker.detail);
           return <li className={styles.issue} key={blocker.key}>
             <span className={styles.issueIcon} aria-hidden="true"><Icon name={itemIcon(blocker.action, chosen)} size={16} /></span>
-            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{blocker.label}</strong><span className={styles.tag}>{blockerTag(blocker.action, chosen)}</span></span><small>{blockerDetail(blocker.detail)}</small></span>
-            <button className="button" type="button" disabled={busy} onClick={() => void runBlocker(blocker)}>{chosen ? t('settings.webdav.writeChosenDirectory') : blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</button>
+            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{blocker.label}</strong><Badge>{blockerTag(blocker.action, chosen)}</Badge></span><small>{blockerDetail(blocker.detail)}</small></span>
+            <Button disabled={busy} onClick={() => void runBlocker(blocker)}>{chosen ? t('settings.webdav.writeChosenDirectory') : blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</Button>
           </li>;
         })}
         {conflicts.map((conflict) => {
           const preview = previews[conflict.key];
           return <li className={styles.issue} key={conflict.key} data-open={preview ? '' : undefined}>
             <span className={styles.issueIcon} data-tone="conflict" aria-hidden="true"><Icon name="copy" size={16} /></span>
-            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{conflict.label}</strong><span className={styles.tag} data-tone="conflict">{t('settings.webdav.tagConflict')}</span></span><small>{t('settings.webdav.conflictsHint')} {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small></span>
-            {!preview && <button className="button" type="button" disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.chooseConflict')}</button>}
+            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{conflict.label}</strong><Badge tone="warning">{t('settings.webdav.tagConflict')}</Badge></span><small>{t('settings.webdav.conflictsHint')} {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small></span>
+            {!preview && <Button disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.chooseConflict')}</Button>}
             {preview && <div className={styles.compare}>
               <div className={styles.version} data-side="local">
                 <span className={styles.versionHead}><Icon name="monitor" size={14} />{t('settings.webdav.local')}</span>
                 <pre>{preview.localSummary}</pre>
-                <button className="button" type="button" disabled={busy} onClick={() => void resolve(conflict.key, null, false)}>{t('settings.webdav.keepLocal')}</button>
+                <Button disabled={busy} onClick={() => void resolve(conflict.key, null, false)}>{t('settings.webdav.keepLocal')}</Button>
               </div>
               {preview.versions.map((version) => <div className={styles.version} data-side="remote" data-deleted={version.deleted || undefined} key={version.id}>
                 <span className={styles.versionHead}><Icon name="cloud" size={14} />{t('settings.webdav.remoteVersion', { id: version.id.slice(0, 8) })}</span>
                 <pre>{version.summary}</pre>
-                <button className={version.deleted ? 'button' : 'button primary'} type="button" disabled={busy} onClick={() => void resolve(conflict.key, version.id, version.deleted)}>{version.deleted ? t('settings.webdav.acceptDelete') : t('settings.webdav.useRemote')}</button>
+                <Button disabled={busy} onClick={() => void resolve(conflict.key, version.id, version.deleted)}>{version.deleted ? t('settings.webdav.acceptDelete') : t('settings.webdav.useRemote')}</Button>
               </div>)}
             </div>}
           </li>;
         })}
       </ul>
-    </div>}
+    </Card>}
 
-    {status?.configured && <div className={styles.card}>
+    {status?.configured && <Card className={styles.card}>
       <header className={styles.cardHead}>
         <span className={styles.cardIcon} aria-hidden="true"><Icon name="records" size={16} /></span>
         <div><h3>{t('settings.webdav.activityTitle')}</h3>{receiptAt && <p title={receiptAt.absolute}>{receiptAt.text}</p>}</div>
-        {activity && (hiddenTransfers > 0 || activity.transfers.length > 0) && <button className="text-button" type="button" onClick={() => setReceiptOpen(true)}>{hiddenTransfers > 0 ? t('settings.webdav.moreTransfers', { count: hiddenTransfers }) : t('settings.webdav.viewReceipt')}<Icon name="chevronRight" size={14} /></button>}
+        {activity && (hiddenTransfers > 0 || activity.transfers.length > 0) && <Button variant="ghost" size="sm" onClick={() => setReceiptOpen(true)}>{hiddenTransfers > 0 ? t('settings.webdav.moreTransfers', { count: hiddenTransfers }) : t('settings.webdav.viewReceipt')}<Icon name="chevronRight" size={14} /></Button>}
       </header>
       {activitySummary && activity ? <div className={styles.activity}>
         <div><p className={styles.headline}>{activitySummary.headline}</p><p className={styles.detail}>{activitySummary.detail}</p></div>
@@ -546,7 +545,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         <p className={styles.headline}>{status.lastSuccess ? t('settings.webdav.noReceipt') : t('settings.webdav.noActivity')}</p>
         <p className={styles.detail}>{status.lastSuccess ? t('settings.webdav.noReceiptDetail') : t('settings.webdav.noActivityDetail')}</p>
       </div>}
-    </div>}
+    </Card>}
 
     <GuideDialog open={!!run?.open} title={run?.running ? t('settings.webdav.progressTitle') : t('settings.webdav.progressDoneTitle')} onClose={closeRun}>
       {run && run.running && <div className={`sync-dialog sync-activity ${styles.dialogBody}`}>
@@ -579,8 +578,8 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
           onChange={(value) => setSetup({ ...setup, authPassword: value, encryptionPassword: '', previousEncryptionPassword: '' })} />
         <div className={styles.callout}><Icon name="shield" size={16} /><span>{t('settings.webdav.securityNote')}</span></div>
         <div className={styles.dialogFoot}>
-          <button type="button" className="button" disabled={busy} onClick={() => onEdit(false)}>{t('common.dialog.cancel')}</button>
-          <button type="submit" className="button primary" data-dialog-save disabled={!canSave}>{busy ? t('settings.webdav.verifying') : t('settings.webdav.save')}</button>
+          <Button disabled={busy} onClick={() => onEdit(false)}>{t('common.dialog.cancel')}</Button>
+          <Button type="submit" variant="primary" data-dialog-save disabled={!canSave}>{busy ? t('settings.webdav.verifying') : t('settings.webdav.save')}</Button>
         </div>
       </form>
     </GuideDialog>

@@ -1,4 +1,8 @@
 export default {
+  sections: {
+    label: '本页目录',
+    other: '其它',
+  },
   tabs: {
     label: '设置分类',
     general: '常规',
