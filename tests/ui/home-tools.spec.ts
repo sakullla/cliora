@@ -189,9 +189,10 @@ test('the launch directory is remembered, and right-click picks another', async 
   expect(requests).toHaveLength(3);
   expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else' });
 
-  const dirMenu = tools.getByRole('button', { name: '启动目录' });
+  const dirMenu = tools.getByRole('button', { name: 'Codex 的更多操作' });
   await dirMenu.click();
-  const menu = page.getByRole('menu', { name: '启动目录' });
+  const menu = page.getByRole('menu', { name: 'Codex 的更多操作' });
+  await expect(menu.getByRole('menuitem', { name: '编辑配置' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '选择其他目录…' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '清除记住的目录' })).toBeVisible();
   await menu.getByRole('menuitem', { name: '选择其他目录…' }).click();
@@ -203,7 +204,7 @@ test('the launch directory is remembered, and right-click picks another', async 
   expect(requests[3]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'E:/menu' });
 
   await dirMenu.click();
-  await page.getByRole('menu', { name: '启动目录' }).getByRole('menuitem', { name: '清除记住的目录' }).click();
+  await page.getByRole('menu', { name: 'Codex 的更多操作' }).getByRole('menuitem', { name: '清除记住的目录' }).click();
   await launch.click();
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog(null));
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
@@ -399,6 +400,117 @@ test('a project tool is searched and switched from the card', async ({ page }) =
   await list.getByRole('option', { name: 'Grok' }).click();
   await expect(trigger).toContainText('Grok');
   expect(await page.evaluate(() => (window as unknown as { __toolCalls: unknown[] }).__toolCalls)).toEqual([{ projectId: 'demo', toolId: 'grok' }]);
+});
+
+/** Two tools that differ in YOLO support; the project default mode is YOLO, so the mode follows the launched tool. */
+async function installSplitLaunch(page: Page, options: { remote?: boolean } = {}) {
+  await page.addInitScript((remote: boolean) => {
+    const host = { id: 'host-1', name: '测试主机', host: '10.0.0.2', port: 22, user: 'dev', authMethod: 'key', identityFile: null, sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: 1, updatedAt: 1 };
+    if (remote) localStorage.setItem('cliora:remote-target', host.id);
+    else localStorage.removeItem('cliora:remote-target');
+    const names: Record<string, string> = { codex: 'Codex', grok: 'Grok' };
+    const ids = Object.keys(names);
+    let preferred = 'codex';
+    const project = () => ({ id: 'demo', name: 'Demo', path: 'C:/demo', available: true, preferredTool: preferred, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} });
+    const calls: Array<[string, unknown]> = [];
+    const state = { failSave: false };
+    Object.assign(window, {
+      isTauri: true,
+      __calls: calls,
+      __split: state,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'light', remote_ssh_enabled: remote }, tools: ids.map((id) => ({ id, name: names[id] })) };
+        if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: names[id], interfaceFormats: [], launchForm: 'terminal', yoloAvailable: id === 'grok' })), managedIds: ids, preservedUnknown: [] };
+        if (command === 'list_projects') return [project()];
+        if (command === 'list_remote_targets') return [host];
+        if (command === 'list_remote_projects') return [{ id: 'rp', targetId: host.id, name: '远程仓库', path: '/srv/repo', preferredTool: 'codex', updatedAt: 1 }];
+        if (command === 'probe_remote_clis') return (args.toolIds as string[]).map((toolId) => ({ targetId: host.id, toolId, executable: toolId, installed: true, version: '1.0.0', detail: null }));
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: `C:/${args.toolId}.cmd`, installations: [{ path: `C:/${args.toolId}.cmd`, version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'yolo' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'set_project_tool') {
+          calls.push([command, args]);
+          if (state.failSave) throw { message: '项目文件被占用' };
+          preferred = args.toolId;
+          return project();
+        }
+        if (command === 'launch_cli') {
+          calls.push([command, args.request]);
+          return { mode: args.request.mode, status: 'terminal_requested', toolId: args.request.toolId, projectId: args.request.projectId, terminal: 'auto' };
+        }
+        if (command.startsWith('list_')) return [];
+        return null;
+      } },
+    });
+  }, options.remote ?? false);
+}
+
+const splitCalls = (page: Page) => page.evaluate(() => (window as unknown as { __calls: Array<[string, unknown]> }).__calls);
+
+test('the project launch menu saves another tool, then launches it with that tool\'s mode', async ({ page }) => {
+  await installSplitLaunch(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="demo"]');
+  await expect(card.locator('[data-variant="primary"]')).toHaveCount(1);
+  const launch = card.getByRole('button', { name: '启动', exact: true });
+  await expect(launch).toHaveAttribute('data-variant', 'primary');
+  const menuButton = card.getByRole('button', { name: '用其他工具启动 Demo' });
+  await menuButton.click();
+  const menu = page.getByRole('menu', { name: '用其他工具启动 Demo' });
+  await expect(menu.getByRole('menuitem')).toHaveText([/Codex/, /Grok/]);
+  await expect(menu.getByRole('menuitem', { name: /Codex/ })).toHaveAttribute('aria-current', 'true');
+  await expect(menu).not.toContainText('工作台');
+  await menu.getByRole('menuitem', { name: /Grok/ }).click();
+  await expect(card.getByRole('button', { name: 'Demo 的工具' })).toContainText('Grok');
+  await expect(page.getByRole('region', { name: '项目与启动' }).getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
+  expect(await splitCalls(page)).toEqual([
+    ['set_project_tool', { projectId: 'demo', toolId: 'grok' }],
+    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
+  ]);
+
+  // The primary half keeps launching the project's (now saved) tool; Codex has no YOLO, so it runs normally.
+  await launch.click();
+  await menuButton.click();
+  await page.getByRole('menu', { name: '用其他工具启动 Demo' }).getByRole('menuitem', { name: /Codex/ }).click();
+  const calls = await splitCalls(page);
+  expect(calls.slice(2)).toEqual([
+    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
+    ['set_project_tool', { projectId: 'demo', toolId: 'codex' }],
+    ['launch_cli', { toolId: 'codex', projectId: 'demo', sessionId: null, mode: 'normal', directory: null }],
+  ]);
+});
+
+test('a failed tool save from the launch menu shows the page error and does not launch', async ({ page }) => {
+  await installSplitLaunch(page);
+  await page.goto('/');
+  await page.evaluate(() => { (window as unknown as { __split: { failSave: boolean } }).__split.failSave = true; });
+  const projects = page.getByRole('region', { name: '项目与启动' });
+  const card = projects.locator('[data-project-id="demo"]');
+  await card.getByRole('button', { name: '用其他工具启动 Demo' }).click();
+  await page.getByRole('menu', { name: '用其他工具启动 Demo' }).getByRole('menuitem', { name: /Grok/ }).click();
+  const alert = projects.getByRole('alert');
+  await expect(alert).toContainText('项目文件被占用');
+  await expect(projects.getByRole('status')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Demo 的工具' })).toContainText('Codex');
+  await expect(card.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  expect(await splitCalls(page)).toEqual([['set_project_tool', { projectId: 'demo', toolId: 'grok' }]]);
+});
+
+test('a remote project launches another tool from the menu without saving it', async ({ page }) => {
+  await installSplitLaunch(page, { remote: true });
+  await page.goto('/');
+  const projects = page.getByRole('region', { name: '项目与启动' });
+  const card = projects.locator('[data-project-id="remote:rp"]');
+  await expect(card).toContainText('远程仓库');
+  await expect(projects.locator('[data-project-id="demo"]')).toHaveCount(0);
+  await expect(card.locator('[data-variant="primary"]')).toHaveCount(1);
+  await card.getByRole('button', { name: '用其他工具启动 远程仓库' }).click();
+  await page.getByRole('menu', { name: '用其他工具启动 远程仓库' }).getByRole('menuitem', { name: /Grok/ }).click();
+  await expect(card.getByRole('button', { name: '远程仓库 的工具' })).toContainText('Grok');
+  await expect.poll(() => splitCalls(page)).toEqual([
+    ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null }],
+  ]);
 });
 
 test('detection failure names the tool and points at edit or reread', async ({ page }) => {
@@ -686,7 +798,12 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
       expect(item.sessionId).toBeNull();
       expect(item.mode).toBe('normal');
     }
-    await expect(row(name).getByRole('button', { name: '启动目录' })).toHaveCount(0);
+    // Desktop tools have no launch directory; their row menu only keeps the edit entry.
+    await row(name).getByRole('button', { name: `${name} 的更多操作` }).click();
+    const rowMenu = page.getByRole('menu', { name: `${name} 的更多操作` });
+    await expect(rowMenu.getByRole('menuitem')).toHaveText(['编辑配置']);
+    await page.keyboard.press('Escape');
+    await expect(rowMenu).toHaveCount(0);
     await expect(row(name)).not.toContainText('选择其他目录');
     await expect(row(name)).not.toContainText('清除记住的目录');
   }
@@ -697,13 +814,13 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   const cursor = row('Cursor');
   await expect(cursor.getByRole('button', { name: '重新检测', exact: true })).toBeVisible();
   await expect(cursor.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
-  await expect(cursor.getByRole('button', { name: '启动目录' })).toHaveCount(0);
+  await expect(cursor.getByRole('button', { name: 'Cursor 的更多操作' })).toHaveCount(0);
   await expect(cursor).not.toContainText('选择其他目录');
   await expect(cursor).not.toContainText('清除记住的目录');
 
   const codex = row('Codex');
-  await expect(codex.getByRole('button', { name: '启动目录' })).toBeVisible();
-  await codex.getByRole('button', { name: '启动目录' }).click();
+  await expect(codex.getByRole('button', { name: 'Codex 的更多操作' })).toBeVisible();
+  await codex.getByRole('button', { name: 'Codex 的更多操作' }).click();
   await expect(page.getByRole('menuitem', { name: '选择其他目录…' })).toBeVisible();
   await page.keyboard.press('Escape');
   await codex.getByRole('button', { name: '启动', exact: true }).click();
@@ -732,7 +849,9 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
 
   await cursor.getByRole('button', { name: '去安装 →', exact: true }).click();
   const workspace = page.getByRole('region', { name: '工具与连接' });
-  await expect(workspace.getByRole('tab', { name: 'Cursor', selected: true })).toBeVisible();
+  const cliList = page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' });
+  await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
+  await expect(cliList.getByRole('button', { name: 'Cursor', exact: true })).toHaveAttribute('aria-current', 'true');
   const guide = workspace.getByRole('link', { name: '官方安装说明 ↗' });
   await expect(guide).toBeVisible();
   await expect(guide).toHaveAttribute('href', /cursor\.com/);
@@ -740,7 +859,8 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await expect(workspace.getByRole('button', { name: '安装 npm' })).toHaveCount(0);
   await expect(workspace).not.toContainText('npm');
   await expect(workspace).not.toContainText('agent');
-  await workspace.getByRole('tab', { name: 'ZCode' }).click();
+  await cliList.getByRole('button', { name: 'ZCode', exact: true }).click();
+  await expect(workspace.getByRole('heading', { level: 2, name: 'ZCode' })).toBeVisible();
   const toolLaunch = workspace.getByRole('button', { name: '启动', exact: true });
   await expect(toolLaunch).toHaveAttribute('title', '直接启动已安装的 ZCode，不选择目录');
   const beforeTool = await dialogs();
@@ -757,7 +877,8 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await launchDirect('Cursor', 'cursor');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await workspace.getByRole('tab', { name: 'Cursor' }).click();
+  await cliList.getByRole('button', { name: 'Cursor', exact: true }).click();
+  await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
   const cursorLaunch = workspace.getByRole('button', { name: '启动', exact: true });
   await expect(cursorLaunch).toHaveAttribute('title', '直接启动已安装的 Cursor，不选择目录');
   const beforeCursor = await dialogs();

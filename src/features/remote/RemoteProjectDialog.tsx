@@ -6,6 +6,7 @@ import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { GuideDialog } from '../../components/GuideDialog';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
+import { Button } from '../../components/ui';
 import styles from './RemoteProjectDialog.module.css';
 
 export function RemoteProjectDialog({
@@ -128,19 +129,19 @@ export function RemoteProjectDialog({
         <label className={styles.field}><span>{t('home.remote.target')}</span><select value={targetId} onChange={(event) => chooseTarget(event.target.value)}><option value="">{t('home.remote.pickTarget')}</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.user}@{item.host}</option>)}</select></label>
         {target && <div className={styles.targetMeta}><Icon name="globe" size={14} /><span>{target.user}@{target.host}:{target.port}</span><span>{target.defaultPath || '/'}</span></div>}
         <div className={styles.directoryCard}>
-          <div className={styles.cardHeader}><div><strong>{t('home.remote.directoryTitle')}</strong><small>{t('home.remote.directoryHint')}</small></div><button type="button" className="text-button" disabled={!targetId || busy !== ''} onClick={() => void refreshDirectories()}><Icon name="refresh" size={14} />{t('home.remote.refreshDirectories')}</button></div>
+          <div className={styles.cardHeader}><div><strong>{t('home.remote.directoryTitle')}</strong><small>{t('home.remote.directoryHint')}</small></div><Button size="sm" variant="ghost" icon={<Icon name="refresh" size={14} />} disabled={!targetId || busy !== ''} onClick={() => void refreshDirectories()}>{t('home.remote.refreshDirectories')}</Button></div>
           <div className={styles.directoryRow}>
             <label className={styles.field}><span>{t('home.remote.savedDirectory')}</span><select value="" onChange={(event) => chooseExisting(event.target.value)} disabled={!targetId || busy !== ''}><option value="">{directories.length || targetProjects.length ? t('home.remote.chooseDirectory') : t('home.remote.noDirectories')}</option>{directories.map((item) => <option key={item} value={item}>{item}</option>)}{targetProjects.map((item) => <option key={`saved:${item.id}`} value={item.path}>{item.path} · {t('home.remote.saved')}</option>)}</select></label>
             <label className={styles.field}><span>{t('home.remote.path')}</span><input value={path} onChange={(event) => setPath(event.target.value)} placeholder={t('home.remote.pathPlaceholder')} /></label>
           </div>
           {target?.authMethod === 'password' && <small className={styles.fieldHint}>{t('home.remote.passwordDirectoryHint')}</small>}
-          <button type="button" className="text-button" disabled={!targetId || !path.trim() || busy !== '' || target?.authMethod === 'password'} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</button>
+          <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== '' || target?.authMethod === 'password'} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
         </div>
         <div className={styles.grid}>
           <label className={styles.field}><span>{t('home.remote.name')}</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('home.remote.namePlaceholder')} /></label>
           <label className={styles.field}><span>{t('home.remote.tool')}</span><select value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">{t('home.remote.chooseLater')}</option>{toolOptionsList.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
-        <div className={styles.actions}><button type="button" className="button" onClick={onClose}>{t('common.dialog.cancel')}</button><button type="button" className="button primary" disabled={!targetId || !path.trim() || busy !== ''} onClick={() => void save()}>{busy === 'save' ? t('home.remote.saving') : t('home.remote.save')}</button></div>
+        <div className={styles.actions}><Button onClick={onClose}>{t('common.dialog.cancel')}</Button><Button variant="primary" loading={busy === 'save'} disabled={!targetId || !path.trim() || busy !== ''} onClick={() => void save()}>{busy === 'save' ? t('home.remote.saving') : t('home.remote.save')}</Button></div>
       </>}
     </div>
   </GuideDialog>;

@@ -1,24 +1,23 @@
-/* style-tokens: pending */
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;
-  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) repeat(3, auto);
+  grid-template-columns: minmax(170px, 230px) minmax(0, 1fr) repeat(3, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;
   border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
 }
+/* Compact rows: one line at --row-h unless a notice or a narrow layout adds a second. */
 .row {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
   align-items: center;
-  gap: 16px;
-  min-height: 68px;
-  padding: 12px 16px 12px 18px;
+  gap: var(--space-1) var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
   border-top: 1px solid var(--line);
   transition: background-color var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) both;
@@ -28,61 +27,33 @@
 .row:nth-child(4) { animation-delay: 90ms; }
 .row:nth-child(5) { animation-delay: 120ms; }
 .row:first-child { border-top: 0; }
-.row:hover, .row:focus-within { background: color-mix(in srgb, var(--surface-2) 80%, var(--surface)); }
+.row:hover, .row:focus-within { background: var(--surface-2); }
 
-.name { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.name > span:last-child { display: grid; gap: 3px; min-width: 0; }
-.name strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: -.1px; text-overflow: ellipsis; white-space: nowrap; }
-
-.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.status::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--text-3); }
-.status[data-state="ok"]::before { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent); }
-.status[data-state="warn"]::before { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
-.status[data-state="error"] { color: var(--danger); }
-.status[data-state="error"]::before { background: var(--danger); }
-.status[data-state="loading"]::before { animation: pulse 1.2s ease-in-out infinite; }
+.name { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
+.name strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.status { flex: none; max-width: 112px; }
+.status[data-status="managedTool.loading"] > span:first-child { animation: pulse 1.2s ease-in-out infinite; }
 
 .switch { min-width: 0; }
-.switch > small { color: var(--text-2); font-size: var(--fs-caption); }
 .loadingBar {
   display: block;
   width: min(180px, 100%);
-  height: 12px;
-  border-radius: 99px;
+  height: var(--space-3);
+  border-radius: var(--radius-pill);
   background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 40%, var(--surface-2) 80%) 0 0 / 300% 100%;
   animation: shimmer 1.4s linear infinite;
 }
 /* Profiles stay on one line; extra chips scroll sideways instead of stacking the row taller. */
-.switch > div[role="radiogroup"] { display: flex; flex-wrap: nowrap; gap: 4px; width: fit-content; max-width: 100%; padding: 3px; overflow-x: auto; border-radius: 99px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); scrollbar-width: none; }
+.switch > div[role="radiogroup"] { display: flex; flex-wrap: nowrap; gap: var(--space-0_5); width: fit-content; max-width: 100%; padding: var(--space-0_5); overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); scrollbar-width: none; }
 .switch > div[role="radiogroup"]::-webkit-scrollbar { display: none; }
-.switcher {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-}
-.step {
-  flex: none;
-  width: var(--control-h-sm);
-  min-height: var(--control-h-sm);
-  padding: 0;
-  border-radius: var(--radius-sm);
-  box-shadow: none;
-  color: var(--text-2);
-}
-.step:hover:not(:disabled) { color: var(--text); }
-.step:disabled { opacity: .5; }
-.switchSelect { flex: 1; min-width: 120px; }
-
 .switch > div[role="radiogroup"] > button {
   flex: none;
   max-width: 220px;
-  min-height: 26px;
-  padding: 0 11px;
+  min-height: var(--space-6);
+  padding: 0 var(--space-2_5);
   overflow: hidden;
-  border: 0;
-  border-radius: 99px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-2);
   font-size: var(--fs-caption);
@@ -90,28 +61,32 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   box-shadow: none;
-  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+  transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.switch > div[role="radiogroup"] > button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); box-shadow: none; }
-.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), 0 0 0 1px var(--line); }
-.modelHint { margin-left: 6px; color: var(--text-3); font-style: normal; font-size: var(--fs-micro); font-weight: var(--fw-medium); font-family: var(--font-mono); }
-.activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.switch > div[role="radiogroup"] > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); box-shadow: none; }
+.switch > div[role="radiogroup"] > button.activeConfig,
+.switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--line); background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
+.switch > div[role="radiogroup"] > button:focus-visible { outline-offset: -2px; }
+.modelHint { margin-left: var(--space-1_5); color: var(--text-3); font-style: normal; font-size: var(--fs-micro); font-weight: var(--fw-medium); font-family: var(--font-mono); }
+.activeConfig::before { content: ''; display: inline-block; width: var(--space-1_5); height: var(--space-1_5); margin-right: var(--space-1_5); border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 
-.addConfig { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--text-2); }
-.addConfig:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.switcher { display: flex; align-items: stretch; gap: var(--space-1); width: 100%; min-width: 0; }
+.step { flex: none; }
+.switchSelect { flex: 1; min-width: 120px; }
 
-.rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: 6px; }
+.switch .addConfig { border: 1px dashed var(--line-strong); }
+.switch .addConfig:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+.rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: var(--space-1_5); }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
-.rowActions > .configure { grid-column: 3; }
-.rowActions > button { min-height: var(--control-h-sm); }
-/* Five identical solid buttons compete with each other. Launch stays tinted at rest and fills in
-   for the row under the pointer or keyboard focus, so the active row reads as the next action. */
-.rowActions .launch { min-width: 0; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
-.row:hover .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent); }
-.row:focus-within .rowActions .launch:not(:disabled) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rowActions .launch:hover:not(:disabled), .row .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: var(--on-accent); }
-.rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
-.rowActions .configure:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.rowActions > .configure { grid-column: 2; }
+.rowActions > .menu { grid-column: 3; }
+/* Launch is tinted at rest and fills in for the row under the pointer or keyboard focus, so the
+   active row reads as the next action without a column of competing solid buttons. */
+.rowActions > .launch:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
+.row:hover .rowActions > .launch:not(:disabled),
+.row:focus-within .rowActions > .launch:not(:disabled),
+.rowActions > .launch:hover:not(:disabled) { border-color: var(--accent-border); background: var(--accent); color: var(--on-accent); }
 
 .note {
   grid-column: 1 / -1;
@@ -119,8 +94,9 @@
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
-  padding: 5px 11px;
-  border-radius: 99px;
+  margin-bottom: var(--space-1);
+  padding: var(--space-1) var(--space-2_5);
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
   font-size: var(--fs-caption);
@@ -130,22 +106,22 @@
   text-overflow: ellipsis;
   animation: reveal var(--medium) var(--ease);
 }
-.note[data-tone="ok"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.note[data-tone="ok"] { background: var(--success-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--success); }
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
-.empty { padding: 32px 18px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
+.empty { padding: var(--space-8) var(--space-4); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 
 @keyframes pulse { 50% { opacity: .3; } }
 
 /* Narrow list: profiles move to their own line, while the actions keep sharing the list's
    subgrid so every launch button still lands in the same column. `.list` resolves this query
    against the home column container; its rows resolve it against the list itself. */
-@container (max-width: 640px) {
+@container (max-width: 560px) {
   .list { grid-template-columns: minmax(0, 1fr) repeat(3, auto); }
-  .row { row-gap: 10px; padding: 14px; }
+  .row { row-gap: var(--space-2); padding: var(--space-2_5) var(--space-3); }
   .name { grid-column: 1; grid-row: 1; }
-  .switch { grid-column: 1 / -1; grid-row: 2; padding-left: 46px; }
+  .switch { grid-column: 1 / -1; grid-row: 2; padding-left: calc(var(--space-6) + var(--space-2_5)); }
   .rowActions { grid-column: 2 / -1; grid-row: 1; }
   .note { grid-row: 3; }
 }

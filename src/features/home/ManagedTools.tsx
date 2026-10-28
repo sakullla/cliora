@@ -15,6 +15,8 @@ import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
+import { Badge, Button, IconButton, StatusBadge } from '../../components/ui';
+import { statusTone } from '../../lib/statusTone';
 import { displayPath } from '../../lib/paths';
 import { launchFailureDetail } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
@@ -109,9 +111,9 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   }
 
   return <div className={styles.switcher}>
-    <button type="button" className={styles.step} aria-label={t('home.tools.prevProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.prevProfileTitle')} onClick={() => move(-1)}><StepGlyph direction="left" /></button>
+    <IconButton size="sm" className={styles.step} aria-label={t('home.tools.prevProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.prevProfileTitle')} icon={<StepGlyph direction="left" />} onClick={() => move(-1)} />
     <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder={t('home.tools.pickProfile')} disabled={disabled} title={title} variant="accent" searchLabel={t('home.tools.searchProfile')} searchPlaceholder={t('home.tools.searchProfilePlaceholder')} onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
-    <button type="button" className={styles.step} aria-label={t('home.tools.nextProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.nextProfileTitle')} onClick={() => move(1)}><StepGlyph direction="right" /></button>
+    <IconButton size="sm" className={styles.step} aria-label={t('home.tools.nextProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.nextProfileTitle')} icon={<StepGlyph direction="right" />} onClick={() => move(1)} />
   </div>;
 }
 
@@ -397,27 +399,45 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
         : loaded?.activity === 'apply'
           ? lineNotice('pending', t('home.tools.applying', { name: tool.name }))
           : loaded?.notice ?? null;
+      const statusState: 'ok' | 'warn' | 'error' | 'loading' | 'missing' = isRemote
+        ? remoteChecking.has(tool.id) ? 'loading' : installed ? 'ok' : remote?.detail ? 'error' : remote ? 'missing' : 'loading'
+        : checking.has(tool.id) && !installed ? 'loading' : loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : probeFailed ? 'warn' : 'missing';
+      const version = statusState !== 'ok' ? null : isRemote ? remote?.version || null : workspace?.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? null;
+      const status = version
+        ? <Badge className={styles.status} dot tone={statusTone('managedTool', 'ok').tone} data-status="managedTool.ok" title={version}>{version}</Badge>
+        : <StatusBadge className={styles.status} dot domain="managedTool" state={statusState} />;
+      // Install guidance and the edit entry after a failure are recovery paths, so they stay on the row;
+      // for a healthy tool the edit entry sits in the row menu.
+      const recovery = (workspace && !installed) || !!loaded?.error || line?.tone === 'error';
+      const configureLabel = workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig');
+      const openConfig = () => onOpenTool(tool.id, { resource: 'config' });
+      const chooseDir = () => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })) : void launchTool(tool.id, true);
+      const menuItems = [
+        !desktop && <button key="dir" type="button" role="menuitem" disabled={!installed || !!loaded?.busy} onClick={chooseDir}>{t('home.tools.chooseOtherDir')}</button>,
+        !desktop && rememberedDir && !isRemote && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>,
+        !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}>{t('home.tools.editConfigItem')}</button>,
+      ].filter(Boolean);
       return <div className={styles.row} data-tool-row key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={isRemote && remote?.detail ? 'error' : loaded?.error ? 'error' : !workspace && !remote ? 'loading' : installed ? 'ok' : 'warn'}>{isRemote ? (remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : installed ? remote?.version || t('home.tools.statusInstalled') : t('home.tools.statusNotFound')) : checking.has(tool.id) && !installed ? t('home.tools.statusChecking') : loaded?.error ? t('home.tools.statusFailed') : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? t('home.tools.statusInstalled') : probeFailed ? t('home.tools.statusProbeFailed') : t('home.tools.statusNotFound') : t('home.tools.statusChecking')}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={24} /><strong title={tool.name}>{tool.name}</strong>{status}</div>
         <div className={styles.switch}>
           {loaded?.error ? null
             : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
             : profiles.length > 4 ? <ProfileMenu label={t('home.tools.switchProfileLabel', { name: tool.name })} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
-            : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
+            : <Button size="sm" variant="ghost" className={styles.addConfig} icon={<Icon name="plus" size={13} />} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</Button>}
         </div>
         <div className={styles.rowActions}>
-          {isRemote && remote?.detail ? <button type="button" className={styles.recheck} disabled={remoteChecking.has(tool.id)} onClick={() => setRemoteProbeRetry((value) => value + 1)}><Icon name="refresh" size={14} />{remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>
-            : !installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || remoteChecking.has(tool.id) || loaded?.busy} onClick={() => isRemote ? setRemoteProbeRetry((value) => value + 1) : recheck.current(tool.id)}><Icon name="refresh" size={14} />{checking.has(tool.id) || remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>
-            : <button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: false } })) : void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); if (!installed || loaded?.busy) return; if (isRemote) { window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })); return; } void launchTool(tool.id, true); }}><Icon name="play" size={14} />{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}
-          {!desktop && <RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })) : void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && !isRemote && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu>}
-          <button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button>
+          {isRemote && remote?.detail ? <Button size="sm" className={styles.recheck} icon={<Icon name="refresh" size={14} />} disabled={remoteChecking.has(tool.id)} onClick={() => setRemoteProbeRetry((value) => value + 1)}>{remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</Button>
+            : !installed && (workspace || loaded?.error) ? <Button size="sm" className={styles.recheck} icon={<Icon name="refresh" size={14} />} disabled={checking.has(tool.id) || remoteChecking.has(tool.id) || loaded?.busy} onClick={() => isRemote ? setRemoteProbeRetry((value) => value + 1) : recheck.current(tool.id)}>{checking.has(tool.id) || remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</Button>
+            : <Button size="sm" className={styles.launch} icon={<Icon name="play" size={14} />} disabled={!installed || loaded?.busy} loading={loaded?.activity === 'launch'} title={launchTitle} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: false } })) : void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); if (!installed || loaded?.busy) return; if (isRemote) { window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })); return; } void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</Button>}
+          {recovery && <Button size="sm" variant="ghost" className={styles.configure} onClick={openConfig}>{configureLabel}</Button>}
+          {menuItems.length > 0 && <div className={styles.menu}><RowMenu label={t('home.tools.rowMenu', { name: tool.name })}>{menuItems}</RowMenu></div>}
         </div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
     <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
-      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
+      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</Button></div></div>}
     </GuideDialog>
   </div>;
 }
