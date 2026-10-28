@@ -1,5 +1,14 @@
 import type { SessionTone } from './SessionRail';
+import { statusTone, type Tone } from '../../lib/statusTone';
 import styles from './SessionWorkbench.module.css';
+
+/** Badge tone of a session state; the shared session table owns streaming, idle and error. */
+export function sessionBadgeTone(tone: SessionTone): Tone {
+  if (tone === 'live') return statusTone('session', 'streaming').tone;
+  if (tone === 'idle') return statusTone('session', 'idle').tone;
+  if (tone === 'error') return statusTone('session', 'error').tone;
+  return tone === 'bell' ? 'warning' : 'neutral';
+}
 
 type ActivitySlot = 'rail' | 'stage' | 'status' | 'footer' | 'pane';
 

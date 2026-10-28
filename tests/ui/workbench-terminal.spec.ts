@@ -221,8 +221,9 @@ for (const width of [1280, 640]) {
         const rect = element.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       };
-      const chip = document.querySelector('[data-activity-slot="status"]')!.parentElement!;
-      const footerState = document.querySelector('[data-activity-slot="footer"]')!.parentElement!;
+      // The state icons sit inside a Badge label; the Badge itself is the chip.
+      const chip = document.querySelector('[data-activity-slot="status"]')!.parentElement!.closest('[data-tone]')!;
+      const footerState = document.querySelector('[data-activity-slot="footer"]')!.parentElement!.closest('[data-tone]')!;
       return {
         chip: box(chip),
         title: box(chip.parentElement!.querySelector('h2')!),

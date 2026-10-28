@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { useLayoutEffect, type RefObject } from 'react';
 import { Icon } from '../../components/Icon';
+import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
 import type { LibraryItem } from '../../types/library';
 import styles from './SessionWorkbench.module.css';
@@ -40,7 +41,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
           <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
           {prompts.map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => onChange(draft ? draft + '\n' + prompt.body : prompt.body)}><Icon name="plus" size={12} />{prompt.title}</button>)}
         </div>}
-        <button type="button" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose}><Icon name="close" size={14} /></button>
+        <IconButton size="sm" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose} icon={<Icon name="close" size={14} />} />
       </div>
       <div className={styles.composerInputRow}>
         <span className={styles.promptMark} aria-hidden="true">›</span>
@@ -53,7 +54,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
             onClose();
           }
         }} />
-        <button type="button" className={styles.sendBtn} aria-label={t('sessions.sendInput')} title={t('sessions.sendInput') + ' (Enter)'} onClick={onSubmit}><Icon name="arrowUp" size={16} /><span>{t('sessions.sendInput')}</span></button>
+        <Button variant="primary" className={styles.sendBtn} aria-label={t('sessions.sendInput')} title={t('sessions.sendInput') + ' (Enter)'} onClick={onSubmit} icon={<Icon name="arrowUp" size={16} />}><span className={styles.sendLabel}>{t('sessions.sendInput')}</span></Button>
       </div>
       <div className={styles.composerFoot}>
         <span className={styles.composerHint}><kbd>Enter</kbd>{t('sessions.composerSend')}<kbd>Shift</kbd><kbd>Enter</kbd>{t('sessions.composerNewline')}<kbd>Esc</kbd>{t('sessions.composerCollapse')}</span>

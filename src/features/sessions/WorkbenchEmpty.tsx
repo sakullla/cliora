@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
+import { Button } from '../../components/ui';
 import { HostSwitcher } from '../../components/HostSwitcher';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -35,8 +36,8 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         <h2>{t('sessions.emptyTitle')}</h2>
         <p>{t('sessions.emptyDetail')}</p>
         <div className={styles.emptyActions}>
-          {tools.length > 0 && <button type="button" className="button primary" onClick={() => onNewSession()}><Icon name="plus" size={14} /><span>{t('sessions.newSession')}</span><kbd className={styles.emptyKbd}>Alt N</kbd></button>}
-          <button type="button" className={tools.length > 0 ? 'button' : 'button primary'} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></button>
+          {tools.length > 0 && <Button variant="primary" className={styles.emptyAction} onClick={() => onNewSession()} icon={<Icon name="plus" size={14} />}><span>{t('sessions.newSession')}</span><kbd className={styles.emptyKbd}>Alt N</kbd></Button>}
+          <Button variant={tools.length > 0 ? 'secondary' : 'primary'} className={styles.emptyAction} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></Button>
         </div>
       </header>
 
