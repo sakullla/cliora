@@ -146,6 +146,19 @@ async function expectNoSideScroll(page: Page) {
   })).toBe('');
 }
 
+/** Geometry of the sidebar CLI items (the 更多 toggle excluded). */
+async function sidebarTools(list: Locator) {
+  return list.evaluate((root) => ({
+    scrollWidth: root.scrollWidth,
+    clientWidth: root.clientWidth,
+    items: [...root.querySelectorAll<HTMLButtonElement>('button:not([aria-expanded])')].map((node) => {
+      const box = node.getBoundingClientRect();
+      const text = node.querySelector<HTMLElement>('.nav-text');
+      return { name: node.getAttribute('aria-label') ?? '', top: Math.round(box.top), clipped: !!text && text.getClientRects().length > 0 && text.scrollWidth > text.clientWidth + 1 };
+    }),
+  }));
+}
+
 async function sharedHeights(locator: Locator) {
   return locator.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
 }
@@ -207,22 +220,17 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   expect(Math.max(...recordControls) - Math.min(...recordControls)).toBeLessThanOrEqual(1);
 
   await nav.getByRole('button', { name: '工具与连接' }).click();
-  const list = page.getByRole('tablist', { name: 'CLI' });
-  await expect(list.getByRole('tab', { name: 'Codex', exact: true })).toBeVisible();
-  const fitted = await list.evaluate((root) => {
-    const buttons = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    return {
-      scrollWidth: root.scrollWidth,
-      clientWidth: root.clientWidth,
-      items: buttons.map((node) => {
-        const box = node.getBoundingClientRect();
-        return { name: node.textContent?.trim() ?? '', top: Math.round(box.top), clipped: node.scrollWidth > node.clientWidth + 1 };
-      }),
-    };
-  });
-  expect(fitted.items.map((item) => item.name)).toEqual(tools.map((item) => item[1]));
+  // The CLIs live in the sidebar under 工具与连接; the page names the current one in an h2.
+  const list = nav.getByRole('group', { name: '受管 CLI' });
+  await expect(list.getByRole('button', { name: 'Codex', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByRole('heading', { level: 2, name: 'Codex', exact: true })).toBeVisible();
+  await expect(page.getByRole('tablist', { name: 'CLI' })).toHaveCount(0);
+  const fitted = await sidebarTools(list);
+  // Sixteen CLIs: the first eight stay listed and the rest fold into 更多（8）.
+  expect(fitted.items.map((item) => item.name)).toEqual(tools.slice(0, 8).map((item) => item[1]));
+  await expect(list.getByRole('button', { name: '更多（8）', exact: true })).toBeVisible();
   expect(fitted.items.every((item) => !item.clipped)).toBe(true);
-  // A wide window stacks every CLI in a vertical rail: one per row, nothing hidden sideways.
+  // A wide window stacks every CLI in the sidebar: one per row, nothing hidden sideways.
   expect(new Set(fitted.items.map((item) => item.top)).size).toBe(fitted.items.length);
   expect(fitted.scrollWidth).toBeLessThanOrEqual(fitted.clientWidth);
   const headingActions = await sharedHeights(page.getByRole('button', { name: /^(启动|通用配置|新建配置)$/ }));
@@ -236,7 +244,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
   await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
   await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(8);
-  await expect(page.getByRole('button', { name: '更多（8）', exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: '更多（8）', exact: true })).toBeVisible();
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode', 'ZCode', 'Qoder CN', 'Kimi Code']) {
     await expect(page.getByRole('checkbox', { name: new RegExp(name) })).toBeEnabled();
   }
@@ -265,18 +273,17 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await nav.getByRole('button', { name: '工具与连接' }).click();
     await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
     await expect(page.getByRole('button', { name: '新建配置', exact: true }).first()).toBeVisible();
-    const narrowTabs = await list.evaluate((root) => {
-      const buttons = [...root.querySelectorAll<HTMLElement>('[role="tab"]')];
-      return { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, tops: buttons.map((node) => Math.round(node.getBoundingClientRect().top)) };
-    });
-    if (width >= 1200) {
-      // Wide: a vertical rail, one CLI per row and no sideways strip.
-      expect(new Set(narrowTabs.tops).size).toBe(narrowTabs.tops.length);
+    const narrowTabs = await sidebarTools(list);
+    const tops = narrowTabs.items.map((item) => item.top);
+    if (width > 760) {
+      // Side-by-side shell: one CLI per row and no sideways strip.
+      expect(new Set(tops).size).toBe(tops.length);
       expect(narrowTabs.scrollWidth).toBeLessThanOrEqual(narrowTabs.clientWidth);
     } else {
-      expect(new Set(narrowTabs.tops).size).toBe(1);
-      expect(narrowTabs.scrollWidth).toBeGreaterThan(narrowTabs.clientWidth);
+      // Stacked shell: the CLIs continue the page row as icons.
+      expect(new Set(tops).size).toBe(1);
     }
+    expect(await page.getByLabel('主导航').evaluate((aside) => aside.scrollWidth - aside.clientWidth)).toBeLessThanOrEqual(0);
     await expectNoSideScroll(page);
 
     await nav.getByRole('button', { name: '资料库' }).click();

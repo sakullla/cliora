@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -33,7 +33,7 @@ import { native, nativeAvailable } from './lib/native';
 import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
-import { navigateChoices } from './lib/choiceNavigation';
+import { navigateList } from './lib/choiceNavigation';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
@@ -70,6 +70,38 @@ const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'light', glyph: 'sun' },
   { id: 'dark', glyph: 'moon' },
 ];
+
+/** Managed CLIs listed under 工具与连接 before the rest folds into “更多”. */
+const sidebarToolLimit = 8;
+const sidebarToolsExpandedKey = 'cliora:sidebar-tools-expanded';
+
+/** Sidebar sub-navigation for the managed CLIs: one Tab stop, ↑/↓/Home/End move, Enter/Space open. */
+function SidebarTools({ tools, current, active, onOpen }: { tools: Array<{ id: string; name: string }>; current?: string; active: boolean; onOpen: (id: string) => void }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(() => { try { return localStorage.getItem(sidebarToolsExpandedKey) === 'true'; } catch { return false; } });
+  if (!tools.length) return null;
+  const overflow = tools.length > sidebarToolLimit;
+  let shown = tools;
+  if (overflow && !expanded) {
+    shown = tools.slice(0, sidebarToolLimit);
+    // The selected CLI always stays visible: it takes the last visible slot.
+    const selected = tools.find((item) => item.id === current);
+    if (selected && !shown.includes(selected)) shown = [...shown.slice(0, sidebarToolLimit - 1), selected];
+  }
+  const stop = shown.some((item) => item.id === current) ? current : shown[0]?.id;
+  const toggle = () => setExpanded((old) => {
+    try { localStorage.setItem(sidebarToolsExpandedKey, String(!old)); } catch { /* Folding works without storage. */ }
+    return !old;
+  });
+  const moreLabel = expanded ? t('common.nav.toolsLess') : t('common.nav.toolsMore', { count: tools.length - sidebarToolLimit });
+  return <div className="nav-tools" role="group" aria-label={t('common.nav.toolList')} onKeyDown={navigateList}>
+    {shown.map((item) => {
+      const selected = item.id === current;
+      return <button type="button" key={item.id} className="nav-tool" data-selected={selected || undefined} aria-current={active && selected ? 'true' : undefined} tabIndex={item.id === stop ? 0 : -1} aria-label={item.name} title={item.name} onClick={() => onOpen(item.id)}><span className="nav-tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} size={18} /></span><span className="nav-text">{item.name}</span></button>;
+    })}
+    {overflow && <button type="button" className="nav-tool nav-tool-more" tabIndex={-1} aria-expanded={expanded} aria-label={moreLabel} title={moreLabel} onClick={toggle}><span className="nav-tool-icon" aria-hidden="true"><Icon name={expanded ? 'arrowUp' : 'more'} size={14} /></span><span className="nav-text">{moreLabel}</span></button>}
+  </div>;
+}
 
 export default function App() {
   const { t } = useTranslation();
@@ -109,6 +141,8 @@ export default function App() {
   const onboardingEvaluated = useRef(false);
   const [visited, setVisited] = useState<Set<string>>(() => new Set(['home']));
   const [tool, setTool] = useState<string>('');
+  // The CLI ToolWorkspace actually shows; a cancelled discard keeps it on the previous one.
+  const [activeToolId, setActiveToolId] = useState<string | null>(null);
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
   const [toolIntent, setToolIntent] = useState<WorkspaceOpenIntent | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
@@ -387,6 +421,8 @@ export default function App() {
   const visible = (nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).filter((item) => managed.includes(item.id));
   const visibleDescriptors = (catalog?.registered ?? []).filter((item) => managed.includes(item.id));
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
+  // Sidebar highlight follows the CLI the workspace reports, not the requested one.
+  const sidebarTool = nativeAvailable && activeToolId && visible.some((item) => item.id === activeToolId) ? activeToolId : selectedTool;
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
   const title: [string, string] = [t(`common.pages.${page}.title`), page === 'records' && remoteTargetId !== 'local' ? t('records.page.remoteSubtitle') : t(`common.pages.${page}.subtitle`)];
 
@@ -399,6 +435,15 @@ export default function App() {
     return true;
   }
   goRef.current = go;
+
+  // Sidebar CLI items and palette tool items share one channel. On the tools page only the
+  // open sequence moves, so ToolWorkspace's own discard prompt is the single confirmation.
+  function openTool(id: string) {
+    setTool(id);
+    setToolIntent(null);
+    setToolOpenSequence((value) => value + 1);
+    if (activePage.current !== 'connections') void go('connections');
+  }
 
   async function revealProject(id: string) {
     if (await go('home')) setSpotlight({ target: 'project', id, token: Date.now() });
@@ -536,7 +581,7 @@ export default function App() {
     }),
     ...paletteSessions.map((session) => ({ id: `session-${session.id}`, group: t('common.palette.groupSessions'), label: session.title.trim() || t('common.palette.untitledSession'), hint: t('common.palette.hintResumeSession'), keywords: session.toolId, toolId: session.toolId, run: () => { void resumePaletteSession(session.id); } })),
     ...paletteLibrary.map((item) => ({ id: `library-${item.id}`, group: t('common.palette.groupLibrary'), label: item.title, hint: t('common.palette.hintOpenItem'), keywords: libraryKindLabel(item.kind), icon: 'library' as const, run: () => { void revealLibraryItem(item.kind, item.id); } })),
-    ...visible.map((item) => ({ id: `tool-${item.id}`, group: t('common.palette.groupTools'), label: item.name, hint: t('common.palette.hintOpenConfig'), keywords: item.id, toolId: item.id, run: () => { setTool(item.id); setToolIntent(null); setToolOpenSequence((value) => value + 1); void go('connections'); } })),
+    ...visible.map((item) => ({ id: `tool-${item.id}`, group: t('common.palette.groupTools'), label: item.name, hint: t('common.palette.hintOpenConfig'), keywords: item.id, toolId: item.id, run: () => openTool(item.id) })),
     ...paletteProjects.map((project) => ({ id: `project-${project.id}`, group: t('common.palette.groupProjects'), label: project.name, hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'), keywords: project.path ?? '', icon: 'folder' as const, run: () => { void revealProject(project.id); } })),
     { id: 'sidebar', group: t('common.palette.groupActions'), label: sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse'), hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
     ...themes.map((item) => ({ id: `theme-${item.id}`, group: t('common.palette.groupActions'), label: t(`common.theme.${item.id}`), hint: bootstrap.preferences.theme === item.id ? t('common.theme.current') : t('common.theme.switch'), icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
@@ -588,7 +633,7 @@ export default function App() {
       {bootstrap.preferences.remote_ssh_enabled && <div className="sidebar-host"><HostSwitcher targets={remoteTargets} value={remoteTargetId} onChange={changeRemoteTarget} onManage={openHostManagement} collapsed={sidebarCollapsed} /></div>}
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {navGroups.map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <button type="button" key={item.id} className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button>; })}</div>)}
+        {navGroups.map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button>{item.id === 'connections' && loaded && <SidebarTools tools={visible} current={sidebarTool} active={page === 'connections'} onOpen={openTool} />}</Fragment>; })}</div>)}
       </nav>
       <div className="sidebar-foot">
         {updateOffer && <button type="button" className="sidebar-update" title={t('common.shell.updateTitle', { version: updateOffer.version })} aria-label={t('common.shell.updateTitle', { version: updateOffer.version })} onClick={openAppUpdate}><span className="sidebar-update-glyph" aria-hidden="true"><Icon name="download" size={14} /></span><span className="sidebar-update-text">{t('common.shell.updateAvailable', { version: updateOffer.version })}</span><span className="sidebar-update-action" aria-hidden="true">{t('common.shell.updateAction')}</span></button>}
@@ -618,7 +663,7 @@ export default function App() {
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onToolChange={setActiveToolId} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>

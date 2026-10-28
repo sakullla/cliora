@@ -95,6 +95,8 @@ export default {
     switchView: '工具与连接中切换任务视图',
     arrows: '方向键',
     moveOptions: '在标签页与选项间移动',
+    toolListKeys: '↑/↓',
+    toolList: '侧栏工具列表：移动，Enter 打开',
     or: '或',
     searchHint: '{{mod}}+F 或 / 定位搜索，Esc 清空',
     saveHint: '保存（{{mod}}+S）',
@@ -239,6 +241,9 @@ export default {
     recordsGroup: '记录',
     settingsGroup: '设置',
     itemTitle: '{{label}}（{{shortcut}}）',
+    toolList: '受管 CLI',
+    toolsMore: '更多（{{count}}）',
+    toolsLess: '收起',
   },
   theme: {
     system: '跟随系统主题',
