@@ -1,17 +1,16 @@
-/* style-tokens: pending */
 .filter { flex: 1 1 auto; width: 100%; min-width: 0; }
 .busy { margin: 0; color: var(--text-3); font-size: var(--fs-caption); }
 
 .account {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1_5);
   max-width: 100%;
   min-width: 0;
   min-height: 24px;
-  padding: 0 9px;
+  padding: 0 var(--space-2_5);
   overflow: hidden;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
   font-size: var(--fs-caption);
@@ -27,12 +26,12 @@
 
 .compat { flex: 1 1 100%; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); }
 .compat summary { width: fit-content; cursor: pointer; }
-.compat p { margin: 6px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
+.compat p { margin: var(--space-1_5) 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 
-.restore { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; margin: 6px; padding: 10px 12px; border: 1px solid var(--info-line); border-radius: var(--radius); background: var(--info-soft); color: var(--text); font-size: var(--fs-caption); }
+.restore { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; margin: var(--space-1_5); padding: var(--space-2_5) var(--space-3); border: 1px solid var(--info-line); border-radius: var(--radius); background: var(--info-soft); color: var(--text); font-size: var(--fs-caption); }
 .restore > svg { flex: none; color: var(--info); }
 .restore > p { flex: 1 1 160px; min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .restore > details { flex-basis: 100%; color: var(--text-2); }
-.restore > details p { margin: 4px 0 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.restore > details p { margin: var(--space-1) 0 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
 .restore > button { min-height: 28px; }
-article > .restore { margin: 10px 20px; }
+article > .restore { margin: var(--space-2_5) var(--space-5); }

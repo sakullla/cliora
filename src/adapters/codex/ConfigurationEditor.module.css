@@ -1,11 +1,10 @@
-/* style-tokens: pending */
-.editor, .fields { display: grid; gap: .86em; min-width: 0; }
-.editor summary { cursor: pointer; padding: .57em 0; }
-.fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.editor, .fields { display: grid; gap: var(--space-3); min-width: 0; }
+.editor summary { cursor: pointer; padding: var(--space-2) 0; }
+.fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1_5); }
 .fields label, .fields > div > div { grid-column: 1 / -1; }
 .editor input, .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
-.note { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); line-height: 1.5; margin: 0 0 10px; }
+.note { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); line-height: 1.5; margin: 0 0 var(--space-2_5); }
 .editor section .note { margin: 0; }
 
-.editor > div:not([hidden]) { display: grid; gap: .86em; min-width: 0; }
+.editor > div:not([hidden]) { display: grid; gap: var(--space-3); min-width: 0; }
 .editor [hidden] { display: none !important; }

@@ -1,5 +1,4 @@
-/* style-tokens: pending */
-.addForm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 12px 16px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.addForm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: var(--space-3) var(--space-4); background: var(--surface); box-shadow: var(--shadow-xs); }
 .addForm > p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
 .addForm > button:first-of-type { grid-column: 2; grid-row: 3; justify-self: end; }
 .addForm > button:last-of-type:not(:first-of-type) { grid-column: 1; grid-row: 3; justify-self: start; }
@@ -8,58 +7,55 @@
   .addForm > button:first-of-type { grid-column: auto; grid-row: 4; justify-self: stretch; }
   .addForm > button:last-of-type:not(:first-of-type) { grid-column: auto; grid-row: 5; justify-self: stretch; }
 }
-.nativeLogin { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px 18px; background: var(--surface); box-shadow: var(--shadow-xs); display: grid; gap: 12px; min-width: 0; }
-.nativeLogin .nativeCheck,
-.nativeLogin .nativeCheck:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
-.nativeLogin .nativeCheck:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.nativeRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.nativeLogin { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4) var(--space-5); background: var(--surface); box-shadow: var(--shadow-xs); display: grid; gap: var(--space-3); min-width: 0; }
+.nativeRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-2) var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .nativeLoading :global(.skeleton-page) { gap: 0; }
 .nativeSkeleton {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "name badge" "meta badge";
   align-items: center;
-  column-gap: 16px;
-  row-gap: 8px;
-  padding: 14px 2px 6px;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  padding: var(--space-4) var(--space-0_5) var(--space-1_5);
   border-top: 1px solid var(--line);
 }
-.nativeSkeleton > :global(.skeleton-block) { height: 12px; border-radius: 6px; }
+.nativeSkeleton > :global(.skeleton-block) { height: 12px; border-radius: var(--radius-xs); }
 .nativeSkeleton > :global(.skeleton-block):nth-child(1) { grid-area: name; width: min(168px, 46%); height: 14px; }
 .nativeSkeleton > :global(.skeleton-block):nth-child(2) { grid-area: meta; width: min(248px, 68%); height: 10px; }
-.nativeSkeleton > :global(.skeleton-block):nth-child(3) { grid-area: badge; width: 76px; height: 22px; border-radius: 99px; }
-.accountListLoading:global(.skeleton-page) { gap: 12px; }
+.nativeSkeleton > :global(.skeleton-block):nth-child(3) { grid-area: badge; width: 76px; height: 22px; border-radius: var(--radius-pill); }
+.accountListLoading:global(.skeleton-page) { gap: var(--space-3); }
 .accountSkeleton {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "name badge" "meta meta";
   align-items: center;
-  gap: 10px 16px;
-  padding: 16px 18px;
+  gap: var(--space-2_5) var(--space-4);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
 }
-.accountSkeleton > :global(.skeleton-block) { height: 12px; border-radius: 6px; }
+.accountSkeleton > :global(.skeleton-block) { height: 12px; border-radius: var(--radius-xs); }
 .accountSkeleton > :global(.skeleton-block):nth-child(1) { grid-area: name; width: min(148px, 42%); height: 14px; }
-.accountSkeleton > :global(.skeleton-block):nth-child(2) { grid-area: badge; width: 68px; height: 22px; border-radius: 99px; }
+.accountSkeleton > :global(.skeleton-block):nth-child(2) { grid-area: badge; width: 68px; height: 22px; border-radius: var(--radius-pill); }
 .accountSkeleton > :global(.skeleton-block):nth-child(3) { grid-area: meta; width: min(220px, 58%); height: 10px; }
-.nativeIdentity { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.nativeIdentity { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
 .nativeIdentity > span { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .nativeRow > details { grid-column: 1 / -1; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .nativeRow summary { cursor: pointer; }
-.management { display: grid; gap: 12px; }
+.management { display: grid; gap: var(--space-3); }
 .management summary { cursor: pointer; width: fit-content; }
-.management[open] { padding-top: 8px; border-top: 1px solid var(--line); }
-.management > .impact { margin: 12px 0; }
-.accountActions { display: grid; gap: 10px; }
+.management[open] { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.management > .impact { margin: var(--space-3) 0; }
+.accountActions { display: grid; gap: var(--space-2_5); }
 .moreActions { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .moreActions summary { cursor: pointer; width: fit-content; }
 .actionHint,
 .accountActions > .actionHint { margin: 0; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
-.impact { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.impact ul { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; }
-.impact li { display: grid; gap: 6px; }
-.impactHeader { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.impact { display: grid; gap: var(--space-2_5); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.impact ul { display: grid; gap: var(--space-2); list-style: none; padding: 0; margin: 0; }
+.impact li { display: grid; gap: var(--space-1_5); }
+.impactHeader { display: flex; justify-content: space-between; gap: var(--space-2_5); align-items: center; }
 .contextSummary { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }

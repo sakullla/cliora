@@ -1,4 +1,3 @@
-/* style-tokens: pending */
 /* ---------- CLI install / update progress ---------------------------------
    A compact status sheet: who (tool icon), what (headline + status), where
    it goes (version flow), how long, and the raw log one click away. */
@@ -8,7 +7,7 @@
   --phase-soft: var(--accent-soft);
   --phase-line: var(--accent-line);
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
 }
 .panel[data-phase='error'] { --phase: var(--danger); --phase-soft: var(--danger-soft); --phase-line: var(--danger-line); }
@@ -16,9 +15,9 @@
 /* Narrow sheet: the dialog only needs room for one message and a log. */
 :global(.guide-dialog):has(.panel) { width: min(600px, calc(100vw - 40px)); }
 
-.hero { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 4px 0 2px; }
+.hero { display: flex; align-items: center; gap: var(--space-4); min-width: 0; padding: var(--space-1) 0 var(--space-0_5); }
 .heroIcon { position: relative; flex: none; display: grid; place-items: center; }
-.heroIcon > :global(.tool-logo) { border-radius: 14px; box-shadow: var(--shadow-sm); }
+.heroIcon > :global(.tool-logo) { border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); }
 .heroBadge {
   position: absolute;
   right: -5px;
@@ -34,12 +33,12 @@
   box-shadow: var(--shadow-xs);
   animation: pop 260ms var(--ease);
 }
-.panel[data-phase='running'] .heroBadge, .pill[data-phase='running'] .heroBadge { background: var(--surface); color: var(--accent); }
-.panel[data-phase='error'] .heroBadge, .pill[data-phase='error'] .heroBadge { background: var(--danger); color: var(--surface); }
-.pill[data-phase='done'] .heroBadge { background: var(--accent); }
+.panel[data-phase='running'] .heroBadge, .dock[data-phase='running'] .heroBadge { background: var(--surface); color: var(--accent); }
+.panel[data-phase='error'] .heroBadge, .dock[data-phase='error'] .heroBadge { background: var(--danger); color: var(--surface); }
+.dock[data-phase='done'] .heroBadge { background: var(--accent); }
 .spinner { width: 12px; height: 12px; border: 2px solid var(--accent-line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
-.heroText { display: grid; gap: 3px; min-width: 0; }
+.heroText { display: grid; gap: var(--space-1); min-width: 0; }
 .heroText h3 { margin: 0; color: var(--text); font-family: var(--font-display); font-size: 18px; font-weight: var(--fw-semibold); letter-spacing: -.01em; line-height: 1.3; overflow-wrap: anywhere; }
 .status { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; overflow-wrap: anywhere; }
 .panel[data-phase='error'] .status { color: var(--danger); }
@@ -50,22 +49,22 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
+  gap: var(--space-2) var(--space-4);
   min-width: 0;
-  padding: 10px 12px;
+  padding: var(--space-2_5) var(--space-3);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
-.flow { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-3); }
+.flow { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-3); }
 .arrow { display: grid; place-items: center; color: var(--text-3); }
 .version {
   min-width: 0;
   max-width: 220px;
   overflow: hidden;
-  padding: 2px 10px;
-  border-radius: 99px;
+  padding: var(--space-0_5) var(--space-2_5);
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
   font-family: var(--font-mono);
@@ -78,13 +77,13 @@
 }
 .version[data-role='to'] { background: var(--phase-soft); color: var(--phase); font-weight: var(--fw-semibold); box-shadow: inset 0 0 0 1px var(--phase-line); }
 .panel[data-phase='error'] .version[data-role='to'] { background: transparent; color: var(--text-3); font-weight: var(--fw-regular); box-shadow: inset 0 0 0 1px var(--line); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
-.elapsed { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.elapsed { display: inline-flex; align-items: center; gap: var(--space-1_5); margin-left: auto; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 
 /* Indeterminate sweep along the strip's bottom edge while the action runs. */
 .track { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .track > span { position: absolute; top: 0; bottom: 0; left: 0; width: 38%; background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--accent-bright) 65%, transparent); animation: sweep 2.6s linear infinite; }
 
-.inlineError { margin: -6px 0 0; color: var(--danger); font-size: var(--fs-caption); }
+.inlineError { margin: calc(var(--space-1_5) * -1) 0 0; color: var(--danger); font-size: var(--fs-caption); }
 
 /* ---------- Log: a light, theme-native disclosure; output stays one click away. */
 .terminal {
@@ -96,15 +95,15 @@
   background: var(--surface);
 }
 .panel[data-phase='error'] .terminal { border-color: var(--danger-line); }
-.terminalHead { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 40px; padding: 0 6px 0 4px; }
+.terminalHead { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 40px; padding: 0 var(--space-1_5) 0 var(--space-1); }
 .terminal[data-open] .terminalHead { border-bottom: 1px solid var(--line); }
 .terminalToggle, .terminalToggle:hover:not(:disabled) {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   min-height: 30px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -115,30 +114,16 @@
 .terminalToggle > svg { color: var(--text-3); transition: transform var(--medium) var(--ease); }
 .terminalToggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
 .terminalTitle { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
-.terminalCount { padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 17px; font-variant-numeric: tabular-nums; }
+.terminalCount { flex: none; }
 .ticker { flex: 1; min-width: 0; overflow: hidden; padding: 0; background: none; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; animation: fade-in var(--medium) var(--ease); }
-.copy, .copy:hover:not(:disabled) {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  min-height: 30px;
-  margin-left: auto;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-3);
-}
-.copy:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.copy { flex: none; }
 .copy[data-copied], .copy[data-copied]:hover:not(:disabled) { border: 0; background: var(--accent-soft); color: var(--accent); }
 .log {
   margin: 0;
   max-height: 260px;
   min-height: 96px;
   overflow: auto;
-  padding: 12px 16px 14px;
+  padding: var(--space-3) var(--space-4) var(--space-4);
   background: var(--surface-2);
   color: var(--text-2);
   font-family: var(--font-mono);
@@ -149,54 +134,49 @@
   animation: reveal var(--medium) var(--ease);
 }
 
-.primary, .primary:hover:not(:disabled) { min-width: 88px; border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.quietDanger, .quietDanger:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
+.quietDanger { color: var(--danger); }
 .quietDanger:hover:not(:disabled) { background: var(--danger-soft); }
 
-/* ---------- Floating activity pill (dialog minimized) ---------- */
-.pill {
+/* ---------- Floating activity dock (dialog minimized) ---------- */
+.dock {
   position: fixed;
   z-index: 70;
   left: 50%;
   bottom: 22px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   width: max-content;
   max-width: min(560px, calc(100vw - 32px));
-  padding: 8px 8px 8px 10px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-2_5);
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: 18px;
+  border-radius: var(--radius-2xl);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(18px) saturate(1.1);
   transform: translateX(-50%);
-  animation: pill-in 260ms var(--ease);
+  animation: dock-in 260ms var(--ease);
 }
-.pill[data-phase='done'] { border-color: var(--accent-line); }
-.pill[data-phase='error'] { border-color: var(--danger-line); }
-.pillIcon { position: relative; flex: none; display: grid; }
-.pillIcon .heroBadge { right: -6px; bottom: -6px; width: 18px; height: 18px; }
-.pillIcon .spinner { width: 10px; height: 10px; }
-.pillText { display: grid; min-width: 0; line-height: 1.3; }
-.pillText strong { overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
-.pillText small { max-width: 320px; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-.pill[data-phase='error'] .pillText small { color: var(--danger); font-family: var(--font-sans); }
-.pillTime { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
-.pillOpen, .pillOpen:hover:not(:disabled) { flex: none; min-height: 30px; padding: 0 12px; border-color: var(--line); border-radius: 12px; box-shadow: none; }
-.pillOpen:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
-.pillClose, .pillClose:hover:not(:disabled) { flex: none; display: grid; place-items: center; width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: var(--text-3); }
-.pillClose:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.pillTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: pill-sweep 2.6s linear infinite; }
+.dock[data-phase='done'] { border-color: var(--accent-line); }
+.dock[data-phase='error'] { border-color: var(--danger-line); }
+.dockIcon { position: relative; flex: none; display: grid; }
+.dockIcon .heroBadge { right: -6px; bottom: -6px; width: 18px; height: 18px; }
+.dockIcon .spinner { width: 10px; height: 10px; }
+.dockText { display: grid; min-width: 0; line-height: 1.3; }
+.dockText strong { overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.dockText small { max-width: 320px; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.dock[data-phase='error'] .dockText small { color: var(--danger); font-family: var(--font-sans); }
+.dockTime { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.dockOpen, .dockClose { flex: none; }
+.dockTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: dock-sweep 2.6s linear infinite; }
 
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
 @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes pill-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.97); } to { opacity: 1; transform: translateX(-50%); } }
-@keyframes pill-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@keyframes dock-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.97); } to { opacity: 1; transform: translateX(-50%); } }
+@keyframes dock-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
 
 @media (max-width: 640px) {
   .elapsed { margin-left: 0; }
-  .pillText small { max-width: 160px; }
+  .dockText small { max-width: 160px; }
 }

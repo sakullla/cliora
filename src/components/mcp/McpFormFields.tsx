@@ -7,6 +7,7 @@ import { Icon } from '../Icon';
 import { KeyValueRows } from './KeyValueRows';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import styles from './McpFormFields.module.css';
+import { Button } from '../ui';
 
 const transports: Array<{ value: McpTransport; label: string; icon: 'terminal' | 'globe' }> = [
   { value: 'stdio', label: 'stdio', icon: 'terminal' },
@@ -91,7 +92,7 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
       <p>{t('library.resources.pasteImportHint')}</p>
       <textarea aria-label={t('library.resources.pasteImportAria')} rows={4} value={pasteText} spellCheck={false} onChange={(event) => setPasteText(event.target.value)} placeholder={'{"mcpServers":{"name":{"command":"npx","args":["-y","pkg"]}}}'} />
       {pasteError && <p className={styles.fieldError} role="alert">{pasteError}</p>}
-      <div className={styles.pasteActions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
+      <div className={styles.pasteActions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><Button variant="primary" disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</Button></div>
     </div>}
     <label className={styles.field}>{t('tools.mcp.name')}
       <input aria-label={t('tools.mcp.nameAria')} aria-invalid={!!nameIssue || undefined} aria-describedby={nameIssue ? `${id}-name` : undefined} value={draft.name} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, name: event.target.value })} onPaste={pasteIntoName} placeholder={t('tools.mcp.namePlaceholder')} />

@@ -5,6 +5,7 @@ import { StepHead } from './ConfigurationStep';
 import styles from './configuration.module.css';
 import type { CatalogControls, ConfigurationContentProps } from '../../adapters/contract';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationEditorProps, ConfigurationField as Field } from '../../types/configuration';
+import { Badge } from '../ui';
 
 type Run = (target: unknown, operation: string, value?: unknown, field?: string | null) => Promise<boolean>;
 type ListChoices = Record<string, readonly (readonly [string, string])[]>;
@@ -135,7 +136,7 @@ export function ModelRow({ id, name, sub = [], badges = [], expanded, sectioned,
   const display = name && name !== id ? name : id;
   const subtitle = [...(name && name !== id ? [id] : []), ...sub];
   const label = [display, ...subtitle, ...badges].join(' · ');
-  const chips = badges.map(badge => <span key={badge} className={styles.modelBadge} {...(badge === t('common.models.defaultBadge') ? { 'data-default-badge': true } : {})}>{badge}</span>);
+  const chips = badges.map(badge => <Badge key={badge} tone="accent" className={styles.modelBadge} {...(badge === t('common.models.defaultBadge') ? { 'data-default-badge': true } : {})}>{badge}</Badge>);
   if (sectioned && expanded) return <div className={styles.modelBack}>
     <button type="button" className={styles.modelBackButton} aria-label={t('common.models.backAria', { label })} disabled={disabled} onClick={onToggle}><span aria-hidden="true">‹</span>{t('common.models.back')}</button>
     <span className={styles.modelBackTitle}><span className={styles.modelRowName}>{display}</span>{chips}</span>
@@ -198,7 +199,7 @@ export function ModelStep({ count, collapsed, defaultModel, note, catalog, disab
   if (collapsed) return <section data-config-step="model" className={styles.modelList}>{children}</section>;
   const fetch = catalog?.supported ? <button type="button" className={styles.catalogButton} disabled={disabled || catalog.busy} onClick={() => catalog.fetch()}>{catalog.busy ? t('common.models.fetching') : t('common.models.fromCatalog')}</button> : undefined;
   return <section data-config-step="model" className={`${styles.controls} ${styles.step}`}>
-    <StepHead step="model" title={<>{t('common.models.title')}{count > 0 && <span className="count-chip">{count}</span>}</>} meta={defaultModel ? t('common.models.defaultMeta', { model: defaultModel }) : count ? t('common.models.noDefaultMeta') : undefined} actions={fetch} />
+    <StepHead step="model" title={<>{t('common.models.title')}{count > 0 && <Badge className={styles.countBadge}>{count}</Badge>}</>} meta={defaultModel ? t('common.models.defaultMeta', { model: defaultModel }) : count ? t('common.models.noDefaultMeta') : undefined} actions={fetch} />
     {note}
     {count === 0 && <div className={styles.modelEmpty}><strong>{t('common.models.emptyTitle')}</strong><span>{catalog?.supported ? t('common.models.emptyCatalog') : t('common.models.empty')}</span></div>}
     <div className={styles.modelList}>{children}</div>

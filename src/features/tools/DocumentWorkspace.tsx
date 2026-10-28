@@ -5,6 +5,7 @@ import { writeClipboard } from '../../lib/clipboard';
 import { displayPath } from '../../lib/paths';
 import { useFeedback } from '../../lib/toast';
 import styles from './DocumentWorkspace.module.css';
+import { Button, IconButton, Switch } from '../../components/ui';
 
 export { styles as documentStyles };
 
@@ -167,7 +168,7 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
         {!single && <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('common.document.resize')} title={t('common.document.resize')} aria-valuemin={minWidth} aria-valuemax={maxWidth} aria-valuenow={width} tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={() => setWidth(defaultWidth)} onKeyDown={onSeparatorKey} />}
         {!single && <div className={styles.documentPane}>
           {document ? <>
-            {onBack && <button type="button" className={styles.back} onClick={onBack}><Icon name="arrowLeft" size={14} />{backLabel}</button>}
+            {onBack && <Button variant="ghost" size="sm" className={styles.back} icon={<Icon name="arrowLeft" size={14} />} onClick={onBack}>{backLabel}</Button>}
             <div className={styles.documentBody}>{document}</div>
           </> : placeholder}
         </div>}
@@ -185,7 +186,7 @@ export function FocusToggle() {
   const { t } = useTranslation();
   const { focused, toggleFocus } = useContext(ShellContext);
   const label = focused ? t('common.document.unfocus') : t('common.document.focus');
-  return <button type="button" className={styles.iconButton} data-focus-toggle="" aria-pressed={focused} aria-label={label} title={label} onClick={toggleFocus}><Icon name={focused ? 'sidebarOpen' : 'sidebarClose'} size={15} /></button>;
+  return <IconButton size="sm" className={styles.iconButton} data-focus-toggle="" aria-pressed={focused} aria-label={label} title={label} onClick={toggleFocus} icon={<Icon name={focused ? 'sidebarOpen' : 'sidebarClose'} size={15} />} />;
 }
 
 /**
@@ -221,7 +222,7 @@ export function ModeSwitch({ mode, editable, disabled, onChange }: { mode: Docum
 export function Toggle({ checked, label, text, disabled, onChange }: { checked: boolean; label: string; text?: string; disabled?: boolean; onChange: (value: boolean) => void }) {
   return <span className={styles.toggle} data-on={checked || undefined}>
     {text && <span aria-hidden="true">{text}</span>}
-    <button type="button" role="switch" className={styles.switch} aria-checked={checked} aria-label={label} title={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>
+    <Switch checked={checked} aria-checked={checked} aria-label={label} title={label} disabled={disabled} onChange={onChange} />
   </span>;
 }
 
@@ -233,7 +234,7 @@ export function PathLine({ path, label }: { path: string; label?: string }) {
   return <p className={styles.pathLine}>
     {label && <span className={styles.pathLabel}>{label}</span>}
     <span className={styles.mono} title={shown}>{shown}</span>
-    <button type="button" className={styles.ghostButton} onClick={() => { void writeClipboard(shown).then(ok => feedback.setNotice(ok ? t('common.document.pathCopied') : t('common.document.copyFailed'))); }}><Icon name="copy" size={13} />{t('common.document.copyPath')}</button>
+    <Button variant="ghost" size="sm" className={styles.ghostButton} onClick={() => { void writeClipboard(shown).then(ok => feedback.setNotice(ok ? t('common.document.pathCopied') : t('common.document.copyFailed'))); }}><Icon name="copy" size={13} />{t('common.document.copyPath')}</Button>
   </p>;
 }
 

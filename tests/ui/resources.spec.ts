@@ -403,7 +403,9 @@ test('MCP card duplicates a definition under a distinct backend-valid name', asy
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '创建副本' }).click();
+  // Duplicate and delete live in the row menu; the menu renders in a portal.
+  await page.getByRole('button', { name: 'filesystem 的更多操作' }).click();
+  await page.getByRole('menuitem', { name: '创建副本' }).click();
   await expect(page.getByRole('status').filter({ hasText: '已创建副本「filesystem-copy」' })).toBeVisible();
   await expect(page.getByRole('list', { name: 'MCP 列表' }).getByText('filesystem-copy', { exact: true })).toBeVisible();
   const copies = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ id: string; name: string; command: string }> }).__resourceMcpDefinitions);
@@ -412,7 +414,8 @@ test('MCP card duplicates a definition under a distinct backend-valid name', asy
   expect(copies[1].name).toMatch(/^[A-Za-z0-9_-]{1,80}$/);
   expect(copies[1].id).not.toBe('mcp-1');
   expect(copies[1].command).toBe('npx');
-  await page.getByRole('button', { name: '创建副本' }).first().click();
+  await page.getByRole('button', { name: 'filesystem 的更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '创建副本' }).click();
   const tripled = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ name: string }> }).__resourceMcpDefinitions.map((item) => item.name));
   expect(tripled).toEqual(['filesystem', 'filesystem-copy', 'filesystem-copy-2']);
 });
@@ -425,7 +428,9 @@ test('MCP duplicate name stays within the 80 byte backend limit when the source 
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '创建副本' }).click();
+  await page.getByRole('button', { name: `${'a'.repeat(78)} 的更多操作` }).click();
+  await page.getByRole('menuitem', { name: '创建副本' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: unknown[] }).__resourceMcpDefinitions.length)).toBe(2);
   const copies = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ name: string }> }).__resourceMcpDefinitions);
   expect(copies).toHaveLength(2);
   expect(copies[1].name).toMatch(/^[A-Za-z0-9_-]{1,80}$/);
@@ -442,9 +447,11 @@ test('MCP details keep delete, duplicate, edit, and distribution actions', async
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   const card = page.getByRole('list', { name: 'MCP 列表' }).getByRole('listitem').filter({ hasText: 'filesystem' });
-  await expect(card.getByRole('button', { name: '删除' })).toBeVisible();
-  await expect(card.getByRole('button', { name: '创建副本' })).toBeVisible();
   await expect(card.getByRole('button', { name: '修改' })).toBeVisible();
+  await card.getByRole('button', { name: 'filesystem 的更多操作' }).click();
+  await expect(page.getByRole('menuitem', { name: '删除' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: '创建副本' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(card.getByRole('group', { name: 'filesystem 的 CLI · 全局' })).toBeVisible();
   await expect(card.getByRole('button', { name: '编辑并分发' })).toHaveCount(0);
   await expect(card.getByRole('button', { name: '复制 JSON' })).toHaveCount(0);
@@ -907,11 +914,13 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   await library.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(library.getByText('alpha')).toBeVisible();
   await expect(library.getByRole('button', { name: 'Codex · 未安装' })).toBeVisible();
-  await library.getByRole('button', { name: '删除' }).click();
+  await library.getByRole('button', { name: 'alpha 的更多操作' }).click();
+  await page.getByRole('menuitem', { name: '删除' }).click();
   await page.getByRole('button', { name: '删除', exact: true }).last().click();
   await expect(library.getByText('还没有 Skill')).toBeVisible();
   await library.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await library.getByRole('button', { name: '删除' }).click();
+  await library.getByRole('button', { name: 'filesystem 的更多操作' }).click();
+  await page.getByRole('menuitem', { name: '删除' }).click();
   await page.getByRole('button', { name: '删除', exact: true }).last().click();
   await expect(library.getByText('还没有 MCP')).toBeVisible();
 });
@@ -1814,7 +1823,7 @@ test('Skill page keeps the choose-project prompt when an earlier workspace read 
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__heldReads.length)).toBeGreaterThan(0);
-  await page.getByRole('tab', { name: 'Codex' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'Codex', exact: true }).click();
   await expect(page.getByText('请先选择项目目录。')).toBeVisible();
   await page.evaluate(async () => {
     const held = (window as any).__heldReads.splice(0) as Array<() => void>;

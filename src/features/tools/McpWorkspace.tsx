@@ -19,6 +19,7 @@ import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, documentSt
 import { SkeletonRows } from '../../components/Skeleton';
 import i18n from '../../i18n';
 import styles from './McpWorkspace.module.css';
+import { Badge, Button, IconButton } from '../../components/ui';
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -254,7 +255,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   if (listLoading && !nativeEntries.length) listBody = <div className={styles.listWrap} role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
   else listBody = <div className={styles.listWrap}>
     {loadError && !nativeEntries.length && <div className={styles.empty}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><button type="button" onClick={() => void refreshNative()}><Icon name="refresh" size={14} />{t('tools.plugins.rescan')}</button></div>}
-    {!loadError && !nativeEntries.length && <div className={styles.empty}><span className={styles.emptyIcon}><Icon name="connections" size={24} /></span><strong>{t('tools.mcp.emptyTitle')}</strong><p>{t('tools.mcp.emptyDetail')}</p>{scope === 'project' && !project && <p>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</button></div>}
+    {!loadError && !nativeEntries.length && <div className={styles.empty}><span className={styles.emptyIcon}><Icon name="connections" size={24} /></span><strong>{t('tools.mcp.emptyTitle')}</strong><p>{t('tools.mcp.emptyDetail')}</p>{scope === 'project' && !project && <p>{t('tools.mcp.pickProjectFirst')}</p>}<Button variant="primary" disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</Button></div>}
     {nativeEntries.length > 0 && shown.length === 0 && <div className={doc.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><button type="button" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</button></div>}
     {shown.length > 0 && <ul className={doc.rows} aria-label={t('tools.mcp.title')}>{shown.map(item => {
       const summary = mcpSummary(item);
@@ -262,9 +263,9 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
         <span className={doc.rowTitle}><strong>{item.name}</strong></span>
         <span className={doc.rowSummary}>{summary || (item.transport === 'http' ? 'HTTP' : 'stdio')}</span>
         <span className={doc.rowMeta}>
-          <span className={doc.chip} data-tone={item.enabled ? 'on' : 'muted'}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>
-          <span className={doc.chip}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
-          {libraryFor(item.name) && <span className={doc.chip} data-tone="info">{t('tools.mcp.inLibrary')}</span>}
+          <Badge tone={item.enabled ? 'success' : 'neutral'}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+          <Badge>{item.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
+          {libraryFor(item.name) && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
         </span>
       </button></li>;
     })}</ul>}
@@ -275,8 +276,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
       heading={t('tools.mcp.title')}
       count={nativeEntries.length ? (needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })) : undefined}
       actions={<>
-        <button type="button" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()}><Icon name="refresh" size={15} /></button>
-        <button type="button" className={doc.accentButton} aria-label={t('tools.mcp.add')} title={t('tools.mcp.add')} disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={16} /></button>
+        <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()} icon={<Icon name="refresh" size={15} />} />
+        <IconButton variant="primary" size="sm" aria-label={t('tools.mcp.add')} title={t('tools.mcp.add')} disabled={!canAdd} onClick={() => void startNew()} icon={<Icon name="plus" size={16} />} />
       </>}
       search={(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) ? <SearchField type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
       notices={<>{stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}{loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><button type="button" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</button></div>}</>}
@@ -286,15 +287,15 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
         <DocumentHeader
           title={nativeOrigin?.name || t('tools.mcp.newTitle')}
           badges={nativeOrigin ? <>
-            <span className={doc.chip}>{nativeOrigin.transport === 'http' ? 'HTTP' : 'stdio'}</span>
-            <span className={doc.chip} data-tone={enabled ? 'on' : 'muted'}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>
-            {openedLibrary && <span className={doc.chip} data-tone="info">{t('tools.mcp.inLibrary')}</span>}
+            <Badge>{nativeOrigin.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
+            <Badge tone={enabled ? 'success' : 'neutral'}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+            {openedLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
           </> : undefined}
           tools={<>
             {nativeOrigin && <ModeSwitch mode={mode} editable disabled={busy || !!preview} onChange={setMode} />}
             {openedLibrary && onOpenLibrary && <button type="button" onClick={() => onOpenLibrary(openedLibrary.id)}><Icon name="library" size={14} />{t('tools.mcp.openLibrary')}</button>}
             {nativeOrigin && <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removeNative(nativeOrigin)}><Icon name="trash" size={14} />{t('tools.mcp.removeFromTool')}</button>}
-            <button type="button" className={doc.iconButton} aria-label={t('common.dialog.close')} title={t('common.dialog.close')} onClick={() => void closeCompose()}><Icon name="close" size={15} /></button>
+            <IconButton size="sm" className={doc.iconButton} aria-label={t('common.dialog.close')} title={t('common.dialog.close')} onClick={() => void closeCompose()} icon={<Icon name="close" size={15} />} />
           </>}
         />
         {editing ? <>
@@ -320,8 +321,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
           </div>
           <DocumentFoot dirty={dirty} note={t('common.document.saveHint', { mod: modLabel })}>
             {preview && <button type="button" disabled={busy} onClick={() => { setPreview(null); setAllowReplace(false); }}>{t('library.resources.back')}</button>}
-            {preview ? <button type="button" className={styles.primary} disabled={busy || preview.targets.some(item => item.status === 'conflict') && !allowReplace || preview.targets.every(item => item.status !== 'ready' && item.status !== 'conflict')} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</button>
-              : <button type="button" className={styles.primary} title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button>}
+            {preview ? <Button variant="primary" disabled={busy || preview.targets.some(item => item.status === 'conflict') && !allowReplace || preview.targets.every(item => item.status !== 'ready' && item.status !== 'conflict')} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</Button>
+              : <Button variant="primary" title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</Button>}
           </DocumentFoot>
         </> : nativeOrigin && <div className={doc.body}><McpDetails key={nativeOrigin.name} statusInHeader item={{ ...nativeOrigin, enabled }} /></div>}
       </article> : null}

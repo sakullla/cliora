@@ -1,4 +1,6 @@
+import type { ReactNode } from 'react';
 import { ExternalLink } from '../../components/ExternalLink';
+import { Badge, Button } from '../../components/ui';
 import { Icon } from '../../components/Icon';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -71,8 +73,10 @@ function compareVersions(current: string, latest: string) {
   return 0;
 }
 
-export function InstallPanel({ toolName, probe, customPath, busy, loading, onCustomPath, onSavePath, onMaintain, onUsePath }: {
+export function InstallPanel({ toolName, heading, probe, customPath, busy, loading, onCustomPath, onSavePath, onMaintain, onUsePath }: {
   toolName: string;
+  /** The CLI header (h2) shown in the summary in place of the plain name. */
+  heading?: ReactNode;
   probe: Omit<ToolProbe, 'tool'> & { tool: string };
   customPath: string;
   busy: boolean;
@@ -124,9 +128,8 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const canUpdate = Boolean(selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported'));
   return <details className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
     <summary>
-      <span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} data-update={behind || undefined} />
-      <strong>{toolName}</strong>
-      {selected && <span className={styles.installSourceBadge}>{sourceLabel(selected.source)}</span>}
+      {heading ?? <strong>{toolName}</strong>}
+      {selected && <Badge className={styles.installSourceBadge} tone={behind ? 'warning' : probe.nativeWrites.state === 'supported' ? 'success' : 'neutral'} dot>{sourceLabel(selected.source)}</Badge>}
       <span className={styles.installSummaryText} data-state={behind ? 'behind' : current ? 'current' : undefined}>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span>
       <span className={styles.diagnosticLabel}>{t('tools.install.label')}</span>
     </summary>
@@ -135,7 +138,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
         <div className={styles.releaseCard}>
           <div className={styles.releaseHead}>
             <span>{t('tools.install.currentVersion')}</span>
-            <span className={styles.releaseChannel}>{sourceLabel(selected.source)} · {fileName(selected.path)}</span>
+            <Badge className={styles.releaseChannel}>{sourceLabel(selected.source)} · {fileName(selected.path)}</Badge>
           </div>
           <strong className={styles.releaseVersion}>{currentVersion || t('tools.install.unknown')}</strong>
           <small className={styles.releasePath} title={selected.path}>{selected.path}</small>
@@ -143,7 +146,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
         <div className={styles.releaseCard} data-state={behind ? 'behind' : current ? 'current' : undefined}>
           <div className={styles.releaseHead}>
             <span>{t('tools.install.latestVersion')}</span>
-            {latest.state === 'unknown' && <button type="button" className={styles.retryVersionBtn} onClick={() => setRetry(value => value + 1)}><Icon name="refresh" size={12} />{t('tools.install.retryVersion')}</button>}
+            {latest.state === 'unknown' && <Button variant="ghost" size="sm" className={styles.retryVersionBtn} icon={<Icon name="refresh" size={12} />} onClick={() => setRetry(value => value + 1)}>{t('tools.install.retryVersion')}</Button>}
           </div>
           <strong className={styles.releaseVersion}>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t(latest.state === 'unsupported' ? 'tools.install.officialVersion' : 'tools.install.notFound')}</strong>
           <small title={latestNote}>{latestNote}</small>
@@ -154,9 +157,9 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       </div>}
       {alternates.length > 0 && <div className={styles.installAlternates}>
         {alternates.map(item => <div className={styles.installRow} key={item.path}>
-          <strong>{sourceLabel(item.source)}</strong>
+          <Badge>{sourceLabel(item.source)}</Badge>
           <span title={item.path}>{item.version ?? t('tools.install.unknownVersion')} · {fileName(item.path)}</span>
-          <button type="button" disabled={busy} title={t('tools.install.useTitle')} onClick={() => onUsePath(item.path)}>{t('tools.install.use')}</button>
+          <Button size="sm" disabled={busy} title={t('tools.install.useTitle')} onClick={() => onUsePath(item.path)}>{t('tools.install.use')}</Button>
         </div>)}
       </div>}
       {(failed.length > 0 || (hasNpm && hasNative) || problems.length > 0 || Boolean(selected && !probe.majorUpgrade?.command && probe.majorUpgrade?.guidance)) && <div className={styles.installDiagnostics}>
@@ -168,20 +171,20 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       <div className={styles.installFooter}>
         <div className={styles.installActions}>
           {!selected && multiple && <>
-            <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</button>
-            <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</button>
+            <Button variant={preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>
+            <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</Button>
           </>}
-          {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</button>}
-          {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{t('tools.install.install')}</button>}
-          {canUpdate && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined, target)}>{updateLabel}</button>}
-          {selected && probe.majorUpgrade?.command && <button type="button" disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</button>}
+          {selected && multiple && !hasNative && <Button disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>}
+          {!selected && !multiple && probe.installCommand && <Button variant="primary" disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{t('tools.install.install')}</Button>}
+          {canUpdate && <Button variant="primary" disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined, target)}>{updateLabel}</Button>}
+          {selected && probe.majorUpgrade?.command && <Button disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</Button>}
           {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
         </div>
         <details className={styles.pathCustom} open={Boolean(customPath.trim()) || undefined}>
           <summary>{t('tools.install.customPath')}</summary>
           <div className={styles.pathCustomRow}>
             <input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} />
-            <button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button>
+            <Button disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</Button>
           </div>
         </details>
       </div>

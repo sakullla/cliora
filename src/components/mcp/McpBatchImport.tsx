@@ -5,6 +5,7 @@ import type { McpCommitResult, McpDraft, McpDraftPreview } from '../../types/res
 import { CodeEditor } from '../CodeEditor';
 import { Icon } from '../Icon';
 import styles from './McpBatchImport.module.css';
+import { Badge, Button } from '../ui';
 
 function failure(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
@@ -95,7 +96,7 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
             <input type="checkbox" aria-label={t('tools.mcp.batchSelect', { name: row.draft.name || index + 1 })} checked={row.selected} disabled={busy || !!issue || complete} onChange={event => patch(row.key, { selected: event.target.checked, preview: null, error: '', replace: false })} />
             <span><strong>{row.draft.name || t('tools.mcp.batchUnnamed', { index: index + 1 })}</strong><small>{row.draft.transport === 'http' ? 'HTTP' : 'stdio'} · {mcpSummary(row.draft) || '—'}</small></span>
           </label>
-          <span className={styles.state}>{row.pending ? t('tools.mcp.batchPending') : complete ? t('tools.mcp.batchDone') : partial ? t('tools.mcp.batchPartial') : row.error ? t('tools.mcp.batchFailed') : issue ? t('tools.mcp.batchNeedsInput') : row.preview ? t('tools.mcp.batchReady') : t('tools.mcp.batchWaiting')}</span>
+          <Badge className={styles.state} tone={row.pending ? 'info' : complete ? 'success' : partial ? 'warning' : row.error ? 'danger' : issue ? 'warning' : row.preview ? 'accent' : 'neutral'}>{row.pending ? t('tools.mcp.batchPending') : complete ? t('tools.mcp.batchDone') : partial ? t('tools.mcp.batchPartial') : row.error ? t('tools.mcp.batchFailed') : issue ? t('tools.mcp.batchNeedsInput') : row.preview ? t('tools.mcp.batchReady') : t('tools.mcp.batchWaiting')}</Badge>
         </div>
         {issue && <p className={styles.error}>{issue}</p>}
         {row.error && <p className={styles.error} role="alert">{row.error}</p>}
@@ -117,8 +118,8 @@ export function McpBatchImport({ items, onPreview, onCommit, onCancel, onDefinit
     <div className="dialog-footer">
       <button type="button" disabled={busy} onClick={onCancel}>{t('library.resources.back')}</button>
       <span className="dialog-footer-gap" />
-      {!reviewed || needsPreview ? <button type="button" className={styles.primary} data-dialog-save disabled={busy || !selectedCount} onClick={() => void preview()}>{t('tools.mcp.batchPreview', { count: selectedCount })}</button>
-        : <button type="button" className={styles.primary} data-dialog-save disabled={busy || !canConfirm} onClick={() => void commit()}>{t('tools.mcp.batchConfirm', { count: confirmable.length })}</button>}
+      {!reviewed || needsPreview ? <Button variant="primary" data-dialog-save disabled={busy || !selectedCount} onClick={() => void preview()}>{t('tools.mcp.batchPreview', { count: selectedCount })}</Button>
+        : <Button variant="primary" data-dialog-save disabled={busy || !canConfirm} onClick={() => void commit()}>{t('tools.mcp.batchConfirm', { count: confirmable.length })}</Button>}
     </div>
   </div>;
 }

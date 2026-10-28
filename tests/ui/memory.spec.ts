@@ -141,6 +141,9 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
   }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies });
 }
 
+/** A managed CLI in the sidebar group under 工具与连接. */
+const cliItem = (page: Page, name: string) => page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name, exact: true });
+
 async function openWorkspace(page: Page) {
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
@@ -150,7 +153,7 @@ async function openWorkspace(page: Page) {
 
 async function openMemory(page: Page, tool = 'Alpha') {
   await openWorkspace(page);
-  if (tool !== 'Alpha') await page.getByRole('tab', { name: tool, exact: true }).click();
+  if (tool !== 'Alpha') await cliItem(page, tool).click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByRole('region', { name: '记忆' })).toBeVisible();
 }
@@ -242,11 +245,11 @@ test('the memory list leads with title, summary, and user or project scope', asy
   expect((await memoryCalls(page)).filter(call => call.command === 'list_all_memories').every(call => call.args.toolId === 'alpha')).toBe(true);
 
   // A CLI without a verified memory declaration never offers the tab.
-  await page.getByRole('tab', { name: 'Gamma', exact: true }).click();
+  await cliItem(page, 'Gamma').click();
   await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
 
   // A read-only CLI lists and reads but hides every write control.
-  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await cliItem(page, 'Beta').click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByTitle(readOnlyLimitation)).toBeVisible();
   await expect(region.getByRole('heading', { name: '记忆', exact: true })).toHaveCount(0);
@@ -569,7 +572,7 @@ test('create picks a destination and states the write location', async ({ page }
   expect((await memoryCalls(page)).find(call => call.command === 'save_memory' && call.args.request?.id === 'b-created')?.args.request).toMatchObject({ target: { scope: 'project', projectPath: 'C:/B', storeDirectory: alphaBStore } });
 
   // A project-only CLI without stores falls back to the stored configuration project.
-  await page.getByRole('tab', { name: 'Delta', exact: true }).click();
+  await cliItem(page, 'Delta').click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await page.getByRole('button', { name: '新建记忆' }).first().click();
   await expect(page.getByText('写入位置：C:/A')).toBeVisible();
@@ -732,7 +735,7 @@ test('refresh preserves drafts and switching tools ignores old queued batches', 
   await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.revision = 3; p.hold = true; });
   await page.getByRole('button', { name: '刷新记忆' }).click();
   await expect.poll(async () => (await batchState(page)).active).toBe(2);
-  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await cliItem(page, 'Beta').click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
   await expect.poll(async () => (await batchState(page)).active).toBe(0);
@@ -745,10 +748,10 @@ test('switching tools reuses a recent memory index instead of enumerating again'
   await openMemory(page);
   await expect(entryButton(page, 'entry-99')).toBeVisible();
   expect(await batchState(page)).toMatchObject({ lists: 1, bodies: 0 });
-  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await cliItem(page, 'Beta').click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(entryButton(page, 'beta-note')).toBeVisible();
-  await page.getByRole('tab', { name: 'Alpha', exact: true }).click();
+  await cliItem(page, 'Alpha').click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(entryButton(page, 'entry-99')).toBeVisible();
   expect(await batchState(page)).toMatchObject({ lists: 1 });

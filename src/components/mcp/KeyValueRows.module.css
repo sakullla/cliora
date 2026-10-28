@@ -1,21 +1,20 @@
-/* style-tokens: pending */
-.rowsField { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
-.rowsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
-.rowsLabel { display: inline-flex; align-items: center; gap: 6px; }
+.rowsField { display: grid; gap: var(--space-1_5); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.rowsHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 26px; }
+.rowsLabel { display: inline-flex; align-items: center; gap: var(--space-1_5); }
 .count {
-  padding: 0 7px;
-  border-radius: 99px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
   line-height: 16px;
 }
-.rows { display: grid; gap: 6px; }
+.rows { display: grid; gap: var(--space-1_5); }
 .row {
   display: grid;
   grid-template-columns: minmax(0, 5fr) auto minmax(0, 7fr) auto;
-  gap: 6px;
+  gap: var(--space-1_5);
   align-items: center;
 }
 .row[data-single='true'] { grid-template-columns: minmax(0, 1fr) auto; }
@@ -30,9 +29,9 @@
 .row[data-blank]:hover .rowOps, .row[data-blank]:focus-within .rowOps { opacity: 1; }
 /* Keeps role=textbox (unlike type=password) while hiding a literal secret. */
 .row input[data-masked] { -webkit-text-security: disc; letter-spacing: .08em; }
-.rowOps { display: inline-flex; flex: none; align-items: center; gap: 2px; }
+.rowOps { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); }
 .value { position: relative; display: block; min-width: 0; }
-.value[data-secret] > input { padding-right: 32px; }
+.value[data-secret] > input { padding-right: var(--space-8); }
 .reveal {
   position: absolute;
   top: 50%;
@@ -70,12 +69,12 @@
 .add {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1_5);
   width: fit-content;
   min-height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--space-2_5);
   border: 1px solid transparent;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: transparent;
   box-shadow: none;
   color: var(--accent);

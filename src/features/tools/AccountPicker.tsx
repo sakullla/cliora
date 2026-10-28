@@ -6,6 +6,7 @@ import type { AuthAccount } from '../../types/accounts';
 import { accountReadyForSelection, accountStateLabel, useAccounts } from './AccountsPanel';
 import i18n from '../../i18n';
 import styles from './AccountPicker.module.css';
+import { Button } from '../../components/ui';
 
 export type AccountPickerProps = {
   toolId: string;
@@ -142,7 +143,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
       return <li key={account.id} aria-label={account.label}>
         <div><strong>{account.label}</strong><span>{cancelledAccounts.current.has(account.id) ? t('tools.accounts.statusCancelled') : accountStateLabel(account.state)}{account.id === selectedAccountId ? t('tools.accounts.draftSelected') : ''}</span></div>
         <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}</p>
-        <div className={styles.actions}><button className={styles.primary} disabled={busy || waiting || !selectable} onClick={() => void select(account)}>{t('tools.accounts.selectAndBack')}</button>
+        <div className={styles.actions}><Button variant="primary" disabled={busy || waiting || !selectable} onClick={() => void select(account)}>{t('tools.accounts.selectAndBack')}</Button>
           {account.pendingLogin && account.id === loginAccountId && <button disabled={busy} onClick={() => void cancel()}>{t('tools.accounts.cancelLogin')}</button>}
           {account.pendingLogin?.operation === 'login' && account.id === loginAccountId && state.capability?.browserLink && <button disabled={busy} onClick={() => {
             const request = ++sequence.current; setBusy(true); setError('');
@@ -157,7 +158,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     {state.capability?.managedLogin && <><button disabled={busy || waiting} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseCreate') : t('tools.accounts.createLogin')}</button>
       {creating && <div className={styles.create}><label>{t('tools.accounts.accountName')}<input value={label} onChange={event => setLabel(event.target.value)} /></label>
         {methods.length > 1 && <label>{t('tools.accounts.loginMethod')}<select value={selectedMethod} onChange={event => setMethod(event.target.value as 'browser' | 'device')}>{methods.map(value => <option key={value} value={value}>{metadata?.methods?.[value] ?? (value === 'device' ? t('tools.accounts.methodDevice') : t('tools.accounts.methodBrowser'))}</option>)}</select></label>}
-        <p>{metadata?.managedDescription}</p><button className={styles.primary} disabled={busy || waiting || !label.trim() || !selectedMethod} onClick={() => void login()}>{t('tools.accounts.addAndLogin')}</button></div>}
+        <p>{metadata?.managedDescription}</p><Button variant="primary" disabled={busy || waiting || !label.trim() || !selectedMethod} onClick={() => void login()}>{t('tools.accounts.addAndLogin')}</Button></div>}
     </>}
     {state.capability && <details><summary>{t('tools.accounts.capabilitySummary')}</summary><p>{state.capability.reason}</p></details>}
   </section>;

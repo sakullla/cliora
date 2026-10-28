@@ -535,11 +535,14 @@ test('account tool identity suppresses delayed operations across A to B and back
   await page.evaluate(() => { (window as any).workspaceFixture.delayAccountCheck = true; });
   await oldA.getByRole('button', { name: '检查状态' }).click();
   await expect.poll(() => page.evaluate(() => !!(window as any).workspaceFixture.releaseAccountCheck)).toBe(true);
-  await page.getByRole('tab', { name: 'pi', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'pi', exact: true }).click();
+  // The sidebar restores each CLI's own last capability tab; open 账号 explicitly.
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
   const b = page.getByRole('listitem').filter({ has: page.getByText('pi-a账号', { exact: true }) });
   await b.getByText('管理与关联', { exact: true }).click();
   await expect(b.getByRole('button', { name: '检查状态' })).toBeEnabled();
-  await page.getByRole('tab', { name: 'codex', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'codex', exact: true }).click();
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
   const newA = page.getByRole('listitem').filter({ has: page.getByText('a账号', { exact: true }) });
   await newA.getByText('管理与关联', { exact: true }).click();
   await expect(newA.getByRole('button', { name: '检查状态' })).toBeEnabled();

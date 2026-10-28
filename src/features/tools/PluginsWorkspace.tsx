@@ -15,6 +15,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { DocumentHeader, DocumentWorkspace, documentStyles as doc } from './DocumentWorkspace';
 import i18n from '../../i18n';
+import { Badge, Button, IconButton } from '../../components/ui';
 
 function actionLabel(action: PluginAction) { return i18n.t(`tools.plugins.action.${action}`); }
 function stateLabel(state: string) { return i18n.t(`tools.plugins.state.${state}`, { defaultValue: state }); }
@@ -207,7 +208,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     <div className={styles.installHeading}><span className={styles.installGlyph} aria-hidden="true"><Icon name="package" size={17} /></span><div><h3>{t('tools.plugins.installTitle')}</h3><p>{t('tools.plugins.sourceHint', { sources: snapshot.capability.sources })}</p></div></div>
     <div className={styles.installControls}>
       <div className={styles.create}><label>{t('tools.plugins.source')}<input ref={sourceInput} aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} aria-invalid={!!source && !!sourceIssue} aria-describedby="plugin-source-error" /></label>
-        <button type="button" className={styles.primary} disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
+        <Button variant="primary" disabled={!source.trim() || !trusted || !!sourceIssue || !canInstall} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</Button></div>
       <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} /> {t('tools.plugins.trust')}{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? t('tools.plugins.trustProject') : ''}</label>
       {source && sourceIssue && <p id="plugin-source-error" className={styles.fieldError}>{t(`tools.plugins.${sourceIssue}`)}</p>}
     </div>
@@ -217,26 +218,26 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   return <DocumentWorkspace label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.toolbar')} backLabel={t('common.dialog.back')} onBack={closeDetails}
     heading={t('tools.plugins.title')}
     count={countText}
-    actions={<button type="button" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()}><Icon name="refresh" size={15} /></button>}
+    actions={<IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()} icon={<Icon name="refresh" size={15} />} />}
     search={snapshot ? <SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
     filters={snapshot ? <select className={styles.filter} aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select> : undefined}
     notices={<>
       {busy && snapshot && <p className={styles.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p>}
-      {stale && snapshot?.baseline && <div className={styles.stale} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><button type="button" disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div>}
+      {stale && snapshot?.baseline && <div className={styles.staleNotice} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><Button size="sm" disabled={busy || operations.some(item => item.status === 'queued' || item.status === 'running')} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</Button></div>}
       {operations.length > 0 && <div className={styles.queue} aria-label={t('tools.plugins.queueLabel')}><div className={styles.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(item => <div className={styles.queueRow} key={item.id} data-state={item.status}><span><strong>{actionLabel(item.action)} · {item.name}</strong>{item.detail && <small>{item.detail}</small>}</span><span className={styles.queueState}>{t(`tools.plugins.operationState.${item.status}`)}</span>{item.status === 'queued' && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.cancelQueued')}</button>}{item.status === 'failed' && <button type="button" disabled={item.action === 'install' && (!source.trim() || !trusted || !!sourceIssue || !canInstall)} onClick={() => { if (item.action === 'install') { void operate('install'); return; } setError(''); setOperations(current => current.map(entry => entry.id === item.id ? { ...entry, status: 'queued', detail: undefined } : entry)); }}>{t('tools.plugins.retry')}</button>}</div>)}</div>}
     </>}
     listFooterLabel={t('tools.plugins.compatSummary')}
     listFooter={snapshot ? <>
-      <span className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></span>
+      <span className={styles.context}><Badge>{scope === 'global' ? scopeLabel('user') : projectPath}</Badge><Badge>{accountLabel(contextId)}</Badge></span>
       <details className={styles.compatibility}><summary>{t('tools.plugins.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>
     </> : undefined}
     list={<div className={styles.listWrap}>
       {install}
       {busy && !snapshot && <div role="status" aria-label={t('tools.plugins.loading')}><SkeletonRows count={3} /></div>}
-      {showFailed && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<button type="button" className="button primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+      {showFailed && <EmptyState title={t('tools.plugins.loadFailedTitle')} detail={t('tools.plugins.loadFailedDetail')} action={<Button variant="primary" onClick={() => void refresh()}>{t('tools.plugins.rescan')}</Button>} />}
       {showEmpty && <EmptyState title={t('tools.plugins.emptyTitle')} detail={[canInstall ? t('tools.plugins.emptyInstallable') : t('tools.plugins.emptyNone'), snapshot?.detail, canInstall ? '' : snapshot?.capability.detail].filter(Boolean).join(' ')} action={canInstall
-        ? <button type="button" className="button primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</button>
-        : <button type="button" className="button primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button>} />}
+        ? <Button variant="primary" onClick={() => sourceInput.current?.focus()}>{t('tools.plugins.installDefault')}</Button>
+        : <Button variant="primary" disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</Button>} />}
       {!showFailed && !showEmpty && filtered.length === 0 && entries.length > 0 && <div className={styles.noMatch}><strong>{t('tools.plugins.noMatch')}</strong><p>{t('tools.plugins.noMatchDetail')}</p><button type="button" onClick={clearFilters}>{t('tools.plugins.clearFilter')}</button></div>}
       {filtered.length > 0 && <ul className={doc.rows} aria-label={t('tools.plugins.title')}>{filtered.map(entry => {
         const key = pluginKey(entry);
@@ -245,10 +246,10 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
           <span className={doc.rowTitle}><strong>{entry.name}</strong></span>
           <span className={doc.rowSummary}>{displayPath(entry.source)} · {scopeLabel(entry.scope)}</span>
           <span className={doc.rowMeta}>
-            <span className={doc.chip} data-tone={entry.enabled ? 'on' : 'muted'}>{statusLabel(entry)}</span>
-            <span className={doc.chip}>{stateLabel(entry.state)}</span>
-            {entry.readOnly && <span className={doc.chip}>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</span>}
-            {pending && <span className={doc.chip} data-tone="warn">{t(`tools.plugins.operationState.${pending.status}`)}</span>}
+            <Badge tone={entry.enabled ? 'success' : 'neutral'}>{statusLabel(entry)}</Badge>
+            <Badge>{stateLabel(entry.state)}</Badge>
+            {entry.readOnly && <Badge>{snapshot?.baseline ? t('tools.plugins.readonly') : t('tools.plugins.pendingReview')}</Badge>}
+            {pending && <Badge tone="warning">{t(`tools.plugins.operationState.${pending.status}`)}</Badge>}
           </span>
         </button></li>;
       })}</ul>}
@@ -258,13 +259,13 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
       <DocumentHeader
         title={opened.name}
         badges={<>
-          <span className={doc.chip} data-tone={opened.enabled ? 'on' : 'muted'}>{stateLabel(opened.state)}</span>
-          {opened.readOnly && <span className={doc.chip}>{t('tools.plugins.readonly')}</span>}
-          {operation && <span className={doc.chip} data-tone="warn">{t(`tools.plugins.operationState.${operation.status}`)}</span>}
+          <Badge tone={opened.enabled ? 'success' : 'neutral'}>{stateLabel(opened.state)}</Badge>
+          {opened.readOnly && <Badge>{t('tools.plugins.readonly')}</Badge>}
+          {operation && <Badge tone="warning">{t(`tools.plugins.operationState.${operation.status}`)}</Badge>}
         </>}
         tools={<>
-          {entryActions(opened).map(action => <button type="button" key={action} className={action === 'uninstall' ? styles.danger : action === 'update' ? styles.primary : undefined} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</button>)}
-          <button type="button" className={doc.iconButton} aria-label={t('tools.plugins.closeDetails')} title={t('tools.plugins.closeDetails')} onClick={closeDetails}><Icon name="close" size={15} /></button>
+          {entryActions(opened).map(action => <Button size="sm" key={action} variant={action === 'uninstall' ? 'danger' : action === 'update' ? 'primary' : 'secondary'} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</Button>)}
+          <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.closeDetails')} title={t('tools.plugins.closeDetails')} onClick={closeDetails} icon={<Icon name="close" size={15} />} />
         </>}
       />
       <div className={doc.body}><div className={styles.pluginDetails}>
