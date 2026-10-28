@@ -1,8 +1,10 @@
 /**
  * One command for the UI capture acceptance run (02 ADR-7): build the frontend, serve it with
  * vite preview on 127.0.0.1:14736, run the four capture scripts over all themes and widths, then
- * stop the preview. Output goes to docs/verification/ui-redesign/<script>. Any failing script makes
- * the run exit non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
+ * stop the preview. The scripts run as one job per theme × width, a few at a time, so the run fits
+ * a 900 s command budget. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
+ * each with the script's own gallery, manifest and job.log. Any failing job makes the run exit
+ * non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
  * not native platform acceptance.
  */
 import { spawn } from 'node:child_process';
@@ -14,19 +16,26 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const port = 14736;
 const previewUrl = `http://127.0.0.1:${port}`;
 const outRoot = path.join(root, 'docs', 'verification', 'ui-redesign');
-const matrix = ['--theme', 'all', '--size', 'all'];
-const captures = [
-  { script: 'capture-ui', args: [...matrix, '--measure'], manifest: 'capture-ui-manifest.json' },
-  { script: 'capture-sync', args: matrix, manifest: 'capture-sync-manifest.json' },
-  { script: 'capture-workbench', args: matrix, manifest: 'capture-workbench-manifest.json' },
-  { script: 'capture-memory', args: matrix, manifest: 'capture-memory-manifest.json' },
-];
+const themes = ['light', 'dark'];
+const widths = [1360, 900, 640];
+// Independent capture jobs share the one preview server; a bounded pool keeps the whole run well
+// inside a 900 s command budget. Each job covers one theme × width of one script and writes to
+// docs/verification/ui-redesign/<script>/<theme>-<width>; only capture-ui light/1360 measures.
+const poolSize = 4;
+const scripts = ['capture-ui', 'capture-sync', 'capture-workbench', 'capture-memory'];
+const jobs = scripts.flatMap((script) => themes.flatMap((theme) => widths.map((width) => ({
+  script,
+  label: `${theme}-${width}`,
+  args: ['--theme', theme, '--size', String(width), ...(script === 'capture-ui' && theme === 'light' && width === 1360 ? ['--measure'] : [])],
+  manifest: `${script}-manifest.json`,
+}))));
 
-function run(args, env = {}) {
+function run(args, env = {}, logFile = null) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true, env: { ...process.env, ...env } });
-    child.on('error', reject);
-    child.on('close', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
+    const log = logFile ? fs.openSync(logFile, 'w') : null;
+    const child = spawn(process.execPath, args, { cwd: root, stdio: log === null ? 'inherit' : ['ignore', log, log], windowsHide: true, env: { ...process.env, ...env } });
+    child.on('error', (error) => { if (log !== null) fs.closeSync(log); reject(error); });
+    child.on('close', (code, signal) => { if (log !== null) fs.closeSync(log); resolve(code ?? (signal ? 1 : 0)); });
   });
 }
 
@@ -71,27 +80,52 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   if (!ready) throw new Error(previewExit === null ? `vite preview 30 秒内未就绪：${previewUrl}` : `vite preview 提前退出（退出码 ${previewExit}）`);
-  for (const { script, args, manifest } of captures) {
-    const out = path.join(outRoot, script);
-    // Each run replaces its own output so stale images from earlier runs are not reported as current.
-    fs.rmSync(out, { recursive: true, force: true });
+  // Each run replaces its own output so stale images from earlier runs are not reported as current.
+  for (const script of scripts) fs.rmSync(path.join(outRoot, script), { recursive: true, force: true });
+  console.log(`> ${jobs.length} capture jobs, ${poolSize} at a time → ${path.relative(root, outRoot)}/<script>/<theme>-<width> (log in job.log)`);
+  const started = Date.now();
+  const runJob = async ({ script, label, args, manifest }) => {
+    const out = path.join(outRoot, script, label);
     fs.mkdirSync(out, { recursive: true });
-    console.log(`> ${script} ${args.join(' ')} → ${path.relative(root, out)}`);
-    const code = await run([`scripts/${script}.mjs`, ...args], { CLIORA_PREVIEW_URL: previewUrl, CLIORA_CAPTURE_OUT: out.replace(/\\/g, '/') });
-    const failing = code === 0 ? [] : failingScenarios(script, path.join(out, manifest));
-    results.push({ script, code, failing });
-  }
+    const jobStart = Date.now();
+    let code;
+    try {
+      code = await run([`scripts/${script}.mjs`, ...args], { CLIORA_PREVIEW_URL: previewUrl, CLIORA_CAPTURE_OUT: out.replace(/\\/g, '/') }, path.join(out, 'job.log'));
+    } catch (error) {
+      code = 1;
+      fs.appendFileSync(path.join(out, 'job.log'), `\n${error.message}\n`);
+    }
+    let failing = [];
+    if (code !== 0) {
+      try { failing = failingScenarios(script, path.join(out, manifest)); } catch (error) { failing = [`(manifest unreadable: ${error.message})`]; }
+      if (!failing.length) failing = [`(no failing scenario in manifest; see ${path.relative(root, path.join(out, 'job.log'))})`];
+    }
+    console.log(`  ${code === 0 ? 'ok  ' : 'FAIL'} ${script} ${args.join(' ')} (${Math.round((Date.now() - jobStart) / 1000)} s)`);
+    results.push({ script, label, code, failing });
+  };
+  const queue = [...jobs];
+  await Promise.all(Array.from({ length: Math.min(poolSize, queue.length) }, async () => {
+    while (queue.length) await runJob(queue.shift());
+  }));
+  console.log(`> captures finished in ${Math.round((Date.now() - started) / 1000)} s`);
 } catch (error) {
   console.error(error.message);
-  results.push({ script: 'preview', code: 1, failing: [error.message] });
+  results.push({ script: 'preview', label: '', code: 1, failing: [error.message] });
 } finally {
   stopPreview();
 }
 
 console.log('\n截图验收结果（合成 IPC，仅浏览器界面检查，不是原生平台验收）：');
-for (const { script, code, failing } of results) {
-  console.log(`- ${script}: ${code === 0 ? '通过' : `失败（退出码 ${code}）`}`);
-  for (const item of failing) console.log(`    ${item}`);
+for (const script of scripts) {
+  const own = results.filter((item) => item.script === script);
+  const bad = own.filter((item) => item.code !== 0);
+  const passed = own.length === jobs.filter((job) => job.script === script).length && !bad.length;
+  console.log(`- ${script}: ${passed ? '通过' : own.length ? `失败（${bad.length}/${own.length} 组非零退出）` : '未运行'}`);
+  for (const { label, code, failing } of bad) {
+    console.log(`  ${label}（退出码 ${code}）`);
+    for (const item of failing) console.log(`    ${item}`);
+  }
 }
+for (const { failing } of results.filter((item) => item.script === 'preview')) for (const item of failing) console.log(`- preview: ${item}`);
 const failed = results.filter((item) => item.code !== 0);
-if (failed.length || results.length < captures.length) process.exitCode = 1;
+if (failed.length || results.length < jobs.length) process.exitCode = 1;
