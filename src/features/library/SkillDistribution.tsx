@@ -11,6 +11,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { SkillInstallation, SkillPackage, SkillTargetPreview } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
 import { CliTargetGrid } from './CliTargetGrid';
+import { Button } from '../../components/ui';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -92,7 +93,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
       {placed.length ? <ul className={styles.installed}>{placed.map((entry) => <li key={`${entry.toolId}:${entry.scope}:${entry.projectPath ?? ''}:${entry.contextId ?? 'default'}`}>
         <ToolIcon toolId={entry.toolId} size={22} />
         <span><strong>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId}</strong><small>{scopeLabel(entry.scope, entry.projectPath, projects)} · {stateLabel(entry.state)}{` · ${contextLabel(entry.contextId)}`}</small></span>
-        <button type="button" disabled={busy || !contexts.ready(entry)} onClick={() => void remove(entry)}>{t('library.skillDist.removeAction')}</button>
+        <Button size="sm" disabled={busy || !contexts.ready(entry)} onClick={() => void remove(entry)}>{t('library.skillDist.removeAction')}</Button>
       </li>)}</ul> : <p>{t('library.skillDist.notInstalled')}</p>}
     </section>
     <section className={styles.skillSection}>
@@ -114,13 +115,13 @@ export function SkillDistribution({ item, tools, projects, installations, initia
         }} />
       </div>
       <CliTargetGrid tools={tools} selected={selected} disabled={(id) => !contexts.ready(targetFor(id))} onToggle={(id, checked) => { setSelected(checked ? [...selected, id] : selected.filter((item) => item !== id)); setPending([]); }} />
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.some((id) => contexts.ready(targetFor(id)))} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? t('library.skillDist.syncSelected') : t('library.skillDist.installSelected')}</button></div>
+      <div className={styles.actions}><Button variant={pending.length ? 'secondary' : 'primary'} disabled={busy || !selected.some((id) => contexts.ready(targetFor(id)))} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? t('library.skillDist.syncSelected') : t('library.skillDist.installSelected')}</Button></div>
     </section>
     {!!pending.length && <section className={styles.skillSection}>
       <h3>{t('library.skillDist.conflictTitle')}</h3>
       <p>{t('library.skillDist.conflictHint')}</p>
       {pending.map((entry) => <p key={entry.toolId}>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId} · {entry.detail}</p>)}
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void install(true)}>{t('library.skillDist.confirmReplace')}</button></div>
+      <div className={styles.actions}><Button variant="primary" disabled={busy} onClick={() => void install(true)}>{t('library.skillDist.confirmReplace')}</Button></div>
     </section>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
     {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: tools.find((tool) => tool.id === issue.toolId)?.name ?? issue.toolId, scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}

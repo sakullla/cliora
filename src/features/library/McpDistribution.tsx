@@ -11,10 +11,13 @@ import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpT
 import { samePath, scopeLabel } from './CliMarks';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
+import { Badge, Button, Switch } from '../../components/ui';
+import type { Tone } from '../../lib/statusTone';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
 
 type TargetState = 'loading' | 'blocked' | 'placed' | 'removing' | 'adding' | 'idle';
+const targetTone: Record<TargetState, Tone> = { loading: 'neutral', blocked: 'danger', placed: 'accent', removing: 'warning', adding: 'success', idle: 'neutral' };
 
 function text(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -255,8 +258,8 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`} data-mcp-targets>
       <div className={styles.panelHead}>
         <div className={styles.panelTitleRow}>
-          <h3 id={`${panelId}-title`}><Icon name="connections" size={16} />{t('library.distribute.title')}<span className={styles.targetCount} aria-hidden="true">{selected.length}/{tools.length}</span></h3>
-          {readyToolIds.length > 1 && <button type="button" className={styles.quickSelectBtn} onClick={() => choose(allReadySelected ? [] : readyToolIds)}>{t(allReadySelected ? 'settings.migration.deselectAll' : 'settings.migration.selectAll')}</button>}
+          <h3 id={`${panelId}-title`}><Icon name="connections" size={16} />{t('library.distribute.title')}<Badge tone="accent" aria-hidden="true">{selected.length}/{tools.length}</Badge></h3>
+          {readyToolIds.length > 1 && <Button variant="ghost" size="sm" onClick={() => choose(allReadySelected ? [] : readyToolIds)}>{t(allReadySelected ? 'settings.migration.deselectAll' : 'settings.migration.selectAll')}</Button>}
         </div>
         <p>{t('library.distribute.description')}</p>
       </div>
@@ -269,12 +272,12 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
         <label title={row.state === 'placed' ? t('library.distribute.placedTitle') : row.state === 'idle' ? t('library.distribute.unplacedTitle') : undefined}>
           <ToolIcon toolId={row.tool.id} size={22} />
           <span className={styles.targetName}>{row.tool.name}</span>
-          <small className={styles.targetState} id={`${panelId}-${row.tool.id}`} title={row.status}>{row.status}</small>
+          <Badge className={styles.targetState} tone={targetTone[row.state]} id={`${panelId}-${row.tool.id}`} title={row.status}>{row.status}</Badge>
           <input type="checkbox" aria-label={row.tool.name} aria-describedby={`${panelId}-${row.tool.id}`} disabled={row.state === 'loading' || row.state === 'blocked'} checked={row.checked} onChange={(event) => choose(event.target.checked ? [...selected, row.tool.id] : selected.filter((item) => item !== row.tool.id))} />
         </label>
       </li>)}</ul>
       <div className={styles.panelFoot}>
-        <label className={styles.choice}><span><strong>{t('library.distribute.enableAfterWrite')}</strong><small>{t('library.distribute.enableAfterWriteHint')}</small></span><input type="checkbox" role="switch" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConfirmationChange('none'); }} /></label>
+        <Switch className={styles.choice} checked={enabled} onChange={(checked) => { setEnabled(checked); setPreview(null); setResults(null); onConfirmationChange('none'); }} label={<span className={styles.choiceText}><strong>{t('library.distribute.enableAfterWrite')}</strong><small>{t('library.distribute.enableAfterWriteHint')}</small></span>} />
         {summary.length === 0 && !selected.length && !mine.length && <p className={styles.summary} data-quiet>{t('library.distribute.summaryNone')}</p>}
         {summary.length > 0 && <p className={styles.summary}>{summary.join('；')}</p>}
       </div>
@@ -294,7 +297,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
         <div className={styles.conflictTarget}>
           <ToolIcon toolId={item.toolId} size={18} />
           <strong>{toolName(item.toolId)}</strong>
-          <span className={styles.conflictState} data-state={item.status}>{item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t(item.operation === 'remove' ? 'library.distribute.statusReadyRemove' : 'library.distribute.statusReady') : t('library.distribute.statusBlocked')}</span>
+          <Badge tone={item.status === 'conflict' ? 'warning' : item.status === 'ready' ? 'neutral' : 'danger'}>{item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t(item.operation === 'remove' ? 'library.distribute.statusReadyRemove' : 'library.distribute.statusReady') : t('library.distribute.statusBlocked')}</Badge>
           {item.path && <code title={item.path}>{item.path}</code>}
         </div>
         {item.detail && <p>{item.detail}</p>}

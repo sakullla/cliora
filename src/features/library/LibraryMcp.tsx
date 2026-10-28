@@ -19,6 +19,7 @@ import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry } from '../../types/resources';
 import { McpDistribution, type McpConfirmation, type McpDistributeHandle } from './McpDistribution';
+import { Badge, Button } from '../../components/ui';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
 
@@ -365,11 +366,11 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const empty = loading && !loaded
     ? <div role="status" aria-label={t('library.resources.loading')}><SkeletonRows count={3} /></div>
     : !loaded
-      ? <EmptyState title={t('library.resources.loadFailedTitle')} detail={loadError || t('library.resources.loadFailedDetail')} action={<button className="button primary" onClick={() => void reload()}>{t('library.resources.retry')}</button>} icon="alert" />
+      ? <EmptyState title={t('library.resources.loadFailedTitle')} detail={loadError || t('library.resources.loadFailedDetail')} action={<Button variant="primary" onClick={() => void reload()}>{t('library.resources.retry')}</Button>} icon="alert" />
       : needle && shown.length === 0
-        ? <EmptyState title={t('library.resources.noMcpMatch', { query: search.trim() })} action={<button onClick={() => setSearch('')}>{t('library.resources.clearSearch')}</button>} icon="search" />
+        ? <EmptyState title={t('library.resources.noMcpMatch', { query: search.trim() })} action={<Button onClick={() => setSearch('')}>{t('library.resources.clearSearch')}</Button>} icon="search" />
         : library.length === 0
-          ? <EmptyState title={t('library.resources.emptyMcpTitle')} detail={t('library.resources.emptyMcpDetail')} action={<div className={styles.emptyActions}><button className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} />{t('library.resources.emptyMcpCreate')}</button><button onClick={() => editMcp(undefined, true)}><Icon name="clipboard" size={14} />{t('library.resources.pasteCreate')}</button></div>} icon="connections" />
+          ? <EmptyState title={t('library.resources.emptyMcpTitle')} detail={t('library.resources.emptyMcpDetail')} action={<div className={styles.emptyActions}><Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => editMcp()}>{t('library.resources.emptyMcpCreate')}</Button><Button icon={<Icon name="clipboard" size={14} />} onClick={() => editMcp(undefined, true)}>{t('library.resources.pasteCreate')}</Button></div>} icon="connections" />
           : undefined;
 
   return <>
@@ -377,13 +378,13 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       <div className={styles.toolbar}>
         <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
         <div className={styles.headActions}>
-          {onOpenConnections && <button type="button" onClick={onOpenConnections}><Icon name="arrowLeft" size={14} />{t('tools.mcp.returnConnections')}</button>}
-          <button type="button" className={styles.refreshButton} disabled={loading || busy} onClick={() => void reload()}><Icon name="refresh" size={14} />{t('library.resources.refresh')}</button>
+          {onOpenConnections && <Button icon={<Icon name="arrowLeft" size={14} />} onClick={onOpenConnections}>{t('tools.mcp.returnConnections')}</Button>}
+          <Button disabled={loading || busy} icon={<Icon name="refresh" size={14} />} onClick={() => void reload()}>{t('library.resources.refresh')}</Button>
         </div>
       </div>
       <p className={styles.hint}>{t('library.resources.mcpDescription')}</p>
       {loading && loaded && <p className={styles.progress} role="status">{t('library.resources.refreshing')}</p>}
-      {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><button disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</button></div>}
+      {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><Button size="sm" disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</Button></div>}
       {empty ?? <ul className={styles.list} aria-label={t('library.resources.mcpListAria')}>
         {shown.map((item) => {
           const places = placements.filter(entry => entry.definitionId === item.id);
@@ -392,9 +393,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
             <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={18} /></span>
             <div className={styles.main}>
               <strong>{item.name}</strong>
-              <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+              <Badge className={styles.transport} tone={item.transport === 'http' ? 'info' : 'neutral'}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
             </div>
-            <span className={styles.count} data-placed={places.length > 0 || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
+            <Badge className={styles.count} tone={places.length ? 'accent' : 'neutral'} dot={places.length > 0}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</Badge>
             <code className={styles.command} title={summary}>{summary || t(item.transport === 'http' ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
             <div className={styles.foot}>
               <ScopeMarks className={styles.marks} contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
@@ -403,9 +404,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
                 return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               }} />
               <div className={styles.rowActions}>
-              <button type="button" disabled={busy} onClick={() => editMcp(item)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
-              <button type="button" disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={14} />{t('library.resources.duplicate')}</button>
-              <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={14} />{t('tools.agents.delete')}</button>
+              <Button variant="ghost" size="sm" disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => editMcp(item)}>{t('library.resources.edit')}</Button>
+              <Button variant="ghost" size="sm" disabled={busy} icon={<Icon name="copy" size={14} />} onClick={() => void duplicateMcp(item)}>{t('library.resources.duplicate')}</Button>
+              <Button variant="ghost" size="sm" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void remove(item)}>{t('tools.agents.delete')}</Button>
               </div>
             </div>
           </li>;
@@ -426,9 +427,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           onKeepCurrent={() => undefined}
         />
         <div className="dialog-footer">
-          <button type="button" disabled={busy} onClick={() => setWriteConflict(null)}>{t('common.conflict.keepCurrent')}</button>
+          <Button disabled={busy} onClick={() => setWriteConflict(null)}>{t('common.conflict.keepCurrent')}</Button>
           <span className="dialog-footer-gap" />
-          <button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmWriteConflict()}>{t('library.page.replaceAction')}</button>
+          <Button variant="primary" disabled={busy} onClick={() => void confirmWriteConflict()}>{t('library.page.replaceAction')}</Button>
         </div>
       </>}
     </GuideDialog>
@@ -446,9 +447,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           onKeepCurrent={() => undefined}
         />
         <div className="dialog-footer">
-          <button type="button" disabled={busy} onClick={() => setRemovalConflict(null)}>{t('common.conflict.keepCurrent')}</button>
+          <Button disabled={busy} onClick={() => setRemovalConflict(null)}>{t('common.conflict.keepCurrent')}</Button>
           <span className="dialog-footer-gap" />
-          <button type="button" className={styles.danger} disabled={busy} onClick={() => void confirmRemovalConflict()}>{t('library.skillDist.removeAction')}</button>
+          <Button variant="danger" disabled={busy} onClick={() => void confirmRemovalConflict()}>{t('library.skillDist.removeAction')}</Button>
         </div>
       </>}
     </GuideDialog>
@@ -462,11 +463,11 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </div>
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">
-          {draft.id && <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => { const found = definitions.find((item) => item.id === draft.id); if (found) void remove(found); }}><Icon name="trash" size={14} />{t('tools.agents.delete')}</button>}
+          {draft.id && <Button variant="ghost" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => { const found = definitions.find((item) => item.id === draft.id); if (found) void remove(found); }}>{t('tools.agents.delete')}</Button>}
           <span className="dialog-footer-gap" />
           {dirty && confirmation === 'none' && <span className={styles.dirty}>{t('library.page.dirtyState')}</span>}
-          {confirmation !== 'none' && <button type="button" disabled={busy} onClick={() => { setConfirmation('none'); distributeRef.current?.dismiss(); }}>{t(confirmation === 'conflict' ? 'common.conflict.keepCurrent' : 'library.resources.back')}</button>}
-          <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (confirmation !== 'none' ? confirmDistribution() : save())}>{confirmation === 'conflict' ? t('library.resources.replaceDistribute') : confirmation === 'ready' ? t('library.resources.confirmDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button>
+          {confirmation !== 'none' && <Button disabled={busy} onClick={() => { setConfirmation('none'); distributeRef.current?.dismiss(); }}>{t(confirmation === 'conflict' ? 'common.conflict.keepCurrent' : 'library.resources.back')}</Button>}
+          <Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (confirmation !== 'none' ? confirmDistribution() : save())}>{confirmation === 'conflict' ? t('library.resources.replaceDistribute') : confirmation === 'ready' ? t('library.resources.confirmDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</Button>
         </div>
       </>}
     </GuideDialog>
