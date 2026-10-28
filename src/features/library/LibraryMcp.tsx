@@ -20,6 +20,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpDraftTargetRequest, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry } from '../../types/resources';
 import { McpDistribution, type McpConfirmation, type McpDistributeHandle } from './McpDistribution';
 import { Badge, Button } from '../../components/ui';
+import { RowMenu } from '../../components/RowMenu';
 import i18n from '../../i18n';
 import styles from './LibraryMcp.module.css';
 
@@ -405,8 +406,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
               }} />
               <div className={styles.rowActions}>
               <Button variant="ghost" size="sm" disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => editMcp(item)}>{t('library.resources.edit')}</Button>
-              <Button variant="ghost" size="sm" disabled={busy} icon={<Icon name="copy" size={14} />} onClick={() => void duplicateMcp(item)}>{t('library.resources.duplicate')}</Button>
-              <Button variant="ghost" size="sm" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void remove(item)}>{t('tools.agents.delete')}</Button>
+              <RowMenu label={t('library.resources.rowMenu', { name: item.name })}>
+                <button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={14} /><span>{t('library.resources.duplicate')}</span></button>
+                <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button>
+              </RowMenu>
               </div>
             </div>
           </li>;

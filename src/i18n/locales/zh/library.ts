@@ -217,6 +217,7 @@ export default {
     removeMcpPlacementTitle: '从 CLI 移除 MCP',
     connectionTitle: '连接',
     edit: '修改',
+    rowMenu: '{{name}} 的更多操作',
   },
   distribute: {
     written: '已写入 {{targets}}。',

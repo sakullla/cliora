@@ -9,6 +9,7 @@ import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
 import { Badge, Button, Card } from '../../components/ui';
+import { RowMenu } from '../../components/RowMenu';
 import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -289,7 +290,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
             }} />
-            <div className={styles.cardActions}><Button variant="ghost" size="sm" className={styles.danger} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</Button><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button></div>
+            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
         </Card>;
       }) : needle

@@ -148,9 +148,11 @@ test('library MCP details keep long text and all CLI targets without horizontal 
   await expect(marks.getByRole('button', { name: 'CLI Extra · 未写入' })).toBeVisible();
   await expect(row.getByText('已写入 18 处')).toBeVisible();
 
-  await row.getByRole('button', { name: '创建副本', exact: true }).click();
+  await row.getByRole('button', { name: `${shortName} 的更多操作`, exact: true }).click();
+  await page.getByRole('menu', { name: `${shortName} 的更多操作` }).getByRole('menuitem', { name: '创建副本', exact: true }).click();
   await expect(list.getByRole('listitem').filter({ hasText: `${shortName}-copy` })).toBeVisible();
-  await row.getByRole('button', { name: '删除', exact: true }).click();
+  await row.getByRole('button', { name: `${shortName} 的更多操作`, exact: true }).click();
+  await page.getByRole('menu', { name: `${shortName} 的更多操作` }).getByRole('menuitem', { name: '删除', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: '删除 MCP' });
   await confirm.getByRole('button', { name: '取消', exact: true }).click();
   await expect(confirm).toHaveCount(0);
