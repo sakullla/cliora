@@ -456,11 +456,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(workspace_permissions_specs(home, &project).len(), 1);
-        // Windows path case is not stable across native records.
+        // Windows path case is not stable across native records; other
+        // platforms must not map a differently cased workspace.
         let case_variant = project.display().to_string().to_uppercase();
         assert_eq!(
             workspace_permissions_specs(home, Path::new(&case_variant)).len(),
-            1
+            if cfg!(windows) { 1 } else { 0 }
         );
         // Whole-file save through the shared catalog keeps workspaceTrusted.
         let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
