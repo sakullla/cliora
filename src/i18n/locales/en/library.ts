@@ -217,6 +217,7 @@ export default {
     removeMcpPlacementTitle: 'Remove MCP from CLI',
     connectionTitle: 'Connection',
     edit: 'Edit',
+    rowMenu: 'More actions for {{name}}',
   },
   distribute: {
     written: 'Written to {{targets}}.',
