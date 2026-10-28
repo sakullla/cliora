@@ -312,11 +312,12 @@ test('auto sync is a switch and a connection error replaces the on state', async
   await openMigration(page);
   const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
   const toggle = webdav.getByRole('switch', { name: /自动同步/ });
-  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(toggle).toBeChecked();
   await page.evaluate(() => { (window as unknown as { __syncReady: { enabled: boolean } }).__syncReady.enabled = false; });
   await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(toggle).not.toBeChecked();
   await expect(webdav.getByText('同步已暂停')).toBeVisible();
+  await expect(webdav.locator('[data-status="sync.off"]')).toHaveText('同步已暂停');
   await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled();
 
   await page.evaluate(() => { (window as unknown as { __syncReady: { lastError: string | null } }).__syncReady.lastError = 'WebDAV 无法连接：offline'; });

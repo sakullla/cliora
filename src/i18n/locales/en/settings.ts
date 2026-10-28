@@ -1,4 +1,8 @@
 export default {
+  sections: {
+    label: 'On this page',
+    other: 'Other',
+  },
   tabs: {
     label: 'Settings sections',
     general: 'General',

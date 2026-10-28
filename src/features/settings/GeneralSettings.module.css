@@ -1,55 +1,73 @@
-/* style-tokens: pending */
-.languageChoice { display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; flex: 0 1 220px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
-.languageChoice button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); white-space: nowrap; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
-.languageChoice button:hover:not(:disabled) { color: var(--text); }
-.languageChoice button[aria-checked="true"] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
+/* General settings: section anchors beside the groups, the update card. */
+.general { display: block; min-width: 0; }
+.sections { min-width: 0; }
+.anchors { display: none; }
 
-@media (max-width: 680px) {
-  .languageChoice { width: 100%; max-width: none; flex-basis: 100%; }
+@media (min-width: 900px) {
+  .general { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+  .anchors { position: sticky; top: 0; display: grid; gap: var(--space-0_5); padding-top: var(--space-1); }
 }
+.anchorsTitle { margin: 0 0 var(--space-1_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.anchors ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
+.anchors a {
+  display: block;
+  min-height: var(--row-h-compact);
+  padding: var(--space-1_5) var(--space-2_5);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-medium);
+  line-height: 1.5;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.anchors a:hover { background: var(--surface-3); color: var(--text); }
+.anchors a[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
 
 /* ---------- App update card ---------- */
-.update { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 18px 22px; }
-.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 15px; background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%); box-shadow: var(--shadow-sm); }
-.updateMark > img { width: 34px; height: 34px; object-fit: contain; }
+.update { display: flex; align-items: center; gap: var(--space-4); min-width: 0; padding: var(--space-4) var(--space-5); }
+.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.updateMark > img { width: 32px; height: 32px; object-fit: contain; }
 .updateBadge { position: absolute; right: -5px; bottom: -5px; display: grid; place-items: center; width: 20px; height: 20px; border: 2px solid var(--surface); border-radius: 50%; background: var(--accent); color: var(--on-accent); animation: reveal var(--medium) var(--ease); }
-.update[data-tone='error'] .updateBadge { background: var(--danger); color: var(--surface); }
+.update[data-tone='error'] .updateBadge { background: var(--danger); color: var(--on-danger); }
 .update[data-tone='new'] .updateMark { border-color: var(--accent-line); }
-.updateText { display: grid; gap: 3px; flex: 1; min-width: 0; }
-.updateText h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); }
-.updateVersion { padding: 0 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-medium); line-height: 20px; }
-.updateText small { color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; overflow-wrap: anywhere; }
+.updateText { display: grid; gap: var(--space-0_5); flex: 1; min-width: 0; }
+.updateText h2 { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); }
+.updateVersion { font-family: var(--font-mono); }
+.updateText small { color: var(--text-2); font-size: var(--fs-control); line-height: 1.5; overflow-wrap: anywhere; }
 .update[data-tone='new'] .updateText small:first-of-type { color: var(--accent); font-weight: var(--fw-semibold); }
 .updateText .updateMeta { color: var(--text-3); font-size: var(--fs-caption); }
-.updateActions { flex: none; display: flex; gap: 8px; }
-.updateActions :global(.button) { min-height: var(--control-h); padding: 0 16px; }
-.updateError { color: var(--danger) !important; }
+.updateActions { flex: none; display: flex; gap: var(--space-2); }
+.update .updateText .updateError { color: var(--danger); }
 
-.updateProgressRow { display: grid; gap: 8px; padding: 0 22px 18px 90px; }
-.updateProgressRow small { display: flex; justify-content: space-between; gap: 12px; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.updateProgressRow { display: grid; gap: var(--space-2); padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + var(--space-12) + var(--space-4)); }
+.updateProgressRow small { display: flex; justify-content: space-between; gap: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 .updateProgressRow small strong { color: var(--accent); font-weight: var(--fw-semibold); }
-.updateProgress { width: 100%; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
-.updateProgress > div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); transition: width var(--medium) var(--ease); }
+.updateProgress { width: 100%; height: 6px; border-radius: var(--radius-pill); background: var(--surface-3); overflow: hidden; }
+.updateProgress > div { height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--medium) var(--ease); }
 .updateProgress > div.indeterminate { width: 40%; animation: update-indeterminate 1.2s var(--ease) infinite; }
 
-.releaseNotes { display: grid; gap: 10px; margin: 0 22px 20px 90px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
-.releaseNotesHead { display: flex; align-items: center; gap: 7px; color: var(--accent); }
+.releaseNotes { display: grid; gap: var(--space-2_5); margin: 0 var(--space-5) var(--space-5) calc(var(--space-5) + var(--space-12) + var(--space-4)); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.releaseNotesHead { display: flex; align-items: center; gap: var(--space-1_5); color: var(--accent); }
 .releaseNotesHead strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .releaseNotesBody { max-height: 260px; overflow: auto; color: var(--text-2); font-size: var(--fs-body); line-height: 1.65; }
-.releaseNotesBody :where(h1, h2, h3) { margin: 10px 0 4px; font-size: var(--fs-body); }
-.releaseNotesBody :where(ul, ol) { margin: 4px 0; padding-left: 20px; }
-.releaseNotesBody p { margin: 4px 0; }
+.releaseNotesBody :where(h1, h2, h3) { margin: var(--space-2_5) 0 var(--space-1); font-size: var(--fs-body); }
+.releaseNotesBody :where(ul, ol) { margin: var(--space-1) 0; padding-left: var(--space-5); }
+.releaseNotesBody p { margin: var(--space-1) 0; }
 .releaseNotesBody > p:only-child { white-space: pre-wrap; }
 .releaseNotesEmpty { margin: 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
 
 @keyframes update-indeterminate {
-  0% { margin-left: -40%; }
-  100% { margin-left: 100%; }
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
 }
 
 @media (max-width: 760px) {
-  .update { flex-wrap: wrap; padding: 16px; }
+  .update { flex-wrap: wrap; padding: var(--space-4); }
   .updateActions { width: 100%; }
-  .updateProgressRow { padding: 0 16px 16px; }
-  .releaseNotes { margin: 0 16px 16px; }
+  .updateProgressRow { padding: 0 var(--space-4) var(--space-4); }
+  .releaseNotes { margin: 0 var(--space-4) var(--space-4); }
 }

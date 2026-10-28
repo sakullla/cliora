@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge, Button, Segmented } from '../../components/ui';
 import { getVersion } from '@tauri-apps/api/app';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
@@ -133,14 +134,16 @@ function UpdateSettings({ busy }: { busy: boolean }) {
     <div className={styles.update} data-tone={tone}>
       <span className={styles.updateMark}><img src={brandIcon} alt="" />{tone && <span className={styles.updateBadge} aria-hidden="true"><Icon name={tone === 'new' ? 'download' : tone === 'error' ? 'alert' : 'check'} size={11} strokeWidth={2.8} /></span>}</span>
       <span className={styles.updateText}>
-        <h2>{t('settings.update.title')}{version && <span className={styles.updateVersion} title={t('settings.update.current')}>{t('settings.update.currentShort', { version })}</span>}</h2>
+        <h2>{t('settings.update.title')}{version && <Badge className={styles.updateVersion} title={t('settings.update.current')}>{t('settings.update.currentShort', { version })}</Badge>}</h2>
         <small role={stage === 'failed' ? 'alert' : 'status'} className={stage === 'failed' ? styles.updateError : undefined}>{statusText}</small>
         {checkedAt && stage === 'latest' && <small className={styles.updateMeta}>{t('settings.update.checkedAt', { time: checkedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</small>}
       </span>
       <span className={styles.updateActions}>
         {stage === 'available' && offer
-          ? <button className="button primary" type="button" disabled={busy} onClick={handleInstall}><Icon name="download" size={14} />{t('settings.update.install')}</button>
-          : <button className="button" type="button" disabled={busy || stage === 'checking' || stage === 'downloading' || stage === 'installed'} onClick={handleCheck}>{stage === 'checking' ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={14} />}{stage === 'checking' ? t('settings.update.checking') : t('settings.update.check')}</button>}
+          ? <Button variant="primary" disabled={busy} icon={<Icon name="download" size={14} />} onClick={handleInstall}>{t('settings.update.install')}</Button>
+          : stage === 'checking'
+            ? <Button loading>{t('settings.update.checking')}</Button>
+            : <Button disabled={busy || stage === 'downloading' || stage === 'installed'} icon={<Icon name="refresh" size={14} />} onClick={handleCheck}>{t('settings.update.check')}</Button>}
       </span>
     </div>
     {stage === 'downloading' && <div className={styles.updateProgressRow}>
@@ -159,33 +162,14 @@ function UpdateSettings({ busy }: { busy: boolean }) {
 
 function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: boolean; onChange: (theme: Theme) => void }) {
   const { t } = useTranslation();
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  function move(from: number, step: number) {
-    const next = (from + step + themeOrder.length) % themeOrder.length;
-    refs.current[next]?.focus();
-    onChange(themeOrder[next]);
-  }
-  return <div className="theme-choice" role="radiogroup" aria-label={t('settings.theme.label')}>{themeOrder.map((id, index) => <button key={id} ref={(element) => { refs.current[index] = element; }} type="button" role="radio" aria-checked={value === id} tabIndex={value === id ? 0 : -1} disabled={disabled} onClick={() => onChange(id)} onKeyDown={(event) => {
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); move(index, 1); }
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); move(index, -1); }
-  }}><Icon name={themeGlyphs[id]} size={16} />{t(`settings.theme.${id}`)}</button>)}</div>;
+  return <Segmented label={t('settings.theme.label')} value={value} onChange={onChange}
+    options={themeOrder.map((id) => ({ value: id, disabled, label: <><Icon name={themeGlyphs[id]} size={16} />{t(`settings.theme.${id}`)}</> }))} />;
 }
 
 function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boolean }) {
   const { t } = useTranslation();
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  function choose(language: AppLanguage) {
-    if (language !== value) setLanguage(language);
-  }
-  function move(from: number, step: number) {
-    const next = (from + step + supportedLanguages.length) % supportedLanguages.length;
-    refs.current[next]?.focus();
-    choose(supportedLanguages[next]);
-  }
-  return <div className={styles.languageChoice} role="radiogroup" aria-label={t('settings.language.label')}>{supportedLanguages.map((id, index) => <button key={id} ref={(element) => { refs.current[index] = element; }} type="button" role="radio" aria-checked={value === id} tabIndex={value === id ? 0 : -1} disabled={disabled} onClick={() => choose(id)} onKeyDown={(event) => {
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); move(index, 1); }
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); move(index, -1); }
-  }}>{t(`common.language.${id}`)}</button>)}</div>;
+  return <Segmented label={t('settings.language.label')} value={value} onChange={(language) => { if (language !== value) setLanguage(language); }}
+    options={supportedLanguages.map((id) => ({ value: id, disabled, label: t(`common.language.${id}`) }))} />;
 }
 
 export function RemoteSshSettings({ enabled, busy, onChange, showHosts = true, showToggle = true, onOpenHosts }: { enabled: boolean; busy: boolean; onChange: (enabled: boolean) => void; showHosts?: boolean; showToggle?: boolean; onOpenHosts?: () => void }) {
@@ -195,7 +179,7 @@ export function RemoteSshSettings({ enabled, busy, onChange, showHosts = true, s
   return <section className="settings-group" id={showHosts ? undefined : 'remote-ssh-settings'}>
     <div className="setting-intro"><h2>{t('settings.remoteSsh.title')}</h2><p>{t('settings.remoteSsh.description')}</p></div>
     {showToggle && <label className="setting-row"><span><strong>{t('settings.remoteSsh.enable')}</strong><small>{t('settings.remoteSsh.enableHint')}</small></span><input type="checkbox" role="switch" checked={enabled} disabled={busy} onChange={(event) => onChange(event.target.checked)} /></label>}
-    {enabled && !showHosts && <div className="setting-row"><span><strong>{t('settings.remoteSsh.manageHosts')}</strong><small>{t('settings.remoteSsh.manageHostsHint')}</small></span><button className="button" type="button" onClick={onOpenHosts}><Icon name="server" size={14} />{t('settings.remoteSsh.openHosts')}</button></div>}
+    {enabled && !showHosts && <div className="setting-row"><span><strong>{t('settings.remoteSsh.manageHosts')}</strong><small>{t('settings.remoteSsh.manageHostsHint')}</small></span><Button icon={<Icon name="server" size={14} />} onClick={onOpenHosts}>{t('settings.remoteSsh.openHosts')}</Button></div>}
     {enabled && showHosts && <div className="setting-row-block"><RemoteHosts /></div>}
   </section>;
 }
@@ -242,15 +226,26 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       toasts.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
     } catch { /* 失败原因由页面顶部错误条展示。 */ }
   }
-  return <>
-    <section className="settings-group">
+  return <div className={styles.general}>
+    <SectionAnchors items={[
+      { id: 'settings-managed', label: t('settings.managed.title') },
+      { id: 'settings-interface', label: t('settings.interface.title') },
+      ...(nativeAvailable ? [
+        { id: 'app-update', label: t('settings.update.title') },
+        { id: 'settings-terminal', label: t('settings.terminal.title') },
+        { id: 'remote-ssh-settings', label: t('settings.remoteSsh.title') },
+      ] : []),
+      { id: 'settings-other', label: t('settings.sections.other') },
+    ]} />
+    <div className={styles.sections}>
+    <section className="settings-group" id="settings-managed">
       <div className="setting-intro"><h2>{t('settings.managed.title')}</h2><p>{t('settings.managed.description')}</p></div>
       <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => onManagedChange(item.id, event.target.checked)} /></label>)}</div>
       {tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
       <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
       {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
     </section>
-    <section className="settings-group">
+    <section className="settings-group" id="settings-interface">
       <div className="setting-intro"><h2>{t('settings.interface.title')}</h2><p>{t('settings.interface.description')}</p></div>
       <div className="setting-row"><span><strong>{t('settings.theme.label')}</strong><small>{t('settings.theme.hint')}</small></span><ThemeChoice value={theme} disabled={busy} onChange={(next) => { if (next !== theme) onThemeChange(next); }} /></div>
       <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
@@ -258,11 +253,62 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
     {nativeAvailable && <UpdateSettings busy={busy} />}
     {nativeAvailable && <TerminalSettings />}
     {nativeAvailable && <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} showHosts={false} onOpenHosts={onOpenHosts} />}
-    <section className="settings-group">
-      <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
-      <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>
-      <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><button className="button" type="button" onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</button></div>
+    <section className="settings-group" id="settings-other">
+      <div className="setting-intro"><h2>{t('settings.sections.other')}</h2></div>
+      <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><Button aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</Button></div>
+      <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><Button onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</Button></div>
+      <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button></div>
     </section>
+    </div>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
-  </>;
+  </div>;
+}
+
+/** The General tab's table of contents: one link per settings group, shown beside them from 900px. */
+function SectionAnchors({ items }: { items: { id: string; label: string }[] }) {
+  const { t } = useTranslation();
+  const [active, setActive] = useState(items[0]?.id ?? '');
+  // A chosen link stays current until the reader scrolls on their own; the last sections may never reach the top.
+  const pinned = useRef(false);
+  const key = items.map((item) => item.id).join(' ');
+  useEffect(() => {
+    const release = () => { pinned.current = false; };
+    window.addEventListener('wheel', release, { passive: true });
+    window.addEventListener('touchstart', release, { passive: true });
+    window.addEventListener('keydown', release);
+    return () => {
+      window.removeEventListener('wheel', release);
+      window.removeEventListener('touchstart', release);
+      window.removeEventListener('keydown', release);
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target.id); else visible.delete(entry.target.id);
+      }
+      const first = items.find((item) => visible.has(item.id));
+      if (first && !pinned.current) setActive(first.id);
+    }, { rootMargin: '0px 0px -55% 0px' });
+    for (const item of items) {
+      const element = document.getElementById(item.id);
+      if (element) observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [key]);
+  function jump(event: MouseEvent<HTMLAnchorElement>, id: string) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    event.preventDefault();
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+    pinned.current = true;
+    setActive(id);
+  }
+  return <nav className={styles.anchors} aria-label={t('settings.sections.label')}>
+    <p className={styles.anchorsTitle} aria-hidden="true">{t('settings.sections.label')}</p>
+    <ul>{items.map((item) => <li key={item.id}><a href={`#${item.id}`} aria-current={active === item.id ? 'true' : undefined} onClick={(event) => jump(event, item.id)}>{item.label}</a></li>)}</ul>
+  </nav>;
 }

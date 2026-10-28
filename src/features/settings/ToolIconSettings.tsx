@@ -1,6 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ToolIcon } from '../../components/ToolIcon';
+import { Button } from '../../components/ui';
 
 export function ToolIconSettings({ tools, icons, busy, onChange, onError }: { tools: { id: string; name: string }[]; icons: Record<string, string>; busy: boolean; onChange: (id: string, data: string | null) => Promise<void>; onError: (message: string) => void }) {
   const { t } = useTranslation();
@@ -14,6 +15,6 @@ export function ToolIconSettings({ tools, icons, busy, onChange, onError }: { to
     await onChange(id, data);
   }
   return <details className="icon-settings"><summary>{t('settings.icons.title')}</summary><p>{t('settings.icons.description')}</p>
-    {tools.map((tool) => <div className="icon-setting-row" key={tool.id}><span className="tool-identity"><ToolIcon toolId={tool.id} size={26} />{tool.name}</span><label className="button icon-file">{t('settings.icons.pick')}<input aria-label={t('settings.icons.pickAria', { name: tool.name })} type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => void pick(tool.id, event)} /></label><button className="text-button" type="button" disabled={busy || !icons[tool.id]} onClick={() => void onChange(tool.id, null)}>{t('common.field.restoreDefault')}</button></div>)}
+    {tools.map((tool) => <div className="icon-setting-row" key={tool.id}><span className="tool-identity"><ToolIcon toolId={tool.id} size={26} />{tool.name}</span><label className="icon-file">{t('settings.icons.pick')}<input aria-label={t('settings.icons.pickAria', { name: tool.name })} type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => void pick(tool.id, event)} /></label><Button variant="ghost" size="sm" disabled={busy || !icons[tool.id]} onClick={() => void onChange(tool.id, null)}>{t('common.field.restoreDefault')}</Button></div>)}
   </details>;
 }

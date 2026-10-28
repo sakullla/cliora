@@ -2,6 +2,7 @@ import { useId, useState, type InputHTMLAttributes, type ReactNode } from 'react
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../../components/Icon';
 import type { SyncTransfer } from '../../types/portable';
+import { Badge, IconButton } from '../../components/ui';
 import styles from './Sync.module.css';
 
 export const MIN_PASSPHRASE = 12;
@@ -31,7 +32,7 @@ export function Notice({ tone, children, onDismiss }: { tone: 'error' | 'success
   return <div className={styles.notice} data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}>
     <span className={styles.noticeIcon}><Icon name={icon} size={16} /></span>
     <div className={styles.noticeText}>{children}</div>
-    {onDismiss && <button type="button" className={styles.noticeClose} aria-label={t('common.dialog.close')} onClick={onDismiss}><Icon name="close" size={14} /></button>}
+    {onDismiss && <IconButton size="sm" className={styles.noticeClose} aria-label={t('common.dialog.close')} icon={<Icon name="close" size={14} />} onClick={onDismiss} />}
   </div>;
 }
 
@@ -58,9 +59,7 @@ export function PassphraseField({ label, value, onChange, placeholder, autoCompl
       <input id={id} type={reveal ? 'text' : 'password'} value={value} autoComplete={autoComplete} placeholder={placeholder} autoFocus={autoFocus} spellCheck={false}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && onEnter) { event.preventDefault(); onEnter(); } }} />
-      <button type="button" className={styles.reveal} aria-label={reveal ? t('settings.migration.hidePassword') : t('settings.migration.showPassword')} aria-pressed={reveal} title={reveal ? t('settings.migration.hidePassword') : t('settings.migration.showPassword')} onClick={() => setReveal((current) => !current)}>
-        <Icon name={reveal ? 'eyeOff' : 'eye'} size={16} />
-      </button>
+      <IconButton size="sm" className={styles.reveal} aria-label={reveal ? t('settings.migration.hidePassword') : t('settings.migration.showPassword')} aria-pressed={reveal} icon={<Icon name={reveal ? 'eyeOff' : 'eye'} size={16} />} onClick={() => setReveal((current) => !current)} />
     </div>
     {meter && <div className={styles.meter} data-ok={ratio >= 1 || undefined} aria-hidden="true"><span style={{ width: `${Math.round(ratio * 100)}%` }} /></div>}
     {hint && <small className={styles.fieldHint} data-ok={meter && ratio >= 1 ? '' : undefined}>{hint}</small>}
@@ -101,7 +100,7 @@ export function TransferList({ items, limit, live }: { items: Pick<SyncTransfer,
           <span className={styles.srOnly}>{down ? t('settings.webdav.directionDownload') : t('settings.webdav.directionUpload')}</span>
         </span>
         <span className={styles.transferName}>{name}</span>
-        <span className={styles.kindChip}>{kindLabel(item.kind)}</span>
+        <Badge className={styles.kindChip}>{kindLabel(item.kind)}</Badge>
       </li>;
     })}
   </ul>;

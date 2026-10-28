@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import { confirmAction } from '../../lib/confirm';
 import { native, nativeAvailable } from '../../lib/native';
 import type { RemoteTarget } from '../../types/remote';
+import { Badge, Button, IconButton, Segmented } from '../../components/ui';
 import styles from './RemoteHosts.module.css';
 
 type AuthMethod = RemoteTarget['authMethod'];
@@ -93,7 +94,7 @@ export function RemoteHosts() {
   return <section className={styles.panel} id="remote-ssh-settings" aria-labelledby="remote-hosts-title">
     <header className={styles.head}>
       <div><h2 id="remote-hosts-title">{t('settings.remoteSsh.hostsTitle')}</h2><p>{t('settings.remoteSsh.hostsDescription')}</p></div>
-      {targets.length > 0 && !adding && <button className="button primary" type="button" onClick={() => setEditing({ ...emptyDraft })}><Icon name="plus" size={14} />{t('settings.remoteSsh.addHost')}</button>}
+      {targets.length > 0 && !adding && <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => setEditing({ ...emptyDraft })}>{t('settings.remoteSsh.addHost')}</Button>}
     </header>
     {loadError && <p className={styles.error} role="alert">{loadError}</p>}
     {adding && <HostEditor draft={editing} passwordSaved={false} onCancel={() => setEditing(null)} onSaved={onSaved} />}
@@ -101,7 +102,7 @@ export function RemoteHosts() {
       <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="server" size={22} /></span>
       <strong>{t('settings.remoteSsh.emptyTitle')}</strong>
       <p>{t('settings.remoteSsh.emptyDetail')}</p>
-      <button className="button primary" type="button" onClick={() => setEditing({ ...emptyDraft })}><Icon name="plus" size={14} />{t('settings.remoteSsh.addHost')}</button>
+      <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => setEditing({ ...emptyDraft })}>{t('settings.remoteSsh.addHost')}</Button>
     </div>}
     {targets.length > 0 && <ul className={styles.list} aria-label={t('settings.remoteSsh.hostsTitle')}>
       {targets.map((target) => {
@@ -114,15 +115,15 @@ export function RemoteHosts() {
             <strong>{target.name}</strong>
             <span className={styles.hostMeta}>
               <code>{address(target)}</code>
-              <span className={styles.badge} data-tone={target.authMethod === 'password' && !passwordKnown ? 'warning' : undefined}><Icon name={target.authMethod === 'password' ? 'lock' : 'shield'} size={12} />{target.authMethod === 'key' ? t('settings.remoteSsh.keyBadge') : passwordKnown ? t('settings.remoteSsh.passwordSavedBadge') : t('settings.remoteSsh.passwordAskBadge')}</span>
+              <Badge tone={target.authMethod === 'password' && !passwordKnown ? 'warning' : 'neutral'}><Icon name={target.authMethod === 'password' ? 'lock' : 'shield'} size={12} />{target.authMethod === 'key' ? t('settings.remoteSsh.keyBadge') : passwordKnown ? t('settings.remoteSsh.passwordSavedBadge') : t('settings.remoteSsh.passwordAskBadge')}</Badge>
               {target.defaultPath && <span className={styles.path} title={target.defaultPath}><Icon name="folder" size={12} />{target.defaultPath}</span>}
             </span>
             {status && status.state !== 'running' && <span className={styles.result} data-tone={status.state} role="status"><Icon name={status.state === 'ok' ? 'check' : 'alert'} size={12} />{status.state === 'ok' ? `${t('settings.remoteSsh.testOk')} · ${status.detail}` : status.detail}</span>}
           </span>
           <span className={styles.hostActions}>
-            <button className="button" type="button" disabled={status?.state === 'running'} onClick={() => void test(target)}>{status?.state === 'running' ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={14} />}{status?.state === 'running' ? t('settings.remoteSsh.testing') : t('settings.remoteSsh.test')}</button>
-            <button className={styles.iconButton} type="button" aria-label={`${t('settings.remoteSsh.edit')} ${target.name}`} title={t('settings.remoteSsh.edit')} onClick={() => setEditing(draftFrom(target))}><Icon name="pencil" size={15} /></button>
-            <button className={styles.iconButton} data-danger type="button" aria-label={`${t('settings.remoteSsh.delete')} ${target.name}`} title={t('settings.remoteSsh.delete')} onClick={() => void remove(target)}><Icon name="trash" size={15} /></button>
+            <Button loading={status?.state === 'running'} icon={<Icon name="refresh" size={14} />} onClick={() => void test(target)}>{status?.state === 'running' ? t('settings.remoteSsh.testing') : t('settings.remoteSsh.test')}</Button>
+            <IconButton aria-label={`${t('settings.remoteSsh.edit')} ${target.name}`} title={t('settings.remoteSsh.edit')} icon={<Icon name="pencil" size={15} />} onClick={() => setEditing(draftFrom(target))} />
+            <IconButton className={styles.danger} aria-label={`${t('settings.remoteSsh.delete')} ${target.name}`} title={t('settings.remoteSsh.delete')} icon={<Icon name="trash" size={15} />} onClick={() => void remove(target)} />
           </span>
         </li>;
       })}
@@ -218,27 +219,26 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
       </label>
       <div className={styles.field} data-span="auth" role="group" aria-labelledby={`${formId}-auth`}>
         <span id={`${formId}-auth`}>{t('settings.remoteSsh.authMethod')}</span>
-        <div className={styles.segmented} role="radiogroup" aria-labelledby={`${formId}-auth`}>
-          {(['password', 'key'] as AuthMethod[]).map((method) => <button key={method} type="button" role="radio" aria-checked={draft.authMethod === method} onClick={() => set({ authMethod: method })}><Icon name={method === 'password' ? 'lock' : 'shield'} size={14} />{method === 'password' ? t('settings.remoteSsh.authPassword') : t('settings.remoteSsh.authKey')}</button>)}
-        </div>
+        <Segmented className={styles.segmented} label={t('settings.remoteSsh.authMethod')} value={draft.authMethod} onChange={(method) => set({ authMethod: method })}
+          options={(['password', 'key'] as AuthMethod[]).map((method) => ({ value: method, label: <><Icon name={method === 'password' ? 'lock' : 'shield'} size={14} />{method === 'password' ? t('settings.remoteSsh.authPassword') : t('settings.remoteSsh.authKey')}</> }))} />
       </div>
       {draft.authMethod === 'password' ? <label className={styles.field} data-span="secret">
         <span>{t('settings.remoteSsh.password')}</span>
         <span className={styles.inputGroup}>
           <input type={showPassword ? 'text' : 'password'} value={draft.password} autoComplete="new-password" placeholder={passwordSaved ? t('settings.remoteSsh.passwordSaved') : t('settings.remoteSsh.passwordPlaceholder')} aria-invalid={Boolean(field('password')) || undefined} onChange={(event) => set({ password: event.target.value })} />
-          <button type="button" className={styles.inlineButton} aria-label={showPassword ? t('settings.remoteSsh.hidePassword') : t('settings.remoteSsh.showPassword')} title={showPassword ? t('settings.remoteSsh.hidePassword') : t('settings.remoteSsh.showPassword')} onClick={() => setShowPassword((value) => !value)}><Icon name={showPassword ? 'eyeOff' : 'eye'} size={15} /></button>
+          <IconButton size="sm" className={styles.inline} aria-label={showPassword ? t('settings.remoteSsh.hidePassword') : t('settings.remoteSsh.showPassword')} icon={<Icon name={showPassword ? 'eyeOff' : 'eye'} size={15} />} onClick={() => setShowPassword((value) => !value)} />
         </span>
         {field('password') ? <small className={styles.fieldError}>{field('password')}</small> : <small className={styles.hint}><Icon name="lock" size={11} />{t('settings.remoteSsh.passwordNote')}</small>}
       </label> : <label className={styles.field} data-span="secret">
         <span>{t('settings.remoteSsh.keyFile')}</span>
         <span className={styles.inputGroup}>
           <input value={draft.identityFile} placeholder={t('settings.remoteSsh.keyFilePlaceholder')} autoComplete="off" spellCheck={false} onChange={(event) => set({ identityFile: event.target.value })} />
-          {nativeAvailable && <button type="button" className={styles.inlineText} onClick={() => void pickKey()}>{t('settings.remoteSsh.browse')}</button>}
+          {nativeAvailable && <Button variant="ghost" size="sm" className={styles.inline} onClick={() => void pickKey()}>{t('settings.remoteSsh.browse')}</Button>}
         </span>
       </label>}
     </div>
     <div className={styles.more}>
-      <button type="button" className={styles.moreToggle} aria-expanded={moreOpen} onClick={() => setMoreOpen((value) => !value)}><Icon name="chevronRight" size={13} />{t('settings.remoteSsh.more')}</button>
+      <Button variant="ghost" size="sm" className={styles.moreToggle} aria-expanded={moreOpen} icon={<Icon name="chevronRight" size={13} />} onClick={() => setMoreOpen((value) => !value)}>{t('settings.remoteSsh.more')}</Button>
       {moreOpen && <div className={styles.grid}>
         <label className={styles.field} data-span="half">
           <span>{t('settings.remoteSsh.name')}</span>
@@ -252,10 +252,10 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
     </div>
     {result && <p className={styles.result} data-tone={result.state} role="status">{result.state === 'running' ? <span className="spinner" aria-hidden="true" /> : <Icon name={result.state === 'ok' ? 'check' : 'alert'} size={13} />}{result.state === 'running' ? t('settings.remoteSsh.testing') : result.state === 'ok' ? `${t('settings.remoteSsh.testOk')} · ${result.detail}` : result.detail}</p>}
     <div className={styles.footer}>
-      <button className="button" type="button" disabled={!!busy} onClick={() => void test()}>{busy === 'test' ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={14} />}{t('settings.remoteSsh.test')}</button>
+      <Button disabled={!!busy} loading={busy === 'test'} icon={<Icon name="refresh" size={14} />} onClick={() => void test()}>{t('settings.remoteSsh.test')}</Button>
       <span className={styles.footerGap} />
-      <button className="button" type="button" onClick={onCancel}>{t('settings.remoteSsh.cancel')}</button>
-      <button className="button primary" type="submit" data-dialog-save disabled={!!busy}>{busy === 'save' && <span className="spinner" aria-hidden="true" />}{t('settings.remoteSsh.save')}</button>
+      <Button onClick={onCancel}>{t('settings.remoteSsh.cancel')}</Button>
+      <Button variant="primary" type="submit" data-dialog-save disabled={!!busy} loading={busy === 'save'}>{t('settings.remoteSsh.save')}</Button>
     </div>
   </form>;
 }

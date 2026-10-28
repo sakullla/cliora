@@ -59,3 +59,22 @@ test('a manual check without a release reports the current version is latest', a
   await expect(card.getByRole('status')).toHaveText('已是最新版本。');
   await expect(page.getByRole('complementary').getByRole('button', { name: /已发布/ })).toHaveCount(0);
 });
+
+test('the General tab lists its sections beside them from 900px and scrolls to the one chosen', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 760 });
+  await setup(page);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const anchors = page.getByRole('navigation', { name: '本页目录' });
+  await expect(anchors).toBeVisible();
+  await expect(anchors.getByRole('link')).toHaveText(['管理的 CLI', '界面', '更新', '外部终端', '远程 SSH', '其它']);
+  await anchors.getByRole('link', { name: '其它' }).click();
+  await expect(page.locator('#settings-other')).toBeInViewport();
+  await expect(anchors.getByRole('link', { name: '其它' })).toHaveAttribute('aria-current', 'true');
+  await anchors.getByRole('link', { name: '更新' }).click();
+  await expect(page.locator('#app-update')).toBeInViewport();
+  await expect(page.locator('#app-update').getByRole('button', { name: '检查更新' })).toBeVisible();
+
+  await page.setViewportSize({ width: 899, height: 760 });
+  await expect(anchors).toBeHidden();
+  await expect(page.locator('#settings-managed')).toBeVisible();
+});
