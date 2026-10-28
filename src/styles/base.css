@@ -1,0 +1,175 @@
+/* Reset, base elements, base controls, disclosure and motion primitives. */
+
+/* ---------- Reset & base ---------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; min-height: 0; overflow: hidden; }
+#root { display: flow-root; }
+body {
+  color: var(--text);
+  background: var(--sidebar);
+}
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); }
+.count-chip, time, .rowContext > span:last-of-type { font-variant-numeric: tabular-nums; }
+[hidden] { display: none !important; }
+::selection { background: var(--selection); color: inherit; }
+/* Desktop chrome: navigation, buttons and tabs never pick up a text selection or a drag ghost. */
+:where(.sidebar, button, [role="tab"], [role="radio"], label, .page-head h1, .section-heading) { -webkit-user-select: none; user-select: none; }
+:where(img, a) { -webkit-user-drag: none; }
+
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button, summary { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .5; }
+a { color: var(--accent); text-decoration: none; text-underline-offset: 2px; }
+a:hover { text-decoration: underline; }
+code, pre, kbd { font-family: var(--font-mono); }
+code { font-size: .92em; padding: 1px var(--space-1); border-radius: var(--radius-xs); background: var(--surface-3); overflow-wrap: anywhere; }
+pre code { padding: 0; background: none; }
+kbd { display: inline-block; min-width: 19px; padding: 0 var(--space-1); border: 1px solid var(--line); border-bottom-color: var(--line-strong); border-bottom-width: 2px; border-radius: var(--radius-xs); font-size: var(--fs-micro); line-height: 16px; text-align: center; color: var(--text-2); background: var(--surface); box-shadow: var(--shadow-xs); }
+
+:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+:where(button, summary, a):focus:not(:focus-visible) { outline: none; }
+[role="tab"]:focus-visible { outline-offset: -2px; border-radius: var(--radius-sm); }
+
+/* Scrollbars */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--line-strong) 82%, transparent); border: 2px solid transparent; border-radius: var(--radius-pill); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--text-3); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+
+/* ---------- Base controls (zero specificity, easy to override) --------- */
+
+:where(button:not([role="tab"]):not([role="radio"])) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1_5);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  /* Linux Chromium keeps the GTK button face on :hover unless appearance is off,
+     so author hover backgrounds never replace the resting color. */
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-medium);
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: var(--shadow-xs);
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+:where(button:not([role="tab"]):not([role="radio"])):hover:not(:disabled) { background: var(--surface-2); border-color: var(--control-line-hover); box-shadow: var(--shadow-sm); }
+:where(button:not([role="tab"]):not([role="radio"])):active:not(:disabled) { transform: translateY(.5px); box-shadow: none; }
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
+  min-height: var(--control-h);
+  padding: 0 var(--space-2_5);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background-color var(--fast) var(--ease);
+}
+:where(textarea) { padding: var(--space-2) var(--space-2_5); line-height: 1.55; resize: vertical; }
+:where(input, textarea) { caret-color: var(--accent); }
+:where(input, select, textarea)::placeholder { color: var(--text-3); }
+/* Entered values inherit `font` from the label, so this rule — not :where — keeps the shared size and body color. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
+/* One ring, not two: the outline sits on the border and a soft halo carries the focus outward. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus { box-shadow: 0 0 0 4px var(--accent-ring); }
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--control-line-hover); }
+
+:where(select) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: calc(var(--space-6) + var(--space-1_5));
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+:where(select) option { background: var(--surface); color: var(--text); }
+:where(input[type="search"], .search-field > input) {
+  padding-left: var(--space-8);
+  padding-right: calc(var(--space-10) + var(--space-1));
+  background-image: var(--search-icon);
+  background-repeat: no-repeat;
+  background-position: 10px center;
+}
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; flex: none; cursor: pointer; }
+/* On/off preferences render as a switch; the native checkbox keeps its semantics and keyboard. */
+input[type="checkbox"][role="switch"],
+.setting-row input[type="checkbox"][role="switch"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  transition: background-color var(--medium) var(--ease);
+}
+input[type="checkbox"][role="switch"]::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--switch-thumb);
+  box-shadow: var(--shadow-thumb);
+  transition: transform var(--medium) var(--ease);
+}
+input[type="checkbox"][role="switch"]:checked { background: var(--accent); }
+input[type="checkbox"][role="switch"]:checked::after { transform: translateX(16px); }
+:root[data-theme="dark"] input[type="checkbox"][role="switch"]:checked::after { background: var(--on-accent); }
+input[type="checkbox"][role="switch"]:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+input[type="date"]::-webkit-calendar-picker-indicator { opacity: .6; cursor: pointer; }
+:root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+
+/* Disclosure */
+summary { cursor: pointer; list-style: none; user-select: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--space-1_5);
+  vertical-align: -1px;
+  background: currentColor;
+  opacity: .55;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  transition: transform var(--medium) var(--ease);
+}
+details[open] > summary::before { transform: rotate(90deg); }
+summary:hover { color: var(--text); }
+details:not([open]) > :not(summary) { display: none !important; }
+details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
+
+/* ---------- Motion ----------------------------------------------------- */
+
+@keyframes reveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@keyframes page-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -200% 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

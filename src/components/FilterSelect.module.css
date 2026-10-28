@@ -6,7 +6,7 @@
   width: 100%;
   min-height: var(--control-h);
   justify-content: flex-start;
-  padding: 0 30px 0 10px;
+  padding: 0 calc(var(--space-6) + var(--space-1_5)) 0 var(--space-2_5);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background-color: var(--surface);
@@ -24,7 +24,7 @@
 .trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
-.triggerIcon { display: grid; place-items: center; flex: none; margin-right: 7px; }
+.triggerIcon { display: grid; place-items: center; flex: none; margin-right: var(--space-1_5); }
 .triggerCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
 .triggerCopy > span,
 .triggerCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -32,7 +32,7 @@
 
 .trigger[data-variant="accent"] {
   min-height: var(--control-h-sm);
-  padding: 4px 28px 4px 10px;
+  padding: var(--space-1) calc(var(--space-6) + var(--space-1)) var(--space-1) var(--space-2_5);
   border-color: var(--accent-line);
   background-color: var(--accent-soft);
   color: var(--text);
@@ -49,8 +49,8 @@
   z-index: 60;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 7px;
+  gap: var(--space-1_5);
+  padding: var(--space-1_5);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -60,14 +60,14 @@
 .panel > input { width: 100%; border-radius: var(--radius-sm); background-color: var(--surface); }
 .panel > input:focus { box-shadow: none; }
 
-.list { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
+.list { display: grid; align-content: start; gap: var(--space-0_5); min-height: 0; overflow: auto; }
 .list > button {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   min-height: 40px;
-  padding: 6px 9px;
+  padding: var(--space-1_5) var(--space-2);
   border: 0;
   border-radius: var(--radius);
   background: transparent;
@@ -79,12 +79,12 @@
 }
 .optionIcon { display: grid; place-items: center; flex: none; }
 .optionCopy { display: grid; flex: 1; min-width: 0; }
-.optionMarks { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.optionMarks { display: inline-flex; flex: none; align-items: center; gap: var(--space-1_5); }
 .optionCopy > strong,
 .optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .optionCopy > strong { font-weight: var(--fw-semibold); }
 .optionCopy > small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.optionMarks { display: inline-flex; align-items: center; gap: 6px; }
+.optionMarks { display: inline-flex; align-items: center; gap: var(--space-1_5); }
 .optionMarks > em { color: var(--text); font-size: var(--fs-body); font-style: normal; font-weight: var(--fw-medium); }
 .optionMarks svg { flex: none; color: var(--accent); }
 .list > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
@@ -93,18 +93,18 @@
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
-.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: var(--fs-body); }
+.list > p { margin: 0; padding: var(--space-2); color: var(--text-3); font-size: var(--fs-body); }
 
-.footerActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 -6px -6px; border-top: 1px solid var(--line); }
+.footerActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 calc(var(--space-1_5) * -1) calc(var(--space-1_5) * -1); border-top: 1px solid var(--line); }
 .footerActions:has(:only-child) { grid-template-columns: 1fr; }
 .folderPick {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 36px;
   margin: 0;
-  padding: 0 14px;
+  padding: 0 calc(var(--space-3) + var(--space-0_5));
   border: 0;
   border-top: 0;
   border-radius: 0 0 var(--radius) var(--radius);

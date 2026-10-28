@@ -1,0 +1,29 @@
+.split { display: inline-flex; align-items: stretch; min-width: 0; }
+.split > .main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split > :last-child > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: 100%;
+  min-height: var(--control-h);
+  padding: 0;
+  border: 1px solid var(--control-line);
+  border-left-width: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface);
+  color: var(--text-2);
+  box-shadow: var(--shadow-xs);
+}
+.split > :last-child > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.split > :last-child > button:disabled { cursor: not-allowed; opacity: .5; }
+.split[data-size="sm"] > :last-child > button { min-height: var(--control-h-sm); width: var(--row-h-compact); }
+
+.split[data-split-variant="primary"] > :last-child > button {
+  border-color: var(--accent-border);
+  border-left: 1px solid color-mix(in srgb, var(--on-accent) 28%, transparent);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent), var(--inner-highlight);
+}
+.split[data-split-variant="primary"] > :last-child > button:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }

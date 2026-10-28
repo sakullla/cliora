@@ -1,0 +1,24 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--space-5);
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  line-height: 1.4;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dot { flex: none; width: var(--space-1_5); height: var(--space-1_5); border-radius: 50%; background: currentColor; }
+
+.badge[data-tone="neutral"] { color: var(--text-2); background: var(--surface-2); border-color: var(--line); }
+.badge[data-tone="accent"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.badge[data-tone="success"] { color: var(--success); background: var(--success-soft); border-color: var(--success-line); }
+.badge[data-tone="warning"] { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-line); }
+.badge[data-tone="danger"] { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.badge[data-tone="info"] { color: var(--info); background: var(--info-soft); border-color: var(--info-line); }

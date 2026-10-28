@@ -1,29 +1,29 @@
 .prose { max-width: 80ch; min-width: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.8; overflow-wrap: anywhere; cursor: text; -webkit-user-select: text; user-select: text; }
-.prose p { margin: 0 0 12px; }
+.prose p { margin: 0 0 var(--space-3); }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
-.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 { margin: 26px 0 10px; color: var(--text); font-family: var(--font-display); font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: -.01em; line-height: 1.45; }
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 { margin: calc(var(--space-6) + var(--space-0_5)) 0 var(--space-2_5); color: var(--text); font-family: var(--font-display); font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: -.01em; line-height: 1.45; }
 .prose h1 { font-size: 20px; }
-.prose h2 { padding-bottom: 6px; border-bottom: 1px solid var(--line); font-size: 17px; }
+.prose h2 { padding-bottom: var(--space-1_5); border-bottom: 1px solid var(--line); font-size: 17px; }
 .prose h3 { font-size: var(--fs-heading); }
-.prose ul, .prose ol { margin: 8px 0 14px; padding-left: 22px; }
-.prose li { margin: 3px 0; padding-left: 3px; }
+.prose ul, .prose ol { margin: var(--space-2) 0 calc(var(--space-3) + var(--space-0_5)); padding-left: calc(var(--space-5) + var(--space-0_5)); }
+.prose li { margin: var(--space-0_5) 0; padding-left: var(--space-0_5); }
 .prose li::marker { color: var(--text-3); }
 .prose li > p { margin: 0; }
-.prose blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid var(--accent-line); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; background: var(--surface-2); color: var(--text-2); }
+.prose blockquote { margin: var(--space-3) 0; padding: var(--space-2) calc(var(--space-3) + var(--space-0_5)); border-left: 3px solid var(--accent-line); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; background: var(--surface-2); color: var(--text-2); }
 .prose blockquote > p:last-child { margin: 0; }
-.prose hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
-.prose :not(pre) > code { padding: 1px 5px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); font-family: var(--font-mono); font-size: .86em; box-shadow: inset 0 0 0 1px var(--line); }
+.prose hr { margin: var(--space-5) 0; border: 0; border-top: 1px solid var(--line); }
+.prose :not(pre) > code { padding: 1px var(--space-1); border-radius: var(--radius-xs); background: var(--surface-2); color: var(--text-2); font-family: var(--font-mono); font-size: .86em; box-shadow: inset 0 0 0 1px var(--line); }
 .prose strong { font-weight: var(--fw-semibold); }
-.prose input[type="checkbox"] { margin-right: 6px; vertical-align: -2px; }
+.prose input[type="checkbox"] { margin-right: var(--space-1_5); vertical-align: -2px; }
 
 .wikiLink, .externalLink { display: inline; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font: inherit; line-height: inherit; white-space: normal; text-decoration: underline; text-decoration-color: var(--accent-line); text-underline-offset: 3px; cursor: text; -webkit-user-select: text; user-select: text; }
 .wikiLink:hover:not([data-missing]), .externalLink:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
 .wikiLink[data-missing] { color: var(--text-3); text-decoration-style: dotted; cursor: text; }
-.codeBlock { margin: 12px 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.7; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
+.codeBlock { margin: var(--space-3) 0; padding: var(--space-3) calc(var(--space-3) + var(--space-0_5)); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.7; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
 .codeBlock code { padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: inherit; }
-.tableScroll { max-width: 100%; margin: 12px 0; overflow: auto; }
+.tableScroll { max-width: 100%; margin: var(--space-3) 0; overflow: auto; }
 .tableScroll table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
-.tableScroll th, .tableScroll td { padding: 7px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; cursor: text; -webkit-user-select: text; user-select: text; }
+.tableScroll th, .tableScroll td { padding: var(--space-1_5) var(--space-2_5); border: 1px solid var(--line); text-align: left; vertical-align: top; cursor: text; -webkit-user-select: text; user-select: text; }
 .tableScroll th { background: var(--surface-2); font-weight: var(--fw-semibold); }
-.imageNote { display: inline-block; padding: 2px 8px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--text-3); }
+.imageNote { display: inline-block; padding: var(--space-0_5) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-xs); color: var(--text-3); }

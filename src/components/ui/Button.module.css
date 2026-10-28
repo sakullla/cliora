@@ -1,0 +1,39 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1_5);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-medium);
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: var(--shadow-xs);
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.button[data-size="sm"] { min-height: var(--control-h-sm); padding: 0 var(--space-3); }
+.button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--control-line-hover); }
+.button:active:not(:disabled) { box-shadow: none; }
+.button:disabled { cursor: not-allowed; opacity: .5; }
+.button[aria-busy="true"] { cursor: progress; }
+
+.button[data-variant="primary"] { border-color: var(--accent-border); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+
+.button[data-variant="ghost"] { border-color: transparent; background: transparent; color: var(--text-2); box-shadow: none; }
+.button[data-variant="ghost"]:hover:not(:disabled) { border-color: transparent; background: var(--surface-3); color: var(--text); }
+
+.button[data-variant="danger"] { border-color: var(--danger); background: var(--danger); color: var(--on-danger); }
+.button[data-variant="danger"]:hover:not(:disabled) { border-color: var(--danger); background: var(--danger); filter: brightness(.94); }
+
+.icon { display: inline-grid; place-items: center; flex: none; }
+.spinner { flex: none; width: var(--space-3); height: var(--space-3); border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+
+/* Icon-only buttons: square, same heights as text buttons. */
+.iconButton { width: var(--control-h); padding: 0; }
+.iconButton[data-size="sm"] { width: var(--control-h-sm); padding: 0; }

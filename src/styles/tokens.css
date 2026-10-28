@@ -1,0 +1,222 @@
+/* Design tokens: semantic colors, type, spacing, shape, elevation, layers and motion. */
+
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", "SFMono-Regular", Menlo, monospace;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+
+  /* Palette: clean neutrals with the faintest leaf undertone, around the brandmark (#366b49).
+     The accent is the leaf green; success leans teal so status stays distinct from brand. */
+
+  /* Surfaces. The window frame (--sidebar) holds the navigation; pages sit on a lighter
+     canvas (--bg) that floats inside the frame; cards are white paper on that canvas. */
+  --bg: #f7f8f6;
+  --sidebar: #edefec;
+  --surface: #ffffff;
+  --surface-2: #f4f5f3;
+  --surface-3: #ebedea;
+  --overlay: rgb(12 18 14 / 34%);
+  --wash-a: rgb(31 122 79 / 4%);
+  --wash-b: rgb(78 116 160 / 3%);
+  --surface-glass: rgb(255 255 255 / 80%);
+
+  /* Text */
+  --text: #131715;
+  --text-2: #3b443e;
+  --text-3: #5b665e;
+
+  /* Lines */
+  --line: #e4e7e3;
+  --line-strong: #c8cfca;
+  /* Control outlines sit between the hairline and the strong line. */
+  --control-line: #d3d9d4;
+  --control-line-hover: #aab3ad;
+
+  /* Brand */
+  --accent: #0f7148;
+  --accent-hover: #0b5d3b;
+  --accent-bright: #22a06b;
+  --on-accent: #f6fcf8;
+  --accent-soft: #e5f3eb;
+  --accent-line: #bddfca;
+  --accent-ring: rgb(15 113 72 / 16%);
+  --selection: #d3e8dc;
+  /* A slightly deeper edge for filled accent buttons. */
+  --accent-border: color-mix(in srgb, var(--accent) 86%, black);
+
+  /* Status */
+  --danger: #a62f2a;
+  --danger-soft: #fcecea;
+  --danger-line: #f0c6c0;
+  /* Label ink on a filled --danger surface. */
+  --on-danger: #fff;
+  --warning: #744700;
+  --warning-soft: #fbf3e2;
+  --warning-line: #ebd29b;
+  --success: #0b6b52;
+  --success-soft: #e0f3ec;
+  --success-line: #b5dcca;
+  --info: #245c8c;
+  --info-soft: #e7f0f8;
+  --info-line: #bed3e6;
+
+  /* Fixed inks */
+  --switch-thumb: #fff;
+  /* Light tile behind tool artwork drawn for a pale background. */
+  --tool-logo-pale: #f5f7f2;
+
+  /* Type scale. Whole pixels only: fractional sizes blur CJK glyphs on Windows.
+     Each step pairs with an icon size so glyphs sit on the text's cap height. */
+  --fs-micro: 11px;    /* axis ticks, kbd, tiny state pills      · icon 12 */
+  --fs-caption: 12px;  /* metadata, counts, chips, helper text   · icon 12–14 */
+  --fs-control: 13px;  /* buttons, tabs, labels, table heads     · icon 14 */
+  --fs-body: 14px;     /* reading text, inputs, nav, menus       · icon 16 */
+  --fs-title: 15px;    /* section and card titles                · icon 16 */
+  --fs-heading: 16px;  /* dialog and detail headings             · icon 18 */
+  --fs-page: 24px;     /* page title                             · icon 20+ */
+
+  /* Weights: Microsoft YaHei / PingFang only ship 400 and 700 (plus 500/600 on macOS),
+     so steps in between render inconsistently for CJK. Keep to four. */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* Data visualization */
+  --chart-input: #4a78a8;
+  --chart-output: #3f8659;
+  --chart-read: #bd8a33;
+  --chart-write: #8266a8;
+
+  /* Shape */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-pill: 999px;
+  /* App-icon tiles keep the squircle proportion of the brand artwork at every size. */
+  --radius-logo: 27%;
+  /* The floating page canvas inside the window frame. */
+  --canvas-gap: 8px;
+  --canvas-radius: 16px;
+
+  /* Elevation: hairline + soft ambient, never a heavy drop. */
+  --shadow-xs: 0 1px 1px rgb(16 24 20 / 4%);
+  --shadow-sm: 0 1px 2px rgb(16 24 20 / 4%), 0 2px 8px -3px rgb(16 24 20 / 7%);
+  --shadow-md: 0 12px 28px -14px rgb(13 24 18 / 18%), 0 2px 6px rgb(13 24 18 / 4%);
+  --shadow-lg: 0 28px 70px -24px rgb(9 20 14 / 28%), 0 10px 28px -14px rgb(9 20 14 / 16%), 0 0 0 1px rgb(9 20 14 / 5%);
+  --shadow-accent: 0 1px 2px rgb(15 113 72 / 22%), 0 4px 12px -6px rgb(15 113 72 / 40%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
+  --shadow-canvas: 0 0 0 1px rgb(16 24 20 / 5%), 0 1px 2px rgb(16 24 20 / 4%), 0 8px 24px -16px rgb(16 24 20 / 14%);
+
+  /* Brand-artwork and focus ink */
+  --shadow-brandmark: 0 3px 6px rgb(14 60 36 / 16%);
+  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 22%);
+  --focus-ring: 2px solid var(--accent);
+
+  /* Spacing scale (px): 2 4 6 8 10 12 16 20 24 32 40 48. */
+  --space-0_5: 2px;
+  --space-1: 4px;
+  --space-1_5: 6px;
+  --space-2: 8px;
+  --space-2_5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  /* The command palette sits a little above the vertical center. */
+  --dialog-top: 13vh;
+
+  /* Layers */
+  --z-nav: 2;
+  --z-popover: 70;
+  --z-toast: 80;
+  --z-dialog: 90;
+
+  /* Controls */
+  --control-h: 36px;
+  --control-h-sm: 32px;
+  --row-h: 40px;
+  --row-h-compact: 32px;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --fast: 120ms;
+  --medium: 200ms;
+  /* Dialog entrance and exit only. */
+  --slow: 280ms;
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%233b443e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b665e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121514;
+  --sidebar: #0b0d0c;
+  --surface: #171b19;
+  --surface-2: #1c211e;
+  --surface-3: #252b27;
+  --overlay: rgb(0 0 0 / 60%);
+  --wash-a: rgb(94 219 154 / 4%);
+  --wash-b: rgb(108 154 210 / 3%);
+  --surface-glass: rgb(23 27 25 / 82%);
+
+  --text: #edf2ee;
+  --text-2: #c5cec8;
+  --text-3: #99a39c;
+
+  --line: #262d29;
+  --line-strong: #444f48;
+  --control-line: #333b36;
+  --control-line-hover: #56625a;
+
+  --accent: #6fdc9f;
+  --accent-hover: #95ebbb;
+  --accent-bright: #b4f4cf;
+  --on-accent: #05120a;
+  --accent-soft: #15291e;
+  --accent-line: #2a5039;
+  --accent-ring: rgb(111 220 159 / 24%);
+  --selection: #19382d;
+
+  --danger: #fcd6d0;
+  --danger-soft: #3a2422;
+  --danger-line: #6b3a33;
+  --on-danger: #2b1b18;
+  --warning: #eed294;
+  --warning-soft: #3a3120;
+  --warning-line: #6a5629;
+  --success: #a3e2cb;
+  --success-soft: #173228;
+  --success-line: #2b5546;
+  --info: #bcd8f3;
+  --info-soft: #1c2a38;
+  --info-line: #35506a;
+
+  --chart-input: #7fb0e0;
+  --chart-output: #8fb59a;
+  --chart-read: #e0b96a;
+  --chart-write: #b5a1e0;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 34%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 36%), 0 3px 10px -2px rgb(0 0 0 / 32%);
+  --shadow-md: 0 14px 32px -14px rgb(0 0 0 / 62%), 0 2px 8px rgb(0 0 0 / 26%);
+  --shadow-lg: 0 36px 90px -30px rgb(0 0 0 / 80%), 0 8px 28px -12px rgb(0 0 0 / 40%);
+  --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px -10px rgb(123 227 167 / 40%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 6%);
+  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 5%), 0 10px 30px -18px rgb(0 0 0 / 70%);
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a39c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+}

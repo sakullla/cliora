@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { styleSource } from './style-source.mjs';
 
 const root = new URL('../../', import.meta.url);
-const style = readFileSync(new URL('src/style.css', root), 'utf8');
+const style = styleSource();
+const badge = readFileSync(new URL('src/components/ui/Badge.module.css', root), 'utf8');
 const editor = readFileSync(new URL('src/components/CodeEditor.css', root), 'utf8');
 const domain = readFileSync(new URL('src/types/domain.ts', root), 'utf8');
 const tauriConfig = JSON.parse(readFileSync(new URL('src-tauri/tauri.conf.json', root), 'utf8'));
@@ -41,12 +43,6 @@ function stroke(value) {
   const match = value.match(/stroke='%23([0-9a-f]{6})'/i);
   assert.ok(match, value);
   return `#${match[1].toLowerCase()}`;
-}
-
-function declaredColor(css, pattern) {
-  const match = css.match(pattern);
-  assert.ok(match, pattern);
-  return match[1].toLowerCase();
 }
 
 const light = variables(style, ':root {');
@@ -133,17 +129,35 @@ test('syntax colors stay distinct and at WCAG 4.5:1 on the editor surface', () =
 });
 
 test('danger buttons and icon strokes follow the text colors', () => {
-  const lightInk = declaredColor(style, /\.confirmation-actions \.destructive[^{]*\{[^}]*color:\s*(#[0-9a-fA-F]{3,6})/);
-  const darkInk = declaredColor(style, /:root\[data-theme="dark"\] \.confirmation-actions \.destructive\s*\{[^}]*color:\s*(#[0-9a-fA-F]{3,6})/);
-  assert.equal(lightInk, '#fff');
-  const darkInkRgb = hexBytes(darkInk);
-  assert.ok(Math.max(...darkInkRgb) <= 80, `dark danger label ${darkInk} is not a dark ink`);
-  ratioAtLeast(wcag(hexBytes('#ffffff'), hexBytes(light.danger)), 4.5, 'light danger button');
-  ratioAtLeast(wcag(darkInkRgb, hexBytes(dark.danger)), 4.5, 'dark danger button');
+  // Filled danger buttons take their label ink from --on-danger in both themes.
+  assert.match(style, /\.confirmation-actions \.destructive[^{]*\{[^}]*color:\s*var\(--on-danger\)/);
+  assert.equal(/:root\[data-theme="dark"\] \.confirmation-actions \.destructive/.test(style), false, 'dark danger label overrides --on-danger');
+  assert.equal(light['on-danger'].toLowerCase(), '#fff');
+  const darkInkRgb = hexBytes(dark['on-danger']);
+  assert.ok(Math.max(...darkInkRgb) <= 80, `dark --on-danger ${dark['on-danger']} is not a dark ink`);
+  ratioAtLeast(wcag(hexBytes(light['on-danger']), hexBytes(light.danger)), 4.5, 'light --on-danger on --danger');
+  ratioAtLeast(wcag(darkInkRgb, hexBytes(dark.danger)), 4.5, 'dark --on-danger on --danger');
   assert.equal(stroke(light.chevron), light['text-2']);
   assert.equal(stroke(light['search-icon']), light['text-3']);
   assert.equal(stroke(dark.chevron), dark['text-2']);
   assert.equal(stroke(dark['search-icon']), dark['text-3']);
+});
+
+test('badge tones and description text on the raised surface stay at WCAG 4.5:1', () => {
+  const tones = ['neutral', 'accent', 'success', 'warning', 'danger', 'info'];
+  for (const tone of tones) {
+    const rule = badge.match(new RegExp(String.raw`\[data-tone="${tone}"\]\s*\{([^}]*)\}`));
+    assert.ok(rule, `Badge tone ${tone} is not declared`);
+    const ink = rule[1].match(/(?:^|;)\s*color:\s*var\(--([\w-]+)\)/);
+    const fill = rule[1].match(/background(?:-color)?:\s*var\(--([\w-]+)\)/);
+    assert.ok(ink && fill, `Badge tone ${tone} must set color and background from tokens`);
+    for (const [name, theme] of themes) {
+      ratioAtLeast(wcag(hexBytes(theme[ink[1]]), hexBytes(theme[fill[1]])), 4.5, `${name} Badge ${tone} (--${ink[1]} on --${fill[1]})`);
+    }
+  }
+  for (const [name, theme] of themes) {
+    ratioAtLeast(wcag(hexBytes(theme['text-3']), hexBytes(theme['surface-2'])), 4.5, `${name} --text-3 on --surface-2`);
+  }
 });
 
 test('charts, font stacks, and theme count stay put', () => {

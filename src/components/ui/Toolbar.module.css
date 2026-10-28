@@ -1,0 +1,13 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  min-height: var(--control-h);
+}
+.heading { display: inline-flex; align-items: baseline; gap: var(--space-2); min-width: 0; margin-right: auto; }
+.title { overflow: hidden; color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.count { color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.primary { display: inline-flex; flex: none; }
