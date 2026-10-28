@@ -1,6 +1,5 @@
 export default {
   preview: {
-    tabsLabel: '工具',
     configTitle: '{{name}} 配置',
     emptyDetail: '桌面应用可读取和保存 CLI 的 TOML / JSON 原文。',
   },
@@ -748,6 +747,7 @@ export default {
   workspace: {
     operationFailed: '操作失败，请重试。',
     hostUnknown: '地址待核验',
+    remoteWritesReason: '远程配置写入由对应 CLI 适配器提供。',
     moreActions: '更多操作',
     view: {
       config: '配置',
@@ -760,9 +760,6 @@ export default {
     },
     memoryUnavailable: '记忆暂不可用',
     discardMessage: '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？',
-    railTitle: 'CLI 工具',
-    scrollToolsBack: '向左查看更多工具',
-    scrollToolsForward: '向右查看更多工具',
     frameCurrent: '修改正在使用的文件',
     frameCommon: '修改通用配置',
     frameProfile: '修改配置 · {{name}}',

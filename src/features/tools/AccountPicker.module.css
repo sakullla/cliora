@@ -1,17 +1,14 @@
-/* style-tokens: pending */
-.picker { display: grid; gap: 14px; min-width: 0; }
-.picker header, .picker li > div:first-child { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+.picker { display: grid; gap: var(--space-4); min-width: 0; }
+.picker header, .picker li > div:first-child { display: flex; justify-content: space-between; align-items: start; gap: var(--space-3); flex-wrap: wrap; }
 .picker h3, .picker p { margin: 0; }
 .picker li span, .picker details { color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
 .picker li span { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .picker details { font-size: var(--fs-body); }
 .picker p { font-size: var(--fs-body); color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
-.picker ul { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
-.picker li, .create { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.picker ul { display: grid; gap: var(--space-2_5); padding: 0; margin: 0; list-style: none; }
+.picker li, .create { display: grid; gap: var(--space-2_5); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .picker summary { cursor: pointer; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.create label { display: grid; gap: 6px; font-size: var(--fs-body); }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
-.picker [role="alert"] { color: var(--danger); background: var(--danger-soft); padding: 10px; border-radius: var(--radius); }
-.picker [role="status"] { background: var(--accent-soft); padding: 10px; border-radius: var(--radius); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.create label { display: grid; gap: var(--space-1_5); font-size: var(--fs-body); }
+.picker [role="alert"] { color: var(--danger); background: var(--danger-soft); padding: var(--space-2_5); border-radius: var(--radius); }
+.picker [role="status"] { background: var(--accent-soft); padding: var(--space-2_5); border-radius: var(--radius); }

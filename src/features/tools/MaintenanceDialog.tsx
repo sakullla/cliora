@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
 import styles from './MaintenanceDialog.module.css';
+import { Badge, Button, IconButton } from '../../components/ui';
 
 export type MaintenanceAction = 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major';
 
@@ -25,7 +26,7 @@ export type MaintenanceState = {
   version?: string | null;
   startedAt: number;
   finishedAt?: number;
-  /** Hidden into the floating activity pill while the action keeps running. */
+  /** Hidden into the floating activity dock while the action keeps running. */
   minimized?: boolean;
 };
 
@@ -134,10 +135,10 @@ export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, on
             <button type="button" className={styles.terminalToggle} aria-expanded={logOpen} onClick={() => setLogOpen((value) => !value)}>
               <Icon name="chevronRight" size={14} />
               <span className={styles.terminalTitle}>{t('tools.workspace.maintenanceLog')}</span>
-              {lines.length > 0 && <span className={styles.terminalCount}>{t('tools.workspace.maintenanceLogLines', { count: lines.length })}</span>}
+              {lines.length > 0 && <Badge className={styles.terminalCount}>{t('tools.workspace.maintenanceLogLines', { count: lines.length })}</Badge>}
             </button>
             {!logOpen && lastLine && <code className={styles.ticker} title={lastLine}>{lastLine}</code>}
-            <button type="button" className={styles.copy} data-copied={copied || undefined} disabled={!text.trim()} onClick={() => void copy()} aria-label={t('tools.workspace.maintenanceCopyLog')} title={t('tools.workspace.maintenanceCopyLog')}><Icon name={copied ? 'check' : 'copy'} size={14} /></button>
+            <IconButton size="sm" className={styles.copy} data-copied={copied || undefined} disabled={!text.trim()} onClick={() => void copy()} aria-label={t('tools.workspace.maintenanceCopyLog')} title={t('tools.workspace.maintenanceCopyLog')} icon={<Icon name={copied ? 'check' : 'copy'} size={14} />} />
           </div>
           <pre ref={logRef} className={styles.log} hidden={!logOpen} aria-label={t('tools.workspace.maintenanceLog')}>{text || t('tools.workspace.maintenanceWaiting')}</pre>
         </section>
@@ -145,34 +146,34 @@ export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, on
         <div className="dialog-footer">
           {state.running
             ? <>
-              <button type="button" className={styles.quietDanger} disabled={state.cancelling} onClick={onCancel}>{t(state.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</button>
+              <Button variant="ghost" className={styles.quietDanger} disabled={state.cancelling} onClick={onCancel}>{t(state.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</Button>
               <span className="dialog-footer-gap" />
-              <button type="button" onClick={onMinimize} title={t('tools.workspace.maintenanceBackgroundHint')}><Icon name="minimize" size={14} />{t('tools.workspace.maintenanceBackground')}</button>
+              <Button onClick={onMinimize} title={t('tools.workspace.maintenanceBackgroundHint')} icon={<Icon name="minimize" size={14} />}>{t('tools.workspace.maintenanceBackground')}</Button>
             </>
             : <>
               <span className="dialog-footer-gap" />
-              {state.error && canRetry && <button type="button" onClick={onClose}>{t('tools.workspace.maintenanceClose')}</button>}
+              {state.error && canRetry && <Button onClick={onClose}>{t('tools.workspace.maintenanceClose')}</Button>}
               {state.error && canRetry
-                ? <button type="button" className={styles.primary} disabled={busy} onClick={onRetry}><Icon name="refresh" size={14} />{t('tools.workspace.maintenanceRetry')}</button>
-                : <button type="button" className={styles.primary} onClick={onClose}>{state.error ? t('tools.workspace.maintenanceClose') : t('tools.workspace.maintenanceFinish')}</button>}
+                ? <Button variant="primary" disabled={busy} onClick={onRetry} icon={<Icon name="refresh" size={14} />}>{t('tools.workspace.maintenanceRetry')}</Button>
+                : <Button variant="primary" onClick={onClose}>{state.error ? t('tools.workspace.maintenanceClose') : t('tools.workspace.maintenanceFinish')}</Button>}
             </>}
         </div>
       </div>
     </GuideDialog>
 
-    {state.minimized && <div className={styles.pill} data-phase={phase} role="status" aria-label={headline}>
-      <span className={styles.pillIcon}>
+    {state.minimized && <div className={styles.dock} data-phase={phase} role="status" aria-label={headline}>
+      <span className={styles.dockIcon}>
         <ToolIcon toolId={state.tool} size={24} />
         <span className={styles.heroBadge} aria-hidden="true">{badge}</span>
       </span>
-      <span className={styles.pillText}>
+      <span className={styles.dockText}>
         <strong>{headline}</strong>
         <small>{phase === 'running' ? (lastLine || status) : status}</small>
       </span>
-      <span className={styles.pillTime}>{elapsed}</span>
-      <button type="button" className={styles.pillOpen} onClick={onRestore}>{t('tools.workspace.maintenanceShow')}</button>
-      {!state.running && <button type="button" className={styles.pillClose} aria-label={t('tools.workspace.maintenanceClose')} title={t('tools.workspace.maintenanceClose')} onClick={onClose}><Icon name="close" size={14} /></button>}
-      {state.running && <span className={styles.pillTrack} aria-hidden="true" />}
+      <span className={styles.dockTime}>{elapsed}</span>
+      <Button size="sm" className={styles.dockOpen} onClick={onRestore}>{t('tools.workspace.maintenanceShow')}</Button>
+      {!state.running && <IconButton size="sm" className={styles.dockClose} aria-label={t('tools.workspace.maintenanceClose')} title={t('tools.workspace.maintenanceClose')} onClick={onClose} icon={<Icon name="close" size={14} />} />}
+      {state.running && <span className={styles.dockTrack} aria-hidden="true" />}
     </div>}
   </>;
 }

@@ -18,6 +18,8 @@ import { useFeedback } from '../../lib/toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import i18n from '../../i18n';
 import styles from './ResourceWorkspace.module.css';
+import { Badge, Button, IconButton } from '../../components/ui';
+import type { Tone } from '../../lib/statusTone';
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -448,12 +450,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     if (error) { feedback.setError(error); setError(''); }
     else if (outcome) { if (result?.status === 'failed') feedback.setWarning(outcome); else feedback.setNotice(outcome); setResult(null); }
   }, [documentOpen, error, outcome, result, feedback]);
-  const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'on' }
-    : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'warn' }
-    : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }
-    : installed?.state === 'disabled' ? { label: t('tools.skills.stateDisabled'), tone: undefined }
-    : installed?.state === 'missing' ? { label: t('tools.skills.stateMissing'), tone: 'warn' }
-    : { label: t('tools.skills.stateNotInstalled'), tone: undefined };
+  const installState: { label: string; tone: Tone } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'success' }
+    : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'info' }
+    : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warning' }
+    : installed?.state === 'disabled' ? { label: t('tools.skills.stateDisabled'), tone: 'neutral' }
+    : installed?.state === 'missing' ? { label: t('tools.skills.stateMissing'), tone: 'danger' }
+    : { label: t('tools.skills.stateNotInstalled'), tone: 'neutral' };
 
   const needle = query.trim().toLowerCase();
   const visible = entries.filter(item => {
@@ -519,13 +521,13 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     const rawSummary = typeof item.detail === 'string' ? item.detail.trim() : '';
     const noteSplit = entryOrigin === 'read_only' ? rawSummary.indexOf(' · ') : -1;
     const summary = noteSplit >= 0 ? rawSummary.slice(noteSplit + 3).trim() : rawSummary;
-    const tone = item.state === 'managed' || loadedWithPlugin ? 'on' : item.state === 'unreadable' || item.state === 'read_only' || (entryOrigin === 'plugin' && !loadedWithPlugin) ? 'warn' : undefined;
+    const tone: Tone = item.state === 'managed' || loadedWithPlugin ? 'success' : item.state === 'unreadable' || item.state === 'read_only' || (entryOrigin === 'plugin' && !loadedWithPlugin) ? 'warning' : 'neutral';
     return <button type="button" key={item.path} className={doc.row} aria-current={current || undefined} title={displayPath(item.path)} onClick={() => void openNative(item)}>
       <span className={doc.rowTitle}><strong>{item.name}</strong></span>
       {summary && <span className={doc.rowSummary}>{summary}</span>}
       <span className={doc.rowMeta}>
-        <span className={doc.chip} data-tone={tone}>{skillBadge(item)}</span>
-        {entryOrigin === 'plugin' && <span className={doc.chip}>{t('tools.skills.sourcePlugin')}</span>}
+        <Badge tone={tone}>{skillBadge(item)}</Badge>
+        {entryOrigin === 'plugin' && <Badge>{t('tools.skills.sourcePlugin')}</Badge>}
         {entryOrigin === 'plugin' && item.pluginName && <span className={doc.rowNote}>{item.pluginName}</span>}
       </span>
     </button>;
@@ -538,11 +540,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     {pendingImport.preview.compatibility && <p>{t('tools.skills.importCompat', { requirement: pendingImport.preview.compatibility })}</p>}
     <p>{t('tools.skills.importChangesNote')}</p>
     {pendingImport.preview.changes.map(file => filePair(file, t('tools.skills.importAfterLabel')))}
-    <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('tools.skills.importCancel')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmImport()}>{pendingImport.installAfter ? t('tools.skills.importConfirmInstall') : t('tools.skills.importConfirmLibrary')}</button></div>
+    <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('tools.skills.importCancel')}</button><Button variant="primary" disabled={busy} onClick={() => void confirmImport()}>{pendingImport.installAfter ? t('tools.skills.importConfirmInstall') : t('tools.skills.importConfirmLibrary')}</Button></div>
   </div>;
   const targetPanel = pendingTarget && <div className={styles.resultList} role="group" aria-label={t('tools.skills.previewLabel')}><strong>{pendingTarget.status === 'conflict' ? t('tools.skills.conflictTitle') : t('tools.skills.confirmTitle')}</strong><p>{pendingTarget.detail} · {pendingTarget.path}</p>
     {pendingTarget.changes.map(file => filePair(file, t('tools.skills.afterLabel')))}
-    <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>{t('common.dialog.cancel')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? t('tools.skills.confirmTakeover') : t('tools.skills.confirmInstall')}</button></div>
+    <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>{t('common.dialog.cancel')}</button><Button variant="primary" disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? t('tools.skills.confirmTakeover') : t('tools.skills.confirmInstall')}</Button></div>
   </div>;
   const status = <>
     {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
@@ -572,21 +574,21 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     <DocumentHeader
       title={docTitle}
       badges={<>
-        {origin === 'plugin' && <span className={doc.chip}><Icon name="package" size={11} />{t('tools.skills.sourcePlugin')}</span>}
-        {origin === 'read_only' && <span className={doc.chip}><Icon name="lock" size={11} />{t('tools.skills.stateReadOnly')}</span>}
-        {external && origin === 'writable' && <span className={doc.chip}>{t('tools.skills.stateExternal')}</span>}
-        {selected && canEditSkill && <span className={doc.chip} data-tone={installState.tone}>{installState.label}</span>}
+        {origin === 'plugin' && <Badge><Icon name="package" size={11} />{t('tools.skills.sourcePlugin')}</Badge>}
+        {origin === 'read_only' && <Badge><Icon name="lock" size={11} />{t('tools.skills.stateReadOnly')}</Badge>}
+        {external && origin === 'writable' && <Badge>{t('tools.skills.stateExternal')}</Badge>}
+        {selected && canEditSkill && <Badge tone={installState.tone}>{installState.label}</Badge>}
       </>}
       tools={<>
         {skillDoc && <ModeSwitch mode={mode} editable={canEditSkill} onChange={setMode} />}
         {selected && canEditSkill && <Toggle checked={skillEnabled} label={t('tools.skills.enableAria')} text={skillEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')} disabled={busy || (!installed && !entries.some(item => item.name === selected?.name) && !skillEnabled)} onChange={value => void toggleSkill(value)} />}
-        {(skillPath || selected) && <button type="button" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.skills.pathToggle')} title={t('tools.skills.pathToggle')} onClick={() => setInfoOpen(value => !value)}><Icon name="info" size={15} /></button>}
+        {(skillPath || selected) && <IconButton size="sm" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.skills.pathToggle')} title={t('tools.skills.pathToggle')} onClick={() => setInfoOpen(value => !value)} icon={<Icon name="info" size={15} />} />}
       </>}
       meta={metaNote || packageMeta ? <>{metaNote && <span>{metaNote}</span>}{packageMeta && <span>{packageMeta}</span>}</> : undefined}
       metaActions={showLibrary || showRemove || showUpdate ? <>
-        {showUpdate && <button type="button" className={doc.ghostButton} data-tone="accent" disabled={busy || needsProject} onClick={() => void change(false)}><Icon name="refresh" size={13} />{t('tools.skills.updateToScope')}</button>}
-        {showLibrary && <button type="button" className={doc.ghostButton} data-tone="accent" disabled={busy} onClick={() => void syncExternal()}><Icon name="library" size={13} />{t('tools.skills.addToLibrary')}</button>}
-        {showRemove && <button type="button" className={doc.ghostButton} data-tone="danger" disabled={busy} onClick={() => void change(true)}><Icon name="trash" size={13} />{t('tools.mcp.removeFromTool')}</button>}
+        {showUpdate && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="accent" disabled={busy || needsProject} onClick={() => void change(false)}><Icon name="refresh" size={13} />{t('tools.skills.updateToScope')}</Button>}
+        {showLibrary && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="accent" disabled={busy} onClick={() => void syncExternal()}><Icon name="library" size={13} />{t('tools.skills.addToLibrary')}</Button>}
+        {showRemove && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="danger" disabled={busy} onClick={() => void change(true)}><Icon name="trash" size={13} />{t('tools.mcp.removeFromTool')}</Button>}
       </> : undefined}
     />
     {infoOpen && <div className={doc.info}>
@@ -610,14 +612,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       {docDirty
         ? <button type="button" disabled={busy} onClick={() => void discardSkill()}>{t('common.document.discard')}</button>
         : <button type="button" onClick={() => setMode('read')}>{t('common.document.done')}</button>}
-      <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !docDirty} onClick={() => void saveSkill()}>{t('tools.skills.save')}</button>
+      <Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !docDirty} onClick={() => void saveSkill()}>{t('tools.skills.save')}</Button>
     </DocumentFoot>}
   </article>;
 
   return <DocumentWorkspace label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} onKeyDown={onEditorKey}
     heading={needsProject ? undefined : t('tools.workspace.view.skills')}
     count={needsProject || !entries.length ? undefined : t('tools.skills.count', { filtered: visible.length, total: entries.length })}
-    actions={needsProject ? undefined : <button type="button" className={doc.accentButton} aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()}><Icon name="plus" size={16} /></button>}
+    actions={needsProject ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}
     search={needsProject || !entries.length ? undefined : <SearchField type="search" label={t('tools.skills.searchLabel')} placeholder={t('tools.skills.searchPlaceholder')} value={query} onChange={setQuery} />}
     filters={needsProject || !entries.length ? undefined : <>
       <FilterSelect className={styles.filterSelect} label={t('tools.skills.sourceFilter')} value={source} triggerDetail={false} options={[
@@ -633,7 +635,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         { value: 'not_loaded', label: t('tools.skills.pluginNotLoaded') },
         { value: 'unreadable', label: t('tools.skills.stateUnreadable') },
       ]} onChange={value => setLoad(value as LoadFilter)} />
-      {filtering && <button type="button" className={doc.ghostButton} onClick={clearFilters}><Icon name="close" size={12} />{t('tools.skills.clearFilters')}</button>}
+      {filtering && <Button variant="ghost" size="sm" className={doc.ghostButton} onClick={clearFilters}><Icon name="close" size={12} />{t('tools.skills.clearFilters')}</Button>}
     </>}
     notices={recovery || scanError ? <>
       {recovery}
@@ -646,7 +648,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         : scanError && !entries.length
           ? null
           : !entries.length
-            ? <EmptyState icon="sparkle" title={t('tools.skills.emptyTitle')} detail={t('tools.skills.emptyDetail')} action={!adding ? <button type="button" className="button primary" disabled={busy} onClick={() => void openAdding()}><Icon name="plus" size={14} />{t('tools.skills.add')}</button> : undefined} />
+            ? <EmptyState icon="sparkle" title={t('tools.skills.emptyTitle')} detail={t('tools.skills.emptyDetail')} action={!adding ? <Button variant="primary" disabled={busy} onClick={() => void openAdding()}><Icon name="plus" size={14} />{t('tools.skills.add')}</Button> : undefined} />
             : filtering && !visible.length
               ? <div className={doc.noMatch}><Icon name="search" size={18} /><p>{needle ? t('tools.skills.noMatchQuery', { query: query.trim() }) : t('tools.skills.noMatch')}</p><button type="button" onClick={clearFilters}>{t('tools.skills.clearFilters')}</button></div>
               : <nav className={doc.rows} aria-label={t('tools.skills.listLabel')}>{visible.map(entryButton)}</nav>}

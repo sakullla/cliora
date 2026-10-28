@@ -2,6 +2,7 @@ import { useEffect, useState, type Key, type KeyboardEvent, type ReactNode } fro
 import { GuideDialog } from '../GuideDialog';
 import { Icon } from '../Icon';
 import styles from './ResourceWorkspace.module.css';
+import { IconButton } from '../ui';
 
 export type ResourceWorkspaceProps<T> = {
   ariaLabel: string;
@@ -63,7 +64,7 @@ export function ResourceWorkspace<T>(props: ResourceWorkspaceProps<T>) {
     <div className={styles.detailsTop}>
       <div className={styles.detailsHeading}>
         <div><span className={styles.detailsEyebrow}>{props.detailsLabel}</span><h3>{props.getItemLabel(selected)}</h3></div>
-        <button type="button" className={styles.iconButton} onClick={props.onCloseDetails} aria-label={props.closeDetailsLabel} title={props.closeDetailsLabel}><Icon name="close" size={17} /></button>
+        <IconButton size="sm" className={styles.iconButton} onClick={props.onCloseDetails} aria-label={props.closeDetailsLabel} title={props.closeDetailsLabel} icon={<Icon name="close" size={17} />} />
       </div>
       {props.detailsActions && <div className={styles.detailsActions}>{props.detailsActions}</div>}
     </div>

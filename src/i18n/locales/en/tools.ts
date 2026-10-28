@@ -1,6 +1,5 @@
 export default {
   preview: {
-    tabsLabel: 'Tools',
     configTitle: '{{name}} configuration',
     emptyDetail: 'The desktop app can read and save the CLI TOML / JSON source.',
   },
@@ -748,6 +747,7 @@ export default {
   workspace: {
     operationFailed: 'Operation failed. Please try again.',
     hostUnknown: 'Address unverified',
+    remoteWritesReason: 'Remote configuration writes are provided by the matching CLI adapter.',
     moreActions: 'More actions',
     view: {
       config: 'Configuration',
@@ -760,9 +760,6 @@ export default {
     },
     memoryUnavailable: 'Memory unavailable',
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
-    railTitle: 'CLI tools',
-    scrollToolsBack: 'Show earlier tools',
-    scrollToolsForward: 'Show more tools',
     frameCurrent: 'Edit the files in use',
     frameCommon: 'Edit common configuration',
     frameProfile: 'Edit profile · {{name}}',

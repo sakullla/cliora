@@ -15,6 +15,7 @@ import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { modLabel, saveShortcutHint, withMod } from '../../lib/shortcut';
+import { Badge, Button, IconButton } from '../../components/ui';
 
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 function remoteAgentPath(toolId: string, scope: Scope, projectPath: string, name: string, format: string) {
@@ -212,16 +213,16 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const readable = opened && !opened.builtin ? !!readModel(content, opened.format) : false;
   const foot = (save: () => void, disabled: boolean) => <DocumentFoot dirty={dirty} note={t('common.document.saveHint', { mod: modLabel })}>
     <button type="button" disabled={busy} onClick={() => void closeEditor()}>{dirty || creating ? t('tools.agents.closeEditor') : t('common.document.done')}</button>
-    <button type="button" className="button primary" title={saveShortcutHint()} disabled={disabled} onClick={save}>{t('tools.agents.save')}</button>
+    <Button variant="primary" title={saveShortcutHint()} disabled={disabled} onClick={save}>{t('tools.agents.save')}</Button>
   </DocumentFoot>;
 
   return <DocumentWorkspace label={t('tools.agents.label')} toolbarLabel={t('tools.agents.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeDocument(); }} onKeyDown={onKey}
     heading={t('tools.workspace.view.agents')}
     count={supported ? filtered.length === entries.length ? t('tools.agents.count', { count: entries.length }) : t('tools.agents.countFiltered', { filtered: filtered.length, total: entries.length }) : undefined}
     actions={<>
-      <button type="button" className={doc.iconButton} aria-label={t('tools.agents.rescan')} title={t('tools.agents.rescan')} disabled={busy} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()}><Icon name="refresh" size={15} /></button>
-      <button type="button" className={doc.iconButton} aria-label={t('tools.agents.import')} title={t('tools.agents.import')} disabled={busy || !supported} onClick={() => importInput.current?.click()}><Icon name="upload" size={15} /></button>
-      <button type="button" className={doc.accentButton} aria-label={t('tools.agents.create')} title={t('tools.agents.create')} disabled={busy || !supported} onClick={() => void createNew()}><Icon name="plus" size={16} /></button>
+      <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.agents.rescan')} title={t('tools.agents.rescan')} disabled={busy} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()} icon={<Icon name="refresh" size={15} />} />
+      <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.agents.import')} title={t('tools.agents.import')} disabled={busy || !supported} onClick={() => importInput.current?.click()} icon={<Icon name="upload" size={15} />} />
+      <IconButton variant="primary" size="sm" aria-label={t('tools.agents.create')} title={t('tools.agents.create')} disabled={busy || !supported} onClick={() => void createNew()} icon={<Icon name="plus" size={16} />} />
       <input ref={importInput} hidden aria-label={t('tools.agents.importAria')} type="file" accept={format === 'toml' ? '.toml' : '.md'} disabled={busy || !supported} onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ''; }} />
     </>}
     search={supported ? <SearchField type="search" label={t('tools.agents.searchLabel')} placeholder={t('tools.agents.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
@@ -243,15 +244,15 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         ? <div className={styles.listWrap} />
         : <div className={styles.listWrap}>
           {!supported && <EmptyState icon="alert" title={t('library.resources.installState.unavailable')} detail={[snapshot.capability.detail, snapshot.detail].filter(Boolean).join(' ')} />}
-          {supported && !entries.length && <EmptyState icon="sparkle" title={t('tools.agents.emptyTitle')} detail={t('tools.agents.empty')} action={<button type="button" className="button primary" disabled={busy} onClick={() => void createNew()}>{t('tools.agents.create')}</button>} />}
+          {supported && !entries.length && <EmptyState icon="sparkle" title={t('tools.agents.emptyTitle')} detail={t('tools.agents.empty')} action={<Button variant="primary" disabled={busy} onClick={() => void createNew()}>{t('tools.agents.create')}</Button>} />}
           {supported && entries.length > 0 && filtered.length === 0 && <div className={doc.noMatch}><Icon name="search" size={18} /><p>{t('tools.agents.noMatch')}</p><button type="button" onClick={() => { setSearch(''); setFilter('all'); }}>{t('tools.plugins.clearFilter')}</button></div>}
           {supported && filtered.length > 0 && <ul className={doc.rows} aria-label={t('tools.agents.title')}>{filtered.map(entry => <li key={entry.id}>
             <button type="button" className={doc.row} aria-current={opened?.id === entry.id ? 'true' : undefined} data-disabled={!entry.enabled || undefined} disabled={busy} onClick={() => void openEntry(entry)}>
               <span className={doc.rowTitle}><strong>{entry.name}</strong></span>
               <span className={doc.rowSummary}>{entry.description || t('tools.agents.noDescription')}</span>
               <span className={doc.rowMeta}>
-                <span className={doc.chip} data-tone={entry.enabled ? 'on' : 'muted'} title={t('tools.agents.badgeTitle')}>{statusText(entry)}</span>
-                {entry.readOnly && <span className={doc.chip}><Icon name="lock" size={10} />{t('tools.plugins.readonly')}</span>}
+                <Badge tone={entry.enabled ? 'success' : 'neutral'} title={t('tools.agents.badgeTitle')}>{statusText(entry)}</Badge>
+                {entry.readOnly && <Badge><Icon name="lock" size={10} />{t('tools.plugins.readonly')}</Badge>}
               </span>
             </button>
           </li>)}</ul>}
@@ -274,14 +275,14 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       <DocumentHeader
         title={opened.name}
         badges={<>
-          <span className={doc.chip} data-tone={opened.enabled ? 'on' : 'muted'} title={t('tools.agents.badgeTitle')}>{statusText(opened)}</span>
-          {opened.readOnly && <span className={doc.chip}><Icon name="lock" size={11} />{t('tools.plugins.readonly')}</span>}
+          <Badge tone={opened.enabled ? 'success' : 'neutral'} title={t('tools.agents.badgeTitle')}>{statusText(opened)}</Badge>
+          {opened.readOnly && <Badge><Icon name="lock" size={11} />{t('tools.plugins.readonly')}</Badge>}
         </>}
         tools={<>
           {!opened.builtin && <ModeSwitch mode={mode} editable={!opened.readOnly} disabled={busy} onChange={setMode} />}
           <Toggle checked={opened.enabled} label={t('tools.agents.enableAria')} text={opened.enabled ? t('tools.plugins.enabled') : t('tools.plugins.disabled')} disabled={busy || opened.readOnly || dirty} onChange={value => void operate(value ? 'enable' : 'disable', opened)} />
-          <button type="button" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.agents.detail')} title={t('tools.agents.detail')} onClick={() => setInfoOpen(value => !value)}><Icon name="info" size={15} /></button>
-          <button type="button" className={doc.iconButton} data-tone="danger" aria-label={t('tools.agents.delete')} title={opened.readOnly ? t('tools.agents.managedTitle') : t('tools.agents.delete')} disabled={busy || opened.readOnly} onClick={() => void operate('delete', opened)}><Icon name="trash" size={15} /></button>
+          <IconButton size="sm" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.agents.detail')} title={t('tools.agents.detail')} onClick={() => setInfoOpen(value => !value)} icon={<Icon name="info" size={15} />} />
+          <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.agents.delete')} title={opened.readOnly ? t('tools.agents.managedTitle') : t('tools.agents.delete')} disabled={busy || opened.readOnly} onClick={() => void operate('delete', opened)} icon={<Icon name="trash" size={15} />} />
         </>}
         meta={opened.owner ? <span>{opened.owner}</span> : undefined}
       />
