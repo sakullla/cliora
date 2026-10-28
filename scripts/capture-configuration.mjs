@@ -89,7 +89,9 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
   const { installConfigurationWorkspace } = await fixtureInstaller();
   for (const width of widths) for (const theme of themes) for (const scene of configurationScenarios.filter(item => selected.includes(item.name))) {
     const page = await browser.newPage({ baseURL: url, viewport: { width, height: 1100 } });
-    page.setDefaultTimeout(10000);
+    // Same 30 s wait budget as the other capture scripts; each scene boots a fresh page, which can
+    // take longer than 10 s when verify-ui-captures runs several capture jobs at once.
+    page.setDefaultTimeout(30000);
     page.on('pageerror', error => failures.push({ name: scene.name, theme, width, type: 'pageerror', message: error.message }));
     try {
       await installConfigurationWorkspace(page, scene.tool, true, scene.action === 'overview');
