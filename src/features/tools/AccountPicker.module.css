@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .picker { display: grid; gap: 14px; min-width: 0; }
 .picker header, .picker li > div:first-child { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
 .picker h3, .picker p { margin: 0; }

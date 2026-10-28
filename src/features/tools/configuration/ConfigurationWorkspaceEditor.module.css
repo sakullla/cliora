@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .shell { display: flex; flex-direction: column; min-height: 0; height: min(720px, calc(100dvh - 180px)); gap: 0; color: var(--text); }
 .scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 4px 28px; overscroll-behavior: contain; }
 .scroll > div:not([hidden]) { display: grid; gap: 16px; }

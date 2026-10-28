@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .rowsField { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .rowsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
 .rowsLabel { display: inline-flex; align-items: center; gap: 6px; }

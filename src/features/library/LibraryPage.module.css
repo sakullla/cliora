@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .page { display: grid; gap: 16px; min-width: 0; container-type: inline-size; }
 
 /* Resource switcher: a quiet segmented control, the primary action at the far end. */

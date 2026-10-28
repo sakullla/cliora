@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .dialog { display: grid; gap: 14px; min-width: min(680px, 72vw); }
 .field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .field input, .field select { width: 100%; min-height: 38px; padding: 8px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }

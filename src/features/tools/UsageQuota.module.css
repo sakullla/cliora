@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .quota { width: 100%; min-width: 0; display: grid; gap: 8px; font-size: var(--fs-caption); container-type: inline-size; }
 .quota > .heading { justify-content: flex-end; }
 .quota > .heading > span { margin-right: auto; color: var(--text-2); }

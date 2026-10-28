@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .batch { display: grid; gap: 14px; min-width: 0; }
 .intro, .hint { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.55; }
 .list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }

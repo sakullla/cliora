@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .languageChoice { display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; flex: 0 1 220px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
 .languageChoice button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); white-space: nowrap; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .languageChoice button:hover:not(:disabled) { color: var(--text); }

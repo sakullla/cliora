@@ -1,3 +1,4 @@
+/* style-tokens: pending */
 .page { display: flex; flex: 1; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; overflow: hidden; }
 .board { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-sm); }
 .usagePane { display: flex; flex: 1; min-width: 0; min-height: 0; }
