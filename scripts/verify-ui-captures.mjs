@@ -1,8 +1,8 @@
 /**
  * One command for the UI capture acceptance run (02 ADR-7): build the frontend, serve it with
  * vite preview on 127.0.0.1:14736, run the four capture scripts over all themes and widths, then
- * stop the preview. The scripts run as one job per theme × width, a few at a time, so the run fits
- * a 900 s command budget. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
+ * stop the preview. The scripts run as one job per theme × width, two at a time by default
+ * (CLIORA_CAPTURE_JOBS overrides), and the total wall-clock is printed at the end. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
  * each with the script's own gallery, manifest and job.log. Any failing job makes the run exit
  * non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
  * not native platform acceptance.
@@ -13,15 +13,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const runStarted = Date.now();
 const port = 14736;
 const previewUrl = `http://127.0.0.1:${port}`;
 const outRoot = path.join(root, 'docs', 'verification', 'ui-redesign');
 const themes = ['light', 'dark'];
 const widths = [1360, 900, 640];
-// Independent capture jobs share the one preview server; a bounded pool keeps the whole run well
-// inside a 900 s command budget. Each job covers one theme × width of one script and writes to
+// Independent capture jobs share the one preview server. Two at a time by default: at four, CPU
+// contention on a loaded host pushed Playwright waits past 30 s. CLIORA_CAPTURE_JOBS (integer ≥ 1)
+// overrides it. Each job covers one theme × width of one script and writes to
 // docs/verification/ui-redesign/<script>/<theme>-<width>; only capture-ui light/1360 measures.
-const poolSize = 4;
+const jobsSetting = process.env.CLIORA_CAPTURE_JOBS;
+if (jobsSetting !== undefined && !/^[1-9]\d*$/.test(jobsSetting.trim())) {
+  console.error(`CLIORA_CAPTURE_JOBS 必须是不小于 1 的整数，当前为 "${jobsSetting}"。`);
+  process.exit(1);
+}
+const poolSize = jobsSetting === undefined ? 2 : Number(jobsSetting.trim());
 const scripts = ['capture-ui', 'capture-sync', 'capture-workbench', 'capture-memory'];
 const jobs = scripts.flatMap((script) => themes.flatMap((theme) => widths.map((width) => ({
   script,
@@ -48,7 +55,7 @@ function failingScenarios(script, file) {
   if (!fs.existsSync(file)) return ['(no manifest written)'];
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   const describe = (item) => [item.type, item.name ?? item.after, item.theme, item.width, item.message ?? (item.over ? `overflow ${JSON.stringify(item.over).slice(0, 160)}` : item.missing ? `missing ${item.missing.map((entry) => `${entry.name}/${entry.theme}/${entry.width}`).join(', ')}` : '')].filter((part) => part !== undefined && part !== '').join(' ');
-  if (script === 'capture-workbench') return data.shots.filter((item) => item.pageErrors.length || item.overflow || item.actionError).map((item) => `${item.name}: ${item.actionError ?? (item.pageErrors.length ? `page error ${item.pageErrors[0]}` : `overflow ${JSON.stringify(item.overflow)}`)}`);
+  if (script === 'capture-workbench') return [...(data.runErrors ?? []).map((message) => `run: ${message}`), ...data.shots.filter((item) => item.pageErrors.length || item.overflow || item.actionError).map((item) => `${item.name}: ${item.actionError ?? (item.pageErrors.length ? `page error ${item.pageErrors[0]}` : `overflow ${JSON.stringify(item.overflow)}`)}`)];
   if (script === 'capture-memory') return data.problems;
   return (data.failures ?? []).map((item) => typeof item === 'string' ? item : describe(item));
 }
@@ -128,4 +135,5 @@ for (const script of scripts) {
 }
 for (const { failing } of results.filter((item) => item.script === 'preview')) for (const item of failing) console.log(`- preview: ${item}`);
 const failed = results.filter((item) => item.code !== 0);
+console.log(`\n总耗时 ${Math.round((Date.now() - runStarted) / 1000)} s（构建、预览与 ${jobs.length} 组截图，${poolSize} 组并行）`);
 if (failed.length || results.length < jobs.length) process.exitCode = 1;

@@ -18,7 +18,7 @@ for (let attempt = 0; attempt < 50; attempt += 1) {
   try { const response = await fetch(previewUrl, { signal: AbortSignal.timeout(1000) }); if (response.ok) { previewReady = true; break; } } catch { /* preview not up yet */ }
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
-if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl + '。请先构建并启动 Vite preview，再运行捕获。');
+if (!previewReady) console.error('预览服务未就绪：' + previewUrl + '。请先构建并启动 Vite preview，再运行捕获。');
 
 const transcript = [
   '\u001b[2m  Codex CLI \u001b[0m\u001b[2m·\u001b[0m v0.160.0 \u001b[2m·\u001b[0m model \u001b[1mgpt-6-astra\u001b[0m',
@@ -170,14 +170,18 @@ async function install(page, initialTheme, empty = false) {
 }
 
 const manifest = [];
-const browser = await chromium.launch();
+// Run-level failures (preview not ready, browser launch) are recorded here instead of crashing, so
+// the manifest, gallery and README are always written and the exit code is 1.
+const runErrors = [];
+let browser = null;
 async function shot(name, theme, width, run, empty = false) {
-  const page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
   const errors = [];
-  page.on('pageerror', (error) => errors.push(String(error)));
   let actionError = null;
   let overflow = null;
+  let page = null;
   try {
+    page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
+    page.on('pageerror', (error) => errors.push(String(error)));
     await install(page, theme, empty);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
@@ -188,9 +192,9 @@ async function shot(name, theme, width, run, empty = false) {
     overflow = size.scroll > size.client ? size : null;
     await page.screenshot({ path: out + '/' + name + '.png', fullPage: false });
   } catch (error) {
-    actionError = error.message.split('\n')[0];
+    actionError = String(error?.message ?? error).split('\n')[0];
     console.error(name + ': ' + actionError);
-  } finally { await page.close(); }
+  } finally { await page?.close().catch(() => {}); }
   manifest.push({ name, theme, width, pageErrors: errors, overflow, actionError });
 }
 
@@ -208,6 +212,9 @@ const widths = sizeOption === 'all' ? [1360, 900, 640] : [...new Set(sizeOption.
 if (!widths.length || widths.some((width) => ![1360, 900, 640].includes(width))) throw new Error('Invalid --size; use 1360,900,640');
 
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
+try {
+if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
+browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
   await shot('workbench-active-' + theme + '-' + width, theme, width);
@@ -284,10 +291,15 @@ for (const width of widths) {
   await shot('workbench-empty-' + theme + '-' + width, theme, width, null, true);
 }
 }
+} catch (error) {
+  runErrors.push(String(error?.message ?? error).split('\n')[0]);
+  console.error(runErrors[runErrors.length - 1]);
+} finally {
+  await browser?.close().catch(() => {});
+}
 
-await browser.close();
 const failed = manifest.filter((item) => item.pageErrors.length || item.overflow || item.actionError);
-fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, success: failed.length === 0, shots: manifest }, null, 2));
+fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, success: failed.length === 0 && runErrors.length === 0, runErrors, shots: manifest }, null, 2));
 
 const cards = manifest.map((item) => '    <figure><a href="' + item.name + '.png"><img src="' + item.name + '.png" loading="lazy" alt="' + item.name + '"></a><figcaption>' + item.name + '</figcaption></figure>').join('\n');
 fs.writeFileSync(out + '/index.html', [
@@ -326,5 +338,5 @@ fs.writeFileSync(out + '/README.md', [
   rows,
   '',
 ].join('\n'));
-console.log(JSON.stringify({ shots: manifest.length, failed, acceptance }, null, 2));
-if (failed.length) process.exitCode = 1;
+console.log(JSON.stringify({ shots: manifest.length, failed, runErrors, acceptance }, null, 2));
+if (failed.length || runErrors.length) process.exitCode = 1;
