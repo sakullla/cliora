@@ -1484,7 +1484,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
     <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as CSSProperties}>
       <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} filter={railFilter} search={railSearch} selectedId={selectedId} narrow={narrowFrame} slim={railSlim} busy={!!busy} canLaunch={terminalTools.length > 0}
-        onFilter={setRailFilter} onSearch={setRailSearch} onSelect={setSelectedId} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRailSlim} />
+        onFilter={setRailFilter} onSearch={setRailSearch} onSelect={(id, focusTerminal = true) => {
+          setSelectedId(id);
+          if (focusTerminal) requestAnimationFrame(() => {
+            if (selectedIdRef.current === id) handles.current.get(id)?.focus();
+          });
+        }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRailSlim} />
       <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
         if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }

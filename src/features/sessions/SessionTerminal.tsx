@@ -882,7 +882,11 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         ptyGridRef.current = { cols: term.cols, rows: term.rows };
         void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
       }
-      if (running && focusedRef.current && !document.querySelector('dialog[open]')) term.focus();
+      // Keyboard navigation in the session rail deliberately keeps focus on
+      // the selected tab while React swaps the active terminal. Do not steal
+      // it during that render; direct terminal activation still focuses here.
+      const railTabFocused = document.activeElement?.matches('[role="tab"][data-session-id]');
+      if (running && focusedRef.current && !railTabFocused && !document.querySelector('dialog[open]')) term.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [active, running, fontSize, lineHeight, sessionId, bridge]);
@@ -899,7 +903,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     wasFocusedRef.current = focused;
     if (!gained || !active || !running) return;
     const frame = requestAnimationFrame(() => {
-      if (!document.querySelector('dialog[open]')) termRef.current?.focus();
+      const railTabFocused = document.activeElement?.matches('[role="tab"][data-session-id]');
+      if (!railTabFocused && !document.querySelector('dialog[open]')) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [focused, active, running]);
