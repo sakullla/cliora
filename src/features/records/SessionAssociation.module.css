@@ -1,23 +1,22 @@
-/* style-tokens: pending */
 .cluster {
   display: grid;
-  gap: 8px;
-  margin: 4px 0 10px 42px;
-  padding: 10px 12px;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2_5) var(--space-10);
+  padding: var(--space-2_5) var(--space-3);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
 }
 .clusterHead {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .clusterTitle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   min-width: 0;
   color: var(--accent);
   font-size: var(--fs-control);
@@ -36,9 +35,9 @@
 .clusterToggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-color: var(--line);
   border-radius: var(--radius-xs);
   background: var(--surface);
@@ -56,16 +55,16 @@
 }
 .clusterList {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1_5);
 }
 
 .card {
   display: grid;
-  gap: 6px;
-  margin: 4px 0 8px 42px;
-  padding: 10px 12px;
+  gap: var(--space-1_5);
+  margin: var(--space-1) 0 var(--space-2) var(--space-10);
+  padding: var(--space-2_5) var(--space-3);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--surface);
   box-shadow: inset 3px 0 0 var(--accent);
 }
@@ -76,16 +75,16 @@
 .cardHead {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .badge {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
-  border-radius: 99px;
+  gap: var(--space-1);
+  padding: 1px var(--space-1_5);
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   font-size: var(--fs-micro);
@@ -111,16 +110,16 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   margin-left: auto;
 }
 .foldBtn,
 .openBtn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-0_5);
   min-height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-color: var(--line);
   border-radius: var(--radius-xs);
   background: var(--surface);
@@ -146,7 +145,7 @@
 
 .compactPreview {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .compactPreview .reply,
@@ -162,8 +161,8 @@
   -webkit-box-orient: vertical;
 }
 .compactPreview .reply {
-  padding: 6px 9px;
-  border-radius: 7px;
+  padding: var(--space-1_5) var(--space-2);
+  border-radius: var(--radius-xs);
   background: var(--surface-2);
   color: var(--text);
   -webkit-line-clamp: 2;
@@ -181,9 +180,9 @@
 .compactPreview .ask span,
 .compactPreview .askSubtle span {
   display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: 4px;
+  margin-right: var(--space-1_5);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
   background: var(--surface-3);
   color: var(--text-2);
   font-size: var(--fs-micro);
@@ -196,16 +195,16 @@
 
 .detailBody {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1_5);
   min-width: 0;
 }
 .block {
   display: grid;
-  gap: 3px;
+  gap: var(--space-0_5);
   min-width: 0;
-  padding: 7px 10px;
+  padding: var(--space-1_5) var(--space-2_5);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
 }
 .replyBlock {

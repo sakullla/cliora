@@ -246,27 +246,24 @@ test('records keep search, show native resume command and only launch on request
   expect(listLayout.minHeight).toBeGreaterThan(48);
   expect(listLayout.titleLines).toBeGreaterThan(1);
   expect(listLayout.titleLines).toBeLessThanOrEqual(2.05);
-  await expect(page.getByRole('checkbox', { name: '只看收藏' })).toBeHidden();
-  await page.getByText('筛选', { exact: true }).click();
-  const filterOrder = await page.evaluate(() => {
-    const search = document.querySelector('[aria-label="搜索会话"]')?.closest('label');
-    const tool = document.querySelector('[aria-label="筛选工具"]')?.closest('label');
-    const favorite = [...document.querySelectorAll('label')].find((label) => label.textContent?.includes('只看收藏'));
-    if (!search || !tool || !favorite) return null;
-    const items = [search, tool, favorite];
-    const documentOrder = items.every((item, index) => index === 0 || Boolean(items[index - 1].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const boxes = items.map((item) => item.getBoundingClientRect());
-    const visualOrder = boxes.every((box, index) => {
-      if (index === 0) return true;
-      const previous = boxes[index - 1];
-      return Math.abs(box.top - previous.top) < 8 ? box.left >= previous.left : box.top >= previous.top;
-    });
-    return { documentOrder, visualOrder, orders: items.map((item) => getComputedStyle(item).order) };
+  // The session filters are one visible row under the tab: favorite, time, project, model.
+  await expect(page.locator('details').filter({ has: page.locator('summary', { hasText: /^筛选/ }) })).toHaveCount(0);
+  const filterBar = page.getByRole('group', { name: '会话筛选' });
+  await expect(filterBar.getByRole('button', { name: '只看收藏', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  const filterRow = await filterBar.evaluate((bar) => {
+    const controls = [...bar.querySelectorAll<HTMLElement>('[aria-pressed], button[data-select-trigger]')];
+    const barBox = bar.getBoundingClientRect();
+    const boxes = controls.map((control) => control.getBoundingClientRect());
+    return {
+      names: controls.map((control) => control.getAttribute('aria-label') ?? control.textContent?.replace(/[☆★]/g, '').trim()),
+      oneRow: boxes.every((box) => Math.abs(box.top - boxes[0].top) < 2),
+      leftToRight: boxes.every((box, index) => index === 0 || box.left > boxes[index - 1].left),
+      inside: boxes.every((box) => box.left >= barBox.left - 1 && box.right <= barBox.right + 1),
+    };
   });
-  expect(filterOrder).toEqual({ documentOrder: true, visualOrder: true, orders: ['0', '0', '0'] });
+  expect(filterRow).toEqual({ names: ['只看收藏', '时间范围', '筛选项目', '筛选模型'], oneRow: true, leftToRight: true, inside: true });
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
   await expect(page.getByLabel('原生恢复命令')).toBeHidden();
-  await page.getByText('筛选', { exact: true }).click();
   await page.getByText('会话选项', { exact: true }).click();
   await page.getByText('查看恢复命令', { exact: true }).click();
   const scrollSplit = await page.evaluate(() => {
@@ -295,7 +292,7 @@ test('records keep search, show native resume command and only launch on request
   expect(scrollSplit).toEqual({ main: 'hidden', list: 'auto', detail: 'auto', transcript: 'visible', chained: false, scrolledAway: true });
   const resumeOutside = page.getByRole('button', { name: '在外部终端继续' });
   await expect(resumeOutside).toBeVisible();
-  await expect(resumeOutside).toHaveClass(/primary/);
+  await expect(resumeOutside).toHaveAttribute('data-variant', 'primary');
   const exportDetails = page.locator('details').filter({ has: page.getByText('会话选项', { exact: true }) });
   await expect(exportDetails).toHaveCount(1);
   await page.getByText('会话选项', { exact: true }).click();
@@ -450,7 +447,7 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect(chart.getByRole('status')).toContainText('1.2M');
   await expect(chart.getByRole('status')).not.toContainText('1,200,000');
   await expect(chart.getByRole('status')).toContainText('40 次');
-  await page.getByRole('tab', { name: '费用', exact: true }).click();
+  await page.getByRole('radiogroup', { name: '趋势指标' }).getByRole('radio', { name: '费用', exact: true }).click();
   const trend = page.getByRole('region', { name: '用量趋势' });
   await expect(trend).toContainText('峰值 $1.50');
   await expect(trend).toContainText('估算费用不等于实际账单');
@@ -484,10 +481,15 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
   await page.getByRole('tab', { name: '用量' }).click();
   await expect(page.getByRole('radio', { name: '近 7 天' })).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByRole('tab', { name: '费用', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('tablist', { name: '分布维度' }).getByRole('tab', { name: '工具', exact: true }).click();
+  await expect(page.getByRole('radiogroup', { name: '趋势指标' }).getByRole('radio', { name: '费用', exact: true })).toHaveAttribute('aria-checked', 'true');
+  // Breakdown and metric switches are in-card radiogroups, not a second tab layer.
+  await expect(page.getByRole('tabpanel', { name: '用量', exact: true }).getByRole('tablist')).toHaveCount(0);
+  const dimensions = page.getByRole('radiogroup', { name: '分布维度' });
+  await dimensions.getByRole('radio', { name: '模型', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(dimensions.getByRole('radio', { name: '工具', exact: true })).toBeFocused();
   await page.getByRole('list', { name: '按工具用量明细' }).getByRole('button', { name: /^Codex/ }).click();
-  await expect(page.getByRole('tablist', { name: '分布维度' }).getByRole('tab', { name: '工具', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(dimensions.getByRole('radio', { name: '工具', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByLabel('用量工具')).toContainText('Codex');
 });
 
@@ -570,9 +572,8 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
   await expect(usage).toHaveCount(0);
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Token');
   await expect(page.getByText('命中 1 / 共 2')).toBeVisible();
-  await page.locator('summary').filter({ hasText: /^筛选/ }).click();
-  await page.getByRole('checkbox', { name: '只看收藏' }).check();
-  await page.locator('summary').filter({ hasText: /^筛选/ }).click();
+  await page.getByRole('group', { name: '会话筛选' }).getByRole('button', { name: '只看收藏', exact: true }).click();
+  await expect(page.getByRole('group', { name: '会话筛选' }).getByRole('button', { name: '只看收藏', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('tab', { name: '用量' }).click();
   const overview = page.getByRole('region', { name: '用量概览' });
   await expect(overview).toContainText('已知模型调用');
@@ -629,7 +630,7 @@ test('all-time trend averages include only dated elapsed buckets for tokens and 
   await expect(overview).toContainText('$100.00');
   const trend = page.getByRole('region', { name: /用量趋势/ });
   await expect(trend.getByText(/平均每小时/)).toHaveText(/平均每小时\s*10$/);
-  await page.getByRole('tablist', { name: '趋势指标' }).getByRole('tab', { name: '费用', exact: true }).click();
+  await page.getByRole('radiogroup', { name: '趋势指标' }).getByRole('radio', { name: '费用', exact: true }).click();
   await expect(trend.getByText(/平均每小时/)).toHaveText(/平均每小时\s*\$2.00$/);
   await expect(overview).toContainText('$100.00');
 });
@@ -659,8 +660,8 @@ test('native credits retain billing groups and unknown tokens across detail, rep
   await expect(summary).toContainText('未知');
   await expect(summary).not.toContainText('$0');
   await expect(summary).not.toContainText('每次约');
-  await expect(usage.getByRole('tab', { name: 'Credits', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(usage.getByRole('tab', { name: 'Token', exact: true })).toHaveCount(0);
+  await expect(usage.getByRole('radio', { name: 'Credits', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(usage.getByRole('radio', { name: 'Token', exact: true })).toHaveCount(0);
   await expect(usage.getByRole('list', { name: '按模型用量明细' })).toContainText('13.22 Credits');
   await expect(usage.getByRole('region', { name: '消耗最多的会话' })).toContainText('13.22 Credits');
   await page.getByLabel('用量工具').click();
@@ -688,7 +689,7 @@ test('known Qoder request with unknown credits and tokens stays visible as one c
   await expect(summary).not.toContainText('$0');
   await expect(summary).not.toContainText('每次约');
   await expect(usage).toContainText('1 条记录没有已知 token');
-  await expect(usage.getByRole('tab', { name: 'Credits', exact: true })).toHaveCount(0);
+  await expect(usage.getByRole('radio', { name: 'Credits', exact: true })).toHaveCount(0);
   const trend = usage.getByRole('region', { name: '用量趋势 按天' });
   await expect(trend).toContainText('日志未提供已知 token');
   await expect(trend.getByRole('group')).toHaveCount(0);

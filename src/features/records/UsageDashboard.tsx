@@ -10,8 +10,8 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { formatNativeValue, nativeUnitLabel, nativeValue, knownTokens, formatTotalTokens, usageSummary, DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
-import { navigateChoices } from '../../lib/choiceNavigation';
 import { saveShortcutHint } from '../../lib/shortcut';
+import { Button, Segmented } from '../../components/ui';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import i18n from '../../i18n';
 import styles from './UsageDashboard.module.css';
@@ -180,9 +180,8 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
   return <section className={styles.card} aria-labelledby="usage-breakdown-title">
     <header className={styles.cardHead}>
       <h3 id="usage-breakdown-title">{t('records.usage.breakdownTitle')}</h3>
-      <div className={styles.miniTabs} role="tablist" aria-label={t('records.usage.breakdownAria')} onKeyDown={navigateChoices}>
-        {(['model', 'tool', 'project'] as const).map((item) => <button key={item} type="button" role="tab" tabIndex={view === item ? 0 : -1} aria-selected={view === item} onClick={() => { onView(item); setExpanded(false); }}>{t(`records.usage.dim.${item}`)}</button>)}
-      </div>
+      <Segmented size="sm" label={t('records.usage.breakdownAria')} value={view} onChange={(item) => { onView(item); setExpanded(false); }}
+        options={(['model', 'tool', 'project'] as const).map((item) => ({ value: item, label: t(`records.usage.dim.${item}`) }))} />
     </header>
     <p className={styles.cardHint}>{t('records.usage.breakdownHint')}</p>
     <ol className={styles.rank} aria-label={view === 'model' ? t('records.usage.byModel') : view === 'tool' ? t('records.usage.byTool') : t('records.usage.byProject')}>
@@ -325,9 +324,9 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
     <div className={styles.overviewHead}><div><h2>{t('records.usage.title')}</h2><p>{search.trim() || favoriteOnly ? t('records.usage.filtered', { parts: [search.trim() ? t('records.usage.filterSearch', { query: search.trim() }) : '', favoriteOnly ? t('records.page.favoriteOnly') : ''].filter(Boolean).join(' · ') }) : t('records.usage.overviewSubtitle')}</p></div>
-      <button type="button" onClick={() => openPrice()}><Icon name="settings" size={14} />{t('records.usage.priceSettings')}</button>
+      <Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} onClick={() => openPrice()}>{t('records.usage.priceSettings')}</Button>
     </div>
-    <div className={styles.header}>
+    <div className={styles.header} role="group" aria-label={t('records.usage.filterBarAria')}>
       <DateRangeFilter variant="toolbar" value={range} customFrom={customFrom} customTo={customTo} presets={ranges()} onChange={setRange}
         onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRange('custom'); }} />
       <div className={styles.headerFilters}>
@@ -335,16 +334,17 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
         <FilterSelect label={t('records.usage.modelFilter')} value={model} options={modelOptions} onChange={setModel} />
         <FilterSelect label={t('records.usage.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.noProject') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
       </div>
-    </div>
-    <div className={styles.subhead}>
-      <p>{rangeCaption(report, range, now)}{(toolId || model || projectId || search.trim() || favoriteOnly) && <span className={styles.activeChips} aria-label={t('records.page.activeAria')}>
+      {(toolId || model || projectId || search.trim() || favoriteOnly) && <span className={styles.activeChips} aria-label={t('records.page.activeAria')}>
         {search.trim() && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearSearch}><span>{t('records.page.chipSearch', { query: search.trim() })}</span><Icon name="close" size={12} /></button>}
         {favoriteOnly && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearFavoriteOnly}><span>{t('records.page.favoriteOnly')}</span><Icon name="close" size={12} /></button>}
         {toolId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setToolId('')}><span>{t('records.page.chipTool', { name: toolName(toolId) })}</span><Icon name="close" size={12} /></button>}
         {model && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setModel('')}><span>{t('records.page.chipModel', { name: model })}</span><Icon name="close" size={12} /></button>}
         {projectId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setProjectId('')}><span>{t('records.page.chipProject', { name: projectId === '__unknown__' ? t('records.page.noProject') : projects.find((item) => item.id === projectId)?.name ?? projectId })}</span><Icon name="close" size={12} /></button>}
-        <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); onClearSearch(); onClearFavoriteOnly(); }}>{t('tools.plugins.clearFilter')}</button>
-      </span>}</p>
+        <Button variant="ghost" size="sm" onClick={() => { setToolId(''); setModel(''); setProjectId(''); onClearSearch(); onClearFavoriteOnly(); }}>{t('records.usage.clearFilters')}</Button>
+      </span>}
+    </div>
+    <div className={styles.subhead}>
+      <p>{rangeCaption(report, range, now)}</p>
       <p className={styles.freshness}>
         {scanning || loading ? <><span className="spinner" aria-hidden="true" />{scanning ? t('records.page.syncing') : t('records.usage.updating')}</> : scanned ? t('records.usage.updatedAt', { time: clockTime(scanned) }) : t('records.usage.notScanned')}
       </p>
@@ -387,11 +387,11 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       <section className={styles.card} aria-labelledby="usage-trend-title">
         <header className={styles.cardHead}>
           <h3 id="usage-trend-title">{t('records.usage.trendTitle')}<small>{t(`records.usage.bucket.${report.bucket}`)}</small></h3>
-          {(totals.cost !== null || nativeUnits.length > 0) && <div className={styles.miniTabs} role="tablist" aria-label={t('records.usage.metricAria')} onKeyDown={navigateChoices}>
-            {knownTokens(totals) && <button type="button" role="tab" tabIndex={shownMetric === 'tokens' ? 0 : -1} aria-selected={shownMetric === 'tokens'} onClick={() => setMetric('tokens')}>Token</button>}
-            {totals.cost !== null && <button type="button" role="tab" tabIndex={shownMetric === 'cost' ? 0 : -1} aria-selected={shownMetric === 'cost'} onClick={() => setMetric('cost')}>{t('records.usage.cost')}</button>}
-            {nativeUnits.map((unit) => <button type="button" role="tab" key={unit} tabIndex={shownMetric === `native:${unit}` ? 0 : -1} aria-selected={shownMetric === `native:${unit}`} onClick={() => setMetric(`native:${unit}`)}>{nativeUnitLabel(unit)}</button>)}
-          </div>}
+          {(totals.cost !== null || nativeUnits.length > 0) && <Segmented<Metric> size="sm" label={t('records.usage.metricAria')} value={shownMetric} onChange={setMetric} options={[
+            ...(knownTokens(totals) ? [{ value: 'tokens' as Metric, label: 'Token' }] : []),
+            ...(totals.cost !== null ? [{ value: 'cost' as Metric, label: t('records.usage.cost') }] : []),
+            ...nativeUnits.map((unit) => ({ value: `native:${unit}` as Metric, label: nativeUnitLabel(unit) })),
+          ]} />}
         </header>
         {shownMetric === 'tokens' && !knownTokens(totals) ? <p className={styles.cardHint}>{t('records.native.noTokens')}</p> : <><p className={styles.trendStats}>
           {peak && <span>{t('records.usage.peak')} <b>{metricFormat(metricValue(peak.totals))}</b> · {bucketLabel(peak, report.bucket, true)}</span>}
@@ -454,7 +454,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
         <label>{t('records.usage.cacheWrite')}<input aria-label={t('records.usage.cacheWriteAria')} type="number" min="0" value={priceDraft.write} onChange={(event) => setPriceDraft({ ...priceDraft, write: event.target.value })} /></label>
         <label>{t('records.usage.source')}<input aria-label={t('records.usage.sourceAria')} value={priceDraft.source} onChange={(event) => setPriceDraft({ ...priceDraft, source: event.target.value })} placeholder={t('records.usage.sourcePlaceholder')} /></label>
         {priceError && <p className={styles.error} role="alert">{priceError}</p>}
-        <div className="dialog-footer"><button type="button" className={styles.primaryButton} data-dialog-save title={saveShortcutHint()} onClick={() => void savePrice()}>{t('records.usage.savePrice')}</button></div>
+        <div className="dialog-footer"><Button variant="primary" data-dialog-save title={saveShortcutHint()} onClick={() => void savePrice()}>{t('records.usage.savePrice')}</Button></div>
       </div>
     </GuideDialog>
   </div>;

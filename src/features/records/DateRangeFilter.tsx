@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GuideDialog } from '../../components/GuideDialog';
+import { FilterSelect } from '../../components/FilterSelect';
+import { Button } from '../../components/ui';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { saveShortcutHint } from '../../lib/shortcut';
 import i18n from '../../i18n';
@@ -12,13 +14,15 @@ const parse = (value: string) => new Date(`${value}T12:00:00`);
 const caption = (value: string) => value ? value.replaceAll('-', '/') : i18n.t('records.range.choose');
 const weekdayNames = () => [1, 2, 3, 4, 5, 6, 0].map((day) => i18n.t(`records.range.weekday.${day}`));
 
-export function DateRangeFilter({ value, customFrom, customTo, presets, onChange, onCustomRange, variant = 'compact' }: {
+export function DateRangeFilter({ value, customFrom, customTo, presets, onChange, onCustomRange, variant = 'select' }: {
   value: RangeKey; customFrom: string; customTo: string;
   presets: Array<{ id: RangeKey; label: string }>;
   onChange: (value: RangeKey) => void; onCustomRange: (from: string, to: string) => void;
-  variant?: 'compact' | 'toolbar';
+  /** `select`: one dropdown for a filter bar; `toolbar`: a radiogroup of presets. */
+  variant?: 'select' | 'toolbar';
 }) {
   const { t } = useTranslation();
+  const selectTrigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -32,8 +36,8 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
   const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
   const days = new Date(year, monthIndex + 1, 0).getDate();
   const today = iso(new Date());
-  function show() {
-    trigger.current = document.activeElement as HTMLElement | null;
+  function show(origin?: HTMLElement | null) {
+    trigger.current = origin ?? document.activeElement as HTMLElement | null;
     const initial = customFrom || today;
     setFrom(customFrom); setTo(customTo); setMonth(parse(initial)); setFocused(initial); setEdge('from'); setOpen(true);
   }
@@ -49,11 +53,12 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
     requestAnimationFrame(() => calendar.current?.querySelector<HTMLButtonElement>(`[data-day="${day}"]`)?.focus());
   }
   return <div className={styles.filter} data-variant={variant}>
-    {variant === 'compact' && <span className={styles.label}>{t('records.range.label')}</span>}
-    <div className={styles.presets} role={variant === 'toolbar' ? 'radiogroup' : undefined} aria-label={variant === 'toolbar' ? t('records.range.statsAria') : t('records.range.label')} onKeyDown={variant === 'toolbar' ? navigateChoices : undefined}>
-      {presets.map((preset) => <button key={preset.id} type="button" role={variant === 'toolbar' ? 'radio' : undefined} tabIndex={variant === 'toolbar' ? value === preset.id ? 0 : -1 : undefined} aria-checked={variant === 'toolbar' ? value === preset.id : undefined} aria-pressed={variant === 'compact' ? value === preset.id : undefined} onClick={() => preset.id === 'custom' ? show() : onChange(preset.id)}>{preset.label}</button>)}
-    </div>
-    {value === 'custom' && <button type="button" className={styles.selectedRange} onClick={show}>{caption(customFrom)} — {caption(customTo)}</button>}
+    {variant === 'select' ? <FilterSelect className={styles.select} label={t('records.range.label')} value={value} options={presets.map((preset) => ({ value: preset.id, label: preset.id === 'all' ? t('records.range.allTime') : preset.label }))} searchable={false} triggerRef={selectTrigger}
+      onChange={(next) => { if (next === 'custom') show(selectTrigger.current); else onChange(next as RangeKey); }} />
+    : <div className={styles.presets} role="radiogroup" aria-label={t('records.range.statsAria')} onKeyDown={navigateChoices}>
+      {presets.map((preset) => <button key={preset.id} type="button" role="radio" tabIndex={value === preset.id ? 0 : -1} aria-checked={value === preset.id} onClick={() => preset.id === 'custom' ? show() : onChange(preset.id)}>{preset.label}</button>)}
+    </div>}
+    {value === 'custom' && <button type="button" className={styles.selectedRange} onClick={() => show()}>{caption(customFrom)} — {caption(customTo)}</button>}
     <GuideDialog open={open} title={t('records.range.title')} hint={t('records.range.hint')} onClose={close}>
       <div className={styles.calendar} ref={calendar}>
         <div className={styles.edges}>
@@ -79,9 +84,9 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
         </div>
         <p className={styles.hint} role="status">{from && to ? t('records.range.selected', { count: Math.round((parse(to).getTime() - parse(from).getTime()) / 86400000) + 1 }) : edge === 'from' ? t('records.range.pickFrom') : t('records.range.pickTo')}</p>
         <div className={styles.footer}>
-          <button type="button" className="text-button" onClick={() => { setMonth(new Date()); setFocused(today); }}>{t('records.range.currentMonth')}</button>
-          <button type="button" onClick={close}>{t('common.dialog.cancel')}</button>
-          <button type="button" className={styles.apply} data-dialog-save title={saveShortcutHint()} disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>{t('records.range.apply')}</button>
+          <Button variant="ghost" size="sm" onClick={() => { setMonth(new Date()); setFocused(today); }}>{t('records.range.currentMonth')}</Button>
+          <Button onClick={close}>{t('common.dialog.cancel')}</Button>
+          <Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>{t('records.range.apply')}</Button>
         </div>
       </div>
     </GuideDialog>
