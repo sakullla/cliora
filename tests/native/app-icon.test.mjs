@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { inflateSync } from 'node:zlib';
+import { styleSource } from './style-source.mjs';
 
 const root = new URL('../../', import.meta.url);
 
@@ -298,7 +299,7 @@ test('tray template stays a monochrome leaf on transparency', () => {
 });
 
 test('dark brandmark does not dim the leaf', () => {
-  const css = read('src/style.css').toString('utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = styleSource().replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(css, /\.brandmark\s*\{/);
   for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     if (!match[1].includes('.brandmark')) continue;

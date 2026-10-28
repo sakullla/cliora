@@ -4,7 +4,8 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './RowMenu.module.css';
 
-export function RowMenu({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+/** `icon` and `title` replace the default ellipsis trigger, e.g. for the menu half of a split button. */
+export function RowMenu({ label, children, className, icon, title }: { label: string; children: ReactNode; className?: string; icon?: ReactNode; title?: string }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
@@ -58,7 +59,7 @@ export function RowMenu({ label, children, className }: { label: string; childre
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
   }, [open]);
   return <div className={styles.rowMenu} ref={ref}>
-    <button ref={trigger} type="button" className={className ?? styles.rowMenuButton} aria-label={label} title={t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
+    <button ref={trigger} type="button" className={className ?? styles.rowMenuButton} aria-label={label} title={title ?? t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}>{icon ?? <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>}</button>
     {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, document.body)}
   </div>;
 }
