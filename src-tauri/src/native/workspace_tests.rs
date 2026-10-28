@@ -271,6 +271,7 @@ fn workspace_save_only_pins_last_success_key_and_explicit_remove_does_not_fallba
     assert!(std::fs::read_to_string(&files[0].path)
         .unwrap()
         .contains("synthetic-new-key"));
+    assert!(store.get(&old_ref).is_err());
     let null = sessions
         .select_credential(
             &registry,

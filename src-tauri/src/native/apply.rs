@@ -577,6 +577,16 @@ fn apply_registered_validated_inner(
     let context_key = if key.starts_with("project:") { key.to_owned() } else { format!("context:{}:{key}",context.as_ref().map(|ctx|ctx.id.as_str()).unwrap_or("default")) };
     let old = get_registered_binding(db, &profile.tool, &context_key)?;
     let old = if old.is_none() && context.is_none() { get_registered_binding(db,&profile.tool,key)?.filter(|binding|binding.context_id.is_none()) } else { old };
+    let previous_credentials = old
+        .as_ref()
+        .and_then(|binding| binding.applied_profile.as_ref())
+        .map(|snapshot| {
+            profile::credential_refs(&snapshot.source_profile)
+                .into_iter()
+                .chain(profile::credential_refs(&snapshot.runtime_profile))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     let mut new_managed = Managed::new();
     for (role, root) in &desired {
         let mut fields = BTreeMap::new();
@@ -814,8 +824,8 @@ fn apply_registered_validated_inner(
     let applied_profile=serde_json::to_string(&AppliedProfileSnapshot { source_profile:snapshot_profile.clone(),runtime_profile,model_summary }).map_err(|error|error.to_string())?;
     let common_version=if snapshot_profile.inherit_common {common.map(|common|common.version as i64)}else{None};
     let common_revision=if snapshot_profile.inherit_common {common.map(|common|common.revision.as_str())}else{None};
-    if patches.is_empty() {
-        return transaction::commit_matching(db, &matching_baselines, |tx| {
+    let result = if patches.is_empty() {
+        transaction::commit_matching(db, &matching_baselines, |tx| {
             check_apply_snapshot(tx, snapshot_profile, common)?;
             if let Some(expected)=binding_expectation {check_binding_snapshot(tx,expected)?;}
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
@@ -824,9 +834,9 @@ fn apply_registered_validated_inner(
                 tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile) VALUES (?1, ?2, ?3, ?4, ?5, ?6,?7,?8,?9) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id,common_version=excluded.common_version,common_revision=excluded.common_revision,applied_profile=excluded.applied_profile", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id),common_version,common_revision,applied_profile]).map_err(|e|e.to_string())?;
             }
             Ok(())
-        });
-    }
-    crate::adapters::commit_registered_patches(
+        })
+    } else {
+        crate::adapters::commit_registered_patches(
         registry,
         &profile.tool,
         native_files,
@@ -843,7 +853,15 @@ fn apply_registered_validated_inner(
             }
             Ok(())
         },
-    )
+        )
+    };
+    if result.is_ok() {
+        let current_credentials = profile::credential_refs(profile);
+        for id in previous_credentials.difference(&current_credentials) {
+            let _ = super::workspace::cleanup_unreferenced_credential(db, credentials, id);
+        }
+    }
+    result
 }
 
 /// Common application supplies both trusted DB snapshots and an expected binding.

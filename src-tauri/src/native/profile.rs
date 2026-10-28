@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -96,6 +96,23 @@ pub struct RegisteredProfile {
     pub connection: Option<Connection>,
     #[serde(default)]
     pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// Return every keyring reference owned by a persisted profile. The references
+/// are opaque IDs; this helper never reads their secrets.
+pub(crate) fn credential_refs(profile: &RegisteredProfile) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+    if let Some(id) = profile
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.secret_ref.as_ref())
+    {
+        refs.insert(id.clone());
+    }
+    for credentials in profile.native_credentials.values() {
+        refs.extend(credentials.values().cloned());
+    }
+    refs
 }
 
 impl From<NativeProfile> for RegisteredProfile {

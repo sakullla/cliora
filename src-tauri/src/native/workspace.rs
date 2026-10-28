@@ -1082,7 +1082,7 @@ fn apply_credential(
     }
 }
 /// Keep adoption failure cleanup in the same DB exclusion boundary as reference checks.
-fn cleanup_failed_adoption(
+pub(crate) fn cleanup_unreferenced_credential(
     db: &Database,
     store: &dyn CredentialStore,
     id: &str,
@@ -1116,6 +1116,32 @@ fn cleanup_failed_adoption(
                 }
             }
         }
+        let mut statement = conn
+            .prepare("SELECT managed, applied_profile FROM applied_bindings")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let (managed, applied_profile) = row.map_err(|error| error.to_string())?;
+            if managed.contains(id) || applied_profile.as_deref().is_some_and(|value| value.contains(id)) {
+                return Ok(());
+            }
+        }
+        let mut statement = conn
+            .prepare("SELECT secret_ref FROM usage_credential_gc")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        if rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|value| value == id)
+        {
+            return Ok(());
+        }
         store.delete(id)
     })
 }
@@ -1129,6 +1155,11 @@ impl DraftSessions {
     ) -> Result<ConfigurationSaveResult, String> {
         let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
         let record = Self::checked(&mut records, &draft)?;
+        let previous_credentials = record
+            .trusted_profile
+            .as_ref()
+            .map(profile::credential_refs)
+            .unwrap_or_default();
         if !draft.issues.is_empty() {
             return Err("草稿存在字段问题，请修正后保存".into());
         }
@@ -1196,7 +1227,7 @@ impl DraftSessions {
                     Ok(saved) => saved,
                     Err(error) => {
                         if let Some((id, _)) = &adopted {
-                            if cleanup_failed_adoption(db, store, id).is_err() {
+                            if cleanup_unreferenced_credential(db, store, id).is_err() {
                                 return Err(format!(
                                     "{error}；本次新密钥清理失败，请检查凭据服务后重试"
                                 ));
@@ -1210,6 +1241,10 @@ impl DraftSessions {
                 }
                 record.trusted_profile = Some(saved.clone());
                 next.profile = saved.clone();
+                let current_credentials = profile::credential_refs(&saved);
+                for id in previous_credentials.difference(&current_credentials) {
+                    let _ = cleanup_unreferenced_credential(db, store, id);
+                }
                 (Some(saved), None)
             }
         };

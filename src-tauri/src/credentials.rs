@@ -19,6 +19,20 @@ pub trait CredentialStore {
 pub struct SystemCredentialStore;
 
 impl SystemCredentialStore {
+    fn operation_error(action: &str, error: keyring::Error) -> String {
+        let detail = error.to_string();
+        #[cfg(target_os = "macos")]
+        {
+            return format!(
+                "无法{action}；macOS 返回：{detail}。如果应用是卸载后重装的，请在“钥匙串访问”中搜索 com.cliora.desktop，给当前 Cliora.app 授权后重试；如果旧条目已不存在，请重新输入密钥。"
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            format!("无法{action}：{detail}")
+        }
+    }
+
     fn entry(id: &str) -> Result<keyring::Entry, String> {
         if id.is_empty()
             || id.len() > 128
@@ -36,13 +50,13 @@ impl CredentialStore for SystemCredentialStore {
     fn put(&self, id: &str, secret: &str) -> Result<(), String> {
         Self::entry(id)?
             .set_password(secret)
-            .map_err(|_| "无法保存到系统凭据服务".into())
+            .map_err(|error| Self::operation_error("保存到系统凭据服务", error))
     }
 
     fn get(&self, id: &str) -> Result<String, String> {
         Self::entry(id)?
             .get_password()
-            .map_err(|_| "无法从系统凭据服务读取".into())
+            .map_err(|error| Self::operation_error("从系统凭据服务读取", error))
     }
 
     fn lookup(&self, id: &str) -> Result<Option<String>, String> {
@@ -56,7 +70,7 @@ impl CredentialStore for SystemCredentialStore {
     fn delete(&self, id: &str) -> Result<(), String> {
         Self::entry(id)?
             .delete_credential()
-            .map_err(|_| "无法从系统凭据服务删除".into())
+            .map_err(|error| Self::operation_error("从系统凭据服务删除", error))
     }
 }
 
