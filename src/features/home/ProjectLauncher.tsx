@@ -16,6 +16,7 @@ import { Icon } from '../../components/Icon';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SkeletonRows } from '../../components/Skeleton';
+import { Badge, Button, Card, IconButton, SplitButton, Toolbar } from '../../components/ui';
 import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
@@ -48,7 +49,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const copiedTimer = useRef(0);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
   const repairToolSelect = useRef<HTMLButtonElement>(null);
-  const repairCard = useRef<HTMLDivElement>(null);
+  const repairCard = useRef<HTMLElement>(null);
   const focusedRepair = useRef(0);
   const latestProjects = useRef(projects); latestProjects.current = projects;
   const mounted = useRef(true);
@@ -185,13 +186,35 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     finally { setBusy(''); }
   }
 
-  async function updateTool(project: Project, toolId: string) {
+  /** Saves the project's tool; resolves false when the save failed and the page error is shown. */
+  async function updateTool(project: Project, toolId: string): Promise<boolean> {
     begin(project.id);
     try {
       const updated = await native.setProjectTool(project.id, toolId || null);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
-    } catch (value) { showPageError(value); }
+      return true;
+    } catch (value) { showPageError(value); return false; }
     finally { setBusy(''); }
+  }
+
+  /** The launch menu: another tool is saved to the project first, then launched with its own mode. */
+  async function launchWith(project: Project, currentToolId: string, toolId: string) {
+    if (toolId !== currentToolId && !await updateTool(project, toolId)) return;
+    const descriptor = managed.find((tool) => tool.id === toolId);
+    await launch(toolId, project.id, preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable));
+  }
+
+  /** Remote projects keep the chosen tool in memory only, as the card's tool picker does. */
+  async function launchRemoteWith(project: RemoteProject, toolId: string) {
+    setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: toolId } : item));
+    const descriptor = managed.find((tool) => tool.id === toolId);
+    await launch(toolId, `remote:${project.id}`, preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable));
+  }
+
+  function launchMenu(currentToolId: string, choose: (toolId: string) => void) {
+    return managed.map((tool) => <button key={tool.id} type="button" role="menuitem" aria-current={tool.id === currentToolId || undefined} onClick={() => choose(tool.id)}>
+      <ToolIcon toolId={tool.id} size={16} /><span>{tool.name}</span>{tool.id === currentToolId && <small className={styles.currentTool}>{t('home.launcher.currentTool')}</small>}
+    </button>);
   }
 
   async function saveModel(project: Project, toolId: string) {
@@ -302,7 +325,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    <div className={styles.heading}><strong>{t('home.projects.title')}{!!totalProjects && <span className="count-chip" aria-hidden="true">{totalProjects}</span>}</strong><span className={styles.actions}><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} />{t('home.launcher.add')}</button></span></div>
+    <Toolbar className={styles.heading} title={t('home.projects.title')} count={totalProjects || undefined} actions={<Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button>} />
     {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {listLoading && !totalProjects ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
@@ -314,38 +337,46 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
       const marked = repair?.projectId === project.id || spotlight?.id === project.id;
       const pasteExpanded = project.id in pasteOpen ? !!pasteOpen[project.id] : repair?.projectId === project.id;
-      return <div ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
-        <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={26} /><strong title={project.name}>{project.name}</strong></div><span title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span></div>
-        <div className={styles.controls}><FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} /><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</button>{descriptor?.resumeLatestAvailable && <button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</button>}<button type="button" className={styles.iconAction} aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="folder" size={16} /></button><button type="button" className={styles.secondary} onClick={() => setEditingId(project.id)}>{t('home.launcher.edit')}</button></div></div>
-        {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} /></label><button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
+      return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
+        <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div><span title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span></div>
+        <div className={styles.controls}>
+          <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} />
+          <div className={styles.actions}>
+            <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
+            {descriptor?.resumeLatestAvailable && <Button size="sm" variant="ghost" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</Button>}
+            <IconButton size="sm" icon={<Icon name="folder" size={16} />} aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)} />
+            <IconButton size="sm" icon={<Icon name="pencil" size={15} />} aria-label={t('home.launcher.edit')} onClick={() => setEditingId(project.id)} />
+          </div>
+        </div>
+        {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} /></label><Button size="sm" disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</Button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
         {!toolId && <div className={styles.hint}>{t('home.launcher.toolUnmanaged')}</div>}
-        {pendingProfile && <div className={styles.extra} data-tone="pending"><span>{project.reapplyProfiles?.[toolId] ? t('home.launcher.reapplyRelinked') : t('home.launcher.pendingProfile')}</span><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>{t('home.launcher.apply')}</button></div>}
+        {pendingProfile && <div className={styles.extra} data-tone="pending"><span>{project.reapplyProfiles?.[toolId] ? t('home.launcher.reapplyRelinked') : t('home.launcher.pendingProfile')}</span><Button size="sm" disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>{t('home.launcher.apply')}</Button></div>}
         <GuideDialog open={editingId === project.id} title={t('home.launcher.editTitle', { name: project.name })} hint={t('home.launcher.editHint')} onClose={() => { setEditingId(null); setDialogError(''); setDialogFeedback(''); }}>
           {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
           {dialogFeedback && <div className={styles.feedback} role="status">{dialogFeedback}</div>}
           <div className={styles.editSections}>
           <section className={styles.editSection} aria-labelledby={`${project.id}-basics`}>
             <h3 id={`${project.id}-basics`}>{t('home.launcher.sectionBasics')}</h3>
-            <label className={styles.editField}><span>{t('home.launcher.nameLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} onKeyDown={event => { if (event.key === 'Enter' && names[project.id]?.trim() && !busy) { event.preventDefault(); void rename(project); } }} /><button type="button" disabled={!!busy || !names[project.id]?.trim() || names[project.id]?.trim() === project.name} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</button></span></label>
-            {descriptor?.projectModelOverride && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /><button type="button" disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</button></span></label>}
+            <label className={styles.editField}><span>{t('home.launcher.nameLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} onKeyDown={event => { if (event.key === 'Enter' && names[project.id]?.trim() && !busy) { event.preventDefault(); void rename(project); } }} /><Button disabled={!!busy || !names[project.id]?.trim() || names[project.id]?.trim() === project.name} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</Button></span></label>
+            {descriptor?.projectModelOverride && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /><Button disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</Button></span></label>}
           </section>
           <section className={styles.editSection} aria-labelledby={`${project.id}-directory`}>
             <h3 id={`${project.id}-directory`}>{t('home.launcher.sectionDirectory')}</h3>
-            {project.path && <div className={styles.projectPath}><Icon name="folder" size={15} /><small>{displayPath(project.path)}</small><span className={styles.pathActions}><button type="button" className={styles.secondary} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}><Icon name="copy" size={13} />{copiedPath === displayPath(project.path) ? t('home.launcher.copied') : copiedPath === `fail:${displayPath(project.path)}` ? t('home.launcher.copyFailed') : t('home.launcher.copyPath')}</button><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="arrowUpRight" size={13} />{t('home.launcher.openDir')}</button></span></div>}
-            <div className={styles.editRow} data-tone={project.available ? undefined : 'warning'}><span>{project.available ? t('home.launcher.relink') : t('home.launcher.relinkMoved')}</span><span className={styles.editRowActions}><button type="button" className={styles.secondary} disabled={busy === project.id} onClick={() => void chooseDirectory(project)}>{t('home.launcher.chooseDir')}</button><button type="button" className={styles.secondary} aria-expanded={pasteExpanded} onClick={() => setPasteOpen((old) => ({ ...old, [project.id]: !pasteExpanded }))}>{t('home.launcher.pastePath')}</button></span></div>
-            {pasteExpanded && <div className={styles.editInline}><input ref={repair?.projectId === project.id ? repairDirectoryInput : undefined} aria-label={t('home.launcher.newDirAria', { name: project.name })} value={relink[project.id] ?? ''} placeholder={t('home.launcher.newDirPlaceholder')} onChange={(event) => setRelink((old) => ({ ...old, [project.id]: event.target.value }))} /><button type="button" disabled={busy === project.id || !relink[project.id]?.trim()} onClick={() => void relinkProject(project)}>{t('home.launcher.link')}</button></div>}
+            {project.path && <div className={styles.projectPath}><Icon name="folder" size={15} /><small>{displayPath(project.path)}</small><span className={styles.pathActions}><Button size="sm" variant="ghost" icon={<Icon name="copy" size={13} />} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}>{copiedPath === displayPath(project.path) ? t('home.launcher.copied') : copiedPath === `fail:${displayPath(project.path)}` ? t('home.launcher.copyFailed') : t('home.launcher.copyPath')}</Button><Button size="sm" variant="ghost" icon={<Icon name="arrowUpRight" size={13} />} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>{t('home.launcher.openDir')}</Button></span></div>}
+            <div className={styles.editRow} data-tone={project.available ? undefined : 'warning'}><span>{project.available ? t('home.launcher.relink') : t('home.launcher.relinkMoved')}</span><span className={styles.editRowActions}><Button size="sm" disabled={busy === project.id} onClick={() => void chooseDirectory(project)}>{t('home.launcher.chooseDir')}</Button><Button size="sm" aria-expanded={pasteExpanded} onClick={() => setPasteOpen((old) => ({ ...old, [project.id]: !pasteExpanded }))}>{t('home.launcher.pastePath')}</Button></span></div>
+            {pasteExpanded && <div className={styles.editInline}><input ref={repair?.projectId === project.id ? repairDirectoryInput : undefined} aria-label={t('home.launcher.newDirAria', { name: project.name })} value={relink[project.id] ?? ''} placeholder={t('home.launcher.newDirPlaceholder')} onChange={(event) => setRelink((old) => ({ ...old, [project.id]: event.target.value }))} /><Button disabled={busy === project.id || !relink[project.id]?.trim()} onClick={() => void relinkProject(project)}>{t('home.launcher.link')}</Button></div>}
           </section>
           {(descriptor?.yoloAvailable || projectMode === 'yolo') && <section className={styles.editSection} aria-labelledby={`${project.id}-once`}>
             <h3 id={`${project.id}-once`}>{t('home.launcher.sectionOnce')}</h3>
-            <div className={styles.editRow}><span>{t('home.launcher.onceNote')}</span><span className={styles.editRowActions}>{projectMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'dialog')}><Icon name="play" size={13} />{t('home.launcher.onceNormal')}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId || !descriptor?.yoloAvailable} title={descriptor?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(toolId, project.id, 'yolo', undefined, 'dialog')}><Icon name="play" size={13} />{t('home.launcher.onceYolo')}</button>}</span></div>
+            <div className={styles.editRow}><span>{t('home.launcher.onceNote')}</span><span className={styles.editRowActions}>{projectMode === 'yolo' ? <Button size="sm" icon={<Icon name="play" size={13} />} disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'dialog')}>{t('home.launcher.onceNormal')}</Button> : <Button size="sm" icon={<Icon name="play" size={13} />} disabled={!!busy || !project.available || !toolId || !descriptor?.yoloAvailable} title={descriptor?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(toolId, project.id, 'yolo', undefined, 'dialog')}>{t('home.launcher.onceYolo')}</Button>}</span></div>
           </section>}
           <section className={styles.dangerZone} aria-labelledby={`${project.id}-danger`}>
             <div><h3 id={`${project.id}-danger`}>{t('home.launcher.removeAction')}</h3><p>{t('home.launcher.removeHint')}</p></div>
-            <button type="button" className={styles.secondary} data-tone="danger" disabled={!!busy} onClick={() => void remove(project)}><Icon name="trash" size={13} />{t('home.launcher.removeAction')}</button>
+            <Button size="sm" className={styles.removeProject} icon={<Icon name="trash" size={13} />} disabled={!!busy} onClick={() => void remove(project)}>{t('home.launcher.removeAction')}</Button>
           </section>
           </div>
         </GuideDialog>
-      </div>;
+      </Card>;
     })}
     </div>}
     {visibleRemoteProjects.length > 0 && <div className={styles.projectGrid}>
@@ -354,20 +385,26 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
         const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : defaultTool;
         const descriptor = managed.find((tool) => tool.id === toolId);
         const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
-        return <div className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
-          <div className={styles.identity}><div className={styles.projectTitle}><Icon name="globe" size={24} /><strong title={project.name}>{project.name}</strong><span className={styles.remoteBadge}>{t('home.remote.badge')}</span></div><span title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
-          <div className={styles.controls}><FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} /><div className={styles.actions}><button type="button" disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}><Icon name="play" size={14} />{t('home.tools.launch')}</button><button type="button" className={styles.secondary} onClick={() => void removeRemote(project)}>{t('home.remote.remove')}</button></div></div>
-        </div>;
+        return <Card padding="compact" className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
+          <div className={styles.identity}><div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong><Badge tone="accent">{t('home.remote.badge')}</Badge></div><span title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
+          <div className={styles.controls}>
+            <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} />
+            <div className={styles.actions}>
+              <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
+              <Button size="sm" variant="ghost" onClick={() => void removeRemote(project)}>{t('home.remote.remove')}</Button>
+            </div>
+          </div>
+        </Card>;
       })}
     </div>}
     {!visibleProjects.length && !visibleRemoteProjects.length && totalProjects > 0 ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p> : null}
-    {!totalProjects && <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
-    </> : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
+    {!totalProjects && <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><Button variant="primary" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    </> : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><Button variant="primary" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
       <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={resumeTool} options={toolOptions(resumable)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />
       <input aria-label={t('home.launcher.resumeIdLabel')} value={sessionId} placeholder={t('home.launcher.resumeIdPlaceholder')} onChange={(event) => setSessionId(event.target.value)} />
-      <div className={styles.actions}><button type="button" disabled={!!busy || !sessionId.trim() || !resumeTool} onClick={() => void launch(resumeTool, null, directMode, sessionId)}>{t('home.launcher.resume')}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim() || !resumeTool} onClick={() => void launch(resumeTool, null, 'normal', sessionId)}>{t('home.launcher.resumeNormal')}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim() || !resumeTool || !resumeDescriptor?.yoloAvailable} title={resumeDescriptor?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(resumeTool, null, 'yolo', sessionId)}>{t('home.launcher.resumeYolo')}</button>}</div></> : !unindexedResume.length && <p>{t('home.launcher.resumeNone')}</p>}
+      <div className={styles.actions}><Button variant="primary" disabled={!!busy || !sessionId.trim() || !resumeTool} onClick={() => void launch(resumeTool, null, directMode, sessionId)}>{t('home.launcher.resume')}</Button>{directMode === 'yolo' ? <Button disabled={!!busy || !sessionId.trim() || !resumeTool} onClick={() => void launch(resumeTool, null, 'normal', sessionId)}>{t('home.launcher.resumeNormal')}</Button> : <Button disabled={!!busy || !sessionId.trim() || !resumeTool || !resumeDescriptor?.yoloAvailable} title={resumeDescriptor?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(resumeTool, null, 'yolo', sessionId)}>{t('home.launcher.resumeYolo')}</Button>}</div></> : !unindexedResume.length && <p>{t('home.launcher.resumeNone')}</p>}
       {unindexedResume.map((item) => <p key={item.id}>{item.name}：{item.history.reason} {t('home.launcher.resumeOnProject')}</p>)}
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}

@@ -27,6 +27,10 @@ test('launch buttons stay in one column whether or not a CLI is installed', asyn
   const primary = rows.getByRole('button', { name: /^(启动|重新检测)$/ });
   const edges = await primary.evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return `${Math.round(box.left)}-${Math.round(box.right)}`; }));
   expect(new Set(edges).size).toBe(1);
-  const menus = await rows.getByRole('button', { name: '启动目录' }).evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().left)));
+  const menus = await rows.getByRole('button', { name: /的更多操作$/ }).evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().left)));
+  expect(menus).toHaveLength(5);
   expect(new Set(menus).size).toBe(1);
+  // Compact rows: every single-line row stays at the 40px row height.
+  const heights = await rows.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+  for (const height of heights) expect(height).toBeLessThanOrEqual(48);
 });
