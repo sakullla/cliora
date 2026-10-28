@@ -2277,8 +2277,16 @@ pub fn delete_native_profile(
     expected_revision: String,
 ) -> Result<(), ApiError> {
     state.with_database(&app, |database| {
-        profile::delete_profile(database, &id, expected_version, &expected_revision)
-            .map_err(native_error)
+        let removed = profile::get_registered_profile(database, &id).map_err(native_error)?;
+        profile::delete_profile(database, &id, expected_version, &expected_revision).map_err(native_error)?;
+        for secret_ref in profile::credential_refs(&removed) {
+            let _ = crate::native::workspace::cleanup_unreferenced_credential(
+                database,
+                &SystemCredentialStore,
+                &secret_ref,
+            );
+        }
+        Ok(())
     })?;
     let _ = app.emit("cliora:bindings-changed", "profiles");
     Ok(())
