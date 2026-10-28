@@ -126,15 +126,18 @@ const problems = [];
 const selected = option('--only', '').split(',').filter(Boolean);
 for (const theme of themes) for (const width of widths) for (const scenario of scenarios.filter(item => !selected.length || selected.includes(item.name))) {
   const page = await browser.newPage({ viewport: { width, height: 940 }, colorScheme: theme });
-  page.on('pageerror', error => problems.push(`${scenario.name}/${theme}/${width}: ${error.message}`));
+  const label = `${scenario.name}/${theme}/${width}`;
+  page.on('pageerror', error => problems.push(`${label}: ${error.message}`));
   await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });
-  await page.goto(previewUrl);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  if (scenario.tool !== 'Claude Code') await page.getByRole('tab', { name: scenario.tool, exact: true }).click();
-  else await page.getByRole('tab', { name: 'Claude Code', exact: true }).click();
-  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  try {
+    await page.goto(previewUrl);
+    // CLIs are chosen from the sidebar group 受管 CLI, which opens 工具与连接 on that CLI.
+    await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: scenario.tool, exact: true }).click();
+    await page.getByRole('region', { name: '工具与连接' }).getByRole('heading', { level: 2, name: scenario.tool, exact: true }).waitFor();
+    await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  } catch (error) { problems.push(`${label}: navigation: ${error.message.split('\n')[0]}`); await page.close(); continue; }
   await page.waitForTimeout(700);
-  try { await scenario.run?.(page); } catch (error) { problems.push(`${scenario.name}/${theme}/${width}: ${error.message.split('\n')[0]}`); }
+  try { await scenario.run?.(page); } catch (error) { problems.push(`${label}: ${error.message.split('\n')[0]}`); }
   await page.waitForTimeout(700);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
   if (overflow) problems.push(`${scenario.name}/${theme}/${width}: horizontal overflow`);

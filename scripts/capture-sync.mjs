@@ -75,49 +75,93 @@ function installMock(seed) {
   });
 }
 
+const acceptanceNote = 'Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
+const acceptance = { kind: 'playwright-synthetic-ipc', nativePlatform: 'unverified', webview2: 'unverified', desktopThemeFocusKeyboard: 'unverified', nativeCliAndFileWrites: 'unverified', note: acceptanceNote };
+let previewReady = false;
+for (let attempt = 0; attempt < 50; attempt += 1) {
+  try { const response = await fetch(previewUrl, { signal: AbortSignal.timeout(1000) }); if (response.ok) { previewReady = true; break; } } catch { /* preview not up yet */ }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
+if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}。请先构建并启动 Vite preview，再运行捕获。`);
+
+// Same rule as capture-ui.mjs: a visible element crossing the viewport fails, unless a clipping ancestor hides the excess.
+function findOverflow() {
+  return [...document.querySelectorAll('main,section,article,input,textarea,select,button')].filter((el) => {
+    if (!el.getClientRects().length) return false;
+    let { left, right } = el.getBoundingClientRect();
+    for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      if (['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowX)) {
+        const rect = parent.getBoundingClientRect(); left = Math.max(left, rect.left); right = Math.min(right, rect.right);
+      }
+    }
+    return right > left && (right > innerWidth + 1 || left < -1);
+  }).map((el) => ({ tag: el.tagName, text: el.textContent?.slice(0, 60) }));
+}
+
 const browser = await chromium.launch();
 const shots = [];
+const failures = [];
+async function openSync(page) {
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '迁移与同步' }).click();
+}
 for (const theme of themes) for (const width of widths) {
   for (const [name, seed] of Object.entries(scenarios)) {
     const page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
+    page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, message: error.message }));
     await page.addInitScript(installMock, { ...seed, theme, sampleTransfers: transfers });
-    await page.goto(previewUrl);
-    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-    await page.getByRole('tab', { name: '迁移与同步' }).click();
-    await page.waitForTimeout(1000);
-    const shot = async (label) => { const file = `${theme}-${width}-${label}.png`; await page.screenshot({ path: `${out}/${file}`, fullPage: true }); shots.push(file); };
-    await shot(name);
-    if (width === 1360 || width === 640) {
-      if (name === 'unconnected') {
-        await page.getByRole('button', { name: '配置 WebDAV' }).first().click();
-        await page.waitForTimeout(700); await shot('connect-dialog');
-        await page.keyboard.press('Escape');
-        await page.getByRole('button', { name: '导出加密配置包' }).first().click();
-        await page.waitForTimeout(700); await shot('export-dialog');
-        await page.keyboard.press('Escape');
-        await page.getByRole('button', { name: '从配置包恢复' }).first().click();
-        await page.waitForTimeout(700); await shot('import-dialog');
-        await page.keyboard.press('Escape');
+    const shot = async (label) => {
+      const file = `${theme}-${width}-${label}.png`;
+      await page.screenshot({ path: `${out}/${file}`, fullPage: true });
+      shots.push({ name: label, scenario: name, theme, width, file });
+      const over = await page.evaluate(findOverflow);
+      if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
+      console.log(`${out}/${file}`);
+    };
+    try {
+      await page.goto(previewUrl);
+      await openSync(page);
+      await page.waitForTimeout(1000);
+      await shot(name);
+      if (width === 1360 || width === 640) {
+        if (name === 'unconnected') {
+          await page.getByRole('button', { name: '配置 WebDAV' }).first().click();
+          await page.waitForTimeout(700); await shot('connect-dialog');
+          await page.keyboard.press('Escape');
+          await page.getByRole('button', { name: '导出加密配置包' }).first().click();
+          await page.waitForTimeout(700); await shot('export-dialog');
+          await page.keyboard.press('Escape');
+          await page.getByRole('button', { name: '从配置包恢复' }).first().click();
+          await page.waitForTimeout(700); await shot('import-dialog');
+          await page.keyboard.press('Escape');
+        }
+        if (name === 'attention') {
+          const choose = page.getByRole('button', { name: '选择冲突版本' });
+          if (await choose.count()) { await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-open'); }
+        }
+        if (name === 'healthy') {
+          await page.evaluate(() => { window.__sync.hang = true; });
+          await page.getByRole('button', { name: '立即同步' }).first().click();
+          await page.waitForTimeout(400); await shot('sync-running');
+          await page.evaluate(() => { window.__sync.hang = false; });
+          await page.reload();
+          await openSync(page);
+          await page.getByRole('button', { name: '立即同步' }).first().click();
+          await page.waitForTimeout(900); await shot('sync-result');
+        }
       }
-      if (name === 'attention') {
-        const choose = page.getByRole('button', { name: '选择冲突版本' });
-        if (await choose.count()) { await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-open'); }
-      }
-      if (name === 'healthy') {
-        await page.evaluate(() => { window.__sync.hang = true; });
-        await page.getByRole('button', { name: '立即同步' }).first().click();
-        await page.waitForTimeout(400); await shot('sync-running');
-        await page.evaluate(() => { window.__sync.hang = false; });
-        await page.reload();
-        await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-        await page.getByRole('tab', { name: '迁移与同步' }).click();
-        await page.getByRole('button', { name: '立即同步' }).first().click();
-        await page.waitForTimeout(900); await shot('sync-result');
-      }
-    }
-    await page.close();
+    } catch (error) {
+      failures.push({ type: 'scenario', name, theme, width, message: error.message.split('\n')[0] });
+      console.error(`${name}/${theme}/${width}: ${error.message.split('\n')[0]}`);
+    } finally { await page.close(); }
   }
 }
 await browser.close();
-fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style>${shots.map((file) => `<figure><img src="${file}"><figcaption>${file}</figcaption></figure>`).join('')}`);
-console.log(JSON.stringify({ out, count: shots.length }));
+const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
+fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
+fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths }, scenarios: Object.keys(scenarios), success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
+const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
+fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\` 与 \`--size 1360,900,640\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));
+if (failures.length) process.exitCode = 1;

@@ -175,16 +175,23 @@ async function shot(name, theme, width, run, empty = false) {
   const page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
-  await install(page, theme, empty);
-  await page.goto(previewUrl);
-  await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
-  await page.waitForTimeout(900);
-  if (run) await run(page);
-  await page.waitForTimeout(500);
-  const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
-  await page.screenshot({ path: out + '/' + name + '.png', fullPage: false });
-  manifest.push({ name, theme, width, pageErrors: errors, overflow: overflow.scroll > overflow.client ? overflow : null });
-  await page.close();
+  let actionError = null;
+  let overflow = null;
+  try {
+    await install(page, theme, empty);
+    await page.goto(previewUrl);
+    await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
+    await page.waitForTimeout(900);
+    if (run) await run(page);
+    await page.waitForTimeout(500);
+    const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    overflow = size.scroll > size.client ? size : null;
+    await page.screenshot({ path: out + '/' + name + '.png', fullPage: false });
+  } catch (error) {
+    actionError = error.message.split('\n')[0];
+    console.error(name + ': ' + actionError);
+  } finally { await page.close(); }
+  manifest.push({ name, theme, width, pageErrors: errors, overflow, actionError });
 }
 
 const option = (flag, fallback) => {
@@ -279,8 +286,8 @@ for (const width of widths) {
 }
 
 await browser.close();
-const failed = manifest.filter((item) => item.pageErrors.length || item.overflow);
-fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, shots: manifest }, null, 2));
+const failed = manifest.filter((item) => item.pageErrors.length || item.overflow || item.actionError);
+fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, success: failed.length === 0, shots: manifest }, null, 2));
 
 const cards = manifest.map((item) => '    <figure><a href="' + item.name + '.png"><img src="' + item.name + '.png" loading="lazy" alt="' + item.name + '"></a><figcaption>' + item.name + '</figcaption></figure>').join('\n');
 fs.writeFileSync(out + '/index.html', [
@@ -296,7 +303,7 @@ fs.writeFileSync(out + '/index.html', [
   '</div></body></html>',
 ].join('\n'));
 
-const rows = manifest.map((item) => '| ' + item.name + ' | ' + item.theme + ' | ' + item.width + ' | ' + (item.pageErrors.length ? '页面错误' : '—') + ' | ' + (item.overflow ? '横向溢出' : '—') + ' |').join('\n');
+const rows = manifest.map((item) => '| ' + item.name + ' | ' + item.theme + ' | ' + item.width + ' | ' + (item.pageErrors.length ? '页面错误' : '—') + ' | ' + (item.overflow ? '横向溢出' : '—') + ' | ' + (item.actionError ? '步骤失败' : '—') + ' |').join('\n');
 fs.writeFileSync(out + '/README.md', [
   '# 工作台捕获',
   '',
@@ -314,9 +321,10 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',
-  '| 图片 | 主题 | 宽度 | 页面错误 | 溢出 |',
-  '| --- | --- | --- | --- | --- |',
+  '| 图片 | 主题 | 宽度 | 页面错误 | 溢出 | 步骤 |',
+  '| --- | --- | --- | --- | --- | --- |',
   rows,
   '',
 ].join('\n'));
 console.log(JSON.stringify({ shots: manifest.length, failed, acceptance }, null, 2));
+if (failed.length) process.exitCode = 1;

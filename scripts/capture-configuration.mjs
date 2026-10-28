@@ -95,7 +95,9 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
       await installConfigurationWorkspace(page, scene.tool, true, scene.action === 'overview');
       await installPresentation(page, theme, toolNames, scene.action === 'raw' ? fs.readFileSync(new URL('../tests/fixtures/native/codex-model-editor.toml', import.meta.url), 'utf8') : null);
       await page.goto('/');
-      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+      // The scene's CLI is opened from the sidebar group 受管 CLI, which lands on 工具与连接.
+      await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: toolNames[scene.tool], exact: true }).click();
+      await page.getByRole('region', { name: '工具与连接' }).getByRole('heading', { level: 2, name: toolNames[scene.tool], exact: true }).waitFor();
       const action = scene.action;
       const dialog = page.locator('dialog.guide-dialog');
       if (action === 'overview') {
