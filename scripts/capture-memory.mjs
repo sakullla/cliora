@@ -120,33 +120,51 @@ const scenarios = [
   { name: 'empty', tool: 'Delta' },
 ];
 
-const browser = await chromium.launch();
 const shots = [];
 const problems = [];
+const firstLine = (error) => String(error?.message ?? error).split('\n')[0];
 const selected = option('--only', '').split(',').filter(Boolean);
-for (const theme of themes) for (const width of widths) for (const scenario of scenarios.filter(item => !selected.length || selected.includes(item.name))) {
-  const page = await browser.newPage({ viewport: { width, height: 940 }, colorScheme: theme });
-  const label = `${scenario.name}/${theme}/${width}`;
-  page.on('pageerror', error => problems.push(`${label}: ${error.message}`));
-  await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });
-  try {
-    await page.goto(previewUrl);
-    // CLIs are chosen from the sidebar group 受管 CLI, which opens 工具与连接 on that CLI.
-    await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: scenario.tool, exact: true }).click();
-    await page.getByRole('region', { name: '工具与连接' }).getByRole('heading', { level: 2, name: scenario.tool, exact: true }).waitFor();
-    await page.getByRole('tab', { name: '记忆', exact: true }).click();
-  } catch (error) { problems.push(`${label}: navigation: ${error.message.split('\n')[0]}`); await page.close(); continue; }
-  await page.waitForTimeout(700);
-  try { await scenario.run?.(page); } catch (error) { problems.push(`${label}: ${error.message.split('\n')[0]}`); }
-  await page.waitForTimeout(700);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
-  if (overflow) problems.push(`${scenario.name}/${theme}/${width}: horizontal overflow`);
-  const file = `${scenario.name}-${theme}-${width}.png`;
-  await page.screenshot({ path: `${out}/${file}` });
-  shots.push(file);
-  await page.close();
+// Every failure (launch, navigation, action, overflow check, screenshot) is recorded in problems so
+// the manifest, README and index below are always written and the exit code is 1.
+let browser = null;
+try {
+  browser = await chromium.launch();
+  for (const theme of themes) for (const width of widths) for (const scenario of scenarios.filter(item => !selected.length || selected.includes(item.name))) {
+    const label = `${scenario.name}/${theme}/${width}`;
+    let page = null;
+    let stage = 'page';
+    try {
+      page = await browser.newPage({ viewport: { width, height: 940 }, colorScheme: theme });
+      page.on('pageerror', error => problems.push(`${label}: ${error.message}`));
+      await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });
+      stage = 'navigation';
+      await page.goto(previewUrl);
+      // CLIs are chosen from the sidebar group 受管 CLI, which opens 工具与连接 on that CLI.
+      await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: scenario.tool, exact: true }).click();
+      await page.getByRole('region', { name: '工具与连接' }).getByRole('heading', { level: 2, name: scenario.tool, exact: true }).waitFor();
+      await page.getByRole('tab', { name: '记忆', exact: true }).click();
+      await page.waitForTimeout(700);
+      stage = 'action';
+      try { await scenario.run?.(page); } catch (error) { problems.push(`${label}: ${firstLine(error)}`); }
+      await page.waitForTimeout(700);
+      stage = 'overflow check';
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+      if (overflow) problems.push(`${label}: horizontal overflow`);
+      stage = 'screenshot';
+      const file = `${scenario.name}-${theme}-${width}.png`;
+      await page.screenshot({ path: `${out}/${file}` });
+      shots.push(file);
+    } catch (error) {
+      problems.push(`${label}: ${stage}: ${firstLine(error)}`);
+    } finally {
+      await page?.close().catch(() => {});
+    }
+  }
+} catch (error) {
+  problems.push(`browser: ${firstLine(error)}`);
+} finally {
+  await browser?.close().catch(() => {});
 }
-await browser.close();
 fs.writeFileSync(`${out}/capture-memory-manifest.json`, JSON.stringify({ out, count: shots.length, problems, shots }, null, 2));
 fs.writeFileSync(`${out}/README.md`, `# Memory captures\n\nSynthetic native IPC; not native acceptance.\n\n${shots.length} screenshots; ${problems.length} page errors/overflow/action failures.\n`);
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Memory captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:680px;border:1px solid #555}</style>${shots.map((file) => `<figure><img src="${file}"><figcaption>${file}</figcaption></figure>`).join('')}`);

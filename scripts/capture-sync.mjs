@@ -82,7 +82,7 @@ for (let attempt = 0; attempt < 50; attempt += 1) {
   try { const response = await fetch(previewUrl, { signal: AbortSignal.timeout(1000) }); if (response.ok) { previewReady = true; break; } } catch { /* preview not up yet */ }
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
-if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}。请先构建并启动 Vite preview，再运行捕获。`);
+if (!previewReady) console.error(`预览服务未就绪：${previewUrl}。请先构建并启动 Vite preview，再运行捕获。`);
 
 // Same rule as capture-ui.mjs: a visible element crossing the viewport fails, unless a clipping ancestor hides the excess.
 function findOverflow() {
@@ -98,27 +98,33 @@ function findOverflow() {
   }).map((el) => ({ tag: el.tagName, text: el.textContent?.slice(0, 60) }));
 }
 
-const browser = await chromium.launch();
 const shots = [];
 const failures = [];
 async function openSync(page) {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
 }
+// Run-level failures (preview not ready, browser launch) are recorded as failures instead of
+// crashing, so the gallery, manifest and README are always written and the exit code is 1.
+let browser = null;
+try {
+if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}`);
+browser = await chromium.launch();
 for (const theme of themes) for (const width of widths) {
   for (const [name, seed] of Object.entries(scenarios)) {
-    const page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
-    page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, message: error.message }));
-    await page.addInitScript(installMock, { ...seed, theme, sampleTransfers: transfers });
-    const shot = async (label) => {
-      const file = `${theme}-${width}-${label}.png`;
-      await page.screenshot({ path: `${out}/${file}`, fullPage: true });
-      shots.push({ name: label, scenario: name, theme, width, file });
-      const over = await page.evaluate(findOverflow);
-      if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
-      console.log(`${out}/${file}`);
-    };
+    let page = null;
     try {
+      page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
+      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, message: error.message }));
+      await page.addInitScript(installMock, { ...seed, theme, sampleTransfers: transfers });
+      const shot = async (label) => {
+        const file = `${theme}-${width}-${label}.png`;
+        await page.screenshot({ path: `${out}/${file}`, fullPage: true });
+        shots.push({ name: label, scenario: name, theme, width, file });
+        const over = await page.evaluate(findOverflow);
+        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
+        console.log(`${out}/${file}`);
+      };
       await page.goto(previewUrl);
       await openSync(page);
       await page.waitForTimeout(1000);
@@ -151,12 +157,19 @@ for (const theme of themes) for (const width of widths) {
         }
       }
     } catch (error) {
-      failures.push({ type: 'scenario', name, theme, width, message: error.message.split('\n')[0] });
-      console.error(`${name}/${theme}/${width}: ${error.message.split('\n')[0]}`);
-    } finally { await page.close(); }
+      const message = String(error?.message ?? error).split('\n')[0];
+      failures.push({ type: 'scenario', name, theme, width, message });
+      console.error(`${name}/${theme}/${width}: ${message}`);
+    } finally { await page?.close().catch(() => {}); }
   }
 }
-await browser.close();
+} catch (error) {
+  const message = String(error?.message ?? error).split('\n')[0];
+  failures.push({ type: 'run', name: 'capture-sync', message });
+  console.error(message);
+} finally {
+  await browser?.close().catch(() => {});
+}
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
