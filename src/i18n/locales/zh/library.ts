@@ -102,7 +102,7 @@ export default {
     bodyRulePlaceholder: '写下要保存或应用到 CLI 的规则…',
     dirtyState: '草稿尚未保存',
     launchTitle: '用这条提示词启动',
-    launchHint: '选择 CLI 和项目。提示词会作为第一条消息发出，启动前可以改。',
+    launchHint: '选择 CLI 和工作目录。提示词会作为第一条消息发出，启动前可以改。',
     launchCli: '启动 CLI',
     noCli: '还没有可启动的 CLI',
     searchCli: '搜索 CLI',
