@@ -1,7 +1,7 @@
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;
-  grid-template-columns: minmax(190px, 280px) minmax(0, 1fr) repeat(3, auto);
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr) repeat(4, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;
@@ -34,7 +34,7 @@
 .status { flex: none; max-width: 112px; }
 /* Star toggle: quiet until the row is hovered or focused, always shown once starred. */
 .favorite,
-.favorite:hover:not(:disabled) { display: grid; place-items: center; flex: none; width: var(--space-6); min-height: var(--row-h-compact); margin-left: auto; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); box-shadow: none; opacity: 0; transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease); }
+.favorite:hover:not(:disabled) { display: grid; place-items: center; flex: none; width: var(--row-h-compact); min-height: var(--row-h-compact); padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); box-shadow: none; opacity: 0; transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease); }
 .row:hover .favorite, .row:focus-within .favorite, .favorite:focus-visible, .favorite[aria-pressed="true"] { opacity: 1; }
 .favorite:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .favorite[aria-pressed="true"], .favorite[aria-pressed="true"]:hover:not(:disabled) { color: var(--warning); }
@@ -79,15 +79,17 @@
 .switch > div[role="radiogroup"] > button:focus-visible { outline-offset: -2px; }
 .activeConfig::before { content: ''; display: inline-block; width: var(--space-1_5); height: var(--space-1_5); margin-right: var(--space-1_5); border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 
-.switcher { display: flex; align-items: center; width: 100%; max-width: 260px; min-width: 0; }
-.switchSelect { flex: 1; min-width: 120px; }
-.switchSelect > button[data-select-trigger] { min-height: var(--row-h-compact); padding-block: 0; font-size: var(--fs-caption); }
-
+/* More than four profiles: one quiet select sized to the current name, styled like the chip group. */
+.switcher { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.switchSelect { flex: none; width: auto; min-width: 140px; max-width: 260px; }
+.switchSelect > button[data-select-trigger] { min-height: var(--row-h-compact); padding-block: 0; border-color: var(--line); background-color: var(--surface-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.switchSelect > button[data-select-trigger]:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--surface); }
 
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: var(--space-1_5); }
-.rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
-.rowActions > .configure { grid-column: 2; }
-.rowActions > .menu { grid-column: 3; }
+.rowActions > .favorite { grid-column: 1; }
+.rowActions > .launch, .rowActions > .recheck { grid-column: 2; justify-self: stretch; }
+.rowActions > .configure { grid-column: 3; }
+.rowActions > .menu { grid-column: 4; }
 .note {
   grid-column: 1 / -1;
   justify-self: start;
@@ -124,7 +126,7 @@
    subgrid so every launch button still lands in the same column. `.list` resolves this query
    against the home column container; its rows resolve it against the list itself. */
 @container (max-width: 560px) {
-  .list { grid-template-columns: minmax(0, 1fr) repeat(3, auto); }
+  .list { grid-template-columns: minmax(0, 1fr) repeat(4, auto); }
   .row { row-gap: var(--space-2); padding: var(--space-2_5) var(--space-3); }
   .name { grid-column: 1; grid-row: 1; }
   .switch { grid-column: 1 / -1; grid-row: 2; padding-left: calc(var(--space-6) + var(--space-2_5)); }
