@@ -13,6 +13,9 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
     const workspace = { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
     const session = { id: 'record-a', toolId: 'codex', nativeId: '1111', title: 'Review change', cwd: 'C:\\project', model: 'gpt', projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { if (control.copyFails) throw new Error('clipboard denied'); }, readText: async () => '' } });
+    // A refused clipboard refuses the copy-command fallback too.
+    const command = document.execCommand.bind(document);
+    document.execCommand = (name: string, ...rest: unknown[]) => name === 'copy' && control.copyFails ? false : command(name, ...(rest as [boolean, string]));
     Object.assign(window, {
       isTauri: true,
       __statusCopy: control,
