@@ -39,9 +39,15 @@ test('new configuration dialog has one save action', async ({ page }) => {
   // The CLI name sits in the h2 beside the install summary, which keeps clear of it.
   const [nameBox, labelBox] = await Promise.all([page.locator('[data-workspace-chrome] h2 strong').boundingBox(), installSummary.getByText('安装与更新').boundingBox()]);
   expect(labelBox!.x - (nameBox!.x + nameBox!.width)).toBeGreaterThan(40);
+  const summaryTop = (await installSummary.boundingBox())!.y;
   await page.getByText('安装与更新').click();
   const docs=page.getByRole('link', { name: '官方安装说明 ↗' });
   await expect(docs).toBeVisible();
+  // Opening keeps the summary beside the CLI switcher; the body opens full width under both.
+  expect((await installSummary.boundingBox())!.y).toBe(summaryTop);
+  const [chrome, title, body] = await Promise.all([page.locator('[data-workspace-chrome]').boundingBox(), page.locator('[data-workspace-chrome] h2').boundingBox(), page.getByText('当前版本', { exact: true }).boundingBox()]);
+  expect(body!.y).toBeGreaterThan(title!.y + title!.height - 1);
+  expect(body!.x - chrome!.x).toBeLessThan(40);
   await docs.click();
   await expect.poll(() => page.evaluate(() => (window as unknown as {__externalLinks:string[]}).__externalLinks)).toEqual(['https://developers.openai.com/codex/cli']);
   expect(page.context().pages()).toHaveLength(1);
