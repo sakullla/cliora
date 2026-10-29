@@ -642,13 +642,13 @@ test('native credits retain billing groups and unknown tokens across detail, rep
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
   const detail = page.getByRole('tabpanel', { name: /^会话/ });
-  const native = detail.getByRole('region', { name: '原生单位用量' });
+  const native = detail.getByRole('region', { name: 'CLI 自带计量' });
   await expect(native).toContainText('12.345 Credits');
   await expect(native).toContainText('原始值：24.69');
   await expect(native).toContainText('原生标记：未计费');
   await expect(native).toContainText('原生标记：可计费');
   await expect(native).toContainText('计费状态未知');
-  await expect(native).toContainText('5 条记录没有已知 token');
+  await expect(native).toContainText('5 条记录没有 token');
   await page.getByText('会话选项', { exact: true }).click();
   await page.getByText('查看恢复命令', { exact: true }).click();
   await expect(page.getByLabel('原生恢复命令')).toContainText('qoderclicn -r 11111111-2222-4333-8444-555555555555');
@@ -669,7 +669,7 @@ test('native credits retain billing groups and unknown tokens across detail, rep
   await page.getByLabel('用量模型').click();
   await page.getByRole('option', { name: 'qfmodel', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__qoderHistoryCalls.filter((call: any) => call.command === 'get_usage_report').at(-1).args.filter)).toMatchObject({ toolId: 'qoder_cn', model: 'qfmodel' });
-  await expect(usage.getByRole('region', { name: '原生单位用量' })).toContainText('12.345 Credits');
+  await expect(usage.getByRole('region', { name: 'CLI 自带计量' })).toContainText('12.345 Credits');
 });
 
 test('known Qoder request with unknown credits and tokens stays visible as one call', async ({ page }) => {
@@ -678,7 +678,7 @@ test('known Qoder request with unknown credits and tokens stays visible as one c
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
   const detail = page.getByRole('tabpanel', { name: /^会话/ });
-  await expect(detail).toContainText('1 条记录没有已知 token');
+  await expect(detail).toContainText('1 条记录没有 token');
   await expect(detail).not.toContainText('0 Credits');
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   const usage = page.getByRole('tabpanel', { name: '用量', exact: true });
@@ -688,7 +688,7 @@ test('known Qoder request with unknown credits and tokens stays visible as one c
   await expect(summary).toContainText('未知');
   await expect(summary).not.toContainText('$0');
   await expect(summary).not.toContainText('每次约');
-  await expect(usage).toContainText('1 条记录没有已知 token');
+  await expect(usage).toContainText('1 条记录没有 token');
   await expect(usage.getByRole('radio', { name: 'Credits', exact: true })).toHaveCount(0);
   const trend = usage.getByRole('region', { name: '用量趋势 按天' });
   await expect(trend).toContainText('日志未提供已知 token');
@@ -899,4 +899,62 @@ test('resuming into the workbench opens that session and an external resume does
   await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('无法恢复');
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
+});
+
+test('CLI-reported units stay quiet when the scope also has tokens', async ({ page }) => {
+  await page.addInitScript(() => {
+    const now = Date.now();
+    const start = new Date().setHours(0, 0, 0, 0);
+    const tools = [{ id: 'codex', name: 'Codex' }, { id: 'kiro', name: 'Kiro' }].map((tool) => ({ ...tool, history: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, interfaceFormats: [], management: {} }));
+    const units = [
+      { unit: 'context-usage-percent', value: 14.3886, originalValue: null, billable: null, records: 80, unknownOriginalRecords: 80 },
+      { unit: 'credit', value: 20.5059857509, originalValue: null, billable: null, records: 5, unknownOriginalRecords: 5 },
+    ];
+    const base = { requests: 0, usageRecords: 0, unknownRequestRecords: 0, unknownTokenRecords: 0, sessions: 1, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0, nativeUsage: [] };
+    const codex = { ...base, requests: 10, usageRecords: 10, input: 4000, output: 1000, total: 5000, cost: 1.5 };
+    const kiro = { ...base, usageRecords: 85, unknownTokenRecords: 85, unknownRequestRecords: 85, nativeUsage: units };
+    const all = { ...codex, sessions: 2, usageRecords: 95, unknownTokenRecords: 85, unknownRequestRecords: 85, nativeUsage: units };
+    const row = (key: string, label: string, toolId: string, sum: typeof all, model: string | null) => ({ key, label, toolId, model, projectId: null, priced: sum.cost !== null, totals: sum });
+    Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'kiro'], theme: 'light' }, tools };
+      if (command === 'list_cli_adapters') return { registered: tools, managedIds: ['codex', 'kiro'], preservedUnknown: [] };
+      if (['list_projects', 'list_history_prices', 'list_history_scans', 'refresh_history', 'list_history_sessions'].includes(command)) return [];
+      if (command === 'get_usage_report') return { generatedAt: now, from: args.filter?.fromMs ?? start, to: args.filter?.toMs ?? now + 1, bucket: 'day', currency: 'USD', totals: all, previous: null,
+        timeline: [{ start, end: start + 86400000, totals: all }],
+        byModel: [row('codex|gpt', 'gpt-6', 'codex', codex, 'gpt-6'), row('kiro|unknown', '模型未知', 'kiro', kiro, null)],
+        byTool: [row('codex', 'Codex', 'codex', codex, null), row('kiro', 'Kiro', 'kiro', kiro, null)], byProject: [],
+        topSessions: [], models: ['gpt-6'], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: now - 1000, priceSources: [], scans: [] };
+      if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      if (command.startsWith('plugin:event|')) return 1;
+      return null;
+    } } });
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const usage = page.getByRole('tabpanel', { name: '用量', exact: true });
+
+  // One collapsed line instead of a card; the unit names and values open on demand.
+  const native = usage.getByRole('region', { name: 'CLI 自带计量' });
+  await expect(native).toContainText('85 条记录没有 token');
+  const values = native.getByText('20.5059857509', { exact: true });
+  await expect(values).toBeHidden();
+  await native.getByText('查看 2 项', { exact: true }).click();
+  await expect(values).toBeVisible();
+  expect((await native.boundingBox())!.height).toBeLessThan(220);
+
+  // The chart offers only Token and cost; the units are not metric tabs.
+  await expect(usage.getByRole('radio', { name: 'Token', exact: true })).toBeVisible();
+  await expect(usage.getByRole('radio', { name: /Context-usage-percent|Credit/ })).toHaveCount(0);
+
+  // The no-token row reads as a short count, with the full values in its tooltip.
+  const ranking = usage.getByRole('list', { name: '按模型用量明细' });
+  const kiroRow = ranking.getByRole('listitem').filter({ hasText: '模型未知' });
+  await expect(kiroRow).toContainText('2 项计量');
+  await expect(kiroRow).toContainText('无 token');
+  await expect(kiroRow).not.toContainText('Context-usage-percent');
+  await expect(kiroRow.locator('[title*="Context-usage-percent"]')).toHaveCount(1);
+  await expect(ranking.getByRole('listitem').filter({ hasText: 'gpt-6' })).toContainText('5K');
 });

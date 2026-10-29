@@ -344,14 +344,14 @@ async function captureQoderHistoryFeatures(){
    await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'使用记录'}).click();
    await page.getByRole('button',{name:/Qoder CN · 原生 Credits 与会话/}).click();
    if(unknownAmounts){
-    await expect(page.getByRole('tabpanel',{name:/^会话/})).toContainText('1 条记录没有已知 token');
+    await expect(page.getByRole('tabpanel',{name:/^会话/})).toContainText('1 条记录没有 token');
     await page.getByRole('tab',{name:'用量',exact:true}).click();
     await expect(page.getByRole('region',{name:'用量概览'})).toContainText('未知');
     await expect(page.getByRole('region',{name:'用量概览'})).not.toContainText('暂无调用次数');
     await capture('qoder-history-unknown','one known call with unknown native amounts and tokens');
     continue;
    }
-   await expect(page.getByRole('region',{name:'原生单位用量'})).toContainText('12.345 Credits');
+   await expect(page.getByRole('region',{name:'CLI 自带计量'})).toContainText('12.345 Credits');
    await capture('qoder-history-detail','native transcript and original/billable credits');
    await page.getByRole('tab',{name:'用量',exact:true}).click();
    await expect(page.getByRole('region',{name:'用量概览'})).toContainText('未知');

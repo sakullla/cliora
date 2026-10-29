@@ -1,8 +1,14 @@
-.summary { margin: var(--space-3) 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); min-width: 0; }
-.summary h3 { margin: 0 0 var(--space-3); font-size: 14px; }
-.summary ul { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-6); margin: 0; padding: 0; list-style: none; }
-.summary li { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
-.summary strong { font-size: 20px; font-variant-numeric: tabular-nums; }
-.summary span { font-size: 12px; }
-.summary small, .summary p { color: var(--text-2); font-size: 12px; line-height: 1.6; }
-.summary p { margin: var(--space-3) 0 0; }
+/* A single quiet line; native unit names can be long and are secondary to token totals. */
+.note { margin: var(--space-2) 0 var(--space-3); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
+p.note, .note summary { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
+.note summary { width: fit-content; max-width: 100%; padding: var(--space-0_5) var(--space-1_5); border-radius: var(--radius-sm); cursor: pointer; }
+.note summary:hover { background: var(--surface-2); color: var(--text-2); }
+.note summary > svg { flex: none; }
+.note summary > span, p.note > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note summary > small { flex: none; color: var(--text-2); font-size: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.note ul { display: grid; gap: var(--space-1); margin: var(--space-1_5) 0 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); list-style: none; }
+.note li { display: grid; grid-template-columns: auto minmax(0, 16ch) minmax(0, 1fr); align-items: baseline; gap: var(--space-3); min-width: 0; }
+.note li > span { overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
+.note li > b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+.note li > small { overflow: hidden; font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.note p { margin: var(--space-1_5) 0 0; line-height: 1.5; }
