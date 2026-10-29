@@ -190,13 +190,31 @@ function ccSwitchLinkConfig(text: string): string | null {
 
 // A `"name": { ... }` snippet copied out of an mcpServers block is not valid
 // JSON on its own; wrapping it in braces (and dropping a trailing comma) is.
+function parseStrict(trimmed: string): unknown {
+  try { return JSON.parse(trimmed); } catch { /* try the snippet form */ }
+  if (!trimmed.startsWith('"')) return undefined;
+  try { return JSON.parse(`{${trimmed.replace(/,\s*$/, '')}}`); } catch { return undefined; }
+}
+
+// Configs pasted through chat apps or word processors arrive with typographic quotes
+// (“ ” „ ″) and with `--flag` turned into an em or en dash. Only text that is not
+// already valid JSON is retried this way, so a real JSON value is never rewritten.
+function normalizeTypography(text: string): string {
+  return text
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u301D\u301E\uFF02]/g, '"')
+    .replace(/\u00A0/g, ' ')
+    .replace(/"[\u2014\u2013](?=[^\s"])/g, '"--');
+}
+
 function parseLenient(text: string): unknown {
   const trimmed = text.trim();
   const linked = ccSwitchLinkConfig(trimmed);
   if (linked !== null) { try { return JSON.parse(linked); } catch { return null; } }
-  try { return JSON.parse(trimmed); } catch { /* try the snippet form */ }
-  if (!trimmed.startsWith('"')) return null;
-  try { return JSON.parse(`{${trimmed.replace(/,\s*$/, '')}}`); } catch { return null; }
+  const strict = parseStrict(trimmed);
+  if (strict !== undefined) return strict;
+  const normalized = normalizeTypography(trimmed);
+  if (normalized === trimmed) return null;
+  return parseStrict(normalized) ?? null;
 }
 
 // Accepts mcpServers / servers wrappers, name maps, snippets and bare servers, plus cc-switch
