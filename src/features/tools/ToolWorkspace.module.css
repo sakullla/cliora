@@ -17,12 +17,18 @@
 }
 .chromeTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 48px; margin: 0; padding: var(--space-2) var(--space-3) var(--space-1_5); font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; line-height: 1.3; }
 .chromeTitle > strong { min-width: 0; overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
-/* The CLI header: the h2 switcher, with the install summary beside it while collapsed.
-   An expanded install panel wraps to its own full-width row under the switcher. */
-.chromeHead { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; }
-.chromeHead > .chromeTitle { flex: 0 0 auto; max-width: 100%; padding-right: 0; }
-.chromeInstall { flex: 1 1 280px; min-width: 0; }
-.chromeHead:has(.chromeInstall details[open]) .chromeInstall { flex-basis: 100%; }
+/* The CLI header: the h2 switcher, then the install summary on the same row. The install
+   <details> is display:contents so its summary and its expanded body are grid items of the
+   header: the summary keeps its place beside the switcher, the body opens full width below. */
+.chromeHead { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; min-width: 0; }
+.chromeHead > .chromeTitle { grid-column: 1; max-width: 100%; padding-right: 0; }
+.chromeInstall { display: contents; }
+.chromeInstall[hidden] { display: none; }
+.chromeInstall > details { display: contents; }
+.chromeInstall > details > summary { grid-column: 2; min-width: 0; }
+.chromeInstall > details::details-content { grid-column: 1 / -1; min-width: 0; }
+.chromeInstall > details[open] > summary { border-bottom: 0; }
+.chromeInstall > details[open]::details-content { border-top: 1px solid var(--line); }
 .chromeTitle .toolPicker { flex: none; width: auto; max-width: 100%; }
 .toolPicker > button[data-select-trigger] { margin-left: calc(var(--space-1_5) * -1); }
 /* An expanded install panel can be tall; let it scroll with the page instead of pinning it. */
