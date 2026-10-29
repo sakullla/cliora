@@ -143,3 +143,39 @@ test('secret masking only applies to literal values under sensitive keys', () =>
   assert.equal(mcp.isValueReference('$API_TOKEN'), true);
   assert.equal(mcp.isValueReference('ghp_literal'), false);
 });
+
+test('cc-switch copies, records, config.json and ccswitch:// links import every server', () => {
+  // "Copy as JSON" in cc-switch: an mcpServers block whose specs may carry type and cwd.
+  const copied = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    fetch: { type: 'stdio', command: 'uvx', args: ['mcp-server-fetch'], env: {} },
+    docs: { type: 'sse', url: 'https://docs.test/sse', headers: { Authorization: 'Bearer t' } },
+    local: { type: 'stdio', command: 'node', args: ['server.js'], cwd: 'C:/work/mcp' },
+    blankCwd: { type: 'stdio', command: 'npx', cwd: '' },
+  } }));
+  assert.deepEqual(copied.map(item => [item.name, item.transport, item.invalid]), [
+    ['fetch', 'stdio', []], ['docs', 'http', []], ['local', 'stdio', ['cwdUnsupported']], ['blankCwd', 'stdio', []],
+  ]);
+
+  // Its stored records: the spec sits under `server`, the record key is the server name.
+  const record = (id, server) => ({ id, name: `${id} display`, server, apps: { claude: true, codex: false }, description: 'from cc-switch', tags: [] });
+  const map = mcp.parseMcpServerCollection(JSON.stringify({ fetch: record('fetch', { command: 'uvx', args: ['mcp-server-fetch'] }), remote: record('remote', { type: 'http', url: 'https://x.test/mcp' }) }));
+  assert.deepEqual(map.map(item => [item.name, item.transport, item.command || item.url, item.invalid]), [['fetch', 'stdio', 'uvx', []], ['remote', 'http', 'https://x.test/mcp', []]]);
+  const single = mcp.parseMcpServerCollection(JSON.stringify(record('memory', { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] })));
+  assert.equal(single.length, 1);
+  assert.equal(single[0].name, 'memory');
+  assert.deepEqual(single[0].args, ['-y', '@modelcontextprotocol/server-memory']);
+  const config = mcp.parseMcpServerCollection(JSON.stringify({ version: 2, providers: {}, mcp: { servers: { time: record('time', { command: 'uvx', args: ['mcp-server-time'] }) } } }));
+  assert.deepEqual(config.map(item => [item.name, item.command]), [['time', 'uvx']]);
+  const broken = mcp.parseMcpServerCollection(JSON.stringify({ servers: { bad: { id: 'bad', server: { command: 'npx', args: [1] }, apps: {} } } }));
+  assert.deepEqual(broken[0].invalid, ['argsInvalid']);
+
+  // Deep links carry base64 mcpServers JSON, including an unescaped '+' and non-ASCII text.
+  const body = JSON.stringify({ mcpServers: { 'mcp-fetch': { command: 'uvx', args: ['mcp-server-fetch', '说明'] } } });
+  const base64 = Buffer.from(body, 'utf8').toString('base64');
+  const link = `ccswitch://v1/import?resource=mcp&apps=claude,codex&config=${encodeURIComponent(base64)}`;
+  const linked = mcp.parseMcpServerCollection(link);
+  assert.deepEqual(linked.map(item => [item.name, item.command, item.args]), [['mcp-fetch', 'uvx', ['mcp-server-fetch', '说明']]]);
+  assert.equal(mcp.parseMcpServerCollection(`ccswitch://v1/import?resource=mcp&config=${base64}`)[0].name, 'mcp-fetch');
+  assert.deepEqual(mcp.parseMcpServerCollection(`ccswitch://v1/import?resource=provider&app=claude&name=x&config=${base64}`), []);
+  assert.deepEqual(mcp.parseMcpServerCollection('ccswitch://v1/import?resource=mcp&config=%%%'), []);
+});

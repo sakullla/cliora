@@ -128,7 +128,7 @@ export function mcpSummary(item: { transport: McpTransport; command: string; arg
   return item.transport === 'http' ? (item.url ?? '').trim() : mcpCommandLine(item.command, item.args);
 }
 
-export type McpParseIssue = 'serverInvalid' | 'argsInvalid' | 'envInvalid' | 'headersInvalid';
+export type McpParseIssue = 'serverInvalid' | 'argsInvalid' | 'envInvalid' | 'headersInvalid' | 'cwdUnsupported';
 
 export type McpParsedServer = {
   total: number;
@@ -160,7 +160,7 @@ function plainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const MCP_SERVER_FIELDS = new Set(['command', 'args', 'env', 'url', 'serverUrl', 'headers', 'type', 'transport']);
+const MCP_SERVER_FIELDS = new Set(['command', 'args', 'env', 'cwd', 'url', 'serverUrl', 'headers', 'type', 'transport']);
 
 function looksLikeServer(value: unknown): value is Record<string, unknown> {
   return plainObject(value)
@@ -168,28 +168,59 @@ function looksLikeServer(value: unknown): value is Record<string, unknown> {
     && (typeof value.command === 'string' || typeof value.url === 'string' || typeof value.serverUrl === 'string');
 }
 
+// cc-switch stores each server as `{ id, name, server: { ...spec }, apps: { claude: true, ... } }`;
+// the spec is the part every CLI reads, and `id` is the name written into their configs.
+function ccSwitchRecord(value: unknown): value is Record<string, unknown> & { server: Record<string, unknown> } {
+  return plainObject(value) && plainObject(value.server) && (plainObject(value.apps) || typeof value.id === 'string');
+}
+
+// cc-switch shares servers as `ccswitch://v1/import?resource=mcp&config=<base64 mcpServers JSON>`.
+function ccSwitchLinkConfig(text: string): string | null {
+  if (!/^ccswitch:\/\//i.test(text)) return null;
+  try {
+    const params = new URL(text).searchParams;
+    const config = params.get('config');
+    if ((params.get('resource') ?? '').toLowerCase() !== 'mcp' || !config) return null;
+    // URLSearchParams turns an unescaped base64 '+' into a space; URL-safe base64 is accepted too.
+    const base64 = config.replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
+    const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='));
+    return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+  } catch { return null; }
+}
+
 // A `"name": { ... }` snippet copied out of an mcpServers block is not valid
 // JSON on its own; wrapping it in braces (and dropping a trailing comma) is.
 function parseLenient(text: string): unknown {
   const trimmed = text.trim();
+  const linked = ccSwitchLinkConfig(trimmed);
+  if (linked !== null) { try { return JSON.parse(linked); } catch { return null; } }
   try { return JSON.parse(trimmed); } catch { /* try the snippet form */ }
   if (!trimmed.startsWith('"')) return null;
   try { return JSON.parse(`{${trimmed.replace(/,\s*$/, '')}}`); } catch { return null; }
 }
 
-// Accepts mcpServers / servers wrappers, name maps, snippets and bare servers.
-// Collection parsing keeps every entry so import review never silently drops servers.
+// Accepts mcpServers / servers wrappers, name maps, snippets and bare servers, plus cc-switch
+// exports: its server records (single, map, or the `mcp.servers` block of its config.json)
+// and `ccswitch://` MCP links. Collection parsing keeps every entry so import review never
+// silently drops servers.
 export function parseMcpServerCollection(text: string): McpParsedServer[] {
   const parsed = parseLenient(text);
   if (!plainObject(parsed)) return [];
-  const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : null;
-  const map = wrapped ?? (!looksLikeServer(parsed) ? parsed : null);
-  const entries: Array<[string, unknown]> = map ? Object.entries(map) : [['', parsed]];
+  const ccSwitchConfig = plainObject(parsed.mcp) && plainObject(parsed.mcp.servers) ? parsed.mcp.servers : null;
+  const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : ccSwitchConfig;
+  const single = !wrapped && ccSwitchRecord(parsed);
+  const map = wrapped ?? (!single && !looksLikeServer(parsed) ? parsed : null);
+  const entries: Array<[string, unknown]> = map ? Object.entries(map)
+    : single ? [[typeof parsed.id === 'string' ? parsed.id : '', parsed]]
+    : [['', parsed]];
   const total = entries.length;
-  return entries.map(([name, value]) => {
+  return entries.map(([name, entry]) => {
     const invalid: McpParseIssue[] = [];
+    const value = ccSwitchRecord(entry) ? entry.server : entry;
     const server = plainObject(value) ? value : {};
     if (!plainObject(value)) invalid.push('serverInvalid');
+    // Cliora has no working-directory field; keep the entry visible but not importable as is.
+    if (server.cwd !== undefined && !(typeof server.cwd === 'string' && !server.cwd.trim())) invalid.push('cwdUnsupported');
     const command = typeof server.command === 'string' ? server.command : '';
     const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
     const hint = typeof server.type === 'string' ? server.type : typeof server.transport === 'string' ? server.transport : '';

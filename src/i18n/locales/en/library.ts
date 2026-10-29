@@ -201,7 +201,7 @@ export default {
     replaceDistribute: 'Replace and distribute',
     saveDistribute: 'Save and distribute',
     pasteImport: 'Paste import',
-    pasteImportHint: 'Paste an mcpServers wrapper or a single server JSON; recognized fields fill the form below.',
+    pasteImportHint: 'Paste an mcpServers wrapper, a single server JSON, or a cc-switch config or ccswitch:// link; recognized fields fill the form below.',
     pasteImportAria: 'Paste MCP JSON',
     pasteImportApply: 'Parse and fill',
     pasteImportError: 'Could not recognize this content. The form is unchanged.',
