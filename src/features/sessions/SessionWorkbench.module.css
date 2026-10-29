@@ -1022,7 +1022,11 @@
   box-shadow: none;
 }
 .promptPill:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent) 8%, transparent); color: var(--term-accent); box-shadow: none; }
-.composerHead .composerClose[data-size] { flex: none; width: calc(var(--control-h-sm) - var(--space-1_5)); height: calc(var(--control-h-sm) - var(--space-1_5)); min-height: 0; margin-left: auto; color: var(--term-text-3); }
+/* More than three prompts: the rest open in a searchable list styled as one more pill. */
+.promptMore { flex: none; width: auto; }
+.promptMore > button[data-select-trigger] { height: 24px; min-height: 24px; padding: 0 var(--space-6) 0 var(--space-2); border: 1px dashed var(--term-line); border-radius: var(--radius-pill); background-color: transparent; background-position: right 8px center; color: var(--term-text-2); font-size: var(--fs-micro); }
+.promptMore > button[data-select-trigger][data-empty] span { color: inherit; }
+.promptMore > button[data-select-trigger]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent) 45%, var(--term-line)); background-color: color-mix(in srgb, var(--term-accent) 8%, transparent); color: var(--term-accent); }.composerHead .composerClose[data-size] { flex: none; width: calc(var(--control-h-sm) - var(--space-1_5)); height: calc(var(--control-h-sm) - var(--space-1_5)); min-height: 0; margin-left: auto; color: var(--term-text-3); }
 .composerInputRow { display: flex; align-items: flex-end; gap: var(--space-2); min-width: 0; }
 .promptMark { flex: none; align-self: flex-start; padding-top: var(--space-0_5); color: var(--term-accent); font-family: var(--font-mono); font-size: 18px; font-weight: var(--fw-semibold); line-height: 1.2; }
 .composerTextarea,
@@ -1160,6 +1164,8 @@
 .dialogPromptLabel { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); margin-right: var(--space-0_5); color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .dialogPrompts .promptPill { border-color: var(--line); background: var(--surface); color: var(--text-2); }
 .dialogPrompts .promptPill:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.dialogPrompts .promptMore > button[data-select-trigger] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); }
+.dialogPrompts .promptMore > button[data-select-trigger]:hover:not(:disabled) { border-color: var(--accent-line); background-color: var(--accent-soft); color: var(--accent); }
 .dialogSummary {
   display: flex;
   align-items: center;

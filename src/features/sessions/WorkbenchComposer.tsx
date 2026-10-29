@@ -4,6 +4,7 @@ import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
 import type { LibraryItem } from '../../types/library';
+import { PromptPicker } from './PromptPicker';
 import styles from './SessionWorkbench.module.css';
 
 export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inputRef, onChange, onSubmit, onClose }: {
@@ -37,10 +38,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
     <div className={styles.composerCard}>
       <div className={styles.composerHead}>
         <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={14} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>{place}</span></span>
-        {prompts.length > 0 && <div className={styles.composerPromptList} role="group" aria-label={t('sessions.pickLibraryPrompt')}>
-          <span className={styles.composerPromptLabel}><Icon name="library" size={12} />{t('sessions.pickLibraryPrompt')}</span>
-          {prompts.map((prompt) => <button key={prompt.id} type="button" className={styles.promptPill} title={prompt.body} onClick={() => onChange(draft ? draft + '\n' + prompt.body : prompt.body)}><Icon name="plus" size={12} />{prompt.title}</button>)}
-        </div>}
+        <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} prompts={prompts} onPick={(prompt) => { onChange(draft ? draft + '\n' + prompt.body : prompt.body); inputRef.current?.focus(); }} />
         <IconButton size="sm" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose} icon={<Icon name="close" size={14} />} />
       </div>
       <div className={styles.composerInputRow}>

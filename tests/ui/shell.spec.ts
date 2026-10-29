@@ -937,7 +937,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
           if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
-          if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'pr1', kind: 'prompt', title: '代码审查', body: '请审查当前改动', category: '开发', projectId: null, version: 1, updatedAt: 1 }] : [];
+          if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'pr1', kind: 'prompt', title: '代码审查', body: '请审查当前改动', category: '开发', projectId: null, version: 1, updatedAt: 1 }, ...Array.from({ length: 31 }, (_, index) => ({ id: `pr${index + 2}`, kind: 'prompt', title: `提示词 ${index + 2}`, body: `第 ${index + 2} 条提示词正文`, category: '开发', projectId: null, version: 1, updatedAt: 1 }))] : [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
@@ -1004,6 +1004,16 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   await stage.locator('.xterm-screen').click();
   await page.keyboard.press('Control+Shift+M');
   const composer = stage.getByRole('textbox', { name: /编写多行内容或从资料库选入提示词/ });
+  // 32 library prompts: three stay as pills, the rest open in one searchable list.
+  const promptGroup = stage.getByRole('group', { name: '资料库提示词' });
+  await expect(promptGroup.locator('button:not([data-select-trigger])')).toHaveCount(3);
+  const allPrompts = promptGroup.getByRole('button', { name: '全部 32 个', exact: true });
+  await allPrompts.click();
+  await expect(page.getByRole('listbox', { name: '全部 32 个' }).getByRole('option')).toHaveCount(32);
+  await page.getByRole('textbox', { name: '搜索提示词' }).fill('第 30 条');
+  await page.getByRole('option', { name: /提示词 30/ }).click();
+  await expect(composer).toHaveValue('第 30 条提示词正文');
+  await expect(composer).toBeFocused();
   await composer.fill('status check');
   await composer.press('Enter');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string; text: string }> }).__writes)).toEqual([
