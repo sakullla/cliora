@@ -1808,6 +1808,41 @@ pub async fn read_native_skill(
     .await
 }
 
+#[tauri::command]
+pub async fn list_native_skill_files(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+) -> Result<resources::skills::SkillFileListing, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::list_files(&db, &adapters::Registry::builtins(), &home, &tool_id, scope, project_path.as_deref(), &directory)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn read_native_skill_file(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+    path: String,
+) -> Result<resources::skills::SkillFilePreview, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::read_file(&db, &adapters::Registry::builtins(), &home, &tool_id, scope, project_path.as_deref(), &directory, &path)
+            .map_err(native_error)
+    })
+    .await
+}
+
 /// Reads SKILL.md text the frontend already holds. Pure: no file access.
 #[tauri::command]
 pub fn analyze_skill_document(

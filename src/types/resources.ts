@@ -61,6 +61,11 @@ export type SkillRecoveryIssue = { contextId?: string | null; operationId: strin
 // as well as failed package reads. Use state to determine readability.
 export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[] };
 export type NativeSkillDocument = { name: string; path: string; content: string };
+/** Attachment beside SKILL.md; `path` is relative to the skill directory with `/` separators. */
+export type SkillFileEntry = { path: string; size: number | null; readable: boolean; detail: string };
+export type SkillFileListing = { files: SkillFileEntry[]; truncated: boolean };
+/** `text` only for UTF-8 files up to 256 KiB without NUL; `digest` is null over the 12 MiB read limit. */
+export type SkillFilePreview = { path: string; size: number; digest: string | null; text: string | null };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
 export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string };

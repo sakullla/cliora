@@ -1027,6 +1027,100 @@ fn package_display_comes_from_the_stored_manifest_and_issues_do_not_block_instal
     assert_eq!(entries[0].issues, package.issues);
 }
 
+#[test]
+fn attachments_list_by_metadata_and_preview_read_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let skill = home.join(".claude/skills/pdf");
+    write_skill(&skill, "---\nname: pdf\ndescription: d\n---\n");
+    fs::create_dir_all(skill.join("scripts")).unwrap();
+    fs::create_dir_all(skill.join("references")).unwrap();
+    fs::create_dir_all(skill.join("assets")).unwrap();
+    fs::write(skill.join("scripts/extract.py"), "print('hi')\n").unwrap();
+    fs::write(skill.join("references/REFERENCE.md"), "# Reference\n").unwrap();
+    fs::write(skill.join("assets/logo.png"), [0x89, b'P', b'N', b'G', 0, 1, 2]).unwrap();
+    fs::write(skill.join("references/big.md"), "x".repeat(256 * 1024 + 1)).unwrap();
+    let dir = skill.display().to_string();
+
+    let listing = list_files(&db, &registry, &home, "claude_code", Scope::Global, None, &dir).unwrap();
+    assert!(!listing.truncated);
+    let summary: Vec<_> = listing.files.iter().map(|file| (file.path.as_str(), file.size, file.readable)).collect();
+    assert_eq!(summary, [
+        ("assets/logo.png", Some(7), true),
+        ("references/REFERENCE.md", Some(12), true),
+        ("references/big.md", Some(256 * 1024 + 1), true),
+        ("scripts/extract.py", Some(12), true),
+    ]);
+
+    let script = read_file(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, "scripts/extract.py").unwrap();
+    assert_eq!(script.text.as_deref(), Some("print('hi')\n"));
+    assert_eq!(script.size, 12);
+    assert_eq!(script.digest.as_deref().map(str::len), Some(64));
+    let image = read_file(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, "assets/logo.png").unwrap();
+    assert!(image.text.is_none() && image.digest.is_some());
+    assert_eq!(image.size, 7);
+    let big = read_file(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, "references/big.md").unwrap();
+    assert!(big.text.is_none() && big.digest.is_some(), "over 256 KiB shows size and digest only");
+
+    for bad in ["../pdf/SKILL.md", "scripts/../../pdf/SKILL.md", "", "scripts", "/etc/passwd", "C:/Windows/win.ini", "scripts\\extract.py"] {
+        assert!(read_file(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, bad).is_err(), "{bad}");
+    }
+    let outside = temp.path().join("outside");
+    write_skill(&outside, "# outside\n");
+    assert!(list_files(&db, &registry, &home, "claude_code", Scope::Global, None, &outside.display().to_string()).is_err());
+
+    let bare = home.join(".claude/skills/bare");
+    write_skill(&bare, "# only the manifest\n");
+    let empty = list_files(&db, &registry, &home, "claude_code", Scope::Global, None, &bare.display().to_string()).unwrap();
+    assert!(empty.files.is_empty() && !empty.truncated);
+
+    // A read-only compatibility root is listed the same way.
+    let compat = home.join(".claude/skills/pdf");
+    let cursor = list_files(&db, &registry, &home, "cursor", Scope::Global, None, &compat.display().to_string()).unwrap();
+    assert_eq!(cursor.files.len(), 4);
+}
+
+#[test]
+fn attachment_limits_and_links_mark_entries_without_failing_the_listing() {
+    let temp = tempfile::tempdir().unwrap();
+    let many = temp.path().join("many");
+    write_skill(&many, "# many\n");
+    for index in 0..=MAX_FILES {
+        fs::write(many.join(format!("f{index:03}.txt")), "x").unwrap();
+    }
+    let listing = list_attachments(&many.canonicalize().unwrap());
+    assert!(listing.truncated);
+    assert_eq!(listing.files.len(), MAX_FILES);
+    fs::remove_file(many.join("f000.txt")).unwrap();
+    let exact = list_attachments(&many.canonicalize().unwrap());
+    assert!(!exact.truncated, "exactly the limit is complete");
+    assert_eq!(exact.files.len(), MAX_FILES);
+
+    let linked = temp.path().join("linked");
+    write_skill(&linked, "# linked\n");
+    fs::write(linked.join("kept.txt"), "kept").unwrap();
+    let secret = temp.path().join("secret.txt");
+    fs::write(&secret, "secret").unwrap();
+    let secret_dir = temp.path().join("secret-dir");
+    fs::create_dir_all(&secret_dir).unwrap();
+    fs::write(secret_dir.join("inner.txt"), "inner").unwrap();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&secret, linked.join("escape.txt")).and_then(|_| std::os::windows::fs::symlink_dir(&secret_dir, linked.join("escape-dir")));
+    #[cfg(not(windows))]
+    let made = std::os::unix::fs::symlink(&secret, linked.join("escape.txt")).and_then(|_| std::os::unix::fs::symlink(&secret_dir, linked.join("escape-dir")));
+    if made.is_err() { return; }
+    let root = linked.canonicalize().unwrap();
+    let listing = list_attachments(&root);
+    let summary: Vec<_> = listing.files.iter().map(|file| (file.path.as_str(), file.readable)).collect();
+    assert_eq!(summary, [("escape-dir", false), ("escape.txt", false), ("kept.txt", true)]);
+    assert!(listing.files.iter().filter(|file| !file.readable).all(|file| !file.detail.is_empty()));
+    assert!(read_attachment(&root, "escape.txt").is_err());
+    assert!(read_attachment(&root, "escape-dir/inner.txt").is_err(), "a linked parent cannot lead outside");
+    assert_eq!(read_attachment(&root, "kept.txt").unwrap().text.as_deref(), Some("kept"));
+}
+
 fn write_skill(dir: &Path, body: &str) {
     fs::create_dir_all(dir).unwrap();
     fs::write(dir.join("SKILL.md"), body).unwrap();
