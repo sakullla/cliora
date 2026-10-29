@@ -24,7 +24,6 @@ rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 memchr = "2"
 glob = "0.3"
 rusqlite = { version = "0.40", features = ["bundled"] }
-keyring = "4.2"
 thiserror = "2"
 toml_edit = "0.25"
 toml = { version = "1.1", features = ["preserve_order"] }
@@ -48,6 +47,12 @@ tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 portable-pty = "0.9.0"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+keyring = "4.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading"] }

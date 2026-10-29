@@ -701,6 +701,7 @@ dependencies = [
  "reqwest",
  "rquickjs",
  "rusqlite",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",
