@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Compartment, EditorState, Transaction } from '@codemirror/state';
-import { EditorView, highlightActiveLine, keymap, lineNumbers, placeholder as editorPlaceholder } from '@codemirror/view';
+import { EditorView, crosshairCursor, drawSelection, highlightActiveLine, rectangularSelection, keymap, lineNumbers, placeholder as editorPlaceholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth, selectAll } from '@codemirror/commands';
 import { HighlightStyle, StreamLanguage, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { json } from '@codemirror/lang-json';
@@ -32,6 +32,16 @@ function language(format: CodeFormat) {
   }
 }
 
+/**
+ * CodeMirror owns every pointer drag either way (it cancels the native drag and sets the selection itself).
+ * WebKit (the macOS window) repaints a native selection across the wrapped editable region on each move,
+ * so there the selection is drawn as CodeMirror's own layer, its default in minimalSetup, which also
+ * allows Alt+drag column selection. Chromium (WebView2) keeps the native selection: measured with drag
+ * selection over a long wrapped document, the drawn layer roughly doubled the work per pointer move there.
+ */
+const webkit = typeof navigator !== 'undefined' && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
+const selectionExtensions = () => webkit ? [drawSelection(), EditorState.allowMultipleSelections.of(true), rectangularSelection(), crosshairCursor()] : [];
+
 /** A format-driven editor shared by native files, structured previews and library text. */
 export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false, errorLine, documentId }: {
   value: string; onChange?: (value: string) => void; format?: CodeFormat; label: string;
@@ -54,8 +64,7 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
     // Tauri gives this bundled anchor a fresh style nonce for each document.
     const nonce = (document.getElementById('cliora-editor-nonce') as HTMLStyleElement | null)?.nonce ?? '';
     return EditorState.create({ doc: text, extensions: [
-      // Native selection follows the pointer through wrapped lines. A drawn selection layer feels sticky.
-      configuration.current.of(extensions()), EditorView.cspNonce.of(nonce), lineNumbers(), history(),
+      configuration.current.of(extensions()), EditorView.cspNonce.of(nonce), lineNumbers(), history(), selectionExtensions(),
       highlightActiveLine(), bracketMatching(), indentOnInput(), EditorState.tabSize.of(2), EditorView.lineWrapping,
       keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]), syntaxHighlighting(highlighting),
       EditorView.updateListener.of(update => {
