@@ -38,6 +38,8 @@ const launchDirectories = new Map<string, string>();
 const recentToolsKey = 'cliora:home-recent-tools';
 const configuredToolsKey = 'cliora:home-configured-tools';
 const otherToolsExpandedKey = 'cliora:home-tools-expanded';
+// Starred tools are pinned above the rest and never fold away.
+const favoriteToolsKey = 'cliora:home-favorite-tools';
 const commonToolLimit = 6;
 function readIds(key: string): string[] {
   try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; }
@@ -146,6 +148,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   const acting = useRef(new Set<string>());
   const [recent, setRecent] = useState(() => readIds(recentToolsKey));
   const [configured, setConfigured] = useState(() => readIds(configuredToolsKey));
+  const [favorites, setFavorites] = useState(() => readIds(favoriteToolsKey));
   const [othersOpen, setOthersOpen] = useState(() => { try { return localStorage.getItem(otherToolsExpandedKey) === 'true'; } catch { return false; } });
   const toolKey = tools.map((item) => item.id).join('|');
 
@@ -171,6 +174,14 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
     setRecent((old) => {
       const next = [toolId, ...old.filter((id) => id !== toolId)].slice(0, 12);
       writeIds(recentToolsKey, next);
+      return next;
+    });
+  }
+
+  function toggleFavorite(toolId: string) {
+    setFavorites((old) => {
+      const next = old.includes(toolId) ? old.filter((id) => id !== toolId) : [...old, toolId];
+      writeIds(favoriteToolsKey, next);
       return next;
     });
   }
@@ -421,11 +432,16 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
 
   if (!tools.length) return <div className={styles.empty}>{t('home.tools.empty')}</div>;
   const present = new Set(tools.map((item) => item.id));
-  const ranked = [...new Set([...recent, ...configured])].filter((id) => present.has(id)).slice(0, commonToolLimit);
-  const common = tools.length <= commonToolLimit ? tools
-    : ranked.length ? tools.filter((item) => ranked.includes(item.id))
-    : tools.slice(0, commonToolLimit);
-  const others = tools.filter((item) => !common.includes(item));
+  // Starred tools lead in the order they were starred; the daily-use list fills in after them.
+  const pinned = favorites.flatMap((id) => tools.filter((item) => item.id === id));
+  const unpinned = tools.filter((item) => !pinned.includes(item));
+  const ranked = [...new Set([...recent, ...configured])].filter((id) => present.has(id) && !favorites.includes(id)).slice(0, commonToolLimit);
+  const daily = tools.length <= commonToolLimit ? unpinned
+    : ranked.length ? unpinned.filter((item) => ranked.includes(item.id))
+    : pinned.length ? []
+    : unpinned.slice(0, commonToolLimit);
+  const common = [...pinned, ...daily];
+  const others = unpinned.filter((item) => !daily.includes(item));
   const shown = othersOpen ? [...common, ...others] : common;
   return <div className={styles.list} aria-label={t('home.managed.title')}>
     {shown.map((tool) => {
@@ -473,7 +489,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
         !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}>{t('home.tools.editConfigItem')}</button>,
       ].filter(Boolean);
       return <div className={styles.row} data-tool-row key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} size={24} /><strong title={tool.name}>{tool.name}</strong>{status}</div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={24} /><strong title={tool.name}>{tool.name}</strong>{status}<button type="button" className={styles.favorite} aria-pressed={favorites.includes(tool.id)} aria-label={t('home.tools.favorite', { name: tool.name })} title={favorites.includes(tool.id) ? t('home.tools.unfavoriteTitle') : t('home.tools.favoriteTitle')} onClick={() => toggleFavorite(tool.id)}><Icon name="star" size={14} /></button></div>
         <div className={styles.switch}>
           {loaded?.error ? null
             : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)

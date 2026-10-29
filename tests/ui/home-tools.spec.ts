@@ -1172,9 +1172,9 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   const rows = tools.locator('[data-tool-row]');
-  // Projects come first; the tools section follows.
+  // Tools come first; the projects section follows.
   const projectsTop = (await page.getByRole('region', { name: '项目与启动' }).boundingBox())!.y;
-  expect(projectsTop).toBeLessThan((await tools.boundingBox())!.y);
+  expect((await tools.boundingBox())!.y).toBeLessThan(projectsTop);
 
   // Only the configured tool is listed; the other seven fold behind one toggle.
   await expect(rows).toHaveCount(1);
@@ -1207,4 +1207,22 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await expect(rows.nth(0)).toContainText('Tool C');
   await expect(rows.nth(1)).toContainText('Tool F');
   await expect(tools.getByRole('button', { name: '其他 6 个工具', exact: true })).toHaveAttribute('aria-expanded', 'false');
+
+  // Starring a folded tool pins it to the top, above the daily list, and it stays there after a reload.
+  await tools.getByRole('button', { name: '其他 6 个工具', exact: true }).click();
+  const star = rows.filter({ hasText: 'Tool H' }).getByRole('button', { name: '收藏 Tool H', exact: true });
+  await expect(star).toHaveAttribute('aria-pressed', 'false');
+  await star.click();
+  await expect(star).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows.nth(0)).toContainText('Tool H');
+  await tools.getByRole('button', { name: '收起其他工具', exact: true }).click();
+  await expect(rows).toHaveCount(3);
+  await page.reload();
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText('Tool H');
+  await expect(tools.getByRole('button', { name: '其他 5 个工具', exact: true })).toBeVisible();
+  // Removing the star returns it to the fold.
+  await rows.nth(0).getByRole('button', { name: '收藏 Tool H', exact: true }).click();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Tool C');
 });
