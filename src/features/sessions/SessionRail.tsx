@@ -136,7 +136,7 @@ export function SessionRail({ sessions, total, running, ended, filter, search, s
           </Button>}
         </span>
       </div>
-      {total > 1 && !compact && <div className={styles.railSearchField}>
+      {total > 1 && !compact && <div className={styles.railSearchField} data-field-frame="">
         <Icon name="search" size={14} />
         <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} />
         {search && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => onSearch('')}><Icon name="close" size={12} /></button>}
