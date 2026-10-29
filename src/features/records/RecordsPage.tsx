@@ -1,5 +1,6 @@
 import { NativeUsageSummary } from './NativeUsageSummary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -429,7 +430,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   async function copy() {
     if (!readyCommand) return;
     toasts.clear();
-    try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText()); setCopyFlash((value) => value + 1); }
+    try { if (!await writeClipboard(readyCommand)) throw new Error('clipboard'); showNotice(copiedCommandText()); setCopyFlash((value) => value + 1); }
     catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; showError(t('records.page.copyFailed')); }
   }
 
