@@ -138,6 +138,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
   const [conflictError, setConflictError] = useState('');
+  const [conflictBusy, setConflictBusy] = useState(false);
   const generation = useRef(0);
   const requests = useRef(new Map<string, number>());
   const recheck = useRef<(toolId: string) => void>(() => {});
@@ -406,8 +407,9 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   }
 
   async function useComparedFile() {
-    if (!conflict) return;
+    if (!conflict || conflictBusy) return;
     const { toolId, toolName, comparison } = conflict;
+    setConflictBusy(true);
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     const previous = states[toolId];
     setConflictError('');
@@ -427,6 +429,10 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
     } catch (error) {
       setConflictError(message(error));
       if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
+      // A stale comparison fails every retry; refresh it so the next attempt uses the current files.
+      try { const fresh = await native.compareRegisteredApplication(comparison.profile.id, 'global', ''); setConflict((current) => current && current.comparison === comparison ? { ...current, comparison: fresh } : current); } catch { /* keep the error and the old view */ }
+    } finally {
+      setConflictBusy(false);
     }
   }
 
@@ -510,7 +516,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
     })}
     {others.length > 0 && <div className={styles.more}><button type="button" aria-expanded={othersOpen} onClick={toggleOthers}><Icon name={othersOpen ? 'arrowUp' : 'more'} size={14} />{othersOpen ? t('home.tools.otherToolsLess') : t('home.tools.otherTools', { count: others.length })}</button></div>}
     <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
-      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</Button></div></div>}
+      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" disabled={conflictBusy} onClick={() => void useComparedFile()}>{conflictBusy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}
     </GuideDialog>
   </div>;
 }

@@ -901,6 +901,7 @@ export default {
     doneSavedUsed: 'Profile saved and in use; read next session.',
     doneSaved: 'Profile saved; the files in use keep their version.',
     compareBanner: 'The current files differ from the saved profile. Compare first, then explicitly use it.',
+    compareFailed: 'Could not use this content: {{error}}. The comparison was refreshed; check it and try again.',
     contextLoading: 'Reading tool context…',
     contextFailed: 'Failed to read tool context.',
     contextRetry: 'Read again',
