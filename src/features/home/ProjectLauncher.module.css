@@ -65,19 +65,23 @@
 /* The launch menu lists managed tools; the current one carries a quiet note. */
 .currentTool { margin-left: auto; padding-left: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 
+/* No projects yet: one slim row with the add action, the same height as a tool row pair. */
 .emptyProjects {
-  display: grid;
-  justify-items: center;
-  gap: var(--space-1);
-  padding: var(--space-6) var(--space-5);
-  border: 1px dashed var(--line-strong);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-2_5) var(--space-3) var(--space-2_5) var(--space-4);
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  text-align: center;
 }
-.emptyProjects strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.emptyProjects span { max-width: 360px; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.6; }
-.emptyProjects button { margin-top: var(--space-2_5); }
+.emptyIcon { display: grid; place-items: center; flex: none; width: var(--space-8); height: var(--space-8); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); }
+.emptyCopy { display: grid; flex: 1 1 240px; gap: 1px; min-width: 0; }
+.emptyCopy strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.emptyCopy span { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
+.emptyProjects > button { flex: none; }
 
 .hint { padding-left: var(--space-2); color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.55; box-shadow: inset 2px 0 0 var(--warning); }
 .note { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }

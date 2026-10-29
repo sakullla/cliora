@@ -325,7 +325,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    <Toolbar className={styles.heading} title={t('home.projects.title')} count={totalProjects || undefined} actions={<Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button>} />
+    <Toolbar className={styles.heading} title={t('home.projects.title')} count={totalProjects || undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button> : undefined} />
     {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {listLoading && !totalProjects ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
@@ -398,8 +398,8 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       })}
     </div>}
     {!visibleProjects.length && !visibleRemoteProjects.length && totalProjects > 0 ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p> : null}
-    {!totalProjects && <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><Button variant="primary" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
-    </> : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><Button variant="primary" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    {!totalProjects && <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span></span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    </> : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span></span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
       <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={resumeTool} options={toolOptions(resumable)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />
