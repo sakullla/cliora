@@ -10,6 +10,7 @@ import { javascript, json as jsonWithComments } from '@codemirror/legacy-modes/m
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { tags } from '@lezer/highlight';
 import { useTranslation } from 'react-i18next';
+import { writeClipboard } from '../lib/clipboard';
 import './CodeEditor.css';
 
 export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'yaml' | 'markdown' | 'text' | 'javascript';
@@ -123,7 +124,7 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
         view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true });
       } else {
         const state = view.state;
-        await navigator.clipboard.writeText(state.selection.ranges.map(range => state.sliceDoc(range.from, range.to)).join('\n'));
+        if (!await writeClipboard(state.selection.ranges.map(range => state.sliceDoc(range.from, range.to)).join('\n'))) throw new Error('clipboard');
         if (kind === 'cut' && editor.current === view && view.state === state && !readOnly) view.dispatch(state.replaceSelection(''), { userEvent: 'delete.cut' });
       }
       view.focus();

@@ -1,5 +1,6 @@
 import { CodeEditor } from '../../components/CodeEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
@@ -355,7 +356,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     if (surface === 'dialog') clearDialogResult();
     else { toasts.setNotice(null); toasts.setError(null); setCopiedId(null); }
     try {
-      await navigator.clipboard.writeText(text);
+      if (!await writeClipboard(text)) throw new Error('clipboard');
       if (surface === 'dialog') showDialogNotice(copiedText());
       else { showNotice(copiedText()); setCopiedId(itemId); }
     } catch {
