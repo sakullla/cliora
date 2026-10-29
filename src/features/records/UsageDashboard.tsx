@@ -9,7 +9,7 @@ import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
-import { formatNativeValue, nativeUnitLabel, nativeValue, knownTokens, formatTotalTokens, usageSummary, DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
+import { formatNativeValue, nativeUnitLabel, nativeValue, knownTokens, formatTotalTokens, usageSummary, usageDetail, DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { Button, Segmented } from '../../components/ui';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
@@ -192,7 +192,7 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
           <span className={styles.rankIcon}>{view === 'project' ? <Icon name="folder" size={16} /> : <ToolIcon toolId={row.toolId ?? ''} size={20} />}</span>
           <span className={styles.rankName}><strong title={row.label}>{view === 'tool' ? toolName(row.label) : row.label}</strong><small>{subtitle(row)}</small></span>
           <span className={styles.rankBar} aria-hidden="true"><i style={{ width: `${Math.max(share * 100, row.totals.total > 0 ? 1 : 0)}%` }} /></span>
-          <span className={styles.rankValue} title={`${formatTotalTokens(row.totals)} token`}><strong>{usageSummary(row.totals)}</strong><small>{knownTokens(row.totals) ? (row.totals.nativeUsage?.length ? `${formatTotalTokens(row.totals)} token · ${formatPercent(share)}` : formatPercent(share)) : t('records.native.noTokens')}</small></span>
+          <span className={styles.rankValue} title={usageDetail(row.totals)}><strong>{usageSummary(row.totals)}</strong><small>{knownTokens(row.totals) ? formatPercent(share) : t('records.native.noTokensShort')}</small></span>
           <span className={styles.rankCost} data-unpriced={row.totals.cost === null || undefined} title={exactMoney(row.totals.cost, report.currency)}>{formatMoney(row.totals.cost, report.currency)}</span>
         </>;
         return <li key={row.key} data-active={isActive(row) || undefined}>
@@ -278,7 +278,8 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const empty = !!report && report.totals.usageRecords === 0;
   const pricedShare = totals ? ratio(totals.total - totals.unpricedTokens, totals.total) : 0;
   const multiDay = report?.bucket !== 'hour';
-  const nativeUnits = [...new Set((totals?.nativeUsage ?? []).map((usage) => usage.unit))];
+  // CLI-reported units only become chart metrics when the scope has no tokens to show instead.
+  const nativeUnits = totals && !knownTokens(totals) ? [...new Set((totals.nativeUsage ?? []).map((usage) => usage.unit))] : [];
   const shownMetric: Metric = metric.startsWith('native:') && nativeUnits.includes(metric.slice(7)) ? metric
     : metric === 'cost' && totals?.cost !== null ? 'cost'
     : totals && !knownTokens(totals) && nativeUnits.length ? `native:${nativeUnits[0]}` : 'tokens';
@@ -420,7 +421,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
             {report.topSessions.map((item) => <li key={item.id}><button type="button" onClick={() => onOpenSession(item.id)} title={t('records.usage.openTitle')}>
               <ToolIcon toolId={item.toolId} size={20} />
               <span className={styles.rankName}><strong title={item.title}>{item.title}</strong><small>{toolName(item.toolId)}{item.model ? ` · ${item.model}` : ''} · {shortDate(item.updatedAt)}</small></span>
-              <span className={styles.rankValue} title={`${formatTotalTokens(item.totals)} token`}><strong>{usageSummary(item.totals)}</strong><small>{formatMoney(item.totals.cost, report.currency)}</small></span>
+              <span className={styles.rankValue} title={usageDetail(item.totals)}><strong>{usageSummary(item.totals)}</strong><small>{formatMoney(item.totals.cost, report.currency)}</small></span>
             </button></li>)}
           </ol>
         </section>

@@ -6,15 +6,24 @@ export const DAY_MS = 86_400_000;
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
 export const formatTokens = (value: number) => value < 1000 ? Math.round(value).toLocaleString() : compactFormat.format(value);
 export const formatNativeValue = (value: number) => value.toLocaleString('en-US', { maximumSignificantDigits: 12 });
+/** Short form for list rows: four significant digits, whole numbers from 1,000; tiny fractions stay nonzero. */
+export const compactNativeValue = (value: number) => value.toLocaleString('en-US', Math.abs(value) >= 1000 ? { maximumFractionDigits: 0 } : { maximumSignificantDigits: 4 });
 export const nativeUnitLabel = (unit: string) => unit.charAt(0).toUpperCase() + unit.slice(1);
 export const knownTokens = (totals: UsageTotals) => !totals.usageRecords || (totals.unknownTokenRecords ?? 0) < totals.usageRecords;
 export const formatTotalTokens = (totals: UsageTotals) => !knownTokens(totals) ? i18n.t('records.native.unknown') : `${formatTokens(totals.total)}${totals.unknownTokenRecords ? '+' : ''}`;
 export const nativeValue = (totals: UsageTotals, unit: string) => (totals.nativeUsage ?? []).filter((usage) => usage.unit === unit).reduce((value, usage) => value + usage.value, 0);
+/** Ranking rows lead with tokens. Native units only stand in when a row has no tokens at all,
+ *  compactly: one unit as a short value, several as a count (full values stay in `usageDetail`). */
 export function usageSummary(totals: UsageTotals) {
   const units = [...new Set((totals.nativeUsage ?? []).map((usage) => usage.unit))];
-  return units.length ? units.map((unit) => `${formatNativeValue(nativeValue(totals, unit))} ${nativeUnitLabel(unit)}`).join(' · ') : formatTotalTokens(totals);
+  if (knownTokens(totals) || !units.length) return formatTotalTokens(totals);
+  if (units.length > 1) return i18n.t('records.native.unitsCount', { count: units.length });
+  return `${compactNativeValue(nativeValue(totals, units[0]))} ${nativeUnitLabel(units[0])}`;
 }
-
+export function usageDetail(totals: UsageTotals) {
+  const units = [...new Set((totals.nativeUsage ?? []).map((usage) => usage.unit))];
+  return [`${formatTotalTokens(totals)} token`, ...units.map((unit) => `${formatNativeValue(nativeValue(totals, unit))} ${nativeUnitLabel(unit)}`)].join(' · ');
+}
 const symbols: Record<string, string> = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$' };
 export function formatMoney(value: number | null, currency: string) {
   if (value === null) return i18n.t('records.format.unpriced');
