@@ -272,7 +272,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   </div>;
 
   return <>
-    <DocumentWorkspace label={t('tools.mcp.title')} toolbarLabel={t('tools.mcp.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeCompose(); }} onKeyDown={onKey}
+    <DocumentWorkspace documentKey={composing ? nativeOrigin?.name ?? draft.id ?? 'new' : null} label={t('tools.mcp.title')} toolbarLabel={t('tools.mcp.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeCompose(); }} onKeyDown={onKey}
       heading={t('tools.mcp.title')}
       count={nativeEntries.length ? (needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })) : undefined}
       actions={<>

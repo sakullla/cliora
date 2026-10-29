@@ -616,7 +616,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     </DocumentFoot>}
   </article>;
 
-  return <DocumentWorkspace label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} onKeyDown={onEditorKey}
+  return <DocumentWorkspace documentKey={adding ? 'new' : selectedId} label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} onKeyDown={onEditorKey}
     heading={needsProject ? undefined : t('tools.workspace.view.skills')}
     count={needsProject || !entries.length ? undefined : t('tools.skills.count', { filtered: visible.length, total: entries.length })}
     actions={needsProject ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}

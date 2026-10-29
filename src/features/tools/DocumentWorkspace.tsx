@@ -34,6 +34,8 @@ export type DocumentWorkspaceProps = {
   list?: ReactNode;
   /** Document column. Null keeps the list, and on a wide page shows `placeholder`. */
   document?: ReactNode | null;
+  /** Identity of the open document. A change starts the new one at the top instead of keeping the old scroll. */
+  documentKey?: string | null;
   placeholder?: ReactNode;
   /** Narrow pages show this above the document. Wide pages hide it. */
   backLabel?: string;
@@ -66,10 +68,17 @@ function storedFocus() {
  * Page height is the content area left after the chrome, so the outer page
  * never scrolls the reader away.
  */
-export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions, search, filters, listFooter, listFooterLabel, notices, list, document, placeholder, backLabel, onBack, onKeyDown }: DocumentWorkspaceProps) {
+export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions, search, filters, listFooter, listFooterLabel, notices, list, document, documentKey, placeholder, backLabel, onBack, onKeyDown }: DocumentWorkspaceProps) {
   const { t } = useTranslation();
   const root = useRef<HTMLElement>(null);
   const split = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
+  // The reader, source editor and details each scroll inside the document pane; rewind all of them.
+  useLayoutEffect(() => {
+    const node = pane.current;
+    if (!node) return;
+    for (const element of [node, ...node.querySelectorAll<HTMLElement>('*')]) if (element.scrollTop) element.scrollTop = 0;
+  }, [documentKey]);
   const [width, setWidth] = useState(storedWidth);
   const [focused, setFocused] = useState(storedFocus);
   const drag = useRef<{ pointer: number; x: number; width: number } | null>(null);
@@ -166,7 +175,7 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
           {listFooter && <div className={styles.listFoot} role="group" aria-label={listFooterLabel}>{listFooter}</div>}
         </div>
         {!single && <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('common.document.resize')} title={t('common.document.resize')} aria-valuemin={minWidth} aria-valuemax={maxWidth} aria-valuenow={width} tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={() => setWidth(defaultWidth)} onKeyDown={onSeparatorKey} />}
-        {!single && <div className={styles.documentPane}>
+        {!single && <div ref={pane} className={styles.documentPane}>
           {document ? <>
             {onBack && <Button variant="ghost" size="sm" className={styles.back} icon={<Icon name="arrowLeft" size={14} />} onClick={onBack}>{backLabel}</Button>}
             <div className={styles.documentBody}>{document}</div>
