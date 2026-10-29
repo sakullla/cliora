@@ -30,7 +30,10 @@ export function stripPlaceSuffix(title: string, places: string[]): string {
 export function railTaskTitle(raw: string, toolName: string, places: string[]): string {
   const title = stripPlaceSuffix(raw, places);
   if (!title || isShellWindowTitle(title)) return '';
-  return title.toLowerCase() === toolName.trim().toLowerCase() ? '' : title;
+  const lower = title.toLowerCase();
+  // Many CLIs title the window with the folder name, which the rail and header already show.
+  if (places.some((place) => baseName(place.trim()).toLowerCase() === lower)) return '';
+  return lower === toolName.trim().toLowerCase() ? '' : title;
 }
 
 /** Short folder label for the rail: the project name, or the directory's last segment. */

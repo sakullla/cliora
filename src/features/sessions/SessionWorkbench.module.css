@@ -523,8 +523,6 @@
 }
 .stageLead { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .stageTail { display: flex; flex: none; align-items: center; gap: var(--space-2); min-width: 0; }
-.stageLead .focusBtn[data-variant] { flex: none; color: var(--term-text-3); }
-.stageLead .focusBtn[aria-pressed='true'][data-variant] { background: var(--accent-soft); color: var(--term-accent); }
 .stageIcon {
   position: relative;
   display: grid;
@@ -616,6 +614,7 @@
 .terminalActions .composerTrigger[aria-pressed='true'][data-variant]:hover:not(:disabled) { background: var(--term-accent); color: var(--term-on-accent); }
 .terminalActions .reattachBtn[data-variant] { gap: var(--space-1); padding: 0 var(--space-2); }
 .toolLabel { color: inherit; font-size: var(--fs-micro); font-weight: var(--fw-semibold); white-space: nowrap; }
+.terminalActions .interruptBtn[data-variant] { gap: var(--space-1); padding: 0 var(--space-2); }
 .terminalActions .interruptBtn[data-variant]:hover:not(:disabled) { background: var(--danger-soft); color: var(--term-danger); }
 .toolButton:focus-visible,
 .iconBtn:focus-visible,
@@ -957,7 +956,6 @@
 }
 .statusItem,
 .statusPath { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); min-width: 0; white-space: nowrap; }
-.statusBar .statusState { flex: none; }
 .statusBar .statusBadge { flex: none; font-size: var(--fs-micro); }
 .statusItem[data-mono] { font-variant-numeric: tabular-nums; }
 
@@ -972,11 +970,6 @@
 .statusGit > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 10.5px; }
 .statusWorktree { flex: none; padding: 0 var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-pill); font-size: 10px; line-height: 15px; }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
-.footerDot { width: 10px; height: 10px; color: var(--term-text-3); }
-.footerDot[data-tone='live'],
-.footerDot[data-tone='idle'] { color: var(--term-success); }
-.footerDot[data-tone='bell'] { color: var(--term-warning); }
-.footerDot[data-tone='error'] { color: var(--term-danger); }
 .statusBar .statusButton[data-size] { flex: none; min-height: 0; height: calc(var(--control-h-sm) - var(--space-1_5)); padding: 0 var(--space-2); color: var(--term-text-3); font-size: var(--fs-micro); }
 .statusBar .statusButton[aria-expanded='true'][data-variant] { background: var(--term-hover); color: var(--term-fg); }
 
@@ -1253,6 +1246,8 @@
 .root[data-narrow] .toolButton[data-tool='split'] { display: none; }
 .root[data-narrow] .composerTrigger[data-size] { width: var(--control-h-sm); padding: 0; }
 .root[data-narrow] .composerTrigger .toolLabel { display: none; }
+.root[data-narrow] .interruptBtn[data-size] { width: var(--control-h-sm); padding: 0; }
+.root[data-narrow] .interruptBtn .toolLabel { display: none; }
 
 .root[data-narrow] .empty { padding: var(--space-6) var(--space-5) var(--space-8); }
 .root[data-narrow] .recentsGrid { grid-template-columns: minmax(0, 1fr); }
@@ -1261,7 +1256,6 @@
 .root[data-tight] .stageBar { gap: var(--space-2); padding: var(--space-2) var(--space-2_5); }
 .root[data-tight] .stageLead { gap: var(--space-1_5); }
 .root[data-tight] .stageIcon { display: none; }
-.root[data-tight] .focusBtn[data-size] { width: 28px; }
 .root[data-tight] .stageTail { gap: var(--space-1_5); }
 .root[data-tight] .composerTrigger[data-size] { width: var(--control-h-sm); padding: 0; }
 .root[data-tight] .composerTrigger .toolLabel { display: none; }
@@ -1273,12 +1267,11 @@
 .root[data-compact] .stageBar { min-height: 52px; gap: var(--space-1_5); padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-1_5); }
 .root[data-compact] .stageLead { gap: var(--space-1_5); }
 .root[data-compact] .stageIcon { display: none; }
-.root[data-compact] .focusBtn[data-size] { width: 28px; height: 28px; min-height: 0; }
 .root[data-compact] .identityTitleRow > h2 { font-size: var(--fs-control); }
 .root[data-compact] .identitySub { gap: var(--space-2); }
 .root[data-compact] .identityTool,
 .root[data-compact] .sessionElapsed,
-.root[data-compact] .statusChip,
+.root[data-compact] .statusChip .statusLabel,
 .root[data-compact] .endedDetail,
 .root[data-compact] .composerPlace,
 .root[data-compact] .composerPromptLabel,
