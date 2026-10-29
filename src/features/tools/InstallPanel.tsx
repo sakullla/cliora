@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ExternalLink } from '../../components/ExternalLink';
 import { Badge, Button } from '../../components/ui';
 import { Icon } from '../../components/Icon';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import type { ToolProbe } from '../../types/native';
@@ -73,8 +73,10 @@ function compareVersions(current: string, latest: string) {
   return 0;
 }
 
-export function InstallPanel({ toolName, heading, probe, customPath, busy, loading, onCustomPath, onSavePath, onMaintain, onUsePath }: {
+export function InstallPanel({ toolName, heading, probe, customPath, busy, loading, collapsed = false, onCustomPath, onSavePath, onMaintain, onUsePath }: {
   toolName: string;
+  /** Keeps the panel to its one-line summary (the page shows another task); closes it if open. */
+  collapsed?: boolean;
   /** The CLI header (h2) shown in the summary in place of the plain name. */
   heading?: ReactNode;
   probe: Omit<ToolProbe, 'tool'> & { tool: string };
@@ -115,7 +117,9 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
   const updateLabel = multiple ? (selected && isNative(selected.source) ? t('tools.install.updateNative') : t('tools.install.updateNpm')) : t('tools.install.update');
   // 未安装时默认展开检测面板；仅取初始值，用户折叠或安装成功后不再强制。
-  const [startOpen] = useState(!selected);
+  const [startOpen] = useState(!selected && !collapsed);
+  const panel = useRef<HTMLDetailsElement>(null);
+  useEffect(() => { if (collapsed && panel.current?.open) panel.current.open = false; }, [collapsed]);
   const latestNote = behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t(latest.state === 'unsupported' ? 'tools.install.unsupportedVersion' : 'tools.install.unavailable');
   const summary = !selected
     ? t('tools.install.notInstalled')
@@ -126,7 +130,7 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
         : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
   const target = latest.state === 'ready' ? latest.version : undefined;
   const canUpdate = Boolean(selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported'));
-  return <details className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
+  return <details ref={panel} className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
     <summary>
       {heading ?? <strong>{toolName}</strong>}
       {selected && <Badge className={styles.installSourceBadge} tone={behind ? 'warning' : probe.nativeWrites.state === 'supported' ? 'success' : 'neutral'} dot>{sourceLabel(selected.source)}</Badge>}

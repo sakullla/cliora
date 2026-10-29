@@ -190,20 +190,23 @@ div > .feedback { margin-bottom: var(--space-3); }
 .pathCustomRow input { flex: 1 1 220px; min-width: 0; font-family: var(--font-mono); }
 .pathCustomRow button { min-height: var(--control-h); }
 
-/* ---------- Profile list: separate cards, not one spreadsheet ---------- */
+/* ---------- Profile list: one framed board, like the MCP / Skill / Agents / 插件 tabs ----------
+   The header carries the title and actions; rows are divided by lines inside the board
+   instead of floating as separate cards on the page background. */
 .profileList {
-  display: grid;
-  gap: var(--space-2_5);
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
-.listHeading { padding: 0 var(--space-0_5); }
-.profileCards { display: grid; gap: var(--space-3); min-width: 0; }
-.profileGroup { display: grid; gap: var(--space-1_5); min-width: 0; }
+.listHeading { flex: none; padding: var(--space-2_5) var(--space-3) var(--space-2_5) var(--space-4); border-bottom: 1px solid var(--line); }
+.boardBody { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.profileCards { display: grid; gap: 0; min-width: 0; }
+.profileGroup { display: grid; gap: 0; min-width: 0; }
 .profileRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -212,10 +215,11 @@ div > .feedback { margin-bottom: var(--space-3); }
   min-width: 0;
   min-height: 0;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  transition: background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) both;
 }
 .profileHead {
@@ -225,36 +229,33 @@ div > .feedback { margin-bottom: var(--space-3); }
   gap: var(--space-2) var(--space-3);
   min-width: 0;
   min-height: var(--row-h);
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
 }
-.profileRow:not(:has(> section:not([data-empty="true"]))) > .profileHead { border-radius: var(--radius-lg); }
 .profileRow > section { grid-column: 1 / -1; min-width: 0; }
 .groupLabel {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
-  padding: var(--space-0_5) var(--space-0_5) 0;
-  border-top: 0;
-  background: transparent;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
 }
-.profileGroup + .profileGroup > .groupLabel { margin-top: var(--space-0_5); padding-top: var(--space-0_5); }
 .groupLabel > strong { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: 0; }
 .groupLabel > small { overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
-.profileHead:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
-.profileRow[data-active="true"] { border-color: var(--accent-line); box-shadow: inset 3px 0 0 var(--accent); }
-.profileRow[data-active="true"] > .profileHead,
-.profileRow[data-active="true"] > .profileHead:hover { background: color-mix(in srgb, var(--accent-soft) 78%, var(--surface)); }
+.profileRow:hover { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.profileRow[data-active="true"],
+.profileRow[data-active="true"]:hover { background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
 .profileRow > span:not(.profileActions),
 .profileHead > .profileMain { display: grid; gap: var(--space-0_5); min-width: 0; justify-items: start; }
 .profileActions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
 .profileState { flex: none; }
-.profileFilter { position: relative; display: flex; align-items: center; gap: var(--space-2_5); padding: 0; border: 0; color: var(--text-3); }
+.profileFilter { position: relative; display: flex; align-items: center; gap: var(--space-2_5); padding: var(--space-2_5) var(--space-4); border-bottom: 1px solid var(--line); color: var(--text-3); }
 .profileFilter > :global(.search-field) { flex: 1; min-width: 0; }
 .profileFilter input { flex: 1; width: 100%; min-width: 0; }
 .profileFilter > span { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 .profileScroll { max-height: none; overflow: visible; }
-.profileEmpty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-3); margin: 0; padding: var(--space-1) var(--space-0_5) var(--space-2); border: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
+.profileEmpty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-3); margin: 0; padding: var(--space-4); border: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
 .profileEmpty > strong { flex-basis: 100%; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .profileEmpty > span { flex: 1 1 260px; min-width: 0; }
 .profileEmpty > button { flex: none; }
@@ -295,13 +296,12 @@ div > .feedback { margin-bottom: var(--space-3); }
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2) var(--space-3);
-  min-height: var(--row-h);
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 72%, var(--surface-2));
+  min-height: 44px;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface));
   box-shadow: none;
 }
-.profileRow[data-kind="native"]:hover { background: var(--surface); }
+.profileRow[data-kind="native"]:hover { background: color-mix(in srgb, var(--surface-2) 75%, var(--surface)); }
 .profileRow[data-kind="native"] > span { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-0_5) var(--space-3); }
 .profileRow[data-kind="native"] .profileName { width: auto; font-size: var(--fs-body); }
 .profileRow[data-kind="native"] small { flex: 1 1 160px; color: var(--text-3); font-size: var(--fs-caption); }
@@ -321,7 +321,7 @@ div > .feedback { margin-bottom: var(--space-3); }
 .profileRow > section:not([data-empty="true"]) {
   /* The quota panel declares width:100%; with side margins that overflows the card. */
   width: auto;
-  margin: 0 var(--space-2) var(--space-2) var(--space-4);
+  margin: 0 var(--space-3) var(--space-3) var(--space-4);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);

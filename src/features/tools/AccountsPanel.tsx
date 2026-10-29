@@ -5,6 +5,7 @@ import { uiAdapterFor } from '../../adapters';
 import { confirmAction } from '../../lib/confirm';
 import { EmptyState } from '../../components/EmptyState';
 import type { AccountCapability, AccountImpact, AccountImpactContextKind, AccountImpactScope, AuthAccount, NativeLoginSnapshot } from '../../types/accounts';
+import { useFillHeight } from '../../lib/fillHeight';
 import styles from './ManagementPanel.module.css';
 import accountStyles from './AccountsPanel.module.css';
 import i18n from '../../i18n';
@@ -193,9 +194,12 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     if (nativeAvailable && !remote) void discover();
     return () => { discoverySequence.current++; };
   }, [toolId, remote]);
+  const board = useRef<HTMLElement>(null);
+  useFillHeight(board, 'minHeight');
   async function run(work: () => Promise<unknown>, notice: string) { setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) setMessage(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
-  return <section className={styles.panel} aria-label={t('tools.accounts.label')}>
+  return <section ref={board} className={styles.panel} aria-label={t('tools.accounts.label')}>
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && !remote && <Button variant={creating ? 'secondary' : 'primary'} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</Button>}</div>
+    <div className={styles.body}>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
     <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><Button variant="ghost" size="sm" disabled={remote || nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</Button></div>
       {nativeLoading && !nativeLogins && <div className={accountStyles.nativeLoading} role="status" aria-label={t('tools.accounts.nativeLoading')}><NativeLoginSkeleton /></div>}
@@ -253,5 +257,6 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       </details>
     </li>)}</ul>
     {state.capability && <details className={styles.compatibility}><summary>{t('tools.accounts.compatibility')}</summary><p>{state.capability.reason}</p></details>}
+    </div>
   </section>;
 }
