@@ -17,6 +17,7 @@ import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
 import { SkillDistribution } from './SkillDistribution';
+import { SkillManifestView, isSkillManifest } from '../tools/SkillManifestView';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -280,6 +281,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
         return <Card className={styles.card} interactive key={item.id}>
           <div className={styles.cardHead}>
             <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+            {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
             <Badge>{t('tools.skills.fileCount', { count: item.fileCount })}</Badge>
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
@@ -322,6 +324,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
         {pendingImport && <section className={styles.skillSection} role="group" aria-label={t('tools.skills.importLabel')}>
           <h3>{t('library.resources.existingTitle', { name: pendingImport.preview.name })}</h3>
           <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
+          {isSkillManifest(pendingImport.preview.manifest) && <SkillManifestView manifest={pendingImport.preview.manifest} directory={pendingImport.preview.name} />}
           <div className={styles.actions}><Button onClick={() => setPendingImport(null)}>{t('library.resources.back')}</Button><Button variant="primary" disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</Button></div>
         </section>}
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}

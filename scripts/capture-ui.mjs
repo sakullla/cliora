@@ -67,6 +67,7 @@ async function mock(initialTheme){
    models:['deepseek-v4.1-flash','devin/swe-2','glm-5.3','gpt-6-astra','gpt-6.1-sol'],untimedRequests:0,duplicateRequests:3,partialSessions:1,staleSessions:0,mixedCurrency:false,latestEventAt:now-120000,priceSources:['codex / gpt-6-astra · OpenAI 公开价'],scans};};
  const definitions=[{id:'mcp-1',name:'filesystem',transport:'stdio',command:'npx',args:['-y','@modelcontextprotocol/server-filesystem','C:/Projects'],url:null,env:{},headers:{},version:1},{id:'mcp-2',name:'github',transport:'http',command:'',args:[],url:'https://api.githubcopilot.com/mcp/',env:{},headers:{Authorization:'Bearer ${GITHUB_TOKEN}'},version:1},{id:'mcp-3',name:'chrome-devtools',transport:'stdio',command:'npx',args:['-y','chrome-devtools-mcp@latest'],url:null,env:{CHROME_PATH:'C:/Program Files/Google/Chrome/Application/chrome.exe'},headers:{},version:1}];
  const mcpPlacements=[{definitionId:'mcp-1',toolId:'codex',scope:'global',projectPath:null,enabled:true},{definitionId:'mcp-1',toolId:'claude_code',scope:'global',projectPath:null,enabled:true},{definitionId:'mcp-2',toolId:'claude_code',scope:'project',projectPath:'C:\\Projects\\cliora',enabled:true},{definitionId:'mcp-3',toolId:'codex',scope:'global',projectPath:null,enabled:false}];
+ const skillPdf='---\nname: pdf-processing\ndescription: 提取 PDF 文本、填写表单并合并文件。处理 PDF 时使用。\nlicense: Apache-2.0\ncompatibility: 需要 Python 3.12 与 poppler\nmetadata:\n  author: example-org\n  version: "1.0"\nallowed-tools: Bash(python:*) Read\n---\n\n# PDF 处理\n\n用 [extract.py](scripts/extract.py) 读取文本，表单字段见 [FORMS.md](references/FORMS.md)。\n';
  const skills=[{id:'skill-1',name:'code-review',description:'检查变更中的正确性、边界条件与可维护性',fileCount:3,digest:'abc',source:'local_directory',version:1}];
  const sync={configured:false,enabled:false,endpoint:null,lastSuccess:null,lastError:null,pendingChanges:0,retryAfter:null,uploaded:0,downloaded:0,conflicts:[]};
  const quotaConfig={schemaVersion:1,label:'GLM Coding Plan · 中国大陆',site:'https://open.bigmodel.cn',identity:{profileId:'codex-work',accountId:null,contextId:null,subject:'plan',subjectId:null},program:{kind:'profile_builtin',provider:'glm',templateVersion:1,profileVersion:1},parameters:{region:'cn'},targets:[{origin:'https://open.bigmodel.cn',allowPrivateNetwork:false}],enabled:true,refreshIntervalSeconds:0};
@@ -127,9 +128,13 @@ async function mock(initialTheme){
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
   if(command==='list_skill_recovery_issues')return [];
   // Directory name is the skill. A mismatched or empty frontmatter name/description stays readable.
-  if(command==='scan_native_skills')return [{name:'code-review',path:'C:/Users/local/.codex/skills/code-review',digest:'abc',state:'managed',detail:'审查代码变更',packageId:'skill-1'},{name:'crud-page',path:'C:/Users/local/.codex/skills/crud-page',digest:'def',state:'external',detail:'',packageId:null},{name:'lark-apps',path:'C:/Users/local/.codex/skills/lark-apps',digest:'ghi',state:'external',detail:'',packageId:null}];
-  if(command==='read_native_skill'){const docs={'C:/Users/local/.codex/skills/code-review':'---\nname: code-review\ndescription: 审查代码变更\n---\n# 代码审查\n\n检查变更中的正确性、边界条件与可维护性。\n','C:/Users/local/.codex/skills/crud-page':'---\nname: other-name\ndescription:\n---\n# page\n','C:/Users/local/.codex/skills/lark-apps':'# just markdown\n'};const content=docs[args.directory];if(content==null)throw '无法读取原生配置';return {name:String(args.directory).split('/').pop(),path:args.directory+'/SKILL.md',content};}
+  if(command==='scan_native_skills')return [{name:'code-review',path:'C:/Users/local/.codex/skills/code-review',digest:'abc',state:'managed',detail:'审查代码变更',packageId:'skill-1',issues:[]},{name:'crud-page',path:'C:/Users/local/.codex/skills/crud-page',digest:'def',state:'external',detail:'',packageId:null,issues:['name_mismatch','description_missing']},{name:'lark-apps',path:'C:/Users/local/.codex/skills/lark-apps',digest:'ghi',state:'external',detail:'',packageId:null,issues:['frontmatter_missing']},{name:'pdf-processing',path:'C:/Users/local/.codex/skills/pdf-processing',digest:null,state:'external',detail:'提取 PDF 文本、填写表单并合并文件。处理 PDF 时使用。',packageId:null,issues:[]}];
+  if(command==='read_native_skill'){const docs={'C:/Users/local/.codex/skills/code-review':'---\nname: code-review\ndescription: 审查代码变更\n---\n# 代码审查\n\n检查变更中的正确性、边界条件与可维护性。\n','C:/Users/local/.codex/skills/crud-page':'---\nname: other-name\ndescription:\n---\n# page\n','C:/Users/local/.codex/skills/lark-apps':'# just markdown\n','C:/Users/local/.codex/skills/pdf-processing':skillPdf};const content=docs[args.directory];if(content==null)throw '无法读取原生配置';return {name:String(args.directory).split('/').pop(),path:args.directory+'/SKILL.md',content};}
   if(command==='save_native_skill')return null;
+  // Synthetic backend reader: fields and issue codes per document; the directory name is the identity.
+  if(command==='analyze_skill_document'){const base={name:null,description:'',license:null,compatibility:null,metadata:[],allowedTools:[],extra:[],bodyLine:0,issues:[]};const text=String(args.content);if(text===skillPdf)return {...base,name:'pdf-processing',description:'提取 PDF 文本、填写表单并合并文件。处理 PDF 时使用。',license:'Apache-2.0',compatibility:'需要 Python 3.12 与 poppler',metadata:[{key:'author',value:'example-org'},{key:'version',value:'1.0'}],allowedTools:['Bash(python:*)','Read'],bodyLine:10};if(!text.startsWith('---'))return {...base,issues:[{code:'frontmatter_missing',limit:null,actual:null}]};const lines=text.split('\n');const end=lines.indexOf('---',1);const field=key=>(lines.slice(1,end).find(line=>line.startsWith(key+':'))||'').slice(key.length+1).trim();const name=field('name')||null;const description=field('description');const issues=[];if(!name)issues.push({code:'name_missing',limit:null,actual:null});else if(name!==args.directoryName)issues.push({code:'name_mismatch',limit:null,actual:null});if(!description)issues.push({code:'description_missing',limit:null,actual:null});return {...base,name,description,bodyLine:end+1,issues};}
+  if(command==='list_native_skill_files')return String(args.directory).endsWith('/pdf-processing')?{truncated:false,files:[{path:'assets/form-template.pdf',size:48213,readable:true,detail:''},{path:'references/FORMS.md',size:2210,readable:true,detail:''},{path:'references/REFERENCE.md',size:5120,readable:true,detail:''},{path:'scripts/extract.py',size:1834,readable:true,detail:''},{path:'scripts/merge.py',size:962,readable:true,detail:''},{path:'shared-notes.md',size:null,readable:false,detail:'符号链接不读取'}]}:{truncated:false,files:[]};
+  if(command==='read_native_skill_file')return args.path==='scripts/extract.py'?{path:args.path,size:1834,digest:'5f2c'.repeat(16),text:'#!/usr/bin/env python3\n# Extract text from every page of a PDF.\nimport sys\nfrom pypdf import PdfReader\n\nfor page in PdfReader(sys.argv[1]).pages:\n    print(page.extract_text())\n'}:{path:args.path,size:48213,digest:'9a1e'.repeat(16),text:null};
   if(command==='get_skill_enabled')return true;
   if(command==='refresh_history')return scans;
   if(command==='list_history_scans')return scans;
@@ -266,6 +271,27 @@ async function captureSkillViews(page,capture){
  await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
  await closeSkill();
  await openSkill('code-review','# 代码审查','skill-reading');
+ await closeSkill();
+ // Specification fields, notes and bundled files in the reading view.
+ await list.getByRole('button',{name:/pdf-processing/}).click();
+ const reading=page.getByRole('region',{name:'SKILL.md 预览'});
+ await reading.getByLabel('SKILL.md 字段').waitFor();
+ await expect(reading.getByRole('list',{name:'allowed-tools'}).getByRole('listitem')).toHaveText(['Bash(python:*)','Read']);
+ await expect(reading.getByText('实验字段')).toBeVisible();
+ const files=reading.getByLabel('附带文件',{exact:true});
+ await files.getByRole('button',{name:/scripts\/extract\.py/}).click();
+ await files.getByRole('group',{name:'附带文件预览：scripts/extract.py'}).locator('pre').waitFor();
+ await capture('skill-manifest');
+ await files.getByRole('button',{name:/assets\/form-template\.pdf/}).click();
+ await expect(files.getByRole('group',{name:'附带文件预览：assets/form-template.pdf'})).toContainText('SHA-256');
+ await files.scrollIntoViewIfNeeded();
+ await capture('skill-attachments');
+ await closeSkill();
+ await list.getByRole('button',{name:/crud-page/}).click();
+ await expect(page.getByRole('region',{name:'SKILL.md 预览'}).getByLabel('规范提示').getByRole('listitem')).toHaveCount(2);
+ await capture('skill-issues');
+ await closeSkill();
+ await openSkill('code-review','# 代码审查');
  await expect(article().getByRole('switch',{name:'启用 Skill'})).toBeVisible();
  await expect(article().getByRole('button',{name:'放进资料库',exact:true})).toHaveCount(0);
  await expect(article().getByRole('button',{name:'保存',exact:true})).toBeVisible();

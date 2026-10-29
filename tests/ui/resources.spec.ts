@@ -124,6 +124,7 @@ async function mockResources(page: Page) {
         if (command === 'get_skill_enabled') return false;
         if (command === 'list_skill_recovery_issues') return [...skillIssues];
         if (command === 'scan_native_skills') return nativeSkills;
+        if (command === 'list_native_skill_files') return { files: [], truncated: false };
         if (command === 'preview_skill_target') return { path: '/tmp/.codex/skills/sample', status: 'conflict', detail: '同名原生 Skills 未受当前包管理', previewToken: 'skill-token', existingDigest: 'old', packageDigest: 'new', changes: [{ path: 'SKILL.md', before: 'old text', after: 'new text', beforeSize: 8, afterSize: 8, beforeDigest: 'old', afterDigest: 'new' }] };
         if (command === 'install_skill') { writes.push(args); return { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: '/tmp/.codex/skills/sample', status: 'installed', detail: '完成' }; }
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
