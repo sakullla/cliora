@@ -44,15 +44,22 @@ export type RulePlacement = { contextId?: string | null; ruleId: string; toolId:
 export type RuleClientSelection = { toolIds: string[]; scope: Scope; projectPath: string | null; allowReplace?: boolean };
 export type RuleSyncResult = { toolId: string; path: string | null; status: 'written' | 'conflict' | 'failed' | 'unchanged'; detail: string; existing: string; proposed: string };
 
-export type SkillPackage = { id: string; name: string; description: string; compatibility: string | null; source: string; digest: string; fileCount: number; updatedAt: number; inLibrary: boolean };
+/** Agent Skills specification issue codes reported by the backend reader. Display only; never blocking. */
+export type SkillIssueCode = 'frontmatter_missing' | 'yaml_invalid' | 'name_missing' | 'name_invalid' | 'name_mismatch' | 'description_missing' | 'description_too_long' | 'compatibility_empty' | 'compatibility_too_long' | 'metadata_invalid' | 'too_many_lines';
+export type SkillIssue = { code: SkillIssueCode; limit: number | null; actual: number | null };
+export type SkillManifestField = { key: string; value: string };
+/** SKILL.md read by `analyze_skill_document`; `bodyLine` is the zero-based line where Markdown starts (lines split on \n). */
+export type SkillManifest = { name: string | null; description: string; license: string | null; compatibility: string | null; metadata: SkillManifestField[]; allowedTools: string[]; extra: SkillManifestField[]; bodyLine: number; issues: SkillIssue[] };
+// `issues` is absent on remote stores saved before the field existed; treat as empty.
+export type SkillPackage = { id: string; name: string; description: string; compatibility: string | null; source: string; digest: string; fileCount: number; updatedAt: number; inLibrary: boolean; issues?: SkillIssueCode[] };
 export type SkillFileChange = { path: string; before: string | null; after: string | null; beforeSize: number | null; afterSize: number | null; beforeDigest: string | null; afterDigest: string | null };
-export type SkillImportPreview = { name: string; source: string; digest: string; fileCount: number; compatibility: string | null; existingDigest: string | null; changedFiles: string[]; changes: SkillFileChange[] };
+export type SkillImportPreview = { name: string; source: string; digest: string; fileCount: number; compatibility: string | null; manifest?: SkillManifest; existingDigest: string | null; changedFiles: string[]; changes: SkillFileChange[] };
 export type SkillInstallation = { contextId?: string | null; packageId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; digest: string; state: 'current' | 'update_available' | 'missing' | 'conflict' | 'unavailable' | 'disabled' };
 export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'installed' | 'removed' | 'already_current' | 'failed'; detail: string };
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 // digest is null for document-only inventory (unmanaged/read-only directories),
 // as well as failed package reads. Use state to determine readability.
-export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[] };
 export type NativeSkillDocument = { name: string; path: string; content: string };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
