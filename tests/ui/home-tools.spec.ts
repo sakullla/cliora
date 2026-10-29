@@ -1043,7 +1043,8 @@ test('workbench launch opens the page, external and desktop launches do not, and
   const stage = page.getByRole('region', { name: '当前会话' });
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('示例项目');
-  await expect(stage).toContainText('普通');
+  // Normal mode is the quiet default: the title bar only calls out YOLO.
+  await expect(stage.getByText('YOLO', { exact: true })).toHaveCount(0);
   await expect(page.getByText('已向外部终端')).toHaveCount(0);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
   await setMode('external');

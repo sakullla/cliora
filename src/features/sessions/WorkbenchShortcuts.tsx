@@ -34,6 +34,7 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
       { keys: [['Alt', '↑'], ['Alt', '↓']], label: t('sessions.shortcutSwitch') },
       { keys: [['Ctrl', 'Tab']], label: t('sessions.kbCycle') },
       { keys: [[modLabel, 'Shift', 'D']], label: t('sessions.splitView') },
+      { keys: [[modLabel, 'Shift', 'B']], label: t('sessions.kbToggleRail') },
     ] },
     { title: t('sessions.kbGroupTerminal'), items: [
       { keys: [[modLabel, 'Shift', 'F']], label: t('sessions.findOutput') },
@@ -48,6 +49,11 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
       { keys: [[modLabel, '+'], [modLabel, '−']], label: t('sessions.kbZoom') },
       { keys: [[modLabel, '0']], label: t('sessions.kbZoomReset') },
     ] },
+    { title: t('sessions.kbGroupMouse'), items: [
+      { keys: [[t('sessions.kbDoubleClick'), t('sessions.kbIconTarget')]], label: t('sessions.kbToggleRail') },
+      { keys: [[t('sessions.kbDoubleClick'), t('sessions.kbTitleTarget')]], label: t('sessions.focusMode') },
+      { keys: [[t('sessions.kbMiddleClick'), t('sessions.kbRowTarget')]], label: t('sessions.kbCloseSession') },
+    ] },
   ];
 
   return <div className={styles.shortcuts} ref={root}>
@@ -57,7 +63,7 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
       <div className={styles.shortcutsBody}>
         {groups.map((group) => <section key={group.title} className={styles.shortcutsGroup}>
           <h3>{group.title}</h3>
-          <dl>{group.items.map((item) => <div key={item.label} className={styles.shortcutRow}>
+          <dl>{group.items.map((item) => <div key={group.title + item.label} className={styles.shortcutRow}>
             <dt>{item.label}</dt>
             <dd>{item.keys.map((combo, index) => <span key={index} className={styles.keyCombo}>{index > 0 && <span className={styles.keyOr}>/</span>}{combo.map((key) => <kbd key={key}>{key}</kbd>)}</span>)}</dd>
           </div>)}</dl>

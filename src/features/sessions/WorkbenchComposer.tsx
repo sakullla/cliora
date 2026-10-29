@@ -39,6 +39,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
       <div className={styles.composerHead}>
         <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={14} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>{place}</span></span>
         <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} prompts={prompts} onPick={(prompt) => { onChange(draft ? draft + '\n' + prompt.body : prompt.body); inputRef.current?.focus(); }} />
+        {lines > 1 && <span className={styles.composerLines}>{t('sessions.composerLines', { count: lines })}</span>}
         <IconButton size="sm" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose} icon={<Icon name="close" size={14} />} />
       </div>
       <div className={styles.composerInputRow}>
@@ -52,11 +53,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
             onClose();
           }
         }} />
-        <Button variant="primary" className={styles.sendBtn} aria-label={t('sessions.sendInput')} title={t('sessions.sendInput') + ' (Enter)'} onClick={onSubmit} icon={<Icon name="arrowUp" size={16} />}><span className={styles.sendLabel}>{t('sessions.sendInput')}</span></Button>
-      </div>
-      <div className={styles.composerFoot}>
-        <span className={styles.composerHint}><kbd>Enter</kbd>{t('sessions.composerSend')}<kbd>Shift</kbd><kbd>Enter</kbd>{t('sessions.composerNewline')}<kbd>Esc</kbd>{t('sessions.composerCollapse')}</span>
-        <span className={styles.composerDraftBadge}>{lines > 1 ? t('sessions.composerLines', { count: lines }) : t('sessions.composerDraftHint')}</span>
+        <Button variant="primary" className={styles.sendBtn} aria-label={t('sessions.sendInput')} title={t('sessions.composerHint')} onClick={onSubmit} icon={<Icon name="arrowUp" size={16} />}><span className={styles.sendLabel}>{t('sessions.sendInput')}</span></Button>
       </div>
     </div>
   </section>;
