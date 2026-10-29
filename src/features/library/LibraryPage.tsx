@@ -16,7 +16,8 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon, type IconName } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
-import { shortPath } from '../../lib/paths';
+import { displayPath, shortPath } from '../../lib/paths';
+import { open } from '@tauri-apps/plugin-dialog';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
@@ -107,7 +108,9 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [rulePlacements, setRulePlacements] = useState<RulePlacement[]>([]);
   const [launchItem, setLaunchItem] = useState<LibraryItem | null>(null);
   const [launchTool, setLaunchTool] = useState('');
-  const [launchProject, setLaunchProject] = useState('');
+  // Same choices as the workbench's new-session dialog: `__home`, `project:<id>` or `custom:<path>`.
+  const [launchPlace, setLaunchPlace] = useState('__home');
+  const [launchFolder, setLaunchFolder] = useState('');
   const [launchText, setLaunchText] = useState('');
   const [launchError, setLaunchError] = useState('');
   const [launchBusy, setLaunchBusy] = useState(false);
@@ -312,12 +315,16 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
-    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(scopedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
+    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(scopedTools[0]?.id ?? ''); setLaunchPlace(item.projectId && projects.some((project) => project.id === item.projectId && project.available) ? `project:${item.projectId}` : '__home'); setLaunchError('');
   }
   async function startSession() {
     if (!launchItem || !launchTool || launchBusy) return;
     setLaunchBusy(true); setLaunchError('');
-    const request = { toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal' as const, initialPrompt: launchText };
+    const desktop = scopedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
+    const projectId = launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null;
+    // Desktop apps open without a directory, as on the home page.
+    const directory = !desktop && launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null;
+    const request = { toolId: launchTool, projectId, sessionId: null, mode: 'normal' as const, directory, initialPrompt: launchText };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
@@ -325,7 +332,6 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       if (opened) { onWorkbenchSession?.(opened); return; }
       showNotice(t('library.page.sessionStarted'));
     } catch (value) {
-      const desktop = scopedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
       if (await failedInWorkbench(desktop)) {
         setLaunchItem(null);
         onWorkbenchFailure?.({ detail: formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext')), retry: { kind: 'launch', request } });
@@ -335,6 +341,17 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     }
     finally { setLaunchBusy(false); }
   }
+  async function pickLaunchFolder() {
+    try {
+      const picked = await open({ directory: true, multiple: false, title: t('sessions.pickFolder') });
+      if (typeof picked === 'string' && picked.trim()) { setLaunchFolder(picked.trim()); setLaunchPlace(`custom:${picked.trim()}`); }
+    } catch { /* Folder dialog cancellation needs no feedback. */ }
+  }
+  const launchPlaces = [
+    { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
+    ...projects.filter((project) => project.available).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
+    ...(launchFolder ? [{ value: `custom:${launchFolder}`, label: shortPath(displayPath(launchFolder)), detail: displayPath(launchFolder), icon: <Icon name="folder" size={14} /> }] : []),
+  ];
   async function remove() {
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
     setBusy(true); clearDialogResult();
@@ -464,7 +481,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         {launchError && <div className={styles.error} role="alert">{launchError}</div>}
         <div className={styles.fields}>
           <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
-          <label>{t('library.page.launchProjectLabel')}<FilterSelect label={t('library.page.launchProject')} value={launchProject} options={[{ value: '', label: t('library.page.noProject') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={setLaunchProject} /></label>
+          <label>{t('sessions.pickWorkspaceLabel')}<FilterSelect label={t('sessions.pickWorkspaceLabel')} value={launchPlace} options={launchPlaces} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickLaunchFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={setLaunchPlace} /></label>
         </div>
         <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
         <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>{t('library.page.launchSubmit')}</Button></div>

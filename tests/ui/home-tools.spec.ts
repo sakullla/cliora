@@ -1096,6 +1096,7 @@ test('a library prompt opens in the workbench with its initial text', async ({ p
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'replay_workbench_session') return btoa('prompt-ready');
           if (command === 'resize_workbench_session') return null;
+          if (command === 'plugin:dialog|open') return 'C:/sample/folder';
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
           return null;
         },
@@ -1106,8 +1107,14 @@ test('a library prompt opens in the workbench with its initial text', async ({ p
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
   await page.getByRole('button', { name: '启动会话', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '用这条提示词启动' });
+  // The same working-directory picker as the workbench's new-session dialog.
+  const place = dialog.getByRole('button', { name: '工作目录 / 项目' });
+  await expect(place).toHaveText('默认主目录');
+  await place.click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  await expect(place).toContainText('folder');
   await dialog.getByRole('button', { name: '在外部终端启动' }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __promptLaunches: Array<{ initialPrompt?: string }> }).__promptLaunches.map((item) => item.initialPrompt))).toEqual(['请先阅读 diff']);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __promptLaunches: Array<{ initialPrompt?: string; directory?: string | null; projectId: string | null }> }).__promptLaunches.map((item) => [item.initialPrompt, item.directory, item.projectId]))).toEqual([['请先阅读 diff', 'C:/sample/folder', null]]);
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
   await expect(page.getByText('已请求外部终端启动会话')).toHaveCount(0);

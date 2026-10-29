@@ -102,7 +102,7 @@ export default {
     bodyRulePlaceholder: 'Write a rule to save or apply to CLIs…',
     dirtyState: 'Draft unsaved',
     launchTitle: 'Launch with this prompt',
-    launchHint: 'Choose a CLI and a project. The prompt is sent as the first message; you can edit it before launching.',
+    launchHint: 'Choose a CLI and a working directory. The prompt is sent as the first message; you can edit it before launching.',
     launchCli: 'Launch CLI',
     noCli: 'No launchable CLI yet',
     searchCli: 'Search CLIs',
