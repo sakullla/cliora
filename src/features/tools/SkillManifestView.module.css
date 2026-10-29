@@ -1,0 +1,39 @@
+.manifest { display: grid; gap: var(--space-4); min-width: 0; }
+
+.issues { display: grid; gap: var(--space-1_5); min-width: 0; padding: var(--space-2_5) var(--space-4); border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--text); font-size: var(--fs-caption); line-height: 1.55; }
+.issues > strong { display: flex; align-items: center; gap: var(--space-1_5); font-weight: var(--fw-semibold); }
+.issues > strong > svg { flex: none; color: var(--warning); }
+.issues ul { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-5); overflow-wrap: anywhere; }
+
+.toolsKey { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
+.tools { display: flex; flex-wrap: wrap; gap: var(--space-1_5); margin: 0; padding: 0; list-style: none; }
+.tools li { padding: 0 var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface); overflow-wrap: anywhere; }
+
+.long { min-width: 0; }
+.long > summary { cursor: pointer; }
+.long > summary::-webkit-details-marker { display: none; }
+.long > summary { list-style: none; }
+.more, .less { margin-left: var(--space-1_5); color: var(--accent); font-family: var(--font-sans); }
+.less { display: none; }
+.long[open] .preview, .long[open] .more { display: none; }
+.long[open] .less { display: inline; margin-left: 0; }
+.full { display: block; margin-top: var(--space-1); white-space: pre-wrap; }
+
+/* Attachment list and read-only preview in the SKILL.md reading view. */
+.attachments { display: grid; gap: var(--space-2_5); min-width: 0; }
+.filesNote { margin: 0; color: var(--text-2); font-size: var(--fs-caption); }
+.fileGroup { display: grid; gap: var(--space-1); min-width: 0; }
+.fileGroup > strong { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.fileGroup ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
+.fileRow { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); width: 100%; min-width: 0; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: var(--fs-caption); text-align: left; }
+button.fileRow { cursor: pointer; }
+button.fileRow:hover { background: var(--surface-2); }
+button.fileRow[aria-pressed="true"] { background: var(--accent-soft); }
+.fileRow > span { min-width: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.fileRow > small { flex: none; color: var(--text-3); }
+.fileRow[data-readable="false"] > small { flex: 0 1 auto; color: var(--warning); text-align: right; }
+.filePreview { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.filePreviewHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; font-size: var(--fs-caption); }
+.filePreviewHead > code { min-width: 0; overflow-wrap: anywhere; }
+.filePreview pre { max-height: 24rem; margin: 0; overflow: auto; font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.filePreview small { color: var(--text-2); overflow-wrap: anywhere; }

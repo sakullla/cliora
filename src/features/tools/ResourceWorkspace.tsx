@@ -1,10 +1,12 @@
 import { CodeEditor } from '../../components/CodeEditor';
 import { open } from '@tauri-apps/plugin-dialog';
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import type { Scope } from '../../types/native';
-import type { NativeSkillEntry, SkillFileChange, SkillImportPreview, SkillInstallation, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
+import type { NativeSkillEntry, SkillFileChange, SkillFileListing, SkillFilePreview, SkillImportPreview, SkillInstallation, SkillManifest, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
+import { SkillManifestView, isSkillManifest, skillBody } from './SkillManifestView';
+import manifestStyles from './SkillManifestView.module.css';
 import { displayPath } from '../../lib/paths';
 import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, PathLine, Toggle, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import { DocumentReader } from './DocumentReader';
@@ -21,6 +23,15 @@ import { samePath } from '../library/CliMarks';
 import styles from './ResourceWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
+
+const MarkdownView = lazy(() => import('../../components/MarkdownView'));
+
+/** Attachment groups in the reading view, by the first path segment. */
+const FILE_GROUPS = ['scripts', 'references', 'assets'] as const;
+function fileGroup(path: string) {
+  const head = path.split('/')[0];
+  return path.includes('/') && (FILE_GROUPS as readonly string[]).includes(head) ? head : 'other';
+}
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -103,6 +114,10 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const [load, setLoad] = useState<LoadFilter>('all');
   const [enabledByPackage, setEnabledByPackage] = useState<Record<string, boolean>>({});
   const [retained, setRetained] = useState<NativeSkillEntry[]>([]);
+  // Backend reading of the text on screen; `manifest` is null when the reader is unavailable.
+  const [manifestState, setManifestState] = useState<{ text: string; name: string; manifest: SkillManifest | null } | null>(null);
+  const [attachments, setAttachments] = useState<{ path: string; listing: SkillFileListing | null; error: string } | null>(null);
+  const [attachmentPreview, setAttachmentPreview] = useState<{ path: string; preview: SkillFilePreview | null; error: string } | null>(null);
   const skillRequest = useRef(0);
   const skillDirty = !!skillDoc && skillDoc.draft !== skillDoc.baseline;
   const formDirty = !!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty;
@@ -299,6 +314,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setSelectedId(null);
     setPendingTarget(null);
     setUrl('');
+    setAttachments(null);
+    setAttachmentPreview(null);
   }
   async function confirmLeave() {
     if (!formDirtyRef.current) return true;
@@ -322,16 +339,41 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setPendingImport(null);
     setPendingTarget(null);
     setUrl('');
+    setAttachments(null);
+    setAttachmentPreview(null);
     try {
       const document = remoteTargetId
         ? { content: ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { documents?: Record<string, string> }).documents ?? {})[entry.path] ?? '' }
         : await native.readNativeSkill(toolId, scope, project, entry.path);
       if (skillRequest.current !== request) return;
       setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content });
+      // Remote hosts only carry SKILL.md documents; attachments are local only.
+      if (!remoteTargetId) void loadAttachments(entry.path, request);
     } catch (value) {
       if (skillRequest.current === request) setError(errorText(value));
     } finally {
       if (skillRequest.current === request) setSkillLoading(false);
+    }
+  }
+  async function loadAttachments(path: string, request: number) {
+    try {
+      const listing = await native.listNativeSkillFiles(toolId, scope, project, path);
+      if (skillRequest.current !== request) return;
+      setAttachments({ path, listing: listing && Array.isArray(listing.files) ? listing : null, error: '' });
+    } catch (value) {
+      if (skillRequest.current === request) setAttachments({ path, listing: null, error: errorText(value) });
+    }
+  }
+  async function openAttachment(file: string) {
+    if (!attachments || attachmentPreview?.path === file) return;
+    const request = skillRequest.current;
+    const directory = attachments.path;
+    setAttachmentPreview({ path: file, preview: null, error: '' });
+    try {
+      const preview = await native.readNativeSkillFile(toolId, scope, project, directory, file);
+      if (skillRequest.current === request) setAttachmentPreview(current => current?.path === file ? { path: file, preview, error: '' } : current);
+    } catch (value) {
+      if (skillRequest.current === request) setAttachmentPreview(current => current?.path === file ? { path: file, preview: null, error: errorText(value) } : current);
     }
   }
   // A jump from a plugin's contents opens that skill once the native list has it.
@@ -351,7 +393,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     try {
       if (remoteTargetId) {
         const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
-        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'skills', { entries: current.entries ?? [], documents: { ...(current.documents ?? {}), [saved.path]: saved.draft } });
+        // The cached store keeps each entry's issues; recompute them for the saved text.
+        const savedEntry = (current.entries ?? []).find(item => item.path === saved.path);
+        const manifest = savedEntry ? await native.analyzeSkillDocument(savedEntry.name, saved.draft).catch(() => null) : null;
+        const entries = (current.entries ?? []).map(item => item === savedEntry && isSkillManifest(manifest) ? { ...item, issues: manifest.issues.map(issue => issue.code) } : item);
+        await native.saveRemoteResourceStore(remoteTargetId, toolId, 'skills', { entries, documents: { ...(current.documents ?? {}), [saved.path]: saved.draft } });
       } else {
         await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
       }
@@ -476,6 +522,17 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   });
   const filtering = needle.length > 0 || source !== 'all' || load !== 'all';
   const docTitle = openedEntry?.name ?? selected?.name ?? t('tools.skills.currentTitle');
+  const skillName = subject?.name ?? selected?.name ?? '';
+  const readingDraft = skillDoc && mode === 'read' ? skillDoc.draft : null;
+  useEffect(() => {
+    if (readingDraft === null) return;
+    if (manifestState && manifestState.text === readingDraft && manifestState.name === skillName) return;
+    let live = true;
+    void native.analyzeSkillDocument(skillName, readingDraft)
+      .then(value => { if (live) setManifestState({ text: readingDraft, name: skillName, manifest: isSkillManifest(value) ? value : null }); })
+      .catch(() => { if (live) setManifestState({ text: readingDraft, name: skillName, manifest: null }); });
+    return () => { live = false; };
+  }, [readingDraft, skillName]);
   const skillPath = subject?.path || skillDoc?.path || '';
   const showLibrary = !!external && origin !== 'plugin';
   const showRemove = !!selected && !!installed && origin !== 'plugin';
@@ -539,6 +596,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         <Badge tone={tone}>{skillBadge(item)}</Badge>
         {entryOrigin === 'plugin' && <Badge>{t('tools.skills.sourcePlugin')}</Badge>}
         {entryOrigin === 'plugin' && item.pluginName && <span className={doc.rowNote}>{item.pluginName}</span>}
+        {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
       </span>
     </button>;
   }
@@ -547,7 +605,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     <strong>{t('tools.skills.importTitle', { name: pendingImport.preview.name })}</strong>
     <p>{pendingImport.installAfter ? t('tools.skills.importInstallNote') : t('tools.skills.importLibraryNote')}</p>
     <p>{t('tools.skills.importSource', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount })}</p>
-    {pendingImport.preview.compatibility && <p>{t('tools.skills.importCompat', { requirement: pendingImport.preview.compatibility })}</p>}
+    {isSkillManifest(pendingImport.preview.manifest)
+      ? <SkillManifestView manifest={pendingImport.preview.manifest} directory={pendingImport.preview.name} />
+      : pendingImport.preview.compatibility && <p>{t('tools.skills.importCompat', { requirement: pendingImport.preview.compatibility })}</p>}
     <p>{t('tools.skills.importChangesNote')}</p>
     {pendingImport.preview.changes.map(file => filePair(file, t('tools.skills.importAfterLabel')))}
     <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('tools.skills.importCancel')}</button><Button variant="primary" disabled={busy} onClick={() => void confirmImport()}>{pendingImport.installAfter ? t('tools.skills.importConfirmInstall') : t('tools.skills.importConfirmLibrary')}</Button></div>
@@ -580,6 +640,48 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const metaNote = subject?.state === 'unreadable' ? '' : documentNote && documentNote !== t('tools.skills.editorNote') ? documentNote : '';
   const packageMeta = selected && canEditSkill ? [t('tools.skills.fileCount', { count: selected.fileCount }), skillEnabled ? '' : t('tools.skills.disabledHint')].filter(Boolean).join(' · ') : '';
   const transient = targetPanel || importPanel;
+  const listing = attachments && attachments.path === skillDoc?.path ? attachments : null;
+  const attachmentSection = listing && (listing.error || (listing.listing && (listing.listing.files.length > 0 || listing.listing.truncated))) ? <section className={manifestStyles.attachments} aria-label={t('tools.skills.filesTitle')}>
+    <span className={doc.sectionLabel}>{t('tools.skills.filesTitle')}</span>
+    {listing.error && <p className={manifestStyles.filesNote}>{t('tools.skills.filesFailed', { detail: listing.error })}</p>}
+    {listing.listing?.truncated && <p className={manifestStyles.filesNote}>{t('tools.skills.filesIncomplete')}</p>}
+    {[...FILE_GROUPS, 'other'].map(group => {
+      const files = listing.listing?.files.filter(file => fileGroup(file.path) === group) ?? [];
+      if (!files.length) return null;
+      return <div key={group} className={manifestStyles.fileGroup} role="group" aria-label={group === 'other' ? t('tools.skills.filesOther') : `${group}/`}>
+        <strong>{group === 'other' ? t('tools.skills.filesOther') : `${group}/`}</strong>
+        <ul>{files.map(file => <li key={file.path}>{file.readable
+          ? <button type="button" className={manifestStyles.fileRow} aria-pressed={attachmentPreview?.path === file.path} onClick={() => void openAttachment(file.path)}><span>{file.path}</span><small>{t('tools.skills.fileSize', { size: file.size ?? 0 })}</small></button>
+          : <span className={manifestStyles.fileRow} data-readable="false"><span>{file.path}</span><small>{file.detail}</small></span>}</li>)}</ul>
+      </div>;
+    })}
+    {attachmentPreview && <div className={manifestStyles.filePreview} role="group" aria-label={t('tools.skills.filePreviewLabel', { path: attachmentPreview.path })}>
+      <div className={manifestStyles.filePreviewHead}><code>{attachmentPreview.path}</code><button type="button" onClick={() => setAttachmentPreview(null)}>{t('tools.skills.filePreviewClose')}</button></div>
+      {attachmentPreview.error
+        ? <small>{attachmentPreview.error}</small>
+        : !attachmentPreview.preview
+          ? <div className={doc.pending}><span /><span /></div>
+          : attachmentPreview.preview.text !== null
+            ? <pre>{attachmentPreview.preview.text}</pre>
+            : <small>{attachmentPreview.preview.digest ? t('tools.skills.fileMeta', { size: attachmentPreview.preview.size, digest: attachmentPreview.preview.digest }) : t('tools.skills.fileTooLarge', { size: attachmentPreview.preview.size })}</small>}
+    </div>}
+  </section> : null;
+  const readManifest = skillDoc && manifestState && manifestState.text === skillDoc.draft && manifestState.name === skillName ? manifestState : null;
+  const readBody = skillDoc && readManifest?.manifest ? skillBody(skillDoc.draft, readManifest.manifest) : '';
+  const readView = !skillDoc ? null
+    : !readManifest
+      ? <div className={doc.body} role="status" aria-label={t('tools.skills.loading')}><div className={doc.pending}><span /><span /><span /></div></div>
+      : !readManifest.manifest
+        ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} />
+        : <div className={doc.body} role="region" aria-label={t('tools.skills.previewRegion')} tabIndex={0}>
+          <div className={doc.readColumn}>
+            <SkillManifestView manifest={readManifest.manifest} directory={skillName} />
+            {readBody.trim()
+              ? <Suspense fallback={<pre className={doc.lead}>{readBody}</pre>}><MarkdownView text={readBody} /></Suspense>
+              : !readManifest.manifest.description && !readManifest.manifest.issues.length && <p className={doc.empty}>{t('common.document.empty')}</p>}
+            {attachmentSection}
+          </div>
+        </div>;
   const article = <article className={doc.doc} aria-label={docTitle}>
     <DocumentHeader
       title={docTitle}
@@ -615,7 +717,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         ? <div className={doc.body} role="status" aria-label={t('tools.skills.loading')}><div className={doc.pending}><span /><span /><span /></div></div>
         : skillDoc
           ? mode === 'read'
-            ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} />
+            ? readView
             : <div className={doc.editor} data-readonly={!canEditSkill || undefined}><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={value => setSkillDoc(current => current ? { ...current, draft: value } : current)} readOnly={busy || !canEditSkill} /></div>
           : <div className={doc.body} />}
     {canEditSkill && skillDoc && !transient && (mode === 'edit' || docDirty) && <DocumentFoot dirty={docDirty} note={t('tools.skills.editorNote')}>
