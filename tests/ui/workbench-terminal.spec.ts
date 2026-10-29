@@ -142,17 +142,17 @@ test('live output and idle waiting keep distinct activity icons in every workben
   const statusIcon = root.locator('[data-activity-slot="status"]');
   const idleBox = await statusIcon.boundingBox();
 
-  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(5);
+  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(4);
   await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'idle');
   await expect(statusIcon.locator('circle')).toBeVisible();
-  await expect(stage.locator('footer')).toContainText('等待输入');
+  await expect(stage.locator('header [data-state]').first()).toContainText('等待输入', { useInnerText: true });
 
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('current output\r\n'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
-  await expect(root.locator('[data-activity-icon="live"]')).toHaveCount(4);
+  await expect(root.locator('[data-activity-icon="live"]')).toHaveCount(3);
   await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(1);
   await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'live');
-  await expect(stage.locator('footer')).toContainText('正在输出');
+  await expect(stage.locator('header [data-state]').first()).toContainText('正在输出', { useInnerText: true });
   expect(await statusIcon.boundingBox()).toEqual(idleBox);
 
   await stage.getByRole('button', { name: '分屏', exact: true }).click();
@@ -174,7 +174,9 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('narrow output\r\n'));
   await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toHaveCount(1);
   await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toHaveCount(1);
-  await expect(stage.locator('footer')).toContainText('正在输出');
+  // Split view uses the tight header: the chip keeps its dot and names the state on hover.
+  await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
+  await expect(stage.locator('header [data-state]').first()).toHaveAttribute('title', '正在输出');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('reduced motion output\r\n'));
@@ -198,16 +200,16 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'idle');
   await page.evaluate(() => (window as unknown as { __exit: (code: number) => void }).__exit(1));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'error');
-  await expect(stage.locator('footer')).toContainText('异常');
+  await expect(stage.locator('header [data-state]').first()).toHaveAttribute('title', '异常');
 
   await page.getByRole('tab', { name: /Claude Code/ }).click();
   await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 's2'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'ended');
-  await expect(stage.locator('footer')).toContainText('已结束');
+  await expect(stage.locator('header [data-state]').first()).toHaveAttribute('title', '已结束');
 });
 
 for (const width of [1280, 640]) {
-  test(`English activity states preserve status, title, and footer geometry at ${width}px`, async ({ page }) => {
+  test(`English activity states preserve status and title geometry at ${width}px`, async ({ page }) => {
     await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
     await page.setViewportSize({ width, height: 800 });
     await openWorkbench(page, true);
@@ -223,11 +225,9 @@ for (const width of [1280, 640]) {
       };
       // The state icons sit inside a Badge label; the Badge itself is the chip.
       const chip = document.querySelector('[data-activity-slot="status"]')!.parentElement!.closest('[data-tone]')!;
-      const footerState = document.querySelector('[data-activity-slot="footer"]')!.parentElement!.closest('[data-tone]')!;
       return {
         chip: box(chip),
         title: box(chip.parentElement!.querySelector('h2')!),
-        footerNext: box(footerState.nextElementSibling!),
       };
     });
     const setLongTitle = () => page.evaluate((value) => {

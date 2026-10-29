@@ -1,6 +1,6 @@
 export type IconName = 'home' | 'connections' | 'library' | 'records' | 'settings' | 'leaf' | 'migration' | 'tool'
   | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play'
-  | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
+  | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'maximize' | 'ban' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
   | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link' | 'pin' | 'star'
   | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard' | 'server' | 'chevronsUpDown' | 'plug' | 'branch';
 const paths: Record<IconName, string> = {
@@ -42,6 +42,8 @@ const paths: Record<IconName, string> = {
   pencil: 'M4.5 19.5h3.8L19 8.8a2.2 2.2 0 0 0-3.1-3.1L5.2 16.4 4.5 19.5ZM14.5 7l2.5 2.5',
   clipboard: 'M9 3.5h6v3H9zM9 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H15M8.5 11.5h7M8.5 15.5h5',
   minimize: 'M5 14h5v5M19 10h-5V5M14 10l6-6M4 20l6-6',
+  maximize: 'M14 4h6v6M10 20H4v-6M20 4l-6 6M4 20l6-6',
+  ban: 'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17ZM6 6l12 12',
   download: 'M12 4v11M7 10.5l5 5 5-5M4.5 19.5h15',
   arrowRight: 'M5 12h14m-6-6 6 6-6 6',
   chevronDown: 'm6 9 6 6 6-6',

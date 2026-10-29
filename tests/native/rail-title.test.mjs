@@ -30,3 +30,9 @@ test('the rail place is the project name or the folder name', () => {
   assert.equal(railPlace(undefined, '/srv/api-service'), 'api-service');
   assert.equal(railPlace(undefined, null), '');
 });
+
+test('a title that only names the session folder falls back to the tool name', () => {
+  assert.equal(railTaskTitle('fixture-user', 'Codex', ['', 'C:\\Users\\fixture-user']), '');
+  assert.equal(railTaskTitle('cliora', 'Codex', ['栖点', '/home/me/cliora/']), '');
+  assert.equal(railTaskTitle('Fix cliora build', 'Codex', ['', '/home/me/cliora']), 'Fix cliora build');
+});
