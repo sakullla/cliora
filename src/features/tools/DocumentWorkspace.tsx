@@ -2,6 +2,7 @@ import { Children, createContext, useCallback, useContext, useEffect, useLayoutE
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { writeClipboard } from '../../lib/clipboard';
+import { useFillHeight } from '../../lib/fillHeight';
 import { displayPath } from '../../lib/paths';
 import { useFeedback } from '../../lib/toast';
 import styles from './DocumentWorkspace.module.css';
@@ -82,29 +83,7 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
   const [width, setWidth] = useState(storedWidth);
   const [focused, setFocused] = useState(storedFocus);
   const drag = useRef<{ pointer: number; x: number; width: number } | null>(null);
-  useLayoutEffect(() => {
-    const section = root.current;
-    if (!section) return;
-    const scroller = section.closest<HTMLElement>('.content') ?? documentElement();
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const scrollerTop = scroller === documentElement() ? 0 : scroller.getBoundingClientRect().top;
-      const inner = section.closest<HTMLElement>('.content-inner');
-      const pad = inner ? Number.parseFloat(getComputedStyle(inner).paddingBottom) || 0 : 0;
-      const top = section.getBoundingClientRect().top - scrollerTop + scroller.scrollTop;
-      const height = Math.max(0, Math.round(scroller.clientHeight - top - pad));
-      const next = `${height}px`;
-      if (section.style.height !== next) section.style.height = next;
-    };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
-    update();
-    const observer = new ResizeObserver(schedule);
-    observer.observe(scroller);
-    if (section.parentElement) observer.observe(section.parentElement);
-    window.addEventListener('resize', schedule);
-    return () => { if (frame) cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', schedule); };
-  }, []);
+  useFillHeight(root);
   useEffect(() => { try { localStorage.setItem(widthKey, String(Math.round(width))); } catch { /* Layout works without storage. */ } }, [width]);
   const toggleFocus = useCallback(() => setFocused(value => {
     const next = !value;
@@ -186,9 +165,6 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
   </ShellContext>;
 }
 
-function documentElement(): HTMLElement {
-  return document.documentElement;
-}
 
 /** Hides or restores the list column. Only shown on a wide workbench. */
 export function FocusToggle() {

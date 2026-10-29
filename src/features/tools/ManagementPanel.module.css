@@ -1,4 +1,8 @@
-.panel { display: grid; gap: var(--space-5); padding: var(--space-5) 0; min-width: 0; }
+/* Accounts board: the same framed surface as the other capability tabs. The header
+   carries the title and the add action; sections inside are tinted, not bordered. */
+.panel { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-sm); }
+.panel > .header { flex: none; align-items: center; padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.body { display: grid; flex: 1 1 auto; align-content: start; gap: var(--space-4); min-width: 0; padding: var(--space-4); }
 .panel h2, .panel h3, .panel p { margin: 0; }
 .panel h2 { font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; }
 .panel h3 { font-size: var(--fs-body); }
@@ -6,7 +10,7 @@
 .sectionTitle > span { color: var(--text-2); font-size: var(--fs-caption); }
 .panel p { color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
 .header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); }
-.header > div:first-child { display: grid; gap: var(--space-1_5); flex: 1 1 280px; }
+.header > div:first-child { display: grid; gap: var(--space-1); flex: 1 1 280px; }
 .header > .actions { display: flex; flex: 0 1 auto; padding-top: var(--space-0_5); }
 .context { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); color: var(--text-2); font-size: var(--fs-caption); }
 .context > span { max-width: 100%; }
@@ -19,11 +23,12 @@
 .trust { display: flex; gap: var(--space-2_5); align-items: flex-start; color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; }
 .trust input { flex: none; margin-top: var(--space-1); }
 .compatibility { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3) var(--space-4); font-size: var(--fs-caption); color: var(--text-2); }
+.body > .compatibility { padding: var(--space-3) 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
 .compatibility summary { cursor: pointer; font-size: var(--fs-body); }
 .compatibility p { margin: var(--space-2) 0 0; line-height: 1.6; overflow-wrap: anywhere; }
-.list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-3); }
-.list > li { display: grid; gap: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4) var(--space-5); background: var(--surface); box-shadow: var(--shadow-xs); min-width: 0; transition: box-shadow var(--fast) var(--ease); }
-.list > li:hover { box-shadow: var(--shadow-sm); }
+.list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+.list > li { display: grid; gap: var(--space-2_5); border: 0; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); min-width: 0; transition: background-color var(--fast) var(--ease); }
+.list > li:hover { background: color-mix(in srgb, var(--surface-2) 85%, var(--surface)); }
 .list > li > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .list details { font-size: var(--fs-body); color: var(--text-2); overflow-wrap: anywhere; }
 .list details > p { margin-top: var(--space-2); }
@@ -75,5 +80,5 @@
 .noMatch { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-5); border: 1px dashed var(--line); border-radius: var(--radius-lg); text-align: center; }
 .noMatch p { margin: 0; color: var(--text-2); }
 @media (max-width: 900px) { .installBox { align-items: start; } }
-@media (max-width: 760px) { .panel { padding: var(--space-4) 0; } .create { align-items: stretch; } .create > button { flex: 1 1 auto; align-self: flex-end; } .installBox .create { flex-wrap: wrap; } .list > li { padding: var(--space-4); }  .detailGrid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .body { padding: var(--space-3); } .create { align-items: stretch; } .create > button { flex: 1 1 auto; align-self: flex-end; } .installBox .create { flex-wrap: wrap; } .list > li { padding: var(--space-3); }  .detailGrid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .list > li { transition: none; } }

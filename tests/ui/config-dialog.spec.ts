@@ -321,8 +321,9 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
       [menuRect.left + 12, menuRect.bottom - 8],
       [menuRect.right - 12, menuRect.bottom - 8],
     ];
+    // The list board clips its corners, so the menu must live outside it (portaled) to stay whole.
     return {
-      escapes: !!listRect && menuRect.bottom > listRect.bottom + 4,
+      escapes: !!list && !!listRect && !list.contains(node),
       covered: points.some(([x, y]) => {
         const target = document.elementFromPoint(x, y);
         return !target || !node.contains(target);
