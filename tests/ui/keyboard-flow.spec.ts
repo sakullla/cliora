@@ -1,8 +1,9 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { cliSwitcher } from './cli-switcher';
 
 // R6: navigation, launching a tool, a dialog and a row menu all work from the keyboard alone,
 // and the focused control always shows a visible ring (02 ADR-6/ADR-7). Arrow keys move inside
-// the sidebar CLI list; the page buttons are reached with Tab or Mod+1..6.
+// the header CLI switcher; the page buttons are reached with Tab or Mod+1..6.
 
 async function install(page: Page) {
   await page.addInitScript(() => {
@@ -53,33 +54,35 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await install(page);
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: '页面' });
-  const list = nav.getByRole('group', { name: '受管 CLI' });
-  const codex = list.getByRole('button', { name: 'Codex', exact: true });
-  const grok = list.getByRole('button', { name: 'Grok', exact: true });
+  const pagesButton = nav.getByRole('button', { name: '工具与连接', exact: true });
   const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="demo"]');
   await expect(card).toBeVisible();
-  await expect(codex).toBeVisible();
 
-  // Tab from the start of the page reaches the sidebar CLI list (one stop) with a visible ring.
+  // Tab from the start of the page reaches the sidebar page buttons with a visible ring.
   await page.locator('body').focus();
   let reached = false;
   for (let step = 0; step < 20 && !reached; step += 1) {
     await page.keyboard.press('Tab');
-    reached = await codex.evaluate((el) => el === document.activeElement);
-    if (!reached) expect(await grok.evaluate((el) => el === document.activeElement)).toBe(false);
+    reached = await pagesButton.evaluate((el) => el === document.activeElement);
   }
   expect(reached).toBe(true);
-  await expectVisibleFocus(codex);
-  await page.keyboard.press('ArrowDown');
-  await expectVisibleFocus(grok);
-  await page.keyboard.press('ArrowUp');
-  await expect(codex).toBeFocused();
-  await page.keyboard.press('ArrowDown');
+  await expectVisibleFocus(pagesButton);
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Grok', level: 2 })).toBeVisible();
-  await expect(grok).toHaveAttribute('aria-current', 'true');
 
+  // The header switcher opens from the keyboard; arrows choose and Enter opens the CLI.
+  const picker = cliSwitcher(page);
+  await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
+  await picker.focus();
+  await expectVisibleFocus(picker);
+  await page.keyboard.press('ArrowDown');
+  const options = page.getByRole('listbox', { name: /，切换 CLI$/ }).getByRole('option');
+  await expect(options.first()).toHaveAttribute('data-active', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(options.filter({ hasText: 'Grok' })).toHaveAttribute('data-active', 'true');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Grok', level: 2 })).toBeVisible();
+  await expect(picker).toHaveAccessibleName('Grok，切换 CLI');
   // Mod+1 returns home, Mod+3 switches to 工具与连接 again, Mod+1 goes back.
   await page.keyboard.press('ControlOrMeta+1');
   await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
@@ -138,5 +141,5 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
-  await expect(codex).toHaveAttribute('aria-current', 'true');
+  await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
 });

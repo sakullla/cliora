@@ -95,8 +95,6 @@ export default {
     switchView: 'Switch task views in Tools & connections',
     arrows: 'Arrow keys',
     moveOptions: 'Move between tabs and options',
-    toolListKeys: '↑/↓',
-    toolList: 'Sidebar CLI list: move, then Enter to open',
     or: 'or',
     searchHint: '{{mod}}+F or / to focus search, Esc to clear',
     saveHint: 'Save ({{mod}}+S)',
@@ -241,9 +239,6 @@ export default {
     recordsGroup: 'Records',
     settingsGroup: 'Settings',
     itemTitle: '{{label}} ({{shortcut}})',
-    toolList: 'Managed CLIs',
-    toolsMore: 'More ({{count}})',
-    toolsLess: 'Show less',
   },
   theme: {
     system: 'Follow system theme',

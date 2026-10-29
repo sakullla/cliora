@@ -32,6 +32,9 @@
 .name { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .status { flex: none; max-width: 112px; }
+/* A healthy install reads as quiet metadata; badges are kept for states that need attention. */
+.version { flex: none; max-width: 96px; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.unset { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .status[data-status="managedTool.loading"] > span:first-child { animation: pulse 1.2s ease-in-out infinite; }
 
 .switch { min-width: 0; }
@@ -67,27 +70,17 @@
 .switch > div[role="radiogroup"] > button.activeConfig,
 .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--line); background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
 .switch > div[role="radiogroup"] > button:focus-visible { outline-offset: -2px; }
-.modelHint { margin-left: var(--space-1_5); color: var(--text-3); font-style: normal; font-size: var(--fs-micro); font-weight: var(--fw-medium); font-family: var(--font-mono); }
 .activeConfig::before { content: ''; display: inline-block; width: var(--space-1_5); height: var(--space-1_5); margin-right: var(--space-1_5); border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 
-.switcher { display: flex; align-items: stretch; gap: var(--space-1); width: 100%; min-width: 0; }
-.step { flex: none; }
+.switcher { display: flex; align-items: center; width: 100%; max-width: 260px; min-width: 0; }
 .switchSelect { flex: 1; min-width: 120px; }
+.switchSelect > button[data-select-trigger] { min-height: var(--row-h-compact); padding-block: 0; font-size: var(--fs-caption); }
 
-.switch .addConfig { border: 1px dashed var(--line-strong); }
-.switch .addConfig:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: var(--space-1_5); }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
 .rowActions > .configure { grid-column: 2; }
 .rowActions > .menu { grid-column: 3; }
-/* Launch is tinted at rest and fills in for the row under the pointer or keyboard focus, so the
-   active row reads as the next action without a column of competing solid buttons. */
-.rowActions > .launch:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
-.row:hover .rowActions > .launch:not(:disabled),
-.row:focus-within .rowActions > .launch:not(:disabled),
-.rowActions > .launch:hover:not(:disabled) { border-color: var(--accent-border); background: var(--accent); color: var(--on-accent); }
-
 .note {
   grid-column: 1 / -1;
   justify-self: start;
@@ -109,6 +102,12 @@
 .note[data-tone="ok"] { background: var(--success-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--success); }
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
+
+/* Fold toggle for the tools outside daily use. */
+.more { grid-column: 1 / -1; border-top: 1px solid var(--line); }
+.more > button,
+.more > button:hover:not(:disabled) { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--row-h-compact); padding: 0 var(--space-4); border: 0; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); box-shadow: none; }
+.more > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 
 .empty { padding: var(--space-8) var(--space-4); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 

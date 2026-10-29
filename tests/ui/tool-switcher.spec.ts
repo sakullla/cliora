@@ -1,7 +1,7 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { cliSwitcher, openCli } from './cli-switcher';
 
-// The in-page CLI strip moved into the sidebar under 工具与连接 (02 ADR-3/ADR-7). Its overflow,
-// selected-item visibility and keyboard coverage now apply to the sidebar list.
+// The CLI is picked from the 工具与连接 header: the h2 is a searchable switcher, and the sidebar\n// keeps only the six pages so it never grows with the managed list.
 const tools = [
   ['codex', 'Codex'],
   ['claude_code', 'Claude Code'],
@@ -62,130 +62,82 @@ async function setupDirty(page: Page) {
   });
 }
 
-const sidebarList = (page: Page) => page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' });
-const item = (list: Locator, name: string) => list.getByRole('button', { name, exact: true });
-
-async function itemNames(list: Locator) {
-  return list.evaluate((root) => [...root.querySelectorAll<HTMLButtonElement>('button:not([aria-expanded])')].map((node) => node.getAttribute('aria-label') ?? ''));
-}
+const options = (page: Page) => page.getByRole('listbox', { name: /，切换 CLI$/ }).getByRole('option');
 
 async function expectSidebarFits(page: Page) {
   await expect.poll(() => page.evaluate(() => {
     const aside = document.querySelector<HTMLElement>('aside.sidebar');
     if (!aside) return 'missing sidebar';
     const sideways = aside.scrollWidth - aside.clientWidth;
+    const tall = aside.getBoundingClientRect().bottom - window.innerHeight;
     const doc = document.documentElement.scrollWidth - window.innerWidth;
-    return sideways <= 0 && doc <= 0 ? '' : `sidebar ${sideways} doc ${doc}`;
+    return sideways <= 0 && tall <= 0 && doc <= 0 ? '' : `sidebar ${sideways} tall ${tall} doc ${doc}`;
   })).toBe('');
 }
 
-test('the sidebar CLI list folds past eight, keeps the selection visible, and never scrolls sideways', async ({ page }) => {
+test('the header switcher lists every managed CLI and the sidebar keeps only the pages', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await setup(page);
   await page.goto('/');
-  const list = sidebarList(page);
-  await expect(item(list, 'Codex')).toBeVisible();
-  await expect(page.getByRole('tablist', { name: 'CLI' })).toHaveCount(0);
-  expect(await itemNames(list)).toEqual(tools.slice(0, 8).map((entry) => entry[1]));
-  const more = list.getByRole('button', { name: '更多（8）', exact: true });
-  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await expect(nav.getByRole('button')).toHaveCount(6);
+  await expect(nav.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
 
-  // Opening a CLI from another page lands on 工具与连接 with that CLI shown and highlighted.
-  await item(list, 'Codex').click();
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
-  await expect(item(list, 'Codex')).toHaveAttribute('aria-current', 'true');
-
-  // Expanded, every CLI is reachable; the choice survives a reload.
-  await more.click();
-  const less = list.getByRole('button', { name: '收起', exact: true });
-  await expect(less).toHaveAttribute('aria-expanded', 'true');
-  expect(await itemNames(list)).toEqual(tools.map((entry) => entry[1]));
-  await item(list, 'Kiro').click();
+  await nav.getByRole('button', { name: '工具与连接', exact: true }).click();
+  const heading = page.getByRole('heading', { name: 'Codex', level: 2 });
+  await expect(heading).toBeVisible();
+  const picker = cliSwitcher(page);
+  await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
+  await picker.click();
+  await expect(options(page)).toHaveCount(tools.length);
+  await expect(options(page).filter({ has: page.getByText('Codex', { exact: true }) })).toHaveAttribute('aria-selected', 'true');
+  // Sixteen CLIs open with a search box; typing narrows the list.
+  await page.getByRole('textbox', { name: '搜索 CLI' }).fill('kir');
+  await expect(options(page)).toHaveCount(1);
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'Kiro', level: 2 })).toBeVisible();
-  await expect(item(list, 'Kiro')).toHaveAttribute('aria-current', 'true');
-  await expect(item(list, 'Codex')).not.toHaveAttribute('aria-current', /.*/);
-  await page.reload();
-  await expect(less).toBeVisible();
+  await expect(picker).toHaveAccessibleName('Kiro，切换 CLI');
 
-  // Folded again, the selected CLI (past the first eight) takes the last visible slot.
-  await item(list, 'Kiro').click();
+  // Picking the CLI already shown keeps the page as it is.
+  await openCli(page, 'Kiro');
+  await picker.click();
+  await options(page).filter({ has: page.getByText('Kiro', { exact: true }) }).click();
+  await expect(page.locator('dialog[open]')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Kiro', level: 2 })).toBeVisible();
-  await less.click();
-  await expect(more).toBeVisible();
-  expect(await itemNames(list)).toEqual([...tools.slice(0, 7).map((entry) => entry[1]), 'Kiro']);
-  await expect(item(list, 'Kiro')).toHaveAttribute('aria-current', 'true');
-  await expect(item(list, 'Kiro')).toBeInViewport();
 
   for (const width of [1360, 900, 640]) {
-    await page.setViewportSize({ width, height: 900 });
-    await expect(item(list, 'Kiro')).toBeVisible();
+    await page.setViewportSize({ width, height: 600 });
+    await expect(picker).toBeVisible();
     await expectSidebarFits(page);
   }
-
-  // Collapsed sidebar: icons only, each with its accessible name.
-  await page.setViewportSize({ width: 1360, height: 900 });
-  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
-  await expect.poll(async () => (await page.getByLabel('主导航').boundingBox())?.width ?? 999).toBeLessThan(80);
-  const kiro = item(list, 'Kiro');
-  await expect(kiro).toBeVisible();
-  await expect(kiro.locator('.nav-text')).toBeHidden();
-  await expect(kiro.locator('img').first()).toBeVisible();
-  await expectSidebarFits(page);
 });
 
-test('the sidebar CLI list is one Tab stop walked with arrows, Home and End', async ({ page }) => {
+test('the header switcher is reached by keyboard and opens with arrows', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await setup(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
-  const list = sidebarList(page);
-  await expect(item(list, 'Codex')).toHaveAttribute('aria-current', 'true');
-  expect(await list.evaluate((root) => [...root.querySelectorAll('button')].filter((node) => node.tabIndex === 0).map((node) => node.getAttribute('aria-label')))).toEqual(['Codex']);
-
-  // Tab from the page button reaches the selected CLI, and the next Tab leaves the list.
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).focus();
-  await page.keyboard.press('Tab');
-  await expect(item(list, 'Codex')).toBeFocused();
+  await openCli(page, 'Codex');
+  const picker = cliSwitcher(page);
+  await picker.focus();
   await page.keyboard.press('ArrowDown');
-  await expect(item(list, 'Claude Code')).toBeFocused();
-  // Arrows move focus only; nothing opens until Enter.
-  await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
-  await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('ArrowUp');
-  await expect(list.getByRole('button', { name: '更多（8）', exact: true })).toBeFocused();
-  await page.keyboard.press('Home');
-  await expect(item(list, 'Codex')).toBeFocused();
-  await page.keyboard.press('End');
+  const search = page.getByRole('textbox', { name: '搜索 CLI' });
+  await expect(search).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  const less = list.getByRole('button', { name: '收起', exact: true });
-  await expect(less).toBeFocused();
-  // Every CLI is reachable by arrow keys once the list is expanded.
-  for (const [, name] of [...tools].reverse()) {
-    await page.keyboard.press('ArrowUp');
-    await expect(item(list, name)).toBeFocused();
-  }
-  await page.keyboard.press('End');
-  await page.keyboard.press('ArrowUp');
-  await expect(item(list, 'Kiro')).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Claude Code', level: 2 })).toBeVisible();
+  await picker.focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: 'Kiro', level: 2 })).toBeVisible();
-  await expect(item(list, 'Kiro')).toHaveAttribute('aria-current', 'true');
-  // Already on the page: the open stays in place instead of moving focus to the h1.
-  await expect(item(list, 'Kiro')).toBeFocused();
-  await item(list, 'Pi').focus();
-  await page.keyboard.press('Space');
-  await expect(page.getByRole('heading', { name: 'Pi', level: 2 })).toBeVisible();
-  await page.keyboard.press('Tab');
-  await expect(list.locator(':focus')).toHaveCount(0);
+  await expect(search).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(search).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Claude Code', level: 2 })).toBeVisible();
 });
 
-test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI, draft and highlight', async ({ page }) => {
+test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI and draft', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await setupDirty(page);
   await page.goto('/');
-  const list = sidebarList(page);
-  await item(list, 'Claude Code').click();
+  await openCli(page, 'Claude Code');
   await expect(page.getByRole('heading', { name: 'Claude Code', level: 2 })).toBeVisible();
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   await page.getByRole('listitem').filter({ has: page.getByText('reviewer', { exact: true }) }).getByRole('button').click();
@@ -193,7 +145,7 @@ test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI, d
   const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
   await editor.fill('unsaved draft');
 
-  await item(list, 'Codex').click();
+  await openCli(page, 'Codex');
   const confirm = page.getByRole('dialog').filter({ hasText: '尚未保存' });
   await expect(confirm).toBeVisible();
   await expect(page.locator('dialog[open]')).toHaveCount(1);
@@ -201,8 +153,7 @@ test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI, d
   await expect(page.locator('dialog[open]')).toHaveCount(0);
   await expect(editor).toContainText('unsaved draft');
   await expect(page.getByRole('heading', { name: 'Claude Code', level: 2 })).toBeVisible();
-  await expect(item(list, 'Claude Code')).toHaveAttribute('aria-current', 'true');
-  await expect(item(list, 'Codex')).not.toHaveAttribute('aria-current', /.*/);
+  await expect(cliSwitcher(page)).toHaveAccessibleName('Claude Code，切换 CLI');
 
   // The command palette tool item uses the same channel: one prompt, then the CLI changes.
   await page.keyboard.press('Control+K');
@@ -213,6 +164,6 @@ test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI, d
   await expect(page.locator('dialog[open]')).toHaveCount(1);
   await confirm.getByRole('button', { name: '放弃修改', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
-  await expect(item(list, 'Codex')).toHaveAttribute('aria-current', 'true');
+  await expect(cliSwitcher(page)).toHaveAccessibleName('Codex，切换 CLI');
   await expect(page.locator('dialog[open]')).toHaveCount(0);
 });

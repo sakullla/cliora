@@ -325,7 +325,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
   await nav.getByRole('button', { name: '工具与连接' }).click();
-  await expect(nav.getByRole('group', { name: '受管 CLI' }).locator('img').first()).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await expect(page.locator('[data-workspace-chrome] h2 img').first()).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.reload();
   await expect(logo).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -523,7 +523,7 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
   await page.getByRole('button', { name: '键盘快捷键', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('快速前往');
   await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText(/\+1…6/);
-  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('侧栏工具列表');
+  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).not.toContainText('侧栏工具列表');
   await page.keyboard.press('Escape');
 
   await page.keyboard.press('Control+Backslash');

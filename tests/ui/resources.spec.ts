@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openCli } from './cli-switcher';
 
 async function mockResources(page: Page) {
   await page.addInitScript(() => {
@@ -1823,7 +1824,7 @@ test('Skill page keeps the choose-project prompt when an earlier workspace read 
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__heldReads.length)).toBeGreaterThan(0);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'Codex', exact: true }).click();
+  await openCli(page, 'Codex');
   await expect(page.getByText('请先选择项目目录。')).toBeVisible();
   await page.evaluate(async () => {
     const held = (window as any).__heldReads.splice(0) as Array<() => void>;

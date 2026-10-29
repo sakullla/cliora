@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { cliSwitcher, openCli } from './cli-switcher';
 
 async function installHome(page: Page, detect = false) {
   await page.addInitScript((failDetection: boolean) => {
@@ -565,9 +566,11 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   await expect(tools.getByRole('radiogroup')).toHaveCount(0);
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
   await expect(menu).toContainText('日常');
-  await expect(menu).toContainText('m0');
+  // One line: the model is in the tooltip and the open list, not under the name.
+  await expect(menu).not.toContainText('m0');
+  await expect(menu).toHaveAttribute('title', /日常 · m0/);
   const rowHeight = await menu.evaluate((element) => element.closest('[data-tool-row]')?.getBoundingClientRect().height ?? 999);
-  expect(rowHeight).toBeLessThan(140);
+  expect(rowHeight).toBeLessThan(56);
   await menu.click();
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
   await expect(list.getByRole('option')).toHaveCount(20);
@@ -590,14 +593,14 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   await expect(list.getByRole('option')).toHaveCount(1);
   await list.getByRole('option', { name: '配置 12' }).click();
   await expect(menu).toContainText('配置 12');
-  await expect(menu).toContainText('m12');
+  await expect(menu).toHaveAttribute('title', /配置 12 · m12/);
   await expect(page.getByRole('listbox')).toHaveCount(0);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
   expect(calls.map((call) => call.profileId)).toEqual(['p12']);
 });
 
-test('a short profile menu switches by step buttons and shows the model', async ({ page }) => {
+test('a short profile menu is one line, switches with arrow keys and keeps the model in the tooltip', async ({ page }) => {
   await page.addInitScript(() => {
     const applied = { codex: 'zhipu' };
     const profiles = [
@@ -631,25 +634,22 @@ test('a short profile menu switches by step buttons and shows the model', async 
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
-  const stacked = await menu.evaluate((element) => {
-    const name = element.querySelector('span span');
-    const model = element.querySelector('small');
-    if (!name || !model) return false;
-    const nameBox = name.getBoundingClientRect();
-    const modelBox = model.getBoundingClientRect();
-    return modelBox.top >= nameBox.bottom - 1 && model.textContent === 'glm-5.3' && nameBox.width > 40;
-  });
-  expect(stacked).toBe(true);
-  await tools.getByRole('button', { name: '下一个配置' }).click();
-  await expect(page.getByRole('listbox')).toHaveCount(0);
-  await expect(menu).toContainText('cpa');
-  await expect(menu).toContainText('claude-opus-5-5');
-  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
-  await tools.getByRole('button', { name: '上一个配置' }).click();
-  await expect(menu).toContainText('Zhipu GLM');
+  await expect(menu).toHaveText('Zhipu GLM');
+  await expect(menu).toHaveAttribute('title', /Zhipu GLM · glm-5\.3/);
+  await expect(menu.locator('small')).toHaveCount(0);
+  await expect(tools.getByRole('button', { name: '下一个配置' })).toHaveCount(0);
   await menu.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(menu).toContainText('cpa');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(menu).toHaveText('cpa');
+  await expect(menu).toHaveAttribute('title', /cpa · claude-opus-5-5/);
+  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  await menu.focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(menu).toHaveText('Zhipu GLM');
+  await menu.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(menu).toHaveText('cpa');
   await menu.click();
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
   await expect(list.getByRole('option')).toHaveCount(6);
@@ -674,8 +674,8 @@ test('a short profile menu switches by step buttons and shows the model', async 
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(page.getByRole('listbox')).toHaveCount(0);
-  await expect(menu).toContainText('DeepSeek');
-  await expect(menu).toContainText('deepseek-flash');
+  await expect(menu).toHaveText('DeepSeek');
+  await expect(menu).toHaveAttribute('title', /DeepSeek · deepseek-flash/);
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
   expect(calls.map((call) => call.profileId)).toEqual(['cpa', 'zhipu', 'cpa', 'deepseek']);
 });
@@ -798,10 +798,10 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
       expect(item.sessionId).toBeNull();
       expect(item.mode).toBe('normal');
     }
-    // Desktop tools have no launch directory; their row menu only keeps the edit entry.
+    // Desktop tools have no launch directory; their row menu keeps profile creation and the edit entry.
     await row(name).getByRole('button', { name: `${name} 的更多操作` }).click();
     const rowMenu = page.getByRole('menu', { name: `${name} 的更多操作` });
-    await expect(rowMenu.getByRole('menuitem')).toHaveText(['编辑配置']);
+    await expect(rowMenu.getByRole('menuitem')).toHaveText(['新建配置', '编辑配置']);
     await page.keyboard.press('Escape');
     await expect(rowMenu).toHaveCount(0);
     await expect(row(name)).not.toContainText('选择其他目录');
@@ -849,9 +849,8 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
 
   await cursor.getByRole('button', { name: '去安装 →', exact: true }).click();
   const workspace = page.getByRole('region', { name: '工具与连接' });
-  const cliList = page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' });
   await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
-  await expect(cliList.getByRole('button', { name: 'Cursor', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(cliSwitcher(page)).toHaveAccessibleName('Cursor，切换 CLI');
   const guide = workspace.getByRole('link', { name: '官方安装说明 ↗' });
   await expect(guide).toBeVisible();
   await expect(guide).toHaveAttribute('href', /cursor\.com/);
@@ -859,7 +858,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await expect(workspace.getByRole('button', { name: '安装 npm' })).toHaveCount(0);
   await expect(workspace).not.toContainText('npm');
   await expect(workspace).not.toContainText('agent');
-  await cliList.getByRole('button', { name: 'ZCode', exact: true }).click();
+  await openCli(page, 'ZCode');
   await expect(workspace.getByRole('heading', { level: 2, name: 'ZCode' })).toBeVisible();
   const toolLaunch = workspace.getByRole('button', { name: '启动', exact: true });
   await expect(toolLaunch).toHaveAttribute('title', '直接启动已安装的 ZCode，不选择目录');
@@ -876,8 +875,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await page.evaluate(() => { (window as unknown as { __desktop: { cursorInstalled: boolean } }).__desktop.cursorInstalled = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await launchDirect('Cursor', 'cursor');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await cliList.getByRole('button', { name: 'Cursor', exact: true }).click();
+  await openCli(page, 'Cursor');
   await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
   const cursorLaunch = workspace.getByRole('button', { name: '启动', exact: true });
   await expect(cursorLaunch).toHaveAttribute('title', '直接启动已安装的 Cursor，不选择目录');
@@ -1144,4 +1142,69 @@ test('a desktop library launch failure stays in the dialog', async ({ page }) =>
   await expect(dialog.getByRole('alert')).toContainText('桌面没有打开');
   await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
+});
+
+test('home lists the tools in daily use first and folds the rest behind one toggle', async ({ page }) => {
+  await page.addInitScript(() => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const name = (id: string) => `Tool ${id.toUpperCase()}`;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system' }, tools: ids.map((id) => ({ id, name: name(id) })) };
+        if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: name(id), interfaceFormats: [], launchForm: 'terminal' })), managedIds: ids, preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: `C:/${args.toolId}.cmd`, installations: [{ path: `C:/${args.toolId}.cmd`, version: '1.0.0', status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles: args.toolId === 'c' ? [{ id: 'daily', tool: 'c', name: '日常', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'm1' } }] : [],
+          binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:dialog|open') return 'C:/work';
+        if (command === 'launch_cli') return { mode: args.request.mode, status: 'terminal_requested', toolId: args.request.toolId, projectId: null, terminal: 'auto' };
+        if (command.startsWith('plugin:event|')) return 1;
+        if (command.startsWith('list_') || command === 'usage_presets') return [];
+        return null;
+      } },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const rows = tools.locator('[data-tool-row]');
+  // Projects come first; the tools section follows.
+  const projectsTop = (await page.getByRole('region', { name: '项目与启动' }).boundingBox())!.y;
+  expect(projectsTop).toBeLessThan((await tools.boundingBox())!.y);
+
+  // Only the configured tool is listed; the other seven fold behind one toggle.
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Tool C');
+  const more = tools.getByRole('button', { name: '其他 7 个工具', exact: true });
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await more.click();
+  await expect(rows).toHaveCount(8);
+  const less = tools.getByRole('button', { name: '收起其他工具', exact: true });
+  await expect(less).toHaveAttribute('aria-expanded', 'true');
+
+  // A row without profiles is quiet: grey 未配置, version as plain text, 新建配置 in the row menu.
+  const toolF = rows.filter({ hasText: 'Tool F' });
+  await expect(toolF).toContainText('未配置');
+  await expect(toolF.locator('[data-status="managedTool.ok"]')).toHaveText('1.0.0');
+  await expect(toolF.getByRole('button', { name: '新建配置' })).toHaveCount(0);
+  await toolF.getByRole('button', { name: 'Tool F 的更多操作' }).click();
+  await expect(page.getByRole('menu', { name: 'Tool F 的更多操作' }).getByRole('menuitem', { name: '新建配置', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  const heights = await rows.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+
+  // A launched tool joins the daily list, and the list survives a reload.
+  await toolF.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(toolF.getByRole('status')).toContainText('已向外部终端发出请求');
+  await less.click();
+  await expect(rows).toHaveCount(2);
+  await page.reload();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Tool C');
+  await expect(rows.nth(1)).toContainText('Tool F');
+  await expect(tools.getByRole('button', { name: '其他 6 个工具', exact: true })).toHaveAttribute('aria-expanded', 'false');
 });

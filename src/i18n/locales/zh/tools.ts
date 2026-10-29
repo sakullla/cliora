@@ -839,6 +839,8 @@ export default {
     tasksAria: '当前任务',
     viewTitle: '{{label}}（Alt+{{index}}）',
     scopeLabel: '配置范围',
+    switchTool: '{{name}}，切换 CLI',
+    searchTool: '搜索 CLI',
     scopeGlobal: '全局配置',
     retryRecovery: '重试恢复',
     recoveryNeeded: '有 {{count}} 项文件事务需要恢复。',

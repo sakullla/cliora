@@ -15,8 +15,7 @@ import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
-import { Badge, Button, IconButton, StatusBadge } from '../../components/ui';
-import { statusTone } from '../../lib/statusTone';
+import { Button, StatusBadge } from '../../components/ui';
 import { displayPath } from '../../lib/paths';
 import { launchFailureDetail } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
@@ -33,6 +32,19 @@ function rememberHome(toolId: string, workspace: RegisteredToolWorkspace) {
   else rememberedHome.delete(toolId);
 }
 const launchDirectories = new Map<string, string>();
+
+// Home shows the tools in daily use first: recently launched ones and those with saved profiles.
+// The rest fold behind one toggle so a long managed list does not push projects off screen.
+const recentToolsKey = 'cliora:home-recent-tools';
+const configuredToolsKey = 'cliora:home-configured-tools';
+const otherToolsExpandedKey = 'cliora:home-tools-expanded';
+const commonToolLimit = 6;
+function readIds(key: string): string[] {
+  try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; }
+}
+function writeIds(key: string, ids: string[]) {
+  try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* The fold still works for this session. */ }
+}
 let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
@@ -81,9 +93,6 @@ function profileLabel(name: string, connection: { model?: string | null } | null
 
 type SwitchableProfile = { id: string; name: string; connection: { model?: string | null } | null | undefined };
 
-function StepGlyph({ direction }: { direction: 'left' | 'right' }) {
-  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={direction === 'left' ? 'm15 6-6 6 6 6' : 'm9 6 6 6-6 6'} /></svg>;
-}
 
 function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, title, onSwitch }: {
   label: string;
@@ -110,10 +119,10 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
     if (event.key === 'ArrowRight') { event.preventDefault(); move(1); return; }
   }
 
+  // One line like the chip group: the model stays in the tooltip and the open list.
+  const hover = [selected ? profileLabel(selected.name, selected.connection) : '', title].filter(Boolean).join(t('home.tools.titleSeparator'));
   return <div className={styles.switcher}>
-    <IconButton size="sm" className={styles.step} aria-label={t('home.tools.prevProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.prevProfileTitle')} icon={<StepGlyph direction="left" />} onClick={() => move(-1)} />
-    <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder={t('home.tools.pickProfile')} disabled={disabled} title={title} variant="accent" searchLabel={t('home.tools.searchProfile')} searchPlaceholder={t('home.tools.searchProfilePlaceholder')} onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
-    <IconButton size="sm" className={styles.step} aria-label={t('home.tools.nextProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.nextProfileTitle')} icon={<StepGlyph direction="right" />} onClick={() => move(1)} />
+    <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder={t('home.tools.pickProfile')} disabled={disabled} title={hover || undefined} variant="accent" triggerDetail={false} searchLabel={t('home.tools.searchProfile')} searchPlaceholder={t('home.tools.searchProfilePlaceholder')} onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
   </div>;
 }
 
@@ -135,6 +144,43 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   const [remoteChecking, setRemoteChecking] = useState(new Set<string>());
   const [remoteProbeRetry, setRemoteProbeRetry] = useState(0);
   const acting = useRef(new Set<string>());
+  const [recent, setRecent] = useState(() => readIds(recentToolsKey));
+  const [configured, setConfigured] = useState(() => readIds(configuredToolsKey));
+  const [othersOpen, setOthersOpen] = useState(() => { try { return localStorage.getItem(otherToolsExpandedKey) === 'true'; } catch { return false; } });
+  const toolKey = tools.map((item) => item.id).join('|');
+
+  // Remember which tools have saved profiles so the fold is stable on the next start, before
+  // every workspace has been read again.
+  useEffect(() => {
+    if (remoteTargetId !== 'local') return;
+    setConfigured((old) => {
+      const next = new Set(old);
+      for (const tool of tools) {
+        const workspace = states[tool.id]?.workspace;
+        if (!workspace) continue;
+        if (workspace.profiles.length) next.add(tool.id); else next.delete(tool.id);
+      }
+      const list = [...next];
+      if (list.length === old.length && list.every((id, index) => id === old[index])) return old;
+      writeIds(configuredToolsKey, list);
+      return list;
+    });
+  }, [states, remoteTargetId, toolKey]);
+
+  function markRecent(toolId: string) {
+    setRecent((old) => {
+      const next = [toolId, ...old.filter((id) => id !== toolId)].slice(0, 12);
+      writeIds(recentToolsKey, next);
+      return next;
+    });
+  }
+
+  function toggleOthers() {
+    setOthersOpen((old) => {
+      try { localStorage.setItem(otherToolsExpandedKey, String(!old)); } catch { /* Folding works without storage. */ }
+      return !old;
+    });
+  }
   const noticeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
@@ -275,6 +321,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
       }
       const request = { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory };
       const result = await native.launchCli(request);
+      markRecent(toolId);
       const opened = workbenchSessionId(result);
       if (opened) { onWorkbenchSession?.(opened); setStates((old) => ({ ...old, [toolId]: settle(previous, null) })); return; }
       const notice = lineNotice('ok', desktop ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
@@ -373,8 +420,15 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   }
 
   if (!tools.length) return <div className={styles.empty}>{t('home.tools.empty')}</div>;
+  const present = new Set(tools.map((item) => item.id));
+  const ranked = [...new Set([...recent, ...configured])].filter((id) => present.has(id)).slice(0, commonToolLimit);
+  const common = tools.length <= commonToolLimit ? tools
+    : ranked.length ? tools.filter((item) => ranked.includes(item.id))
+    : tools.slice(0, commonToolLimit);
+  const others = tools.filter((item) => !common.includes(item));
+  const shown = othersOpen ? [...common, ...others] : common;
   return <div className={styles.list} aria-label={t('home.managed.title')}>
-    {tools.map((tool) => {
+    {shown.map((tool) => {
       const loaded = states[tool.id];
       const isRemote = remoteTargetId !== 'local';
       const remote = remoteStates[tool.id];
@@ -404,7 +458,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
         : checking.has(tool.id) && !installed ? 'loading' : loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : probeFailed ? 'warn' : 'missing';
       const version = statusState !== 'ok' ? null : isRemote ? remote?.version || null : workspace?.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? null;
       const status = version
-        ? <Badge className={styles.status} dot tone={statusTone('managedTool', 'ok').tone} data-status="managedTool.ok" title={version}>{version}</Badge>
+        ? <span className={styles.version} data-status="managedTool.ok" title={t('home.tools.versionTitle', { version })}>{version}</span>
         : <StatusBadge className={styles.status} dot domain="managedTool" state={statusState} />;
       // Install guidance and the edit entry after a failure are recovery paths, so they stay on the row;
       // for a healthy tool the edit entry sits in the row menu.
@@ -415,6 +469,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
       const menuItems = [
         !desktop && <button key="dir" type="button" role="menuitem" disabled={!installed || !!loaded?.busy} onClick={chooseDir}>{t('home.tools.chooseOtherDir')}</button>,
         !desktop && rememberedDir && !isRemote && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>,
+        installed && workspace && !loaded?.error && profiles.length === 0 && <button key="new" type="button" role="menuitem" onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>,
         !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}>{t('home.tools.editConfigItem')}</button>,
       ].filter(Boolean);
       return <div className={styles.row} data-tool-row key={tool.id}>
@@ -423,8 +478,8 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
           {loaded?.error ? null
             : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
             : profiles.length > 4 ? <ProfileMenu label={t('home.tools.switchProfileLabel', { name: tool.name })} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
-            : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
-            : <Button size="sm" variant="ghost" className={styles.addConfig} icon={<Icon name="plus" size={13} />} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</Button>}
+            : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}</button>)}</div>
+            : <span className={styles.unset}>{t('home.tools.unconfigured')}</span>}
         </div>
         <div className={styles.rowActions}>
           {isRemote && remote?.detail ? <Button size="sm" className={styles.recheck} icon={<Icon name="refresh" size={14} />} disabled={remoteChecking.has(tool.id)} onClick={() => setRemoteProbeRetry((value) => value + 1)}>{remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</Button>
@@ -436,6 +491,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
+    {others.length > 0 && <div className={styles.more}><button type="button" aria-expanded={othersOpen} onClick={toggleOthers}><Icon name={othersOpen ? 'arrowUp' : 'more'} size={14} />{othersOpen ? t('home.tools.otherToolsLess') : t('home.tools.otherTools', { count: others.length })}</button></div>}
     <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
       {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</Button></div></div>}
     </GuideDialog>

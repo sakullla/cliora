@@ -198,11 +198,18 @@ function countFirstScreen(){
   return rect.top>=top-1&&rect.left>=left-1&&rect.bottom<=bottom+1&&rect.right<=right+1;
  }).length;
 }
-// CLIs are chosen from the sidebar group 受管 CLI under 工具与连接; opening one lands on that page.
-function cliItem(page,name){return page.getByRole('navigation',{name:'页面'}).getByRole('group',{name:'受管 CLI'}).getByRole('button',{name,exact:true});}
-async function openCli(page,name){
- await cliItem(page,name).click();
- await page.getByRole('region',{name:'工具与连接'}).getByRole('heading',{level:2,name,exact:true}).waitFor();
+// CLIs are chosen from the h2 switcher in the 工具与连接 header (a single managed CLI has no switcher).
+async function openCli(page, name) {
+  const region = page.getByRole('region', { name: '工具与连接' });
+  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  const title = region.locator('[data-workspace-chrome] h2');
+  await title.waitFor();
+  const picker = title.getByRole('button', { name: /，切换 CLI$/ });
+  if (await picker.count() && !(await picker.getAttribute('aria-label')).startsWith(`${name}，`)) {
+    await picker.click();
+    await page.getByRole('listbox', { name: /，切换 CLI$/ }).getByRole('option').filter({ has: page.getByText(name, { exact: true }) }).click();
+  }
+  await region.getByRole('heading', { level: 2, name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(，切换 CLI)?$`) }).waitFor();
 }
 async function captureSkillViews(page,capture){
  await openCli(page,'Codex');

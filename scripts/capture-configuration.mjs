@@ -3,6 +3,19 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { expect } from '@playwright/test';
 
+// CLIs are chosen from the h2 switcher in the 工具与连接 header (a single managed CLI has no switcher).
+async function openCli(page, name) {
+  const region = page.getByRole('region', { name: '工具与连接' });
+  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  const title = region.locator('[data-workspace-chrome] h2');
+  await title.waitFor();
+  const picker = title.getByRole('button', { name: /，切换 CLI$/ });
+  if (await picker.count() && !(await picker.getAttribute('aria-label')).startsWith(`${name}，`)) {
+    await picker.click();
+    await page.getByRole('listbox', { name: /，切换 CLI$/ }).getByRole('option').filter({ has: page.getByText(name, { exact: true }) }).click();
+  }
+  await region.getByRole('heading', { level: 2, name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(，切换 CLI)?$`) }).waitFor();
+}
 const toolNames = { pi: 'Pi', open_code: 'OpenCode', kimi_code: 'Kimi Code', codex: 'Codex', claude_code: 'Claude Code', qoder_cn: 'Qoder CN' };
 const toolSlugs = { pi: 'pi', open_code: 'opencode', kimi_code: 'kimi', codex: 'codex', claude_code: 'claude' };
 const variants = Object.keys(toolSlugs).flatMap(tool => [
@@ -97,9 +110,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
       await installConfigurationWorkspace(page, scene.tool, true, scene.action === 'overview');
       await installPresentation(page, theme, toolNames, scene.action === 'raw' ? fs.readFileSync(new URL('../tests/fixtures/native/codex-model-editor.toml', import.meta.url), 'utf8') : null);
       await page.goto('/');
-      // The scene's CLI is opened from the sidebar group 受管 CLI, which lands on 工具与连接.
-      await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: toolNames[scene.tool], exact: true }).click();
-      await page.getByRole('region', { name: '工具与连接' }).getByRole('heading', { level: 2, name: toolNames[scene.tool], exact: true }).waitFor();
+      await openCli(page, toolNames[scene.tool]);
       const action = scene.action;
       const dialog = page.locator('dialog.guide-dialog');
       if (action === 'overview') {

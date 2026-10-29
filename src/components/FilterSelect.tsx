@@ -23,7 +23,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   searchPlaceholder?: string;
   emptyText?: string;
   onChange: (value: string) => void;
-  variant?: 'default' | 'accent';
+  variant?: 'default' | 'accent' | 'title';
   className?: string;
   triggerRef?: RefObject<HTMLButtonElement | null>;
   onTriggerKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;

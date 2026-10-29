@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openCli } from './cli-switcher';
 
 async function setup(page: Page) {
   await page.addInitScript(() => {
@@ -28,7 +29,7 @@ test('unsupported management tabs are hidden and switching tools leaves no unsup
   await setup(page);
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   await expect(page.getByLabel('原生插件管理')).toBeVisible();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'Unsupported CLI', exact: true }).click();
+  await openCli(page, 'Unsupported CLI');
   for (const name of ['账号', 'MCP', 'Skill', 'Agents', '插件']) await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: '配置', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByLabel('原生插件管理')).toHaveCount(0);
