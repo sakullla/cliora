@@ -97,6 +97,9 @@ async function mock(initialTheme){
   if(command==='test_usage_query')return {execution:{kind:'draft',executionId:args.executionId,draftRevision:args.draftRevision},result:quotaResult,error:null,elapsedMs:42,stage:'validation',preview:JSON.stringify(quotaResult,null,2),requestOrigins:[args.draft.config.site]};
   if(command==='preview_native_plugins')return pluginSnapshot(args.target);
   if(command==='scan_native_plugins'){if(window.__capturePluginScanFailure)throw new Error('插件扫描暂时失败');return pluginSnapshot(args.target);}
+  if(command==='inspect_native_plugin'){const root='C:/fixture/plugins/code-review';return {pluginId:args.pluginId,root,manifest:{description:'对拉取请求做正确性、安全与边界条件审查。',author:'Example Team',homepage:'https://example.test/code-review',license:'MIT',keywords:['review','git'],path:root+'/.claude-plugin/plugin.json'},items:[{kind:'agents',name:'reviewer',description:'审查正确性、安全与边界条件',path:root+'/agents/reviewer.md',location:root+'/agents/reviewer.md',format:'markdown'},{kind:'skills',name:'diff-summary',description:'总结当前改动',path:root+'/skills/diff-summary/SKILL.md',location:root+'/skills/diff-summary',format:'markdown'},{kind:'commands',name:'review',description:'审查当前 diff',path:root+'/commands/review.md',location:root+'/commands/review.md',format:'markdown'},{kind:'mcp',name:'docs',description:'npx -y docs-server',path:root+'/.mcp.json',location:root+'/.mcp.json',format:'json'},{kind:'hooks',name:'PreToolUse',description:'1',path:root+'/hooks/hooks.json',location:root+'/hooks/hooks.json',format:'json'}],truncated:false};}
+  if(command==='read_native_plugin_file')return {path:args.path,content:args.path.endsWith('.json')?'{\n  "mcpServers": { "docs": { "command": "npx", "args": ["-y", "docs-server"] } }\n}\n':'---\nname: reviewer\ndescription: 审查正确性、安全与边界条件\n---\n# Reviewer\n\n检查改动影响，引用具体证据并说明验证范围。\n',format:args.path.endsWith('.json')?'json':'markdown',truncated:false};
+  if(command==='reveal_native_plugin_path')return null;
   if(command==='operate_native_plugin'){
    if(window.__capturePluginHold)await new Promise(resolve=>{window.__releaseCapturePlugin=resolve;});
    if(window.__capturePluginFailure)return {status:'failed_possible_side_effects',detail:'原生命令失败；实际副作用尚未核验',transactionId:null,snapshot:pluginSnapshot(args.request.target)};
@@ -520,16 +523,21 @@ async function capturePluginScreens(page,capture){
  const list=page.getByRole('list',{name:'插件',exact:true});
  await list.getByRole('button',{name:/Code Review/}).waitFor();await capture('native-plugins');
  await list.getByRole('button',{name:/Code Review/}).click();
- let details=page.getByRole('article',{name:'插件详情'});await details.waitFor();await capture('plugin-details');
+ let details=page.getByRole('article',{name:'插件详情'});await details.waitFor();
+ const contents=details.getByRole('list',{name:'插件内容'});await contents.waitFor();await capture('plugin-details');
+ await contents.getByRole('button',{name:/reviewer/}).first().click();await page.getByText('检查改动影响').first().waitFor();await capture('plugin-item-preview');
+ await page.getByRole('button',{name:'返回插件',exact:true}).click();await contents.waitFor();
  await details.getByRole('button',{name:'关闭插件详情',exact:true}).click();
- await page.getByLabel('插件来源',{exact:true}).fill('capture-plugin@official');
- await page.getByRole('checkbox',{name:/我信任所选来源/}).check();await capture('plugin-install');
  await page.evaluate(()=>window.__capturePluginHold=true);
  await list.getByRole('button',{name:/Code Review/}).click();details=page.getByRole('article',{name:'插件详情'});
  await details.getByRole('button',{name:'禁用',exact:true}).click();
  await details.getByRole('button',{name:'关闭插件详情',exact:true}).click();
  const queue=page.locator('[aria-label="插件操作队列"]');await queue.waitFor();
- await page.getByRole('button',{name:'安装插件',exact:true}).click();
+ await page.getByRole('button',{name:'安装新插件',exact:true}).click();
+ const install=page.getByRole('dialog',{name:'安装新插件'});await install.waitFor();
+ await install.getByLabel('插件来源',{exact:true}).fill('capture-plugin@official');
+ await install.getByRole('checkbox',{name:/我信任所选来源/}).check();await capture('plugin-install');
+ await install.getByRole('button',{name:'安装插件',exact:true}).click();
  await queue.locator('[data-state="queued"]').waitFor();await capture('plugin-queue');
  await page.evaluate(()=>{window.__capturePluginHold=false;window.__capturePluginFailure=true;window.__releaseCapturePlugin?.();});
  await queue.locator('[data-state="failed"]').first().waitFor();

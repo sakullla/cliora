@@ -6,6 +6,11 @@ export type PluginEntry = { id: string; name: string; source: string; version: s
 export type PluginSnapshot = { target: PluginTarget; capability: { version: string; sources: string; actions: PluginAction[]; project: boolean; detail: string }; entries: PluginEntry[]; baseline: string; detail: string };
 export type PluginRequest = { target: PluginTarget; action: PluginAction; source: string; baseline: string; trusted: boolean };
 export type PluginResult = { status: string; detail: string; transactionId: string | null; snapshot: PluginSnapshot | null };
+/** What a plugin bundles, named per item. `kind` follows the resource kind (agents, skills, commands, hooks, mcp, …). */
+export type PluginManifest = { description: string | null; author: string | null; homepage: string | null; license: string | null; keywords: string[]; path: string | null };
+export type PluginItem = { kind: string; name: string; description: string | null; path: string; location: string; format: string };
+export type PluginContents = { pluginId: string; root: string | null; manifest: PluginManifest; items: PluginItem[]; truncated: boolean };
+export type PluginFile = { path: string; content: string; format: string; truncated: boolean };
 
 export type McpTransport = 'stdio' | 'http';
 export type McpDefinition = {

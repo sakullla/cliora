@@ -8,6 +8,7 @@ import type { AgentEntry, AgentRequest, AgentResult, AgentSnapshot, PluginTarget
 import { useAccountLabels } from '../library/resourceContexts';
 import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, PathLine, Toggle, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import { DocumentReader, readModel } from './DocumentReader';
+import { samePath } from '../library/CliMarks';
 import styles from './AgentsWorkspace.module.css';
 import { StatusBanner } from '../../components/StatusBanner';
 import { SearchField } from '../../components/SearchField';
@@ -24,7 +25,10 @@ function remoteAgentPath(toolId: string, scope: Scope, projectPath: string, name
   return `${base}/agents/${name}.${format === 'toml' ? 'toml' : 'md'}`;
 }
 
-export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; remoteTargetId?: string | null; onDirtyChange: (value: boolean) => void }) {
+/** Agents owned by a plugin carry `插件：<id>` (resources/agents.rs). */
+function pluginOwner(owner: string) { const match = /^插件[:：]\s*(.+)$/.exec(owner); return match?.[1] ?? null; }
+
+export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, focusPath = null, onOpenPlugin }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; remoteTargetId?: string | null; onDirtyChange: (value: boolean) => void; focusPath?: { path: string; token: number } | null; onOpenPlugin?: (pluginId: string) => void }) {
   const { t } = useTranslation();
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
   const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
@@ -95,6 +99,15 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setError('');
     applyEntry(entry);
   }
+  // A jump from a plugin's contents opens that agent definition once it is listed.
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focusPath || appliedFocus.current === focusPath.token || !snapshot) return;
+    const entry = snapshot.entries.find(item => samePath(item.path, focusPath.path));
+    if (!entry) return;
+    appliedFocus.current = focusPath.token;
+    void openEntry(entry);
+  }, [focusPath, snapshot]);
   async function createNew() {
     if (!snapshot?.capability.supported || busy || !await abandon()) return;
     const text = snapshot.capability.template ?? '';
@@ -285,6 +298,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
           <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.agents.delete')} title={opened.readOnly ? t('tools.agents.managedTitle') : t('tools.agents.delete')} disabled={busy || opened.readOnly} onClick={() => void operate('delete', opened)} icon={<Icon name="trash" size={15} />} />
         </>}
         meta={opened.owner ? <span>{opened.owner}</span> : undefined}
+        metaActions={onOpenPlugin && pluginOwner(opened.owner) ? <Button size="sm" variant="ghost" className={doc.ghostButton} onClick={() => onOpenPlugin(pluginOwner(opened.owner)!)}><Icon name="package" size={13} />{t('tools.agents.openPlugin')}</Button> : undefined}
       />
       {reasonFor(opened) && <p className={doc.strip} data-tone={opened.readOnly ? 'warn' : undefined}><Icon name={opened.readOnly ? 'lock' : 'info'} size={14} /><span>{reasonFor(opened)}</span></p>}
       {infoOpen && <div className={doc.info}>

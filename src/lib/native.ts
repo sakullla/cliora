@@ -3,7 +3,7 @@ import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft }
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
-import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
+import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, WorkbenchGitContext, WorkbenchReplay, WorkbenchSession, RemoteSessionIndexEntry } from '../types/launch';
@@ -93,6 +93,9 @@ export const native = {
   scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),
   previewNativePlugins: (target: PluginTarget) => command<PluginSnapshot | null>('preview_native_plugins', { target }),
   operateNativePlugin: (request: PluginRequest) => command<PluginResult>('operate_native_plugin', { request }),
+  inspectNativePlugin: (target: PluginTarget, pluginId: string) => command<PluginContents>('inspect_native_plugin', { target, pluginId }),
+  readNativePluginFile: (target: PluginTarget, pluginId: string, path: string) => command<PluginFile>('read_native_plugin_file', { target, pluginId, path }),
+  revealNativePluginPath: (target: PluginTarget, pluginId: string, path: string | null) => command<void>('reveal_native_plugin_path', { target, pluginId, path }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
   discoverNativeLogins: (toolId: string) => command<NativeLoginSnapshot>('discover_native_logins', { toolId }),
   adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),

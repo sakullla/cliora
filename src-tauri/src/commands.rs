@@ -79,6 +79,51 @@ pub async fn operate_native_plugin(
     })
     .await
 }
+
+/// Names what a plugin bundles. Read-only; resolved against a fresh scan of the target.
+#[tauri::command]
+pub async fn inspect_native_plugin(
+    app: AppHandle,
+    target: resources::plugins::PluginTarget,
+    plugin_id: String,
+) -> Result<resources::plugin_contents::PluginContents, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::plugin_contents::inspect(&db, &home()?, &target, &plugin_id).map_err(native_error)
+    })
+    .await
+}
+
+/// Text of one file inside the plugin's root or declared resources.
+#[tauri::command]
+pub async fn read_native_plugin_file(
+    app: AppHandle,
+    target: resources::plugins::PluginTarget,
+    plugin_id: String,
+    path: String,
+) -> Result<resources::plugin_contents::PluginFile, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::plugin_contents::read_file(&db, &home()?, &target, &plugin_id, &path).map_err(native_error)
+    })
+    .await
+}
+
+/// Shows the plugin folder, or a file inside it, in the system file manager.
+#[tauri::command]
+pub async fn reveal_native_plugin_path(
+    app: AppHandle,
+    target: resources::plugins::PluginTarget,
+    plugin_id: String,
+    path: Option<String>,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let location = resources::plugin_contents::locate(&db, &home()?, &target, &plugin_id, path.as_deref()).map_err(native_error)?;
+        tauri_plugin_opener::reveal_item_in_dir(&location).map_err(|error| native_error(format!("无法在文件管理器中显示：{error}")))
+    })
+    .await
+}
 use std::path::PathBuf;
 
 #[derive(Default)]

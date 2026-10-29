@@ -26,6 +26,13 @@ async function setup(page: Page) {
       if (command === 'list_cli_adapters') return { registered: [{ id: 'capable', name: 'Capable CLI', interfaceFormats: ['openai_responses'], management }], managedIds: ['capable'], preservedUnknown: [] };
       if (command === 'list_projects') return [{ id: 'project', name: '测试项目', path: '/fixture/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
       if (command === 'get_registered_tool_workspace') return { probe: { tool: args.toolId, selectedPath: '/fixture/cli', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [] }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+      if (command === 'inspect_native_plugin') return { pluginId: args.pluginId, root, manifest: { description: null, author: null, homepage: null, license: null, keywords: [], path: null }, items: [
+        { kind: 'rules', name: 'rules', description: null, path: `${root}/rules/style.md`, location: `${root}/rules`, format: 'markdown' },
+        { kind: 'rules', name: 'AGENTS.md', description: null, path: `${root}/AGENTS.md`, location: `${root}/AGENTS.md`, format: 'markdown' },
+        { kind: 'hooks', name: 'PreToolUse', description: '1', path: `${root}/hooks.json`, location: `${root}/hooks.json`, format: 'json' },
+        { kind: 'mcp', name: 'docs', description: null, path: `${root}/.mcp.json`, location: `${root}/.mcp.json`, format: 'json' },
+        { kind: 'mcp', name: 'search', description: null, path: `${root}/mcp.json`, location: `${root}/mcp.json`, format: 'json' },
+      ], truncated: false };
       if (command === 'scan_native_plugins') return { target: args.target, capability: { version: '3000.11.205', sources: 'GitHub owner/repo 或本地路径', actions: ['install', 'update', 'uninstall'], project: false, detail: '' }, entries: [entry], baseline: 'fixture-baseline', detail: '' };
       if (command === 'account_capabilities') return [];
       if (['list_accounts', 'list_usage_queries', 'list_usage_cache', 'usage_presets'].includes(command)) return [];
@@ -71,7 +78,7 @@ test('a capability without enable or disable only offers update and uninstall pe
   await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeVisible();
   await expect(details.getByRole('button', { name: '启用', exact: true })).toHaveCount(0);
   await expect(details.getByRole('button', { name: '禁用', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '安装插件' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '安装新插件', exact: true })).toBeEnabled();
 });
 
 test('plugin resources render rules, hooks, and both mcp layout entries', async ({ page }) => {
@@ -80,12 +87,11 @@ test('plugin resources render rules, hooks, and both mcp layout entries', async 
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await card.getByRole('button').click();
   const details = page.getByLabel('插件详情', { exact: true });
-  const root = '/fixture/plugins/fixture';
-  await expect(details.locator('li')).toHaveCount(5);
-  const resources = details.locator('li');
-  const expected = [['rules', 'rules'], ['rules', 'AGENTS.md'], ['hooks', 'hooks.json'], ['mcp', '.mcp.json'], ['mcp', 'mcp.json']] as const;
-  for (const [index, [kind, suffix]] of expected.entries()) {
-    await expect(resources.nth(index).getByText(kind, { exact: true })).toBeVisible();
-    await expect(resources.nth(index).getByText(`${root}/${suffix}`, { exact: true })).toBeVisible();
+  const items = details.getByRole('list', { name: '插件内容' }).getByRole('listitem');
+  await expect(items).toHaveCount(5);
+  const expected = [['规则', 'rules'], ['规则', 'AGENTS.md'], ['Hook', '1 个处理器'], ['MCP 服务', 'docs'], ['MCP 服务', 'search']] as const;
+  for (const [index, [kind, text]] of expected.entries()) {
+    await expect(items.nth(index)).toContainText(text);
+    await expect(details.getByRole('group', { name: '按类型筛选' }).getByRole('button', { name: new RegExp(`^${kind}`) })).toBeVisible();
   }
 });
