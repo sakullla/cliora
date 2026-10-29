@@ -265,7 +265,7 @@ fn five_cli_histories_resume_in_the_original_macos_directory() {
         assert_eq!(plan.terminal, TerminalId::MacTerminal);
         assert_eq!(plan.directory, project);
         assert!(plan.cli_args.contains(session.native_id.as_ref().unwrap()));
-        let terminal = launch::terminal_command(&plan).unwrap();
+        let terminal = launch::terminal_command(&plan, None).unwrap();
         assert_eq!(terminal.program, "/usr/bin/open");
         let script = terminal.mac_script.unwrap();
         assert!(script.contains("export PATH="));
