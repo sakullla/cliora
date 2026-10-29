@@ -37,6 +37,13 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await expect(dialog.getByLabel('标题')).toBeVisible();
   await expect(dialog.getByLabel('分类')).toHaveCount(0);
   await dialog.getByRole('button', { name: '开发' }).click();
+  // Focus draws one ring: on the tag field's frame, not a second one on the input inside it.
+  await dialog.getByLabel('添加标签').focus();
+  const rings = await dialog.getByLabel('添加标签').evaluate((input) => {
+    const ring = (el: Element) => { const style = getComputedStyle(el); return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0; };
+    return { input: ring(input), frame: ring(input.closest('[data-field-frame]')!) };
+  });
+  expect(rings).toEqual({ input: false, frame: true });
   await dialog.getByLabel('添加标签').fill('文档');
   await dialog.getByLabel('添加标签').press('Enter');
   await expect(dialog.getByRole('button', { name: '开发 ×' })).toBeVisible();

@@ -169,7 +169,7 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
         </div></details>
         <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={14} />{t('records.reader.latest')}</button>
       </div>
-      {findOpen && <div className={styles.find}>
+      {findOpen && <div className={styles.find} data-field-frame="">
         <Icon name="search" size={14} /><input autoFocus aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
           if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }

@@ -88,6 +88,9 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, tex
 /* One ring, not two: the outline sits on the border and a soft halo carries the focus outward. */
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):focus { box-shadow: 0 0 0 4px var(--accent-ring); }
+/* A composite field (tags, search with buttons) draws the one focus ring on its frame through
+   :focus-within; the control inside stays flat instead of drawing a second ring. */
+[data-field-frame] input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus, [data-field-frame] select:focus, [data-field-frame] textarea:focus { outline: none; box-shadow: none; }
 :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--control-line-hover); }
 
 :where(select) {
