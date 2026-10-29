@@ -18,9 +18,10 @@ function row(page: Page, name: string) {
   return page.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) });
 }
 
-async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true) {
-  await page.addInitScript(({ holdScan, emptyEntries, supported }) => {
-    const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: '/fixture/agents/reviewer.md', format: 'markdown', content: '---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\nReview code.\n', enabled: true, readOnly: false, owner: '独立定义', detail: '' };
+async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true, longBody = false) {
+  await page.addInitScript(({ holdScan, emptyEntries, supported, longBody }) => {
+    const body = longBody ? Array.from({ length: 80 }, (_, index) => `## Step ${index + 1}\n\nReview code carefully.\n`).join('\n') : 'Review code.\n';
+    const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: '/fixture/agents/reviewer.md', format: 'markdown', content: `---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\n${body}`, enabled: true, readOnly: false, owner: '独立定义', detail: '' };
     const conflicted = { ...entry, id: 'conflicted', name: 'planner', description: 'Plan', path: '/fixture/opencode.json', format: 'json', content: '{"description":"Plan"}', readOnly: true, detail: 'agent 与 agents 同义并存，原生形态冲突；请在原生配置统一为一种形态后再编辑' };
     const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted], fail: false, releaseScan: null as (() => void) | null };
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', supported, format: 'markdown', template: entry.content, detail: supported ? '下一次委派加载' : '此版本未证实统一的原生 agent 定义格式。' }, entries: supported ? state.entries : [], baseline: 'fixture-baseline', detail: supported ? '原生定义管理' : '规则与扩展可在各自入口管理。' });
@@ -47,7 +48,7 @@ async function setup(page: Page, holdScan = false, emptyEntries = false, support
       }
       return null;
     } } });
-  }, { holdScan, emptyEntries, supported });
+  }, { holdScan, emptyEntries, supported, longBody });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   if (!holdScan && !emptyEntries && supported) await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
@@ -333,4 +334,18 @@ test('the workbench reads first, edits from the header, resizes, focuses, and wa
   await page.keyboard.press('End');
   await expect(page.getByRole('article', { name: 'planner' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+});
+
+test('opening another agent starts its document at the top', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await setup(page, false, false, true, true);
+  await row(page, 'reviewer').getByRole('button').click();
+  const reader = page.getByRole('article', { name: 'reviewer' });
+  await expect(reader).toContainText('Step 80');
+  const scrolled = () => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll<HTMLElement>('[data-document-shell] *')].map((node) => node.scrollTop)));
+  await reader.getByText('Step 80').scrollIntoViewIfNeeded();
+  await expect.poll(scrolled).toBeGreaterThan(100);
+  await row(page, 'plugin-agent').getByRole('button').click();
+  await expect(page.getByRole('article', { name: 'plugin-agent' })).toBeVisible();
+  await expect.poll(scrolled).toBe(0);
 });

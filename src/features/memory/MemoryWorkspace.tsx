@@ -783,7 +783,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const currentScope = current ? scopeOf(current.entry, currentStore) : null;
   const currentModified = currentParsed?.modified ? relativeTime(currentParsed.modified, i18n.language) : null;
 
-  return <DocumentWorkspace label={t('tools.workspace.view.memory')} toolbarLabel={aggregate ? t('common.memory.toolbar') : undefined} onKeyDown={onEditorKey} backLabel={t('common.memory.back')} onBack={() => { void closeDocument(); }}
+  return <DocumentWorkspace documentKey={compose ? 'new' : selected} label={t('tools.workspace.view.memory')} toolbarLabel={aggregate ? t('common.memory.toolbar') : undefined} onKeyDown={onEditorKey} backLabel={t('common.memory.back')} onBack={() => { void closeDocument(); }}
     heading={aggregate ? t('tools.workspace.view.memory') : undefined}
     count={aggregate && total > 0 ? filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length }) : undefined}
     actions={aggregate ? <>

@@ -216,7 +216,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     <Button variant="primary" title={saveShortcutHint()} disabled={disabled} onClick={save}>{t('tools.agents.save')}</Button>
   </DocumentFoot>;
 
-  return <DocumentWorkspace label={t('tools.agents.label')} toolbarLabel={t('tools.agents.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeDocument(); }} onKeyDown={onKey}
+  return <DocumentWorkspace documentKey={creating ? 'new' : selected?.id} label={t('tools.agents.label')} toolbarLabel={t('tools.agents.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeDocument(); }} onKeyDown={onKey}
     heading={t('tools.workspace.view.agents')}
     count={supported ? filtered.length === entries.length ? t('tools.agents.count', { count: entries.length }) : t('tools.agents.countFiltered', { filtered: filtered.length, total: entries.length }) : undefined}
     actions={<>
