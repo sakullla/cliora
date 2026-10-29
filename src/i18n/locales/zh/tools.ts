@@ -531,6 +531,7 @@ export default {
       argsInvalid: 'args 必须是仅包含字符串的数组。',
       envInvalid: 'env 必须是对象，值只能是字符串。',
       headersInvalid: 'headers 必须是对象，值只能是字符串。',
+      cwdUnsupported: '含工作目录 cwd，栖点不支持该字段；去掉 cwd 后再导入。',
     },
   },
   skills: {

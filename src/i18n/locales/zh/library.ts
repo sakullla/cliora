@@ -201,7 +201,7 @@ export default {
     replaceDistribute: '替换并分发',
     saveDistribute: '保存并分发',
     pasteImport: '粘贴导入',
-    pasteImportHint: '粘贴 mcpServers 包装或单个服务器的 JSON，识别后填入下方表单。',
+    pasteImportHint: '粘贴 mcpServers 包装、单个服务器的 JSON，或 cc-switch 复制的配置与 ccswitch:// 链接，识别后填入下方表单。',
     pasteImportAria: '粘贴 MCP JSON',
     pasteImportApply: '解析并填入',
     pasteImportError: '无法识别这段内容，表单未改动。',

@@ -531,6 +531,7 @@ export default {
       argsInvalid: 'args must be an array of strings only.',
       envInvalid: 'env must be an object with string values only.',
       headersInvalid: 'headers must be an object with string values only.',
+      cwdUnsupported: 'Sets a working directory (cwd), which Cliora does not support; remove cwd, then import.',
     },
   },
   skills: {
