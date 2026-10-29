@@ -284,7 +284,7 @@ test('subscription profiles are grouped apart and quota is added from the row me
 
 test('the profile row menu stays fully clickable past the card edge', async ({ page }) => {
   await page.addInitScript(() => {
-    const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://cpa.example.test/v1', model: 'devin/swe-2', secretRef: null, authEnvVar: null };
+    const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://gateway.example.test/v1', model: 'devin/swe-2', secretRef: null, authEnvVar: null };
     const profiles = [{ id: 'live', tool: 'codex', name: '新配置', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection }];
     Object.assign(window, {
       isTauri: true,
@@ -338,7 +338,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
 test('a long configuration list scrolls with the page and can be searched', async ({ page }) => {
   await page.addInitScript(() => {
     const applied = { id: 'p0' };
-    const profiles = Array.from({ length: 20 }, (_, index) => ({ id: `p${index}`, tool: 'claude_code', name: index === 0 ? 'Kimi For Coding' : `配置 ${index}`, version: 1, revision: String(index), inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: null }));
+    const profiles = Array.from({ length: 20 }, (_, index) => ({ id: `p${index}`, tool: 'claude_code', name: index === 0 ? 'Plan A' : `配置 ${index}`, version: 1, revision: String(index), inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: null }));
     const workspace = () => ({
       probe: { selectedPath: 'C:/claude.cmd', installations: [{ path: 'C:/claude.cmd', version: '2.1.284', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
       profiles, binding: { scopeKey: 'global', tool: 'claude_code', profileId: applied.id, profileVersion: 1, appliedProfileAvailable: true, appliedSummary: { profileVersion: 1, profileRevision: profiles.find(profile => profile.id === applied.id)!.revision, authentication: { kind: 'native' }, contextId: null, providerId: null, baseUrl: null, model: null }, commonVersion: null, commonRevision: null, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,

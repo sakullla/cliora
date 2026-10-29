@@ -14,13 +14,13 @@ test('plugin search and read-only filter expose relevant actions without changin
 });
 
 async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false) {
-  const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\sakullla-dev`;
-  const extendedResource = String.raw`\\?\UNC\server\share\plugins\sakullla-dev\agents`;
+  const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\example-dev`;
+  const extendedResource = String.raw`\\?\UNC\server\share\plugins\example-dev\agents`;
   await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
     const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
-    if (extended) state.entries.push({ ...entry, id: 'sakullla-dev', name: 'sakullla-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'sakullla-dev' }] });
+    if (extended) state.entries.push({ ...entry, id: 'example-dev', name: 'example-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'example-dev' }] });
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries.map(item => ({ ...item })), baseline: state.baseline, detail: '静态列表，加载未验证' });
     Object.assign(window, { isTauri: true, pluginsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
@@ -289,8 +289,8 @@ test('returning to plugins uses the scoped snapshot and explicit scan refreshes 
 
 test('windows extended plugin paths are shown as ordinary paths', async ({ page }) => {
   await setup(page, false, false, false, false, true);
-  const card = page.getByRole('listitem').filter({ has: page.getByText('sakullla-dev', { exact: true }) });
-  const drive = 'C:\\Users\\fixture\\.grok\\plugins\\sakullla-dev';
+  const card = page.getByRole('listitem').filter({ has: page.getByText('example-dev', { exact: true }) });
+  const drive = 'C:\\Users\\fixture\\.grok\\plugins\\example-dev';
   await expect(card.getByText(`${drive} · 全局`)).toBeVisible();
   await expect(card).not.toContainText('\\\\?\\');
   await card.getByRole('button').click();
@@ -298,7 +298,7 @@ test('windows extended plugin paths are shown as ordinary paths', async ({ page 
   await expect(details.getByText('安装位置', { exact: true })).toBeVisible();
   await expect(details.getByText(drive, { exact: true }).first()).toBeVisible();
   await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
-  await expect(details.getByText('\\\\server\\share\\plugins\\sakullla-dev\\agents', { exact: true })).toBeVisible();
+  await expect(details.getByText('\\\\server\\share\\plugins\\example-dev\\agents', { exact: true })).toBeVisible();
   const market = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(market.getByText('fixture@market · 全局')).toBeVisible();
 });

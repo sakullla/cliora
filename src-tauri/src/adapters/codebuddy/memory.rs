@@ -476,23 +476,23 @@ mod tests {
         // (2026-10-19) match the bundle rule; the lowercase drive letter is
         // the Node realpathSync normalization.
         let samples = [
-            ("C:\\Users\\12976\\IdeaProjects\\Rillight", "c-Users-12976-IdeaProjects-Rillight"),
+            ("C:\\Users\\dev\\IdeaProjects\\SampleApp", "c-Users-dev-IdeaProjects-SampleApp"),
             (
-                "C:\\Users\\12976\\IdeaProjects\\nginx-reverse-emby",
-                "c-Users-12976-IdeaProjects-nginx-reverse-emby",
+                "C:\\Users\\dev\\IdeaProjects\\sample-proxy",
+                "c-Users-dev-IdeaProjects-sample-proxy",
             ),
             (
-                "C:\\Users\\12976\\IdeaProjects\\sakullla-plugins",
-                "c-Users-12976-IdeaProjects-sakullla-plugins",
+                "C:\\Users\\dev\\IdeaProjects\\example-plugins",
+                "c-Users-dev-IdeaProjects-example-plugins",
             ),
-            ("C:\\Users\\12976\\cursor\\LightInk", "c-Users-12976-cursor-LightInk"),
-            ("C:\\Users\\12976\\project\\LightInk", "c-Users-12976-project-LightInk"),
-            ("C:\\Users\\12976\\project\\Rillight", "c-Users-12976-project-Rillight"),
-            ("C:\\Users\\12976\\project\\cliora", "c-Users-12976-project-cliora"),
-            ("C:\\Users\\12976\\project\\cropmark", "c-Users-12976-project-cropmark"),
+            ("C:\\Users\\dev\\cursor\\SampleNotes", "c-Users-dev-cursor-SampleNotes"),
+            ("C:\\Users\\dev\\project\\SampleNotes", "c-Users-dev-project-SampleNotes"),
+            ("C:\\Users\\dev\\project\\SampleApp", "c-Users-dev-project-SampleApp"),
+            ("C:\\Users\\dev\\project\\cliora", "c-Users-dev-project-cliora"),
+            ("C:\\Users\\dev\\project\\sample-tool", "c-Users-dev-project-sample-tool"),
             (
-                "C:\\Users\\12976\\project\\self-workflow",
-                "c-Users-12976-project-self-workflow",
+                "C:\\Users\\dev\\project\\sample-workflow",
+                "c-Users-dev-project-sample-workflow",
             ),
         ];
         for (path, slug) in samples {

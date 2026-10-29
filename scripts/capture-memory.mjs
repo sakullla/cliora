@@ -48,12 +48,12 @@ const fixtures = {
         feedback_requirement_docs: doc('requirement-docs-new-not-revise', '延续已关闭 workflow 的需求时新建独立需求文档，不修订旧文档', 'feedback', 1, '对已关闭 workflow 交付的需求做后续强化时，新建 `docs/requirements/<日期>-<主题>.md`，不修订旧需求文档。\n\n**Why:** 旧文档是已验收交付的依据。\n\n**How to apply:** 新需求引用旧文档路径即可。'),
         'linux-build-server': doc('linux-build-server', 'Debian 13 构建机；无 GitHub 访问（scp 中转）；GUI 冒烟需要 DBus+Xvfb', 'reference', 12, '构建机 `192.168.0.109`，Debian 13。\n\n```bash\nscp target/release/bundle/deb/*.deb build:/tmp/\nxvfb-run -a dbus-run-session ./cliora\n```'),
       } },
-      { label: 'C:\\Users\\dev\\IdeaProjects\\Rillight', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-Rillight/memory', entries: {
-        project_rillight_playback: doc('project-rillight-playback', '播放器使用 mpv 嵌入；字幕与音轨切换走 IPC 命令', 'project', 9, '播放链路：mpv 嵌入窗口 → IPC 命令切换字幕与音轨。'),
+      { label: 'C:\\Users\\dev\\IdeaProjects\\SampleApp', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-SampleApp/memory', entries: {
+        project_sample_playback: doc('project-sample-playback', '播放器使用 mpv 嵌入；字幕与音轨切换走 IPC 命令', 'project', 9, '播放链路：mpv 嵌入窗口 → IPC 命令切换字幕与音轨。'),
         user_profile: doc('user-profile', 'Prefers Kotlin, compact code, and Chinese commit messages', 'user', 30, 'Kotlin first; compact code; Chinese commit summaries.'),
       } },
       { label: 'C:\\Users\\dev\\project\\empty-store', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-project-empty-store/memory', entries: {} },
-      { label: 'C:\\Users\\dev\\IdeaProjects\\nginx-reverse-emby', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-nginx-reverse-emby/memory', entries: {
+      { label: 'C:\\Users\\dev\\IdeaProjects\\sample-proxy', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-sample-proxy/memory', entries: {
         'ui-permission-controls-in-composer': '# Composer permission controls\n\nPermission toggles live in the composer footer, not in a modal.', } },
     ],
   },

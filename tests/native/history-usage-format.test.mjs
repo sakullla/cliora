@@ -17,7 +17,7 @@ test('unknown token records stay distinct from known zero and partial known tota
 test('native fractions remain nonzero and unrelated units are not added', () => {
   assert.equal(formatNativeValue(0.000000001), '0.000000001');
   assert.equal(compactNativeValue(0.000000001), '0.000000001');
-  assert.equal(compactNativeValue(20.5059857509), '20.51');
+  assert.equal(compactNativeValue(3.14159265358), '3.142');
   assert.equal(compactNativeValue(12345.6), '12,346');
   const mixed = { usageRecords: 3, unknownTokenRecords: 3, total: 0, nativeUsage: [
     { unit: 'credits', value: 1.25, billable: false }, { unit: 'credits', value: 0.75, billable: true },

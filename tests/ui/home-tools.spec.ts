@@ -602,13 +602,13 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
 
 test('a short profile menu is one line, switches with arrow keys and keeps the model in the tooltip', async ({ page }) => {
   await page.addInitScript(() => {
-    const applied = { codex: 'zhipu' };
+    const applied = { codex: 'plan-b' };
     const profiles = [
-      { id: 'kimi', tool: 'codex', name: 'Kimi For Coding', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'k3' } },
-      { id: 'zhipu', tool: 'codex', name: 'Zhipu GLM', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'glm-5.3' } },
-      { id: 'cpa', tool: 'codex', name: 'cpa', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'claude-opus-5-5' } },
-      { id: 'deepseek', tool: 'codex', name: 'DeepSeek', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'deepseek-flash' } },
-      { id: 'minimax', tool: 'codex', name: 'MiniMax', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'MiniMax-M3' } },
+      { id: 'plan-a', tool: 'codex', name: 'Plan A', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'model-a' } },
+      { id: 'plan-b', tool: 'codex', name: 'Plan B', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'model-b' } },
+      { id: 'plan-c', tool: 'codex', name: 'Plan C', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'model-c' } },
+      { id: 'plan-d', tool: 'codex', name: 'Plan D', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'model-d' } },
+      { id: 'plan-e', tool: 'codex', name: 'Plan E', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'model-e' } },
       { id: 'spare', tool: 'codex', name: '备用', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'spare-model' } },
     ];
     Object.assign(window, {
@@ -634,34 +634,34 @@ test('a short profile menu is one line, switches with arrow keys and keeps the m
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
-  await expect(menu).toHaveText('Zhipu GLM');
-  await expect(menu).toHaveAttribute('title', /Zhipu GLM · glm-5\.3/);
+  await expect(menu).toHaveText('Plan B');
+  await expect(menu).toHaveAttribute('title', /Plan B · model-b/);
   await expect(menu.locator('small')).toHaveCount(0);
   await expect(tools.getByRole('button', { name: '下一个配置' })).toHaveCount(0);
   await menu.focus();
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('listbox')).toHaveCount(0);
-  await expect(menu).toHaveText('cpa');
-  await expect(menu).toHaveAttribute('title', /cpa · claude-opus-5-5/);
+  await expect(menu).toHaveText('Plan C');
+  await expect(menu).toHaveAttribute('title', /Plan C · model-c/);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
   await menu.focus();
   await page.keyboard.press('ArrowLeft');
-  await expect(menu).toHaveText('Zhipu GLM');
+  await expect(menu).toHaveText('Plan B');
   await menu.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(menu).toHaveText('cpa');
+  await expect(menu).toHaveText('Plan C');
   await menu.click();
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
   await expect(list.getByRole('option')).toHaveCount(6);
   const search = page.getByLabel('搜索配置');
   await expect(search).toBeFocused();
-  await search.fill('deep');
+  await search.fill('plan d');
   await expect(list.getByRole('option')).toHaveCount(1);
-  await expect(list.getByRole('option', { name: 'DeepSeek' })).toBeVisible();
+  await expect(list.getByRole('option', { name: 'Plan D' })).toBeVisible();
   await search.fill('');
   await expect(list.getByRole('option')).toHaveCount(6);
-  const option = list.getByRole('option', { name: 'DeepSeek' });
-  await expect(option).toContainText('deepseek-flash');
+  const option = list.getByRole('option', { name: 'Plan D' });
+  await expect(option).toContainText('model-d');
   const optionStacked = await option.evaluate((element) => {
     const name = element.querySelector('strong')?.getBoundingClientRect();
     const model = element.querySelector('small')?.getBoundingClientRect();
@@ -674,10 +674,10 @@ test('a short profile menu is one line, switches with arrow keys and keeps the m
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(page.getByRole('listbox')).toHaveCount(0);
-  await expect(menu).toHaveText('DeepSeek');
-  await expect(menu).toHaveAttribute('title', /DeepSeek · deepseek-flash/);
+  await expect(menu).toHaveText('Plan D');
+  await expect(menu).toHaveAttribute('title', /Plan D · model-d/);
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
-  expect(calls.map((call) => call.profileId)).toEqual(['cpa', 'zhipu', 'cpa', 'deepseek']);
+  expect(calls.map((call) => call.profileId)).toEqual(['plan-c', 'plan-b', 'plan-c', 'plan-d']);
 });
 
 

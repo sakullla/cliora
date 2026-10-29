@@ -564,40 +564,40 @@ mod tests {
         // (2026-10-19) matches the bundle rule; separator runs are kept
         // (`C:\Users` → `C--Users`) and case is not folded.
         let samples = [
-            ("C:\\Users\\12976", "C--Users-12976"),
+            ("C:\\Users\\dev", "C--Users-dev"),
             (
-                "C:\\Users\\12976\\Documents\\Qoder",
-                "C--Users-12976-Documents-Qoder",
+                "C:\\Users\\dev\\Documents\\Qoder",
+                "C--Users-dev-Documents-Qoder",
             ),
             (
-                "C:\\Users\\12976\\IdeaProjects\\nginx-reverse-emby",
-                "C--Users-12976-IdeaProjects-nginx-reverse-emby",
+                "C:\\Users\\dev\\IdeaProjects\\sample-proxy",
+                "C--Users-dev-IdeaProjects-sample-proxy",
             ),
             (
-                "C:\\Users\\12976\\cursor\\LightInk",
-                "C--Users-12976-cursor-LightInk",
+                "C:\\Users\\dev\\cursor\\SampleNotes",
+                "C--Users-dev-cursor-SampleNotes",
             ),
             (
-                "C:\\Users\\12976\\cursor\\cliora",
-                "C--Users-12976-cursor-cliora",
+                "C:\\Users\\dev\\cursor\\cliora",
+                "C--Users-dev-cursor-cliora",
             ),
             (
-                "C:\\Users\\12976\\project\\cliora",
-                "C--Users-12976-project-cliora",
+                "C:\\Users\\dev\\project\\cliora",
+                "C--Users-dev-project-cliora",
             ),
             (
-                "C:\\Users\\12976\\project\\cropmark",
-                "C--Users-12976-project-cropmark",
+                "C:\\Users\\dev\\project\\sample-tool",
+                "C--Users-dev-project-sample-tool",
             ),
             (
-                "C:\\Users\\12976\\project\\self-workflow",
-                "C--Users-12976-project-self-workflow",
+                "C:\\Users\\dev\\project\\sample-workflow",
+                "C--Users-dev-project-sample-workflow",
             ),
             // Live probe (2026-10-19): underscores, dots, spaces and CJK
             // characters each collapse to one `-` per character.
             (
-                "C:\\Users\\12976\\project\\_probe.dir with space-汉字",
-                "C--Users-12976-project--probe-dir-with-space---",
+                "C:\\Users\\dev\\project\\_probe.dir with space-汉字",
+                "C--Users-dev-project--probe-dir-with-space---",
             ),
         ];
         for (path, slug) in samples {
@@ -611,24 +611,24 @@ mod tests {
     #[test]
     fn store_label_uses_a_transcript_cwd_only_when_it_rederives_the_slug() {
         let temp = tempfile::tempdir().unwrap();
-        let slug = "C--Users-12976-project-cliora";
+        let slug = "C--Users-dev-project-cliora";
         let directory = temp.path().join(slug);
         fs::create_dir_all(directory.join("memory")).unwrap();
         assert_eq!(recorded_project(&directory, slug), None);
         fs::write(
             directory.join("a.jsonl"),
-            "{\"type\":\"summary\"}\n{\"cwd\":\"C:\\\\Users\\\\12976\\\\other\"}\n",
+            "{\"type\":\"summary\"}\n{\"cwd\":\"C:\\\\Users\\\\dev\\\\other\"}\n",
         )
         .unwrap();
         assert_eq!(recorded_project(&directory, slug), None);
         fs::write(
             directory.join("b.jsonl"),
-            "not json\n{\"cwd\":\"C:\\\\Users\\\\12976\\\\project\\\\cliora\"}\n",
+            "not json\n{\"cwd\":\"C:\\\\Users\\\\dev\\\\project\\\\cliora\"}\n",
         )
         .unwrap();
         assert_eq!(
             recorded_project(&directory, slug).as_deref(),
-            Some("C:\\Users\\12976\\project\\cliora")
+            Some("C:\\Users\\dev\\project\\cliora")
         );
     }
 
