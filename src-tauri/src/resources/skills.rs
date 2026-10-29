@@ -88,6 +88,34 @@ pub struct NativeSkillDocument {
     pub content: String,
 }
 
+/// One attachment beside SKILL.md, by path relative to the skill directory.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFileEntry {
+    pub path: String,
+    pub size: Option<u64>,
+    pub readable: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFileListing {
+    pub files: Vec<SkillFileEntry>,
+    /// The file or byte limit stopped the walk; `files` is what was read.
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFilePreview {
+    pub path: String,
+    pub size: u64,
+    /// Absent when the file is over the read limit.
+    pub digest: Option<String>,
+    pub text: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillTargetPreview {
@@ -134,6 +162,17 @@ struct Candidate {
     digest: String,
 }
 
+const TEXT_PREVIEW_BYTES: usize = 256 * 1024;
+
+/// Text for small UTF-8 files without NUL bytes, plus size and SHA-256.
+/// Shared by import diffs and attachment previews.
+fn file_summary(bytes: &[u8]) -> (Option<String>, usize, String) {
+    let text = (bytes.len() <= TEXT_PREVIEW_BYTES && !bytes.contains(&0))
+        .then(|| std::str::from_utf8(bytes).ok().map(str::to_owned))
+        .flatten();
+    (text, bytes.len(), format!("{:x}", Sha256::digest(bytes)))
+}
+
 fn compare_files(
     old_files: &BTreeMap<String, String>,
     new_files: &BTreeMap<String, String>,
@@ -154,16 +193,10 @@ fn compare_files(
             let after = decode(new_files.get(path))?;
             let summary =
                 |value: Option<&Vec<u8>>| -> (Option<String>, Option<usize>, Option<String>) {
-                    let size = value.map(Vec::len);
-                    let hash = value.map(|bytes| format!("{:x}", Sha256::digest(bytes)));
-                    let text = value.and_then(|bytes| {
-                        if bytes.len() <= 256 * 1024 && !bytes.contains(&0) {
-                            std::str::from_utf8(bytes).ok().map(str::to_owned)
-                        } else {
-                            None
-                        }
-                    });
-                    (text, size, hash)
+                    match value.map(|bytes| file_summary(bytes)) {
+                        Some((text, size, hash)) => (text, Some(size), Some(hash)),
+                        None => (None, None, None),
+                    }
                 };
             let (before, before_size, before_digest) = summary(before.as_ref());
             let (after, after_size, after_digest) = summary(after.as_ref());
@@ -381,6 +414,142 @@ pub fn save_document(
         contents: Some(content.to_owned()),
     }], |_| Ok(()))?;
     Ok(())
+}
+
+/// Canonical directory of a located skill; a linked skill directory reads from its target.
+fn located_root(located: &SkillFile) -> Result<PathBuf, String> {
+    let dir = located.file.parent().ok_or("Skills 目录无效")?;
+    resolved_skill_dir(dir)?.canonicalize().map_err(|error| error.to_string())
+}
+
+fn unreadable_file(path: String, detail: impl Into<String>) -> SkillFileEntry {
+    SkillFileEntry { path, size: None, readable: false, detail: detail.into() }
+}
+
+/// Lists files by metadata only. Links are not followed and one failed entry
+/// does not stop the rest; the shared file and byte limits end the walk.
+fn list_attachments(root: &Path) -> SkillFileListing {
+    let mut files = Vec::new();
+    let mut total: u64 = 0;
+    let mut truncated = false;
+    let mut pending = vec![(root.to_path_buf(), String::new())];
+    'walk: while let Some((dir, prefix)) = pending.pop() {
+        let children = match fs::read_dir(&dir) {
+            Ok(children) => children,
+            Err(error) => {
+                if !prefix.is_empty() {
+                    files.push(unreadable_file(prefix, error.to_string()));
+                }
+                continue;
+            }
+        };
+        let mut children = children.collect::<Vec<_>>();
+        children.sort_by_key(|entry| entry.as_ref().map(|entry| entry.file_name()).ok());
+        for child in children {
+            if files.len() >= MAX_FILES {
+                truncated = true;
+                break 'walk;
+            }
+            let child = match child {
+                Ok(child) => child,
+                Err(error) => {
+                    files.push(unreadable_file(prefix.clone(), error.to_string()));
+                    continue;
+                }
+            };
+            let name = child.file_name().to_string_lossy().into_owned();
+            let relative = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+            if prefix.is_empty() && name == "SKILL.md" {
+                continue;
+            }
+            if child.file_name().to_str().is_none() {
+                files.push(unreadable_file(relative, "文件名无法识别"));
+                continue;
+            }
+            match fs::symlink_metadata(child.path()) {
+                Err(error) => files.push(unreadable_file(relative, error.to_string())),
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    files.push(unreadable_file(relative, "符号链接不读取"));
+                }
+                Ok(meta) if meta.is_dir() => pending.push((child.path(), relative)),
+                Ok(meta) if meta.is_file() => {
+                    total = total.saturating_add(meta.len());
+                    if total > MAX_BYTES as u64 {
+                        truncated = true;
+                        break 'walk;
+                    }
+                    files.push(SkillFileEntry { path: relative, size: Some(meta.len()), readable: true, detail: String::new() });
+                }
+                Ok(_) => files.push(unreadable_file(relative, "不是普通文件")),
+            }
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    SkillFileListing { files, truncated }
+}
+
+/// Attachments of a skill on the current tool and scope. Read-only.
+pub fn list_files(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+) -> Result<SkillFileListing, String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
+    Ok(list_attachments(&located_root(&located)?))
+}
+
+/// One attachment for read-only preview. The path stays inside the skill
+/// directory and is never a link.
+#[allow(clippy::too_many_arguments)]
+pub fn read_file(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+    relative: &str,
+) -> Result<SkillFilePreview, String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
+    let root = located_root(&located)?;
+    read_attachment(&root, relative)
+}
+
+fn read_attachment(root: &Path, relative: &str) -> Result<SkillFilePreview, String> {
+    let normal = !relative.is_empty()
+        && !relative.contains('\\')
+        && relative.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+        && Path::new(relative).components().all(|part| matches!(part, std::path::Component::Normal(_)));
+    if !normal {
+        return Err("附带文件路径无效".into());
+    }
+    let path = root.join(relative);
+    let meta = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    if meta.file_type().is_symlink() {
+        return Err("符号链接不读取".into());
+    }
+    if !meta.is_file() {
+        return Err("不是普通文件".into());
+    }
+    // A linked parent directory can still lead outside the skill.
+    if !within_root(root, &path) {
+        return Err("附带文件不在 Skill 目录内".into());
+    }
+    if meta.len() > MAX_BYTES as u64 {
+        return Ok(SkillFilePreview { path: relative.to_owned(), size: meta.len(), digest: None, text: None });
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path).map_err(|error| error.to_string())?
+        .take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    let (text, size, digest) = file_summary(&bytes);
+    Ok(SkillFilePreview { path: relative.to_owned(), size: size as u64, digest: Some(digest), text })
 }
 
 fn lock() -> &'static Mutex<()> {
