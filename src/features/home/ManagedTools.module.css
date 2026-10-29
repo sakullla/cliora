@@ -1,7 +1,7 @@
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;
-  grid-template-columns: minmax(170px, 230px) minmax(0, 1fr) repeat(3, auto);
+  grid-template-columns: minmax(190px, 280px) minmax(0, 1fr) repeat(3, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;
@@ -32,6 +32,13 @@
 .name { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .status { flex: none; max-width: 112px; }
+/* Star toggle: quiet until the row is hovered or focused, always shown once starred. */
+.favorite,
+.favorite:hover:not(:disabled) { display: grid; place-items: center; flex: none; width: var(--space-6); min-height: var(--row-h-compact); margin-left: auto; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); box-shadow: none; opacity: 0; transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease); }
+.row:hover .favorite, .row:focus-within .favorite, .favorite:focus-visible, .favorite[aria-pressed="true"] { opacity: 1; }
+.favorite:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.favorite[aria-pressed="true"], .favorite[aria-pressed="true"]:hover:not(:disabled) { color: var(--warning); }
+.favorite[aria-pressed="true"] svg { fill: currentColor; }
 /* A healthy install reads as quiet metadata; badges are kept for states that need attention. */
 .version { flex: none; max-width: 96px; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
 .unset { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }

@@ -1,5 +1,5 @@
 /* Home */
-/* One column: projects (the daily entry point) first, then the tools in daily use. */
+/* One column: the tools in daily use first, then projects. */
 .home-band { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); align-items: start; }
 .home-band > * { min-width: 0; }
 .home-tools { min-width: 0; container-type: inline-size; }
