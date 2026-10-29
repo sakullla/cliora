@@ -1,5 +1,6 @@
 pub mod mcp;
 pub mod plugins;
+pub mod plugin_contents;
 pub mod rules;
 pub mod skills;
 pub mod agents;

@@ -83,6 +83,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const [dirty, setDirty] = useState(false);
   const [resourceDirty, setResourceDirty] = useState({ mcp: false, skills: false, agents: false, memory: false });
   const [resourceEpoch, setResourceEpoch] = useState(0);
+  // A jump between tabs (a plugin's bundled agent or skill, an agent's owning plugin) opens the
+  // target tab on that item once; `token` keeps a later revisit from re-applying it.
+  const [resourceFocus, setResourceFocus] = useState<{ resource: ResourceView; key: string; token: number } | null>(null);
+  const focusToken = useRef(0);
   const mcpDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.mcp === value ? previous : { ...previous, mcp: value }), []);
   const skillsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.skills === value ? previous : { ...previous, skills: value }), []);
   const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
@@ -273,6 +277,13 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   }
   async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); }
   async function switchResource(next: ResourceView) { if (next === resource || !await mayLeave()) return; discard(); setResource(next); }
+  async function openResourceItem(next: 'agents' | 'skills' | 'plugins', key: string) {
+    if (!supported[next]) return;
+    if (next !== resource) { if (!await mayLeave()) return; discard(); setResource(next); }
+    setResourceFocus({ resource: next, key, token: ++focusToken.current });
+  }
+  const focusFor = (view: ResourceView) => resourceFocus?.resource === view ? { path: resourceFocus.key, token: resourceFocus.token } : null;
+  const pluginTabs = (['agents', 'skills'] as const).filter(view => supported[view]);
   async function pickProject() { const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: t('tools.workspace.pickProjectTitle') }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { setError(errorText(failure)); } }
   const openTarget = async (profileId: string, target?: AccountImpactScope) => {
     if (!await mayLeave()) return;
@@ -478,9 +489,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
     {!['config', 'accounts', 'memory'].includes(resource) && !resourcesReady && <div role="status" className={styles.contextState}><p>{resourceContext?.nativeContextError ?? (loading ? t('tools.workspace.contextLoading') : workspace?.nativeContextError ?? t('tools.workspace.contextFailed'))}</p>{!loading && <Button size="sm" onClick={() => void reload(toolId, scope, projectPath, true)}>{t('tools.workspace.contextRetry')}</Button>}</div>}
     {resourcesReady && resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={mcpDirty} onOpenLibrary={onOpenMcpLibrary} />}
-    {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={skillsDirty} />}
-    {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={agentsDirty} />}
-    {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} />}
+    {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={skillsDirty} focusPath={focusFor('skills')} />}
+    {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} onDirtyChange={agentsDirty} focusPath={focusFor('agents')} onOpenPlugin={supported.plugins ? id => void openResourceItem('plugins', id) : undefined} />}
+    {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} remoteTargetId={isRemote ? remoteTargetId : null} focusPlugin={resourceFocus?.resource === 'plugins' ? { id: resourceFocus.key, token: resourceFocus.token } : null} onOpenItem={(tab, path) => void openResourceItem(tab, path)} openTabs={pluginTabs} />}
     {resource === 'memory' && supported.memory && (management?.memory
       ? <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} remoteTargetId={isRemote ? remoteTargetId : null} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />
       : management?.memoryReason && <div className={styles.taskEmpty}><Icon name="alert" size={24} /><div><strong>{t('tools.workspace.memoryUnavailable')}</strong><p>{management.memoryReason}</p></div></div>)}

@@ -13,12 +13,21 @@ test('plugin search and read-only filter expose relevant actions without changin
   await expect(page.getByRole('article', { name: '插件详情' }).getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 });
 
+/** Install lives in a dialog opened from the list header's + button. */
+async function openInstall(page: Page) {
+  await page.getByRole('button', { name: '安装新插件', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '安装新插件' })).toBeVisible();
+}
+async function closeInstall(page: Page) {
+  await page.getByRole('dialog', { name: '安装新插件' }).getByRole('button', { name: '取消', exact: true }).click();
+}
+
 async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false) {
   const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\example-dev`;
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\example-dev\agents`;
   await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
-    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null };
+    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
     if (extended) state.entries.push({ ...entry, id: 'example-dev', name: 'example-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'example-dev' }] });
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries.map(item => ({ ...item })), baseline: state.baseline, detail: '静态列表，加载未验证' });
@@ -52,6 +61,29 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
         if (holdFull) await new Promise<void>(resolve => { state.releaseFull = resolve; });
         return snapshot(args.target);
       }
+      if (command === 'inspect_native_plugin') {
+        state.inspectCalls.push(args.pluginId);
+        if (state.failInspect) throw { message: '读取插件目录失败' };
+        const root = '/fixture/plugins/fixture';
+        const items = args.pluginId === 'fixture@market' ? [
+          { kind: 'agents', name: 'reviewer', description: 'Reviews code', path: `${root}/agents/reviewer.md`, location: `${root}/agents/reviewer.md`, format: 'markdown' },
+          { kind: 'agents', name: 'planner', description: null, path: `${root}/agents/planner.md`, location: `${root}/agents/planner.md`, format: 'markdown' },
+          { kind: 'skills', name: 'lint-check', description: 'Runs lint', path: `${root}/skills/lint/SKILL.md`, location: `${root}/skills/lint`, format: 'markdown' },
+          { kind: 'commands', name: 'review', description: 'Review the current diff', path: `${root}/commands/review.md`, location: `${root}/commands/review.md`, format: 'markdown' },
+          { kind: 'mcp', name: 'docs', description: 'npx -y docs-server', path: `${root}/.mcp.json`, location: `${root}/.mcp.json`, format: 'json' },
+          { kind: 'hooks', name: 'PreToolUse', description: '2', path: `${root}/hooks/hooks.json`, location: `${root}/hooks/hooks.json`, format: 'json' },
+        ] : args.pluginId === 'example-dev' ? [
+          { kind: 'agents', name: 'explorer', description: 'Explore', path: `${extendedResource}\\explorer.md`, location: `${extendedResource}\\explorer.md`, format: 'markdown' },
+        ] : [];
+        return { pluginId: args.pluginId, root, manifest: args.pluginId === 'fixture@market' ? { description: 'Review helpers for pull requests.', author: 'Example Team', homepage: 'https://example.test/fixture', license: 'MIT', keywords: ['review', 'git'], path: `${root}/.claude-plugin/plugin.json` } : { description: null, author: null, homepage: null, license: null, keywords: [], path: null }, items, truncated: false };
+      }
+      if (command === 'read_native_plugin_file') {
+        state.readCalls.push(args.path);
+        const content = args.path.endsWith('.json') ? '{\n  "mcpServers": { "docs": { "command": "npx" } }\n}' : '---\nname: reviewer\ndescription: Reviews code\n---\n# Reviewer\n\nRead the diff first.';
+        return { path: args.path, content, format: args.path.endsWith('.json') ? 'json' : 'markdown', truncated: false };
+      }
+      if (command === 'reveal_native_plugin_path') { state.revealCalls.push(args.path ?? null); return null; }
+      if (command === 'scan_native_agents') return { target: args.target, capability: { version: '2.1.287', supported: true, format: 'markdown', template: '---\nname: new\n---\n', detail: '下一次委派加载' }, entries: [{ id: 'fixture@market:reviewer', name: 'reviewer', description: 'Reviews code', path: '/fixture/plugins/fixture/agents/reviewer.md', format: 'markdown', content: '---\nname: reviewer\ndescription: Reviews code\n---\nRead the diff first.', enabled: true, readOnly: true, owner: '插件：fixture@market', detail: '' }], baseline: 'agents-baseline', detail: '原生定义管理' };
       if (command === 'operate_native_plugin') {
         const req = args.request;
         if (req.target.contextId !== 'ctx-fixture' || req.baseline !== state.baseline) throw { message: '目标或基线错误' };
@@ -107,18 +139,21 @@ test('a late lightweight context cannot replace the completed workspace binding'
 test('native plugin lifecycle retains context, policy, ownership and load distinction', { tag: '@integration' }, async ({ page }) => {
   await setup(page);
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
-  await expect(card.getByText(/原生已安装 · 加载未验证/)).toBeVisible();
+  await expect(card.getByText('已启用', { exact: true })).toBeVisible();
   await card.getByRole('button').click();
   const details = page.getByRole('article', { name: '插件详情' });
-  await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
-  await expect(details.getByText('agents', { exact: true })).toBeVisible();
+  await expect(details.getByText('原生已安装 · 加载未验证')).toBeVisible();
+  await expect(details.getByRole('heading', { name: '包含内容' })).toBeVisible();
+  await expect(details.getByRole('list', { name: '插件内容' }).getByText('reviewer', { exact: true })).toBeVisible();
   await details.getByRole('button', { name: '禁用', exact: true }).click(); await expect(details.getByRole('button', { name: '启用' })).toBeVisible();
   await details.getByRole('button', { name: '启用' }).click();
   const managed = page.getByRole('listitem').filter({ has: page.getByText('Organization plugin', { exact: true }) });
   await managed.getByRole('button').click();
   await expect(details.getByRole('button', { name: '禁用' })).toBeDisabled(); await expect(details.getByRole('button', { name: '卸载' })).toBeDisabled();
-  await page.getByLabel('插件来源', { exact: true }).fill('second@market'); await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
-  await page.getByRole('checkbox').check(); await page.getByRole('button', { name: '安装插件' }).click();
+  await openInstall(page);
+  await page.getByLabel('插件来源', { exact: true }).fill('second@market'); await expect(page.getByRole('dialog').getByRole('button', { name: '安装插件' })).toBeDisabled();
+  await page.getByRole('checkbox').check(); await page.getByRole('dialog').getByRole('button', { name: '安装插件' }).click();
+  await expect(page.getByRole('dialog', { name: '安装新插件' })).toHaveCount(0);
   await expect(details.getByRole('heading', { name: 'second@market', exact: true })).toBeVisible();
   await expect(details.getByText('版本', { exact: true })).toBeVisible();
   await card.getByRole('button').click();
@@ -184,20 +219,26 @@ for (const failed of [false, true]) {
 test('editing a failed install source requires new trust and retries only the current source', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => { (window as any).pluginsHarness.fail = true; });
+  await openInstall(page);
   await page.getByLabel('插件来源', { exact: true }).fill('first@market');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '安装插件', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '安装插件', exact: true }).click();
   const queue = page.getByLabel('插件操作队列');
   await expect(queue).toContainText('安装 · first@market');
   await expect(queue).toContainText('失败');
   const retry = queue.getByRole('button', { name: '重试', exact: true });
   await expect(retry).toBeEnabled();
 
+  await openInstall(page);
+  await expect(page.getByLabel('插件来源', { exact: true })).toHaveValue('first@market');
   await page.getByLabel('插件来源', { exact: true }).fill('second@market');
   await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await closeInstall(page);
   await expect(retry).toBeDisabled();
   await page.evaluate(() => { (window as any).pluginsHarness.fail = false; });
+  await openInstall(page);
   await page.getByRole('checkbox').check();
+  await closeInstall(page);
   await expect(retry).toBeEnabled();
   await retry.click();
   await expect(queue).toContainText('安装 · second@market');
@@ -213,9 +254,10 @@ test('editing a failed install source requires new trust and retries only the cu
 test('local Cursor install opens the added snapshot entry when its installed path differs', async ({ page }) => {
   await setup(page);
   await page.evaluate(() => { (window as any).pluginsHarness.rewriteInstall = true; });
+  await openInstall(page);
   await page.getByLabel('插件来源', { exact: true }).fill('C:/fixture/downloads/cursor-plugin');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '安装插件' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '安装插件' }).click();
   const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByRole('heading', { name: 'Cursor plugin', exact: true })).toBeVisible();
   await expect(details.getByText('C:/Users/fixture/.cursor/plugins/cursor-plugin', { exact: true }).first()).toBeVisible();
@@ -262,14 +304,17 @@ test('Pi project plugin details visibly explain why update is unavailable', asyn
 
 test('changing plugin scope clears the previous source trust before a project operation', async ({ page }) => {
   await setup(page);
+  await openInstall(page);
   await page.getByLabel('插件来源', { exact: true }).fill('second@market');
   await page.getByRole('checkbox').check();
-  await expect(page.getByRole('button', { name: '安装插件' })).toBeEnabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: '安装插件' })).toBeEnabled();
+  await closeInstall(page);
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '测试项目' }).click();
+  await openInstall(page);
   await expect(page.getByRole('checkbox')).not.toBeChecked();
   await page.getByLabel('插件来源', { exact: true }).fill('second@market');
-  await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: '安装插件' })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin'))).toEqual([]);
 });
 
@@ -297,8 +342,8 @@ test('windows extended plugin paths are shown as ordinary paths', async ({ page 
   const details = page.getByRole('article', { name: '插件详情' });
   await expect(details.getByText('安装位置', { exact: true })).toBeVisible();
   await expect(details.getByText(drive, { exact: true }).first()).toBeVisible();
-  await expect(details.getByText('包内资源（随插件管理）')).toBeVisible();
-  await expect(details.getByText('\\\\server\\share\\plugins\\example-dev\\agents', { exact: true })).toBeVisible();
+  const explorer = details.getByRole('list', { name: '插件内容' }).getByRole('button', { name: /explorer/ });
+  await expect(explorer).toHaveAttribute('title', '\\\\server\\share\\plugins\\example-dev\\agents\\explorer.md');
   const market = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(market.getByText('fixture@market · 全局')).toBeVisible();
 });
@@ -360,10 +405,11 @@ test('update-only capability does not render an install form', async ({ page }) 
 
 test('invalid install source explains the problem and cannot be submitted', async ({ page }) => {
   await setup(page);
+  await openInstall(page);
   await page.getByLabel('插件来源', { exact: true }).fill('-unsafe');
   await page.getByRole('checkbox').check();
   await expect(page.getByText('来源不能以连字符开头。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByRole('button', { name: '安装插件' })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin'))).toEqual([]);
 });
 
@@ -469,3 +515,68 @@ for (const colorScheme of ['light', 'dark'] as const) {
     }
   });
 }
+
+async function openFixture(page: Page) {
+  await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').first().click();
+  const details = page.getByRole('article', { name: '插件详情' });
+  await expect(details.getByRole('list', { name: '插件内容' })).toBeVisible();
+  return details;
+}
+
+test('plugin details list bundled contents and filter them by kind', async ({ page }) => {
+  await setup(page);
+  const details = await openFixture(page);
+  await expect(details.getByText('Review helpers for pull requests.')).toBeVisible();
+  const items = details.getByRole('list', { name: '插件内容' });
+  await expect(items.getByRole('listitem')).toHaveCount(6);
+  await expect(items.getByText('2 个处理器')).toBeVisible();
+  const filter = details.getByRole('group', { name: '按类型筛选' });
+  await filter.getByRole('button', { name: /^Skill/ }).click();
+  await expect(filter.getByRole('button', { name: /^Skill/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(items.getByRole('listitem')).toHaveCount(1);
+  await expect(items.getByText('lint-check', { exact: true })).toBeVisible();
+  await filter.getByRole('button', { name: /^全部/ }).click();
+  await expect(items.getByRole('listitem')).toHaveCount(6);
+  expect(await page.evaluate(() => (window as any).pluginsHarness.inspectCalls)).toContain('fixture@market');
+});
+
+test('bundled files open in a read-only preview, reveal through the backend and return to the plugin', async ({ page }) => {
+  await setup(page);
+  const details = await openFixture(page);
+  const items = details.getByRole('list', { name: '插件内容' });
+  await items.getByRole('button', { name: /reviewer/ }).first().click();
+  await expect(page.getByText('Read the diff first.')).toBeVisible();
+  await page.getByRole('button', { name: '在文件夹中显示' }).click();
+  expect(await page.evaluate(() => (window as any).pluginsHarness.revealCalls)).toEqual(['/fixture/plugins/fixture/agents/reviewer.md']);
+  await page.getByRole('button', { name: '返回插件' }).click();
+  await items.getByRole('button', { name: /docs/ }).first().click();
+  await expect(page.getByRole('textbox', { name: /docs/ })).toContainText('mcpServers');
+  expect(await page.evaluate(() => (window as any).pluginsHarness.readCalls)).toEqual(['/fixture/plugins/fixture/agents/reviewer.md', '/fixture/plugins/fixture/.mcp.json']);
+  await page.getByRole('button', { name: '返回插件' }).click();
+  await expect(details.getByRole('list', { name: '插件内容' })).toBeVisible();
+});
+
+test('a bundled agent opens in Agents and its owner link returns to the plugin', async ({ page }) => {
+  await setup(page);
+  const details = await openFixture(page);
+  const reviewer = details.getByRole('list', { name: '插件内容' }).getByRole('listitem').filter({ hasText: 'reviewer' });
+  await reviewer.getByRole('button', { name: '在 Agents 中打开' }).click();
+  await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const agent = page.getByRole('article', { name: 'reviewer' });
+  await expect(agent).toBeVisible();
+  await agent.getByRole('button', { name: '查看所属插件' }).click();
+  await expect(page.getByRole('tab', { name: '插件', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('article', { name: '插件详情' }).getByRole('heading', { name: 'Fixture plugin', exact: true })).toBeVisible();
+});
+
+test('a failed contents read explains the problem and retries', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).pluginsHarness.failInspect = true; });
+  await page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) }).getByRole('button').first().click();
+  const details = page.getByRole('article', { name: '插件详情' });
+  const alert = details.getByRole('alert').filter({ hasText: '暂时无法读取插件内容' });
+  await expect(alert).toContainText('读取插件目录失败');
+  await page.evaluate(() => { (window as any).pluginsHarness.failInspect = false; });
+  await alert.getByRole('button', { name: '重试' }).click();
+  await expect(details.getByRole('list', { name: '插件内容' }).getByRole('listitem')).toHaveCount(6);
+});

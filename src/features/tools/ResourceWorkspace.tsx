@@ -17,6 +17,7 @@ import { Icon } from '../../components/Icon';
 import { useFeedback } from '../../lib/toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import i18n from '../../i18n';
+import { samePath } from '../library/CliMarks';
 import styles from './ResourceWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
@@ -76,7 +77,7 @@ function loadKind(entry: NativeSkillEntry, enabledByPackage: Record<string, bool
   return enabledByPackage[entry.packageId] === false ? 'not_loaded' : 'will_load';
 }
 
-export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; remoteTargetId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
+export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, focusPath = null }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; remoteTargetId?: string | null; onDirtyChange?: (dirty: boolean) => void; focusPath?: { path: string; token: number } | null }) {
   const { t } = useTranslation();
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
@@ -333,6 +334,15 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       if (skillRequest.current === request) setSkillLoading(false);
     }
   }
+  // A jump from a plugin's contents opens that skill once the native list has it.
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focusPath || appliedFocus.current === focusPath.token) return;
+    const entry = nativeEntries.find(item => samePath(item.path, focusPath.path));
+    if (!entry) return;
+    appliedFocus.current = focusPath.token;
+    void openNative(entry);
+  }, [focusPath, nativeEntries]);
   async function saveSkill() {
     if (!skillDoc || skillDoc.draft === skillDoc.baseline) return;
     const request = skillRequest.current;
