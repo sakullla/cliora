@@ -68,7 +68,7 @@ function readFrontmatter(block: string): MemoryProperty[] {
   return properties;
 }
 
-/** `project_sample-app_playback` → `Project sample-app playback`; other names stay as written. */
+/** `project_sample_playback` → `Project sample playback`; other names stay as written. */
 export function humanize(value: string): string {
   const text = value.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(text) || !/[_-]/.test(text)) return text;

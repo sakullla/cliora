@@ -907,8 +907,8 @@ test('CLI-reported units stay quiet when the scope also has tokens', async ({ pa
     const start = new Date().setHours(0, 0, 0, 0);
     const tools = [{ id: 'codex', name: 'Codex' }, { id: 'kiro', name: 'Kiro' }].map((tool) => ({ ...tool, history: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, interfaceFormats: [], management: {} }));
     const units = [
-      { unit: 'context-usage-percent', value: 14.3886, originalValue: null, billable: null, records: 80, unknownOriginalRecords: 80 },
-      { unit: 'credit', value: 20.5059857509, originalValue: null, billable: null, records: 5, unknownOriginalRecords: 5 },
+      { unit: 'context-usage-percent', value: 9.25, originalValue: null, billable: null, records: 80, unknownOriginalRecords: 80 },
+      { unit: 'credit', value: 3.14159265358, originalValue: null, billable: null, records: 5, unknownOriginalRecords: 5 },
     ];
     const base = { requests: 0, usageRecords: 0, unknownRequestRecords: 0, unknownTokenRecords: 0, sessions: 1, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0, nativeUsage: [] };
     const codex = { ...base, requests: 10, usageRecords: 10, input: 4000, output: 1000, total: 5000, cost: 1.5 };
@@ -939,7 +939,7 @@ test('CLI-reported units stay quiet when the scope also has tokens', async ({ pa
   // One collapsed line instead of a card; the unit names and values open on demand.
   const native = usage.getByRole('region', { name: 'CLI 自带计量' });
   await expect(native).toContainText('85 条记录没有 token');
-  const values = native.getByText('20.5059857509', { exact: true });
+  const values = native.getByText('3.14159265358', { exact: true });
   await expect(values).toBeHidden();
   await native.getByText('查看 2 项', { exact: true }).click();
   await expect(values).toBeVisible();

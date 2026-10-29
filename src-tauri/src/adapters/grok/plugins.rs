@@ -385,12 +385,12 @@ mod tests {
         std::fs::create_dir_all(root.join(".grok-plugin")).unwrap();
         std::fs::write(
             root.join(".grok-plugin").join("plugin.json"),
-            r#"{"name":"sakullla-dev","version":"2.2.73","agents":["./generated/agents/grok-build","../outside"],"skills":"./skills/"}"#,
+            r#"{"name":"example-dev","version":"2.2.73","agents":["./generated/agents/grok-build","../outside"],"skills":"./skills/"}"#,
         )
         .unwrap();
         std::fs::write(
-            agents.join("sakullla-explorer.md"),
-            "---\nname: sakullla-explorer\ndescription: Explore\n---\nLook.\n",
+            agents.join("example-explorer.md"),
+            "---\nname: example-explorer\ndescription: Explore\n---\nLook.\n",
         )
         .unwrap();
     }
@@ -398,14 +398,14 @@ mod tests {
     #[test]
     fn user_directory_plugin_is_listed_with_manifest_agents_when_plugin_list_is_empty() {
         let temp = tempfile::tempdir().unwrap();
-        let plugin = temp.path().join(".grok").join("plugins").join("sakullla-dev");
+        let plugin = temp.path().join(".grok").join("plugins").join("example-dev");
         write_plugin(&plugin);
         let outside = temp.path().join(".grok").join("outside");
         std::fs::create_dir_all(&outside).unwrap();
         let mut entries = Vec::new();
         Grok.supplement(temp.path(), &target(), &mut entries).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "sakullla-dev");
+        assert_eq!(entries[0].id, "example-dev");
         assert_eq!(entries[0].version.as_deref(), Some("2.2.73"));
         assert_eq!(entries[0].enabled, Some(true));
         assert!(entries[0].read_only);
@@ -425,13 +425,13 @@ mod tests {
             Path::new(&agents[0]),
             "md",
             true,
-            "插件：sakullla-dev",
+            "插件：example-dev",
             &mut definitions,
         )
         .unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].name, "sakullla-explorer");
-        assert_eq!(definitions[0].owner, "插件：sakullla-dev");
+        assert_eq!(definitions[0].name, "example-explorer");
+        assert_eq!(definitions[0].owner, "插件：example-dev");
         Grok.supplement(temp.path(), &target(), &mut entries).unwrap();
         assert_eq!(entries.len(), 1);
     }
@@ -439,11 +439,11 @@ mod tests {
     #[test]
     fn disabled_config_keeps_the_user_plugin_visible_and_off() {
         let temp = tempfile::tempdir().unwrap();
-        let plugin = temp.path().join(".grok").join("plugins").join("sakullla-dev");
+        let plugin = temp.path().join(".grok").join("plugins").join("example-dev");
         write_plugin(&plugin);
         std::fs::write(
             temp.path().join(".grok").join("config.toml"),
-            "[plugins]\ndisabled = [\"sakullla-dev\"]\n",
+            "[plugins]\ndisabled = [\"example-dev\"]\n",
         )
         .unwrap();
         let mut entries = Vec::new();
@@ -460,8 +460,8 @@ mod tests {
         let config = temp.path().join(".grok").join("config.toml");
         std::fs::write(&config, "[cli]\ninstaller = \"npm\"\n").unwrap();
         let mut entry = PluginEntry {
-            id: "sakullla-dev".into(),
-            name: "sakullla-dev".into(),
+            id: "example-dev".into(),
+            name: "example-dev".into(),
             source: "directory".into(),
             version: None,
             scope: "user".into(),

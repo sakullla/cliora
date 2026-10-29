@@ -10,7 +10,7 @@
 //! and the SQLite state files stay untouched.
 //!
 //! The workspace slug is `<repo>-<hash>` (for example `cliora-490670fe`,
-//! `self-workflow-53a3449c`); the hash is not derivable from the repository
+//! `sample-workflow-1a2b3c4d`); the hash is not derivable from the repository
 //! identity (not a plain hash of the remote URL or `owner/name` under md5/
 //! sha/crc/fnv/xxhash/siphash variants), so the project directory is matched
 //! by lowercased project name among the workspaces Grok itself created, and a
@@ -318,7 +318,7 @@ fn workspace_topics(root: &Path, project: Option<&Path>) -> Result<PathBuf, Stri
 }
 
 /// The repository part of a Grok workspace slug, when the entry name has the
-/// `<name>-<8 lowercase hex>` shape (`self-workflow-53a3449c` keeps the inner
+/// `<name>-<8 lowercase hex>` shape (`sample-workflow-1a2b3c4d` keeps the inner
 /// hyphen in the name).
 fn slug_prefix(entry: &str) -> Option<&str> {
     let (prefix, suffix) = entry.rsplit_once('-')?;
@@ -402,12 +402,12 @@ mod tests {
     #[test]
     fn slug_prefix_accepts_only_lowercase_name_and_hex_hash() {
         assert_eq!(slug_prefix("cliora-490670fe"), Some("cliora"));
-        assert_eq!(slug_prefix("self-workflow-53a3449c"), Some("self-workflow"));
+        assert_eq!(slug_prefix("sample-workflow-1a2b3c4d"), Some("sample-workflow"));
         assert_eq!(slug_prefix("rillsql-1f1de9e6"), Some("rillsql"));
         assert_eq!(slug_prefix("cliora-490670FE"), None);
         assert_eq!(slug_prefix("cliora-490670f"), None);
         assert_eq!(slug_prefix("cliora-not-a-hash"), None);
-        assert_eq!(slug_prefix("SampleApp-b1bf8dfd"), None);
+        assert_eq!(slug_prefix("SampleApp-0f0f0f0f"), None);
         assert_eq!(slug_prefix("490670fe"), None);
     }
 

@@ -899,7 +899,7 @@ mod tests {
     #[test]
     fn workspace_folder_becomes_the_session_directory() {
         let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("self-workflow");
+        let project = temp.path().join("sample-workflow");
         fs::create_dir_all(&project).unwrap();
         let folder = url::Url::from_file_path(&project).unwrap();
         let slug = project_slug(&project);
@@ -955,16 +955,16 @@ mod tests {
     #[test]
     fn sampled_windows_slugs_match_opened_workspaces() {
         assert_eq!(
-            project_slug(Path::new(r"C:\Users\example\cursor\cliora")),
-            "c-Users-example-cursor-cliora"
+            project_slug(Path::new(r"C:\Users\dev\cursor\cliora")),
+            "c-Users-dev-cursor-cliora"
         );
         assert_eq!(
-            project_slug(Path::new(r"C:\Users\example\project\self-workflow")),
-            "c-Users-example-project-self-workflow"
+            project_slug(Path::new(r"C:\Users\dev\project\sample-workflow")),
+            "c-Users-dev-project-sample-workflow"
         );
         assert_eq!(
-            project_slug(Path::new(r"C:\Users\example\IdeaProjects\sample-proxy-test-suite-speed")),
-            "c-Users-example-IdeaProjects-sample-proxy-test-suite-speed"
+            project_slug(Path::new(r"C:\Users\dev\IdeaProjects\sample-proxy-test-suite-speed")),
+            "c-Users-dev-IdeaProjects-sample-proxy-test-suite-speed"
         );
     }
 

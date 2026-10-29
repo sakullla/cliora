@@ -2016,7 +2016,7 @@ fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
     let credentials = Store(Mutex::new(HashMap::new()));
 
     // claude：projects/<slug>/memory，slug 不可逆推项目。
-    let claude_slug = "C--Users-example-project-cliora";
+    let claude_slug = "C--Users-dev-project-cliora";
     let claude_store = home
         .join(".claude")
         .join("projects")

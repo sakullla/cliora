@@ -49,7 +49,7 @@ const fixtures = {
         'linux-build-server': doc('linux-build-server', 'Debian 13 构建机；无 GitHub 访问（scp 中转）；GUI 冒烟需要 DBus+Xvfb', 'reference', 12, '构建机 `192.168.0.109`，Debian 13。\n\n```bash\nscp target/release/bundle/deb/*.deb build:/tmp/\nxvfb-run -a dbus-run-session ./cliora\n```'),
       } },
       { label: 'C:\\Users\\dev\\IdeaProjects\\SampleApp', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-SampleApp/memory', entries: {
-        project_sample-app_playback: doc('project-sample-app-playback', '播放器使用 mpv 嵌入；字幕与音轨切换走 IPC 命令', 'project', 9, '播放链路：mpv 嵌入窗口 → IPC 命令切换字幕与音轨。'),
+        project_sample_playback: doc('project-sample-playback', '播放器使用 mpv 嵌入；字幕与音轨切换走 IPC 命令', 'project', 9, '播放链路：mpv 嵌入窗口 → IPC 命令切换字幕与音轨。'),
         user_profile: doc('user-profile', 'Prefers Kotlin, compact code, and Chinese commit messages', 'user', 30, 'Kotlin first; compact code; Chinese commit summaries.'),
       } },
       { label: 'C:\\Users\\dev\\project\\empty-store', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-project-empty-store/memory', entries: {} },

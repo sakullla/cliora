@@ -476,23 +476,23 @@ mod tests {
         // (2026-10-19) match the bundle rule; the lowercase drive letter is
         // the Node realpathSync normalization.
         let samples = [
-            ("C:\\Users\\example\\IdeaProjects\\SampleApp", "c-Users-example-IdeaProjects-SampleApp"),
+            ("C:\\Users\\dev\\IdeaProjects\\SampleApp", "c-Users-dev-IdeaProjects-SampleApp"),
             (
-                "C:\\Users\\example\\IdeaProjects\\sample-proxy",
-                "c-Users-example-IdeaProjects-sample-proxy",
+                "C:\\Users\\dev\\IdeaProjects\\sample-proxy",
+                "c-Users-dev-IdeaProjects-sample-proxy",
             ),
             (
-                "C:\\Users\\example\\IdeaProjects\\sakullla-plugins",
-                "c-Users-example-IdeaProjects-sakullla-plugins",
+                "C:\\Users\\dev\\IdeaProjects\\example-plugins",
+                "c-Users-dev-IdeaProjects-example-plugins",
             ),
-            ("C:\\Users\\example\\cursor\\SampleNotes", "c-Users-example-cursor-SampleNotes"),
-            ("C:\\Users\\example\\project\\SampleNotes", "c-Users-example-project-SampleNotes"),
-            ("C:\\Users\\example\\project\\SampleApp", "c-Users-example-project-SampleApp"),
-            ("C:\\Users\\example\\project\\cliora", "c-Users-example-project-cliora"),
-            ("C:\\Users\\example\\project\\sample-tool", "c-Users-example-project-sample-tool"),
+            ("C:\\Users\\dev\\cursor\\SampleNotes", "c-Users-dev-cursor-SampleNotes"),
+            ("C:\\Users\\dev\\project\\SampleNotes", "c-Users-dev-project-SampleNotes"),
+            ("C:\\Users\\dev\\project\\SampleApp", "c-Users-dev-project-SampleApp"),
+            ("C:\\Users\\dev\\project\\cliora", "c-Users-dev-project-cliora"),
+            ("C:\\Users\\dev\\project\\sample-tool", "c-Users-dev-project-sample-tool"),
             (
-                "C:\\Users\\example\\project\\self-workflow",
-                "c-Users-example-project-self-workflow",
+                "C:\\Users\\dev\\project\\sample-workflow",
+                "c-Users-dev-project-sample-workflow",
             ),
         ];
         for (path, slug) in samples {
