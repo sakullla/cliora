@@ -17,6 +17,7 @@ use crate::native::adapter::Scope;
 use crate::native::transaction::{self, FileMutation};
 use crate::adapters::Registry;
 use crate::projects;
+use super::skill_manifest::{self, SkillManifest};
 
 const MAX_FILES: usize = 256;
 const MAX_BYTES: usize = 12 * 1024 * 1024;
@@ -33,6 +34,8 @@ pub struct SkillPackage {
     pub file_count: usize,
     pub updated_at: u64,
     pub in_library: bool,
+    /// Specification issue codes from the package SKILL.md.
+    pub issues: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -73,6 +76,8 @@ pub struct NativeSkillEntry {
     pub source: &'static str,
     pub plugin_name: Option<String>,
     pub plugin_enabled: Option<bool>,
+    /// Specification issue codes; empty when SKILL.md is absent or unreadable.
+    pub issues: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -103,6 +108,7 @@ pub struct SkillImportPreview {
     pub digest: String,
     pub file_count: usize,
     pub compatibility: Option<String>,
+    pub manifest: SkillManifest,
     pub existing_digest: Option<String>,
     pub changed_files: Vec<String>,
     pub changes: Vec<SkillFileChange>,
@@ -122,8 +128,7 @@ pub struct SkillFileChange {
 
 struct Candidate {
     name: String,
-    description: String,
-    compatibility: Option<String>,
+    manifest: SkillManifest,
     source: String,
     files: BTreeMap<String, String>,
     digest: String,
@@ -197,7 +202,8 @@ fn preview_candidate(db: &Database, candidate: &Candidate) -> Result<SkillImport
         source: candidate.source.clone(),
         digest: candidate.digest.clone(),
         file_count: candidate.files.len(),
-        compatibility: candidate.compatibility.clone(),
+        compatibility: candidate.manifest.compatibility.clone(),
+        manifest: candidate.manifest.clone(),
         existing_digest: existing.map(|(digest, _)| digest),
         changed_files,
         changes,
@@ -206,50 +212,28 @@ fn preview_candidate(db: &Database, candidate: &Candidate) -> Result<SkillImport
 
 fn manifest_info(
     files: &BTreeMap<String, String>,
-    _name: &str,
-) -> Result<(String, Option<String>), String> {
-    // Directory name is the identity. Frontmatter name and description are
-    // metadata for display, not a reason to hide a skill that is already on disk.
+    name: &str,
+) -> Result<SkillManifest, String> {
+    // Directory name is the identity. Frontmatter fields are metadata for
+    // display; specification problems are issues, not a reason to hide a skill.
     let Some(encoded) = files.get("SKILL.md") else {
-        return Ok((String::new(), None));
+        return Ok(SkillManifest::default());
     };
     let text = String::from_utf8(STANDARD.decode(encoded).map_err(|_| "SKILL.md 编码错误")?)
         .map_err(|_| "SKILL.md 应为 UTF-8")?;
-    Ok(manifest_text_info(&text))
+    Ok(skill_manifest::analyze(&text, name))
 }
 
-fn manifest_text_info(text: &str) -> (String, Option<String>) {
-    let mut lines = text.lines();
-    if lines.next().map(str::trim) != Some("---") {
-        return (String::new(), None);
-    }
-    let mut description = String::new();
-    let mut compatibility = None;
-    for line in lines {
-        if line.trim() == "---" {
-            break;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            let value = value.trim().trim_matches('"').trim_matches('\'').to_owned();
-            match key.trim() {
-                "description" => description = value,
-                "compatibility" if !value.is_empty() && value.len() <= 500 => {
-                    compatibility = Some(value);
-                }
-                _ => {}
-            }
-        }
-    }
-    (description, compatibility)
-}
+/// Description and issue codes of a native skill directory.
+type NativeSummary = (String, Vec<String>);
 
 // Listing a native directory is not importing a distributable package. Read
 // only its document; attachments are validated by preview/import and mutations.
-fn native_description(path: &Path) -> Result<String, String> {
+fn native_description(path: &Path) -> Result<NativeSummary, String> {
     let file = path.join("SKILL.md");
     let meta = match fs::symlink_metadata(&file) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((String::new(), Vec::new())),
         Err(error) => return Err(error.to_string()),
     };
     if meta.file_type().is_symlink() || !meta.is_file() {
@@ -262,7 +246,10 @@ fn native_description(path: &Path) -> Result<String, String> {
         return Err("SKILL.md 超过 12 MiB".into());
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| "SKILL.md 应为 UTF-8")?;
-    Ok(manifest_text_info(text).0)
+    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    let manifest = skill_manifest::analyze(text, name);
+    let issues = manifest.issue_codes();
+    Ok((manifest.description, issues))
 }
 
 struct SkillFile {
@@ -643,14 +630,7 @@ fn timestamp() -> u64 {
         .map_or(0, |time| time.as_secs())
 }
 fn safe_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && !value.contains("--")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    skill_manifest::valid_name(value)
 }
 fn digest(files: &BTreeMap<String, String>) -> Result<String, String> {
     Ok(format!(
@@ -713,8 +693,8 @@ fn resolved_skill_dir(path: &Path) -> Result<PathBuf, String> {
     }
     Err("请选择普通 Skills 目录".into())
 }
-/// A Skill directory read as name, description, optional compatibility, files by relative path, and checksum.
-type SkillSnapshot = (String, String, Option<String>, BTreeMap<String, String>, String);
+/// A Skill directory read as name, manifest, files by relative path, and checksum.
+type SkillSnapshot = (String, SkillManifest, BTreeMap<String, String>, String);
 
 fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
     let name = path
@@ -728,16 +708,16 @@ fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
     let root = resolved_skill_dir(path)?;
     let mut files = BTreeMap::new();
     collect(&root, &root, &mut files, &mut 0)?;
-    let (description, compatibility) = manifest_info(&files, &name)?;
+    let manifest = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;
-    Ok((name, description, compatibility, files, checksum))
+    Ok((name, manifest, files, checksum))
 }
 
 fn local_candidate(source: &str) -> Result<Candidate, String> {
     let path = Path::new(source)
         .canonicalize()
         .map_err(|_| "Skills 来源目录不存在")?;
-    let (name, description, compatibility, files, checksum) = snapshot(&path)?;
+    let (name, manifest, files, checksum) = snapshot(&path)?;
     // A library package is a distributable bundle, so it still needs SKILL.md.
     // A directory already on a CLI can be opened and edited without one.
     if !files.contains_key("SKILL.md") {
@@ -745,8 +725,7 @@ fn local_candidate(source: &str) -> Result<Candidate, String> {
     }
     Ok(Candidate {
         name,
-        description,
-        compatibility,
+        manifest,
         source: path.display().to_string(),
         files,
         digest: checksum,
@@ -764,7 +743,7 @@ pub fn local_documents(source: &str) -> Result<(String, String, BTreeMap<String,
         let bytes = STANDARD.decode(encoded).map_err(|error| error.to_string())?;
         if let Ok(text) = String::from_utf8(bytes) { documents.insert(path, text); }
     }
-    Ok((candidate.name, candidate.description, documents))
+    Ok((candidate.name, candidate.manifest.description, documents))
 }
 pub fn preview_local(db: &Database, source: &str) -> Result<SkillImportPreview, String> {
     preview_candidate(db, &local_candidate(source)?)
@@ -802,12 +781,13 @@ fn save_candidate(
     }
     let Candidate {
         name,
-        description,
-        compatibility,
+        manifest,
         source,
         files,
         digest: checksum,
     } = candidate;
+    let issues = manifest.issue_codes();
+    let SkillManifest { description, compatibility, .. } = manifest;
     let id = db
         .with_connection(|conn| {
             conn.query_row(
@@ -844,6 +824,7 @@ fn save_candidate(
         file_count: files.len(),
         in_library,
         updated_at,
+        issues,
     })
 }
 
@@ -1035,7 +1016,7 @@ fn candidate_from_zip_files(source: &str, prefix: String, archive_files: BTreeMa
     if !files.contains_key("SKILL.md") {
         return Err("归档中没有 SKILL.md，请选择完整的 Skills 包".into());
     }
-    let (description, compatibility) = manifest_info(&files, &name)?;
+    let manifest = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;
     let source_label = if prefix.is_empty() {
         source.to_owned()
@@ -1044,8 +1025,7 @@ fn candidate_from_zip_files(source: &str, prefix: String, archive_files: BTreeMa
     };
     Ok(Candidate {
         name,
-        description,
-        compatibility,
+        manifest,
         source: source_label,
         files,
         digest: checksum,
@@ -1070,9 +1050,15 @@ pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
             let files = serde_json::from_str::<BTreeMap<String, String>>(&json).ok();
             let file_count = files.as_ref().map_or(0, BTreeMap::len);
             let name: String = row.get(1)?;
-            let compatibility = files.as_ref().and_then(|files| manifest_info(files, &name).ok())
-                .and_then(|(_, compatibility)| compatibility);
-            Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0 })
+            // Display comes from the stored SKILL.md, so a description saved by
+            // an older reader is corrected without a migration.
+            let manifest = files.as_ref().and_then(|files| manifest_info(files, &name).ok());
+            let stored: String = row.get(2)?;
+            let (description, compatibility, issues) = match manifest {
+                Some(manifest) => { let issues = manifest.issue_codes(); (manifest.description, manifest.compatibility, issues) }
+                None => (stored, None, Vec::new()),
+            };
+            Ok(SkillPackage { id: row.get(0)?, name, description, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0, issues })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
     })
@@ -1086,11 +1072,12 @@ fn package(db: &Database, id: &str) -> Result<(SkillPackage, BTreeMap<String, St
             "SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages WHERE id = ?1", [id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)))
             .optional().map_err(|error| error.to_string())?;
-        let (id, name, description, source, checksum, json, updated_at, in_library) = row.ok_or("Skills 包不存在")?;
+        let (id, name, _stored_description, source, checksum, json, updated_at, in_library) = row.ok_or("Skills 包不存在")?;
         let files: BTreeMap<String, String> = serde_json::from_str(&json).map_err(|_| "Skills 包内容损坏")?;
         if digest(&files)? != checksum || !files.contains_key("SKILL.md") { return Err("Skills 包完整性校验失败".into()); }
-        let (_, compatibility) = manifest_info(&files, &name)?;
-        let package = SkillPackage { id, name, description, compatibility, source, digest: checksum, file_count: files.len(), updated_at: updated_at.max(0) as u64, in_library: in_library != 0 };
+        let manifest = manifest_info(&files, &name)?;
+        let issues = manifest.issue_codes();
+        let package = SkillPackage { id, name, description: manifest.description, compatibility: manifest.compatibility, source, digest: checksum, file_count: files.len(), updated_at: updated_at.max(0) as u64, in_library: in_library != 0, issues };
         Ok((package, files))
     })
 }
@@ -1208,6 +1195,7 @@ pub fn scan_native(
             source: "plugin",
             plugin_name: Some(skill.plugin_name),
             plugin_enabled: skill.plugin_enabled,
+            issues: skill.issues,
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1221,6 +1209,7 @@ struct PluginSkillDirectory {
     plugin_enabled: Option<bool>,
     detail: String,
     unreadable: bool,
+    issues: Vec<String>,
 }
 
 /// Installed plugin skills for this scope. A CLI without a plugin port, a
@@ -1319,19 +1308,19 @@ fn within_root(root: &Path, path: &Path) -> bool {
 
 /// `Ok(None)` means this directory is not a skill. A present `SKILL.md` that
 /// cannot be read stays on the list.
-fn inspect_plugin_skill(dir: &Path) -> Result<Option<(bool, String)>, String> {
+fn inspect_plugin_skill(dir: &Path) -> Result<Option<(bool, String, Vec<String>)>, String> {
     let file = dir.join("SKILL.md");
     match fs::symlink_metadata(&file) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Ok(Some((true, error.to_string()))),
+        Err(error) => return Ok(Some((true, error.to_string(), Vec::new()))),
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
-            return Ok(Some((true, "SKILL.md 应为普通文件".into())));
+            return Ok(Some((true, "SKILL.md 应为普通文件".into(), Vec::new())));
         }
         Ok(_) => {}
     }
     match native_description(dir) {
-        Ok(description) => Ok(Some((false, description))),
-        Err(error) => Ok(Some((true, error))),
+        Ok((description, issues)) => Ok(Some((false, description, issues))),
+        Err(error) => Ok(Some((true, error, Vec::new()))),
     }
 }
 
@@ -1342,7 +1331,7 @@ fn push_plugin_dir(
     found: &mut Vec<PluginSkillDirectory>,
     seen: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    let Some((unreadable, detail)) = inspect_plugin_skill(dir)? else {
+    let Some((unreadable, detail, issues)) = inspect_plugin_skill(dir)? else {
         return Ok(());
     };
     let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
@@ -1362,6 +1351,7 @@ fn push_plugin_dir(
         plugin_enabled,
         detail,
         unreadable,
+        issues,
     });
     Ok(())
 }
@@ -1454,12 +1444,12 @@ fn scan_skill_children(
             None
         };
         let inspected = if managed.is_some() {
-            snapshot(&path).map(|(_, description, _, _, checksum)| (Some(checksum), description))
+            snapshot(&path).map(|(_, manifest, _, checksum)| { let issues = manifest.issue_codes(); (Some(checksum), manifest.description, issues) })
         } else {
-            native_description(&path).map(|description| (None, description))
+            native_description(&path).map(|(description, issues)| (None, description, issues))
         };
         let readable = inspected.is_ok();
-        let (checksum, mut detail) = inspected.unwrap_or_else(|error| (None, error));
+        let (checksum, mut detail, issues) = inspected.unwrap_or_else(|error| (None, error, Vec::new()));
         if let Some(note) = read_only_detail {
             detail = if detail.is_empty() { note.to_owned() } else { format!("{note} · {detail}") };
         }
@@ -1482,6 +1472,7 @@ fn scan_skill_children(
             source: if read_only { "read_only" } else { "writable" },
             plugin_name: None,
             plugin_enabled: None,
+            issues,
         });
     }
     Ok(())
@@ -1504,7 +1495,7 @@ pub fn preview_target(
         return Err(issue.message());
     }
     let old_files = if path.exists() {
-        snapshot(&path)?.3
+        snapshot(&path)?.2
     } else {
         BTreeMap::new()
     };

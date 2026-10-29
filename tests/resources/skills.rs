@@ -106,9 +106,9 @@ fn a_linked_skill_directory_is_read_from_its_target() {
     #[cfg(not(windows))]
     let linked = std::os::unix::fs::symlink(&real, &link);
     if linked.is_err() { return; }
-    let (name, description, _, _, digest) = snapshot(&link).unwrap();
+    let (name, manifest, _, digest) = snapshot(&link).unwrap();
     assert_eq!(name, "linkup-automation");
-    assert_eq!(description, "hello there");
+    assert_eq!(manifest.description, "hello there");
     assert!(!digest.is_empty());
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let registry = Registry::builtins();
@@ -956,6 +956,11 @@ fn loose_frontmatter_stays_readable_and_round_trips_skill_markdown() {
     assert_eq!(found.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["crud-page", "fresh-skill", "lark-apps", "named-elsewhere"]);
     assert_eq!(found.iter().find(|entry| entry.name == "crud-page").unwrap().detail, "");
     assert_eq!(found.iter().find(|entry| entry.name == "named-elsewhere").unwrap().detail, "still here");
+    let issues = |name: &str| found.iter().find(|entry| entry.name == name).unwrap().issues.clone();
+    assert_eq!(issues("crud-page"), ["name_mismatch", "description_missing"]);
+    assert_eq!(issues("lark-apps"), ["frontmatter_missing"]);
+    assert_eq!(issues("named-elsewhere"), ["name_mismatch"]);
+    assert!(issues("fresh-skill").is_empty(), "a directory without SKILL.md has no manifest to check");
 
     let crud = found.iter().find(|entry| entry.name == "crud-page").unwrap();
     let document = read_document(&db, &registry, &home, "claude_code", Scope::Global, None, &crud.path).unwrap();
@@ -989,6 +994,38 @@ fn loose_frontmatter_stays_readable_and_round_trips_skill_markdown() {
     assert!(package.description.is_empty());
 }
 
+#[test]
+fn package_display_comes_from_the_stored_manifest_and_issues_do_not_block_install() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let source = temp.path().join("folded");
+    let long = "c".repeat(501);
+    write_skill(&source, &format!("---\nname: Other\ndescription: >\n  Folded\n  text\ncompatibility: {long}\nlicense: MIT\n---\nbody\n"));
+    let preview = preview_local(&db, source.to_str().unwrap()).unwrap();
+    assert_eq!(preview.manifest.description, "Folded text");
+    assert_eq!(preview.manifest.license.as_deref(), Some("MIT"));
+    assert_eq!(preview.compatibility.as_deref(), Some(long.as_str()));
+    assert_eq!(preview.manifest.issue_codes(), ["name_invalid", "name_mismatch", "compatibility_too_long"]);
+
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    assert_eq!(package.description, "Folded text");
+    assert_eq!(package.compatibility.as_deref(), Some(long.as_str()), "a long requirement still needs confirmation");
+    assert_eq!(package.issues, ["name_invalid", "name_mismatch", "compatibility_too_long"]);
+
+    // A description saved by the old line reader is corrected on listing.
+    db.with_connection(|conn| conn.execute("UPDATE skill_packages SET description = '>' WHERE id = ?1", [&package.id]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let listed = list(&db).unwrap();
+    assert_eq!(listed[0].description, "Folded text");
+    assert_eq!(listed[0].issues, package.issues);
+
+    let home = temp.path().join("home");
+    assert_eq!(install(&db, &registry, &home, &package.id, "claude_code", Scope::Global, None).status, "installed");
+    let entries = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(entries[0].state, "managed");
+    assert_eq!(entries[0].detail, "Folded text");
+    assert_eq!(entries[0].issues, package.issues);
+}
 
 fn write_skill(dir: &Path, body: &str) {
     fs::create_dir_all(dir).unwrap();

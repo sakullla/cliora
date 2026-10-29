@@ -3,6 +3,7 @@ pub mod plugins;
 pub mod plugin_contents;
 pub mod rules;
 pub mod skills;
+pub mod skill_manifest;
 pub mod agents;
 pub mod memory;
 

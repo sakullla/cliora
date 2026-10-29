@@ -1808,6 +1808,15 @@ pub async fn read_native_skill(
     .await
 }
 
+/// Reads SKILL.md text the frontend already holds. Pure: no file access.
+#[tauri::command]
+pub fn analyze_skill_document(
+    directory_name: String,
+    content: String,
+) -> resources::skill_manifest::SkillManifest {
+    resources::skill_manifest::analyze(&content, &directory_name)
+}
+
 #[tauri::command]
 pub async fn save_native_skill(
     app: AppHandle,

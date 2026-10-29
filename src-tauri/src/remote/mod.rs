@@ -148,16 +148,6 @@ fn skill_root_index(path: &str, roots: &[SkillScanRoot]) -> usize {
         .unwrap_or(0)
 }
 
-fn skill_description(text: &str) -> String {
-    let Some(rest) = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n")) else { return String::new(); };
-    let Some(end) = rest.find("\n---") else { return String::new(); };
-    rest[..end]
-        .lines()
-        .find_map(|line| line.strip_prefix("description:"))
-        .map(|value| value.trim().trim_matches(['"', '\'']).to_owned())
-        .unwrap_or_default()
-}
-
 fn seed_remote_skills(target: &RemoteTarget, tool_id: &str) -> Result<serde_json::Value, RemoteError> {
     let roots = remote_skill_roots(tool_id);
     if roots.is_empty() {
@@ -213,13 +203,15 @@ fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &B
         let root = roots.get(index).unwrap_or(&roots[0]);
         let text = contents.get(path);
         if let Some(text) = text { documents.insert(path.clone(), serde_json::Value::String(text.clone())); }
-        let description = text.map(|value| skill_description(value)).unwrap_or_default();
+        let manifest = text.map(|value| crate::resources::skill_manifest::analyze(value, name));
+        let issues = manifest.as_ref().map(|manifest| manifest.issue_codes()).unwrap_or_default();
+        let description = manifest.map(|manifest| manifest.description).unwrap_or_default();
         let detail = if root.read_only {
             if description.is_empty() { root.detail.clone() } else { format!("{} · {description}", root.detail) }
         } else if description.is_empty() { root.detail.clone() } else { description };
         let source = if root.read_only { "read_only" } else { "writable" };
         let state = if root.read_only { "read_only" } else { "external" };
-        serde_json::json!({"name": name, "path": path, "digest": null, "state": state, "detail": detail, "packageId": null, "source": source, "pluginName": null, "pluginEnabled": null})
+        serde_json::json!({"name": name, "path": path, "digest": null, "state": state, "detail": detail, "packageId": null, "source": source, "pluginName": null, "pluginEnabled": null, "issues": issues})
     }).collect::<Vec<_>>();
     serde_json::json!({"entries": entries, "documents": documents})
 }
@@ -410,10 +402,11 @@ pub fn import_skill_directory(target: &RemoteTarget, tool_id: &str, source: &str
     let mut stored = value.get("documents").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
     let root = if tool_id == "grok" { "$HOME/.grok/skills" } else { "$HOME/.codex/skills" };
     entries.retain(|entry| entry.get("name").and_then(serde_json::Value::as_str) != Some(name.as_str()));
+    let issues = documents.get("SKILL.md").map(|text| crate::resources::skill_manifest::analyze(text, &name).issue_codes()).unwrap_or_default();
     for (path, text) in documents {
         stored.insert(format!("{root}/{name}/{path}"), serde_json::Value::String(text));
     }
-    entries.push(serde_json::json!({"name": name, "path": format!("{root}/{name}/SKILL.md"), "digest": null, "state": "external", "detail": description, "packageId": null, "source": "writable", "pluginName": null, "pluginEnabled": null}));
+    entries.push(serde_json::json!({"name": name, "path": format!("{root}/{name}/SKILL.md"), "digest": null, "state": "external", "detail": description, "packageId": null, "source": "writable", "pluginName": null, "pluginEnabled": null, "issues": issues}));
     value = serde_json::json!({"entries": entries, "documents": stored});
     save_resource_store(target, tool_id, "skills", &value)
 }
@@ -2342,7 +2335,13 @@ mod tests {
         let path = "/root/.codex/skills/.system/imagegen/SKILL.md";
         let index = super::skill_root_index(path, &roots);
         assert!(roots[index].read_only);
-        assert_eq!(super::skill_description("---\ndescription: Draw pictures\n---\nbody"), "Draw pictures");
+        let located = vec![(index, path.to_owned())];
+        let contents = BTreeMap::from([(path.to_owned(), "---\nname: imagegen\ndescription: >\n  Draw\n  pictures\n---\nbody".to_owned())]);
+        let entry = super::assemble_skill_store("codex", &located, &contents)["entries"][0].clone();
+        assert!(entry["detail"].as_str().unwrap().ends_with("Draw pictures"), "{entry}");
+        assert_eq!(entry["issues"], serde_json::json!([]));
+        let loose = BTreeMap::from([(path.to_owned(), "# no header".to_owned())]);
+        assert_eq!(super::assemble_skill_store("codex", &located, &loose)["entries"][0]["issues"], serde_json::json!(["frontmatter_missing"]));
     }
 
     #[test]
