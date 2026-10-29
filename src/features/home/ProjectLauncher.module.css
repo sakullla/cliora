@@ -36,7 +36,7 @@
 .noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 
 /* Project cards: identity, then one control line with the split launch as the card's only primary. */
-.projectGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: var(--space-2); }
 .project {
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) both;
@@ -123,7 +123,6 @@
   .quick > summary small { display: none; }
 }
 @container (min-width: 620px) {
-  .projectGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }
 }

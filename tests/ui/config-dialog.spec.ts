@@ -36,7 +36,8 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(page.getByText('安装与更新')).toBeVisible();
   const installSummary = page.locator('summary').filter({ hasText: '安装与更新' });
   await expect(installSummary).toHaveCSS('display', 'flex');
-  const [nameBox, labelBox] = await Promise.all([installSummary.locator('strong').boundingBox(), installSummary.getByText('安装与更新').boundingBox()]);
+  // The CLI name sits in the h2 beside the install summary, which keeps clear of it.
+  const [nameBox, labelBox] = await Promise.all([page.locator('[data-workspace-chrome] h2 strong').boundingBox(), installSummary.getByText('安装与更新').boundingBox()]);
   expect(labelBox!.x - (nameBox!.x + nameBox!.width)).toBeGreaterThan(40);
   await page.getByText('安装与更新').click();
   const docs=page.getByRole('link', { name: '官方安装说明 ↗' });

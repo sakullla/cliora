@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { openCli } from './cli-switcher';
 
 // R3: when a capability read fails, the error and its recovery control stay on the page instead of
 // being folded into a row menu (02 ADR-2/ADR-7).
@@ -59,7 +60,7 @@ test('a failed home probe keeps the error, 重新检测 and 编辑配置 on the 
 test('a failed tool workspace read shows the error and a direct retry on the tools page', async ({ page }) => {
   await install(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' }).getByRole('button', { name: 'Codex', exact: true }).click();
+  await openCli(page, 'Codex');
   const region = page.getByRole('region', { name: '工具与连接' });
   await expect(region.getByText('配置读取失败', { exact: true })).toBeVisible();
   await expect(page.getByText('找不到 Codex 可执行文件').first()).toBeVisible();

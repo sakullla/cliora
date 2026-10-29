@@ -1,4 +1,4 @@
-/* The CLI is chosen in the sidebar. The chrome panel carries the CLI identity (h2)
+/* The CLI is chosen from the h2 switcher. The chrome panel carries the CLI identity (h2)
    and one row of capability tabs with the scope selector at its right end. */
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 0; min-width: 0; color: var(--text); }
 .main { display: grid; gap: var(--space-3); min-width: 0; align-content: start; }
@@ -17,10 +17,14 @@
 }
 .chromeTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 48px; margin: 0; padding: var(--space-2) var(--space-3) var(--space-1_5); font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; line-height: 1.3; }
 .chromeTitle > strong { min-width: 0; overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
-/* The CLI header absorbs the install summary: the summary row is the header, expanding shows the install panel. */
-.chromeHead { display: grid; min-width: 0; }
-.chromeInstall { min-width: 0; }
-.chromeInstall .chromeTitle { flex: 0 1 auto; min-height: 0; padding: 0; }
+/* The CLI header: the h2 switcher, with the install summary beside it while collapsed.
+   An expanded install panel wraps to its own full-width row under the switcher. */
+.chromeHead { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; }
+.chromeHead > .chromeTitle { flex: 0 0 auto; max-width: 100%; padding-right: 0; }
+.chromeInstall { flex: 1 1 280px; min-width: 0; }
+.chromeHead:has(.chromeInstall details[open]) .chromeInstall { flex-basis: 100%; }
+.chromeTitle .toolPicker { flex: none; width: auto; max-width: 100%; }
+.toolPicker > button[data-select-trigger] { margin-left: calc(var(--space-1_5) * -1); }
 /* An expanded install panel can be tall; let it scroll with the page instead of pinning it. */
 .chrome:has(.chromeInstall details[open]) { position: relative; }
 

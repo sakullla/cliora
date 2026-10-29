@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openCli } from './cli-switcher';
 
 // R2: the capability tabs come from each CLI's registry descriptor (`management`), so two CLIs with
 // different descriptors show different tab sets. That shared UI has no CLI-ID branches is covered by
@@ -43,11 +44,10 @@ test('two CLIs with different management descriptors show different capability t
   await page.setViewportSize({ width: 1360, height: 900 });
   await install(page);
   await page.goto('/');
-  const list = page.getByRole('navigation', { name: '页面' }).getByRole('group', { name: '受管 CLI' });
   const tabs = page.getByRole('tablist', { name: '当前任务' }).getByRole('tab');
   const seen: string[][] = [];
   for (const tool of catalog) {
-    await list.getByRole('button', { name: tool.name, exact: true }).click();
+    await openCli(page, tool.name);
     await expect(page.getByRole('heading', { name: tool.name, level: 2 })).toBeVisible();
     await expect(tabs).toHaveText(tabsFor(tool.management));
     seen.push(await tabs.allTextContents());
@@ -56,7 +56,7 @@ test('two CLIs with different management descriptors show different capability t
 
   // An entry the descriptor does not declare is absent, not merely disabled; switching back restores it.
   for (const name of ['Skill', 'Agents', '插件', '记忆']) await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0);
-  await list.getByRole('button', { name: 'Alpha CLI', exact: true }).click();
+  await openCli(page, 'Alpha CLI');
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByText('记忆目录尚未扫描')).toBeVisible();
 

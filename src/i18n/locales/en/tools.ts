@@ -839,6 +839,8 @@ export default {
     tasksAria: 'Current tasks',
     viewTitle: '{{label}} (Alt+{{index}})',
     scopeLabel: 'Configuration scope',
+    switchTool: '{{name}}, switch CLI',
+    searchTool: 'Search CLIs',
     scopeGlobal: 'Global configuration',
     retryRecovery: 'Retry recovery',
     recoveryNeeded: '{{count}} file transactions need recovery.',
