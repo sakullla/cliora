@@ -54,6 +54,30 @@ test('collection paste keeps every server, including entries needing field valid
   assert.deepEqual(mcp.parseMcpServerCollection('not json'), []);
 });
 
+test('a config pasted with typographic quotes and dashed flags still imports', () => {
+  const pasted = `{
+”type“: ”stdio“,
+”command“: ”npx“,
+”args“: [
+”—registry=https://registry.example.test/“,
+”-y“,
+”@example/server“,
+”–stdio“
+],
+”env“: {
+”DB_HOST“: ”db.example.test“,
+”DB_PASSWORD“: ”fixture-secret“
+}
+}`;
+  const [server] = mcp.parseMcpServerCollection(pasted);
+  assert.equal(server.command, 'npx');
+  assert.deepEqual(server.args, ['--registry=https://registry.example.test/', '-y', '@example/server', '--stdio']);
+  assert.deepEqual(server.env, { DB_HOST: 'db.example.test', DB_PASSWORD: 'fixture-secret' });
+  // Valid JSON is never rewritten: a literal em dash inside a real string stays as typed.
+  const [literal] = mcp.parseMcpServerCollection(JSON.stringify({ command: 'npx', args: ['—note'] }));
+  assert.deepEqual(literal.args, ['—note']);
+});
+
 test('collection paste diagnoses invalid entries instead of silently dropping data', () => {
   const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
     scalar: 'not-a-server',
