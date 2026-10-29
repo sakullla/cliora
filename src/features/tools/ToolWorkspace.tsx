@@ -94,6 +94,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
   const memoryDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.memory === value ? previous : { ...previous, memory: value }), []);
   const [comparison, setComparison] = useState<ApplyComparison | null>(null);
+  // A failed "use this content" must be visible in the dialog; page toasts sit behind it.
+  const [compareError, setCompareError] = useState('');
   const [filter, setFilter] = useState('');
   const [customPath, setCustomPath] = useState('');
   const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
@@ -367,16 +369,23 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         await native.saveRemoteToolStore(remoteTargetId, toolId, { ...store, currentFiles: profile.files, profiles: store.profiles.map(item => item.id === profile.id ? profile : item) });
       } else await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false);
       if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
-    catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
+    catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) { setCompareError(''); setComparison(value); } } catch {} }
     finally { if (identity === currentContext.current) setApplying(null); }
   }
+  function closeComparison() { setComparison(null); setCompareError(''); }
   async function compareUse() {
-    if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError('');
+    if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError(''); setCompareError('');
     try {
-      if (isRemote) { setComparison(null); return; }
-      await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.appliedShort')); }
+      if (isRemote) { closeComparison(); return; }
+      await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { closeComparison(); await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.appliedShort')); }
     }
-    catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
+    catch (failure) {
+      if (identity !== currentContext.current || !alive.current) return;
+      setCompareError(errorText(failure));
+      // The comparison is usually stale (the file, profile or account changed after it was
+      // taken). Refresh it so the dialog shows the current difference and a retry uses it.
+      try { const fresh = await native.compareRegisteredApplication(value.profile.id, scope, projectPath); if (identity === currentContext.current && alive.current) setComparison(fresh); } catch { /* keep the error and the old view */ }
+    }
     finally { if (identity === currentContext.current) setBusy(false); }
   }
   async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += t('tools.workspace.copySuffix'); await openFrame('profile', copy, true, t('tools.workspace.frameCopy', { name: profile.name })); }
@@ -488,7 +497,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         </div>
       </div>}
       <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} />}</GuideDialog>
-      <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div className="dialog-footer"><Button onClick={() => setComparison(null)}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
+      <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}

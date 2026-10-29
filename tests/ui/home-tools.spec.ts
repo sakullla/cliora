@@ -75,8 +75,10 @@ async function installHome(page: Page, detect = false) {
           }
           return finish();
         }
-        if (command === 'compare_registered_application') return (window as unknown as { __compareResult: unknown }).__compareResult;
+        if (command === 'compare_registered_application') { const state = window as unknown as { __compareResult: unknown; __compareCount?: number }; state.__compareCount = (state.__compareCount ?? 0) + 1; return state.__compareResult; }
         if (command === 'apply_compared_application') {
+          const failure = (window as unknown as { __applyComparedError?: string }).__applyComparedError;
+          if (failure) { (window as unknown as { __applyComparedError?: string }).__applyComparedError = undefined; throw { message: failure }; }
           const comparison = (args as unknown as { comparison?: { profile?: { id?: string } } }).comparison;
           applied.codex = comparison?.profile?.id ?? applied.codex;
           const calls = ((window as unknown as { __comparedCalls?: unknown[] }).__comparedCalls ??= []);
@@ -1232,4 +1234,31 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await rows.nth(0).getByRole('button', { name: '收藏 Tool H', exact: true }).click();
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText('Tool C');
+});
+test('a failed compared apply explains itself in the dialog and retries with a fresh comparison', async ({ page }) => {
+  await installHome(page);
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as unknown as { __applyError: string; __compareResult: unknown; __applyComparedError: string };
+    state.__applyError = '原生文件已有不同的字段值：settings；请确认接管';
+    state.__applyComparedError = '配置资料在比较后变化，请重新比较';
+    state.__compareResult = {
+      profile: { id: 'work', tool: 'codex', name: '工作', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'gpt-5-codex' } },
+      common: null,
+      files: [{ role: 'settings', format: 'toml', current: 'model = "old"', proposed: { model: 'new' }, proposedText: 'model = "new"\n' }],
+    };
+  });
+  const tools = page.getByLabel('管理中的工具');
+  await tools.getByRole('radio', { name: '工作' }).click();
+  const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
+  await expect(dialog).toBeVisible();
+  const compares = () => page.evaluate(() => (window as unknown as { __compareCount: number }).__compareCount);
+  const before = await compares();
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('配置资料在比较后变化');
+  await expect.poll(compares).toBe(before + 1);
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
 });

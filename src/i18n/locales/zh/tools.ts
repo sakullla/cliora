@@ -901,6 +901,7 @@ export default {
     doneSavedUsed: '配置已保存并使用；下次会话读取。',
     doneSaved: '配置已保存；正在使用的文件保持原版本。',
     compareBanner: '当前文件和保存配置不同。先比较，再明确使用。',
+    compareFailed: '没能使用本次内容：{{error}}。已重新比较，确认后可再试。',
     contextLoading: '正在读取工具上下文…',
     contextFailed: '工具上下文读取失败。',
     contextRetry: '重新读取',
