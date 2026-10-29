@@ -839,7 +839,8 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toHaveAttribute('aria-selected', 'true');
   await expect(stage).toContainText('Codex');
   await expect(stage).toContainText('Alpha');
-  await expect(stage).toContainText('普通');
+  // Normal mode is the default and stays quiet; only YOLO is called out.
+  await expect(stage.getByText('普通', { exact: true })).toHaveCount(0);
   await page.locator('.xterm-helper-textarea:visible').focus();
   await page.keyboard.type('a');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writes: Array<{ sessionId: string }> }).__writes.map((item) => item.sessionId))).toEqual(['s1']);
@@ -1040,12 +1041,83 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   await dialog.getByRole('button', { name: '启动会话' }).click();
   await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
 
-  // Mark wb-1 exited, filter by ended, and clear ended sessions
+  // Mark wb-1 exited; the ended group folds away and its clear action removes it
   await page.evaluate(() => (window as unknown as { __emitExit: (id: string, code: number) => void }).__emitExit('wb-1', 0));
-  await rail.getByRole('button', { name: /已结束/ }).first().click();
+  const endedGroup = rail.getByRole('button', { name: /已结束/, expanded: true });
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toBeVisible();
-  await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toHaveCount(0);
-  await rail.getByRole('button', { name: /清理已结束/ }).click();
+  await endedGroup.click();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-ended-collapsed'))).toBe('true');
+  await rail.getByRole('button', { name: /已结束/, expanded: false }).click();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toBeVisible();
+  await rail.getByRole('button', { name: '清理已结束' }).click();
   await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
+});
+
+test('workbench re-reads library prompts after the library changes', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions: Array<{ id: string; toolId: string; projectId: string | null; directory: string; mode: string; running: boolean; exitCode: number | null; startedAt: number }> = [];
+    const library = { prompts: [{ id: 'pr1', kind: 'prompt', title: '旧标题', body: '旧正文', category: '', projectId: null, version: 1, updatedAt: 1 }] };
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void> } = { handlers: [] };
+    Object.assign(window, {
+      isTauri: true, __library: library,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'light' }, tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['claude_code'], preservedUnknown: [] };
+          if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+          if (command === 'list_library_items') return args.kind === 'prompt' ? library.prompts.map((item) => ({ ...item })) : [];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'launch_cli') {
+            const id = `wb-${sessions.length + 1}`;
+            sessions.push({ id, toolId: args.request.toolId, projectId: args.request.projectId ?? null, directory: 'C:/alpha', mode: args.request.mode, running: true, exitCode: null, startedAt: Date.now() });
+            return { toolId: args.request.toolId, projectId: args.request.projectId ?? null, mode: args.request.mode, terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'plugin:event|listen') return args.handler;
+          if (command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+  const rename = (title: string) => page.evaluate((next) => {
+    (window as unknown as { __library: { prompts: Array<{ title: string; body: string }> } }).__library.prompts[0].title = next;
+  }, title);
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog.getByRole('group', { name: '资料库提示词' })).toContainText('旧标题');
+  await dialog.getByRole('button', { name: '取消' }).click();
+
+  // Editing the library between openings shows the new title on the next opening.
+  await rename('新标题');
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  await expect(dialog.getByRole('group', { name: '资料库提示词' })).toContainText('新标题');
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Alpha/ }).click();
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+  await expect(dialog).toBeHidden();
+
+  await stage.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+M');
+  const composerPrompts = stage.getByRole('group', { name: '资料库提示词' });
+  await expect(composerPrompts).toContainText('新标题');
+  await page.keyboard.press('Escape');
+  await expect(composerPrompts).toHaveCount(0);
+
+  // Reopening the composer re-reads the library too.
+  await rename('第三版');
+  await stage.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+M');
+  await expect(composerPrompts).toContainText('第三版');
 });

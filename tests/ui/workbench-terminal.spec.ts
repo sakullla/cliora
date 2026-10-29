@@ -656,9 +656,11 @@ test('long task titles, metadata, and toolbar actions keep their own space at ev
         && endBox.x + endBox.width <= stageBox.x + stageBox.width;
     }).toBe(true);
     await expect.poll(() => toolbar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-    for (const name of ['查找输出', '复制输出', '快捷输入', '发送中断 (Ctrl+C)', '终端显示', '更多终端操作']) {
+    for (const name of ['查找输出', '快捷输入', '发送中断 (Ctrl+C)', '更多终端操作']) {
       await expect(toolbar.getByRole('button', { name, exact: true })).toBeVisible();
     }
+    // Display settings live in the status bar, next to the shortcut reference.
+    await expect(stage.locator('footer').getByRole('button', { name: '终端显示', exact: true })).toBeVisible();
   }
   expect(await heading.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
 });
@@ -1016,4 +1018,47 @@ test('find can match case, line spacing persists, shortcuts are listed, and the 
   await rail.getByRole('button', { name: '展开会话栏', exact: true }).click();
   await expect(rail).not.toHaveAttribute('data-slim', 'true');
   expect(await writes(page)).toEqual([]);
+});
+
+test('double-clicks and Mod+Shift+B toggle the rail and focus mode; middle-click removes an ended session', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const root = page.locator('[data-term-theme]');
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const codex = page.getByRole('tab', { name: /Codex/ });
+
+  // Double-clicking a session's icon collapses the rail; the slim icon expands it again.
+  await codex.locator('[data-rail-icon]').dblclick();
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await codex.locator('[data-rail-icon]').dblclick();
+  await expect(rail).not.toHaveAttribute('data-slim', 'true');
+
+  // The title bar icon does the same, and the keyboard shortcut works from the terminal.
+  await stage.locator('[data-stage-icon]').dblclick();
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await page.locator('.xterm-helper-textarea:visible').focus();
+  await page.keyboard.press('Control+Shift+B');
+  await expect(rail).not.toHaveAttribute('data-slim', 'true');
+  expect(await writes(page)).toEqual([]);
+
+  // Double-clicking the bare title bar enters focus mode; the stage icon brings the rail back.
+  const header = stage.locator('header').first();
+  const box = (await header.boundingBox())!;
+  const toolbar = (await stage.getByRole('toolbar', { name: '终端操作' }).boundingBox())!;
+  await page.mouse.dblclick(toolbar.x - 24, box.y + box.height / 2);
+  await expect(root).toHaveAttribute('data-focus-mode', 'true');
+  await expect(rail).toBeHidden();
+  await stage.locator('[data-stage-icon]').dblclick();
+  await expect(root).not.toHaveAttribute('data-focus-mode', 'true');
+  await expect(rail).toBeVisible();
+
+  // Middle-click closes an ended session like a browser tab.
+  await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 's2'));
+  const claude = page.getByRole('tab', { name: /Claude Code/ });
+  await expect(claude).toContainText('已结束');
+  await claude.click({ button: 'middle' });
+  await expect(claude).toHaveCount(0);
+  await expect(codex).toBeVisible();
 });

@@ -163,7 +163,7 @@ export function quoteDroppedPaths(paths: string[]): string {
     .join(' ');
 }
 
-export type ShortcutAction = 'find' | 'composer' | 'split' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
+export type ShortcutAction = 'find' | 'composer' | 'split' | 'rail' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
 
 /** Keys the workbench owns before xterm sees them. Null lets xterm encode the key. */
 export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>, options: { hasSelection: boolean; canSwitch: boolean; mac: boolean }):
@@ -184,6 +184,7 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
   if (mod && shiftKey && !altKey && lower === 'm') return { kind: 'shortcut', action: 'composer' };
   // Ctrl+Shift+D would otherwise reach the CLI as Ctrl+D (EOF); the workbench owns it for split view.
   if (mod && shiftKey && !altKey && lower === 'd') return { kind: 'shortcut', action: 'split' };
+  if (mod && shiftKey && !altKey && lower === 'b') return { kind: 'shortcut', action: 'rail' };
   if (ctrlKey && !altKey && !metaKey && key === 'Tab') {
     if (!options.canSwitch) return null;
     return { kind: 'shortcut', action: shiftKey ? 'prevSession' : 'nextSession' };

@@ -136,7 +136,8 @@ test('a remote session composer lists that host library, not this computer', asy
   const composer = stage.getByRole('region', { name: '多行输入与提示词投递' });
   await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
   await expect(composer.getByRole('button', { name: 'ui/ux重做' })).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __libraryCalls: Array<{ command: string; targetId?: string; kind?: string }> }).__libraryCalls.filter((item) => item.command === 'list_remote_library_items'))).toEqual([
-    { command: 'list_remote_library_items', targetId: host.id, kind: 'prompt' },
-  ]);
+  // Opening the composer re-reads the library, so every read goes to that host.
+  const remoteCalls = await page.evaluate(() => (window as unknown as { __libraryCalls: Array<{ command: string; targetId?: string; kind?: string }> }).__libraryCalls.filter((item) => item.command === 'list_remote_library_items'));
+  expect(remoteCalls.length).toBeGreaterThan(0);
+  expect(remoteCalls.every((item) => item.targetId === host.id && item.kind === 'prompt')).toBe(true);
 });
