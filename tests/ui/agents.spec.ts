@@ -342,10 +342,19 @@ test('opening another agent starts its document at the top', async ({ page }) =>
   await row(page, 'reviewer').getByRole('button').click();
   const reader = page.getByRole('article', { name: 'reviewer' });
   await expect(reader).toContainText('Step 80');
-  const scrolled = () => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll<HTMLElement>('[data-document-shell] *')].map((node) => node.scrollTop)));
-  await reader.getByText('Step 80').scrollIntoViewIfNeeded();
-  await expect.poll(scrolled).toBeGreaterThan(100);
+  // The scroll position of the element that scrolls the reader; `to` sets it first.
+  const scroller = (article: ReturnType<typeof page.getByRole>, to?: number) => article.evaluate((node, value) => {
+    const scrolls = (item: Element) => item.scrollHeight > item.clientHeight + 50 && /auto|scroll/.test(getComputedStyle(item).overflowY);
+    const ancestors: Element[] = [];
+    for (let item = node.parentElement; item; item = item.parentElement) ancestors.push(item);
+    const element = [node, ...node.querySelectorAll('*'), ...ancestors].find(scrolls) as HTMLElement | undefined;
+    if (!element) return -1;
+    if (value !== undefined) element.scrollTop = value;
+    return element.scrollTop;
+  }, to);
+  await expect.poll(() => scroller(reader, 600)).toBeGreaterThan(100);
   await row(page, 'plugin-agent').getByRole('button').click();
-  await expect(page.getByRole('article', { name: 'plugin-agent' })).toBeVisible();
-  await expect.poll(scrolled).toBe(0);
+  const next = page.getByRole('article', { name: 'plugin-agent' });
+  await expect(next).toContainText('Step 80');
+  await expect.poll(() => scroller(next)).toBe(0);
 });
