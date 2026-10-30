@@ -88,6 +88,7 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
   openExternalUrl: (url: string) => command<void>('open_external_url', { url }),
+  openWorkbenchPath: (sessionId: string, path: string) => command<void>('open_workbench_path', { sessionId, path }),
   scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
   operateNativeAgent: (request: AgentRequest) => command<AgentResult>('operate_native_agent', { request }),
   scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),

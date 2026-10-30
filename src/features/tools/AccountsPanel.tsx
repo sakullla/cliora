@@ -85,8 +85,14 @@ export function useAccounts(tool: string, active = true, remoteTargetId: string 
     if (!nativeAvailable || !active) { setLoading(false); return () => { mounted.current = false; generation.current++; }; }
     setLoading(true); setAccounts([]); setCapability(null); setError('');
     const read = () => refresh().catch(() => {}).finally(() => { if (mounted.current && generation.current === scope) setLoading(false); });
-    void read(); const timer = window.setInterval(() => void read(), remoteTargetId ? 30_000 : 2_500);
-    return () => { mounted.current = false; generation.current++; window.clearInterval(timer); };
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      await read();
+      if (!disposed) timer = setTimeout(() => { void poll(); }, remoteTargetId ? 30_000 : 2_500);
+    };
+    void poll();
+    return () => { disposed = true; mounted.current = false; generation.current++; clearTimeout(timer); };
   }, [tool, active, remoteTargetId]);
   return { accounts, capability, error, refresh, loading, remote: !!remoteTargetId };
 }

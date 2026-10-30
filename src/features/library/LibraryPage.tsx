@@ -20,7 +20,7 @@ import { displayPath, shortPath } from '../../lib/paths';
 import { open } from '@tauri-apps/plugin-dialog';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
-import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import { useToasts } from '../../lib/toast';
 import { ToastScope } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
@@ -162,7 +162,9 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     return () => { live = false; };
   }, [active, countStamp, remoteTargetId]);
   useEffect(() => {
-    if (!nativeAvailable || !active) return;
+    // The editor/launch draft owns its own copy; the hidden list need not retain every body.
+    if (!active || (section !== 'prompt' && section !== 'rule')) { setItems([]); return; }
+    if (!nativeAvailable) return;
     if (remoteTargetId !== 'local') {
       let live = true;
       setListLoading(true);
@@ -178,7 +180,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
     }, search ? 180 : 0);
     return () => { live = false; window.clearTimeout(timer); };
-  }, [active, kind, search, remoteTargetId]);
+  }, [active, section, kind, search, remoteTargetId]);
   // Spotlight from the command palette: settle the section and filters first, then
   // open the entry's edit dialog (its view/copy surface) once the list shows it.
   // Waiting is event-driven: the reveal simply fires when a matching item arrives.

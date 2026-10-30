@@ -1,3 +1,4 @@
+import { BoundedCache } from '../../lib/boundedCache';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as pickFolder } from '@tauri-apps/plugin-dialog';
@@ -56,7 +57,7 @@ const knownTypes = ['user', 'feedback', 'project', 'reference'];
 // the last aggregate briefly so switching between tools/views shows the saved
 // index immediately while an explicit refresh still revalidates the disk.
 const MEMORY_CACHE_TTL = 30_000;
-const aggregateCache = new Map<string, { value: MemoryAggregate; at: number }>();
+const aggregateCache = new BoundedCache<string, MemoryAggregate>(12, MEMORY_CACHE_TTL);
 
 function isExternalChange(error: unknown): boolean {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
@@ -231,7 +232,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         if (retained) { value.entries.push(retained); setMissingDraft(true); }
       }
       setAggregate(value);
-      aggregateCache.set(`${remoteTargetId ?? 'local'}:${toolId}`, { value, at: Date.now() });
+      aggregateCache.set(`${remoteTargetId ?? 'local'}:${toolId}`, value);
       setListFailure(null);
       void loadDocs(value, epoch);
       return value;
@@ -250,11 +251,11 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   useEffect(() => {
     if (!active) return;
     const cached = aggregateCache.get(`${remoteTargetId ?? 'local'}:${toolId}`);
-    if (cached && Date.now() - cached.at < MEMORY_CACHE_TTL) {
+    if (cached) {
       const epoch = ++loadEpoch.current;
-      setAggregate(cached.value);
+      setAggregate(cached);
       setListFailure(null);
-      void loadDocs(cached.value, epoch);
+      void loadDocs(cached, epoch);
       return;
     }
     void reload();

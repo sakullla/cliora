@@ -375,6 +375,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         if (nativeAvailable) await native.openExternalUrl(url);
         else window.open(url, '_blank', 'noopener,noreferrer');
       },
+      openPath: nativeAvailable ? (path) => native.openWorkbenchPath(sessionId, path) : undefined,
       onError: (error) => bridge.current.linkError(error),
     });
     linksRef.current = links;

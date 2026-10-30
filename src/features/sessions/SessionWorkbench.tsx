@@ -16,7 +16,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, WorkbenchGitContext, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchGitContext, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -35,27 +35,12 @@ import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
-export type WorkbenchRetry =
-  | { kind: 'launch'; request: LaunchRequest }
-  | { kind: 'resume'; id: string; mode: LaunchMode };
-
-export type WorkbenchFailure = { detail: string; retry: WorkbenchRetry };
-
-export function workbenchSessionId(result: LaunchResult): string | null {
-  return result.status === 'session_started' && result.sessionId ? result.sessionId : null;
-}
+import { workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
 
 /** A remote session's library prompts come from that host. `null` means the host is not known yet. */
 export function libraryHostId(projectId: string | null | undefined, remoteProjects: RemoteProject[]): string | null {
   if (!projectId?.startsWith('remote:')) return 'local';
   return remoteProjects.find((item) => `remote:${item.id}` === projectId)?.targetId ?? null;
-}
-
-/** Desktop launches never become workbench sessions. Only an explicit workbench preference routes a failure onto this page. */
-export async function failedInWorkbench(desktop = false): Promise<boolean> {
-  if (desktop || !nativeAvailable) return false;
-  try { return (await native.getLaunchSettings()).selected === 'workbench'; }
-  catch { return false; }
 }
 
 const DEFAULT_RAIL_WIDTH = 272;
@@ -190,7 +175,8 @@ type MenuState =
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome, remoteIntent }: {
+  remoteIntent?: RemoteWorkbenchIntent | null;
   active: boolean;
   tools: AdapterDescriptor[];
   remoteSshEnabled?: boolean;
@@ -352,6 +338,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     window.addEventListener('cliora:open-remote-session', onOpenRemote);
     return () => { window.removeEventListener('cliora:remote-target-changed', onTarget); window.removeEventListener('cliora:manage-hosts', onManage); window.removeEventListener('cliora:open-remote-session', onOpenRemote); };
   }, [activeTargetId, remoteProjects, tools]);
+
+  // Carry the launch through the first lazy mount, after the event listener is ready.
+  const handledRemoteIntent = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !remoteIntent || handledRemoteIntent.current === remoteIntent.token) return;
+    handledRemoteIntent.current = remoteIntent.token;
+    window.dispatchEvent(new CustomEvent('cliora:open-remote-session', { detail: remoteIntent }));
+  }, [active, remoteIntent]);
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
@@ -577,7 +571,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
   bridge.current = {
     writeError: (error) => setActionError(formatFailure(error, t('sessions.writeFailed'), t('sessions.retry'))),
-    linkError: (error) => setActionError(formatFailure(error, t('common.externalLink.openFailed'), t('sessions.retry'))),
+    linkError: (error) => setActionError(formatFailure(error, t('sessions.openLinkFailed'), t('sessions.retry'))),
     bell: (id) => {
       if (soundEnabledRef.current) playWorkbenchChime('bell');
       if (id === selectedIdRef.current && document.hasFocus()) return;

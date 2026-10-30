@@ -17,7 +17,7 @@ import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
-import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
 import { childTitle, childTrail } from './SessionAssociation';
@@ -292,7 +292,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   useEffect(() => {
     const sequence = ++detailRequest.current;
     setDetailError('');
-    if (!selectedId || !nativeAvailable) { setDetail(null); return; }
+    if (!active || tab !== 'sessions' || !selectedId || !nativeAvailable) { setDetail(null); return; }
     if (remoteTargetId !== 'local') {
       void native.getRemoteNativeHistory(remoteTargetId, selectedId).then((value) => {
         if (sequence !== detailRequest.current) return;
@@ -306,7 +306,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     })
       .catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, t('records.page.detailFailed'), t('records.page.detailFailedNext'))); });
     return () => { detailRequest.current++; };
-  }, [selectedId, detailRetry, scanVersion, remoteTargetId, t]);
+  }, [active, tab, selectedId, detailRetry, scanVersion, remoteTargetId, t]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const selectedFacet = tools.find((item) => item.id === selected?.session.toolId)?.association;
@@ -319,7 +319,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
   const readyCommand = resumeCommand?.key === resumeKey ? resumeCommand.text : '';
   const shownResumeError = resumeError?.key === resumeKey ? resumeError.text : selected?.resumeReason ?? '';
-  useEffect(() => { if (!yolo && mode === 'yolo') setMode('normal'); }, [yolo, mode]);
+  useEffect(() => { if (selected && !yolo && mode === 'yolo') setMode('normal'); }, [selected, yolo, mode]);
   useEffect(() => {
     setResumeCommand(null);
     setResumeError(null);

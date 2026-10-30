@@ -28,6 +28,7 @@ export default {
   listNext: '可以重试读取。',
   writeFailed: '输入没有送进当前会话',
   openLinkHint: '{{modifier}} + 点击打开',
+  openLinkFailed: '链接未能打开',
   externalOpened: '这次打开的是外部终端，工作台没有对应的进行中会话。',
   desktopOpened: '已请求打开桌面应用，工作台没有建立会话。',
   placeUnknown: '未指定目录',

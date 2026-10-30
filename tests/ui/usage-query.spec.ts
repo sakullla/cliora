@@ -59,6 +59,46 @@ async function setup(page: Page, automatic = false) {
   await expect(page.getByText(automatic ? '官方套餐' : '测试套餐', { exact: true })).toBeVisible();
 }
 const harness = (page: Page, action: string) => page.evaluate(action);
+
+test('quota polling joins slow reads, skips unchanged histories and stops when hidden', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByText('125% 已用')).toBeVisible();
+  await page.clock.install();
+  await page.evaluate(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.pollProbe = { queries: 0, histories: 0, presets: 0, hold: true, release: null };
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: unknown) => {
+      const probe = w.pollProbe;
+      if (command === 'list_usage_queries') {
+        probe.queries++;
+        if (probe.hold) await new Promise<void>(resolve => { probe.release = resolve; });
+      }
+      if (command === 'list_usage_samples') probe.histories++;
+      if (command === 'usage_presets') probe.presets++;
+      return invoke(command, args);
+    };
+  });
+  await page.clock.fastForward(4000);
+  await expect.poll(() => harness(page, 'window.pollProbe.queries')).toBe(1);
+  await page.clock.fastForward(12000);
+  expect(await harness(page, 'window.pollProbe.queries')).toBe(1);
+  await harness(page, 'window.pollProbe.hold=false;window.pollProbe.release()');
+  // Wait for the read to reach its final React update before advancing the next timer.
+  await page.waitForTimeout(50);
+  await page.clock.fastForward(4000);
+  await expect.poll(() => harness(page, 'window.pollProbe.queries')).toBe(2);
+  expect(await harness(page, 'window.pollProbe.histories')).toBe(0);
+  expect(await harness(page, 'window.pollProbe.presets')).toBe(0);
+  await harness(page, 'window.quotaHarness.cache[0].success.measuredAt="2026-01-02T00:00:00Z"');
+  await page.waitForTimeout(50);
+  await page.clock.fastForward(4000);
+  await expect.poll(() => harness(page, 'window.pollProbe.histories')).toBe(1);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  const count = await harness(page, 'window.pollProbe.queries');
+  await page.clock.fastForward(12000);
+  expect(await harness(page, 'window.pollProbe.queries')).toBe(count);
+});
 /** Seed usage samples as [hoursAgo, remaining] pairs (ascending time) for the primary metric. */
 const seedSamples = (page: Page, readings: Array<[number, number]>) => page.evaluate((readings) => {
   const harness = (window as any).quotaHarness;
@@ -68,6 +108,8 @@ const seedSamples = (page: Page, readings: Array<[number, number]>) => page.eval
     const at = now - hoursAgo * 3600;
     return { queryId: 'q1', measuredAt: at, snapshot: { execution: { kind: 'saved', queryId: 'q1', generation: 1, identity: harness.queries[0].config.identity }, source: 'builtin:glm:1', attemptedAt: new Date(at * 1000).toISOString(), measuredAt: new Date(at * 1000).toISOString(), result: { schemaVersion: 1, status: 'success', metrics: [{ ...metric, used: 100 - remaining, remaining }], errors: [] } } };
   });
+  // A persisted sample accompanies a new successful reading in the native store.
+  harness.cache[0].success.measuredAt = new Date().toISOString();
 }, readings);
 
 test('profile quota preserves overage, missing values, expiry and last success after rate limit', async ({ page }) => {
