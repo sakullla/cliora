@@ -12,6 +12,7 @@ export default {
     loading: 'Reading account context…',
   },
   page: {
+    processing: 'Processing, please wait…',
     bindingsLoading: 'Reading rule placement status…',
     bindingsUnknown: 'Placement status is not yet known',
     bindingsFailed: 'Could not read rule placement status. Retry before saving and distributing rules.',

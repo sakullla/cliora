@@ -109,6 +109,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(busy); busyRef.current = busy;
   const toasts = useToasts();
   const [listLoading, setListLoading] = useState(nativeAvailable);
   const [dialogError, setDialogError] = useState('');
@@ -136,7 +137,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     return () => window.clearTimeout(timer);
   }, [copiedId, toasts.notice]);
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
-  const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
+  const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active, busy]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   async function confirmCurrent(message: string, options: ConfirmationOptions = { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') }) {
@@ -243,7 +244,11 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   // The unfiltered count loads separately; clamp it so a fresh filtered batch never shows x > y.
   const listTotal = Math.max(counts[kind] ?? items.length, shown.length);
 
-  async function canReplace() { return !dirty || confirmCurrent(t('library.page.confirmDiscard')); }
+  async function canReplace() {
+    if (busyRef.current) return false;
+    const allowed = !dirty || await confirmCurrent(t('library.page.confirmDiscard'));
+    return allowed && !busyRef.current;
+  }
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
@@ -507,24 +512,24 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           : <div className={styles.empty}><Icon name="search" size={24} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
       </div>
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
-      {draft && <div className={styles.editor}>
+    <GuideDialog open={!!draft} closeDisabled={busy} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
+      {draft && <div className={styles.editor} aria-busy={busy}>
         {draft.kind === 'rule' && bindingFeedback()}
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
-          <label>{t('library.page.title')}<input autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
-          <label>{t('library.page.project')}<FilterSelect label={t('library.page.project')} value={draft.projectId ?? ''} options={[{ value: '', label: t('tools.apply.global') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
+          <label>{t('library.page.title')}<input disabled={busy} autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
+          <label>{t('library.page.project')}<FilterSelect disabled={busy} label={t('library.page.project')} value={draft.projectId ?? ''} options={[{ value: '', label: t('tools.apply.global') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
           <div className={styles.tags}>{t('library.page.tags')}
             <div className={styles.tagList} data-field-frame="">
-              {tagsOf(draft.category).map((tag) => <button type="button" key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
-              <input aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
+              {tagsOf(draft.category).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
+              <input disabled={busy} aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
             </div>
-            {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
+            {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
           </div>
         </div>
-        <label className={styles.body}><span className={styles.bodyHead}>{t('library.page.body')}<span className={styles.charCount}>{t('library.page.charCount', { count: draft.body.length })}</span></span><CodeEditor key={draft.id ?? 'new'} label={t('library.page.bodyEditorLabel')} format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? t('library.page.bodyPromptPlaceholder') : t('library.page.bodyRulePlaceholder')} /></label>
-        <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{dirty ? t('library.page.dirtyState') : t('tools.config.statusSaved')}</span><span className="dialog-footer-gap" /><Button onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>{t('library.page.copy')}</Button>{draft.id && <Button variant="ghost" className={styles.danger} onClick={() => void remove()} disabled={busy}>{t('tools.agents.delete')}</Button>}<Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.title.trim() || (draft.kind === 'rule' && !bindingsKnown)} onClick={() => void save()}>{t('home.launcher.save')}</Button></div>
+        <label className={styles.body}><span className={styles.bodyHead}>{t('library.page.body')}<span className={styles.charCount}>{t('library.page.charCount', { count: draft.body.length })}</span></span><CodeEditor readOnly={busy} key={draft.id ?? 'new'} label={t('library.page.bodyEditorLabel')} format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? t('library.page.bodyPromptPlaceholder') : t('library.page.bodyRulePlaceholder')} /></label>
+        <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{busy ? t('library.page.processing') : dirty ? t('library.page.dirtyState') : t('tools.config.statusSaved')}</span><span className="dialog-footer-gap" /><Button onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>{t('library.page.copy')}</Button>{draft.id && <Button variant="ghost" className={styles.danger} onClick={() => void remove()} disabled={busy}>{t('tools.agents.delete')}</Button>}<Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.title.trim() || (draft.kind === 'rule' && !bindingsKnown)} onClick={() => void save()}>{t('home.launcher.save')}</Button></div>
       </div>}
     </GuideDialog>
     <GuideDialog open={!!launchItem} title={t('library.page.launchTitle')} hint={t('library.page.launchHint')} onClose={() => { if (!launchBusy) setLaunchItem(null); }}>

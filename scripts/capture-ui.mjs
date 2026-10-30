@@ -655,7 +655,16 @@ for(const width of widths)for(const theme of themes){
   await expect(editor).toHaveText('保留规则编辑草稿，确认绑定后再分发。');
   expect(await page.evaluate(()=>window.__captureBindings.saves)).toBe(0);await capture('rules-bindings-editor-stale');
   await page.evaluate(()=>window.__captureBindings.fail=false);await dialog.getByRole('button',{name:'重试写入状态',exact:true}).click();
-  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();await dialog.locator('[data-dialog-save]').click();await dialog.waitFor({state:'hidden'});
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await page.evaluate(()=>window.__captureBindings.hold=true);await dialog.locator('[data-dialog-save]').click();
+  await expect(editor).toHaveAttribute('aria-readonly','true');
+  await expect(dialog.getByLabel('标题',{exact:true})).toBeDisabled();await expect(dialog.getByRole('button',{name:'关联项目',exact:true})).toBeDisabled();
+  await expect(dialog.getByLabel('添加标签')).toBeDisabled();await expect(dialog.getByRole('button',{name:'项目规则 ×',exact:true})).toBeDisabled();
+  await expect(dialog.getByRole('button',{name:'关闭',exact:true})).toBeDisabled();
+  await page.keyboard.press('Escape');await expect(dialog).toBeVisible();
+  await dialog.getByText('正在处理，请稍候…',{exact:true}).waitFor();await capture('rules-bindings-editor-saving');
+  expect(await page.evaluate(()=>window.__captureBindings.saves)).toBe(0);
+  await page.evaluate(()=>window.__releaseBindings());await dialog.waitFor({state:'hidden'});
   await expect(ruleRow.getByRole('button',{name:'Codex · 已生效',exact:true})).toBeEnabled();
   const dismiss=page.getByRole('button',{name:'关闭提示',exact:true});if(await dismiss.isVisible()){await dismiss.click();await dismiss.waitFor({state:'hidden'});}
   await capture('rules-bindings-ready');

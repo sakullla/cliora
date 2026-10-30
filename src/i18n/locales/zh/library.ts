@@ -12,6 +12,7 @@ export default {
     loading: '正在读取账号上下文…',
   },
   page: {
+    processing: '正在处理，请稍候…',
     bindingsLoading: '正在读取规则写入状态…',
     bindingsUnknown: '写入状态尚未确定',
     bindingsFailed: '无法读取规则写入状态。重试成功后可保存和分发规则。',

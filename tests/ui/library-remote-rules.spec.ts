@@ -26,7 +26,7 @@ const rule = {
   updatedAt: 1,
 };
 
-async function installRemoteRules(page: Page, options: { bound?: boolean; delay?: boolean; fail?: boolean } = {}) {
+async function installRemoteRules(page: Page, options: { bound?: boolean; delay?: boolean; fail?: boolean; category?: string } = {}) {
   await page.addInitScript(({ host, rule, options }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
@@ -37,15 +37,21 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
       management: { accounts: false, mcp: true, skills: true, agents: false, plugins: false, projectPlugins: false, rules: { global: true, project: false, catalog: false, globalReason: '', projectReason: '' } },
     }));
     const calls: Array<Record<string, unknown>> = [];
-    const state = { bound: options.bound ?? false, delay: options.delay ?? false, fail: options.fail ?? false, failAfterSync: false, saves: 0 };
+    const state = { bound: options.bound ?? false, delay: options.delay ?? false, delaySave: false, delaySync: false, fail: options.fail ?? false, failAfterSync: false, saves: 0 };
     const releases: Array<() => void> = [];
-    const savedRule = { ...rule };
+    const saveReleases: Array<() => void> = [];
+    const syncReleases: Array<() => void> = [];
+    const savedDrafts: Array<Record<string, unknown>> = [];
+    const savedRule = { ...rule, category: options.category ?? rule.category };
     const placements = () => state.bound ? [{ ruleId: rule.id, toolId: 'codex', scope: 'global', projectPath: null, state: 'current', path: '/root/.codex/AGENTS.md' }] : [];
     Object.assign(window, {
       isTauri: true,
       __ruleCalls: calls,
       __ruleState: state,
+      __ruleSavedDrafts: savedDrafts,
       __releaseRulePlacements: () => { state.delay = false; releases.splice(0).forEach(release => release()); },
+      __releaseRuleSave: () => { state.delaySave = false; saveReleases.splice(0).forEach(release => release()); },
+      __releaseRuleSync: () => { state.delaySync = false; syncReleases.splice(0).forEach(release => release()); },
       __TAURI_INTERNALS__: {
         transformCallback: () => 1,
         invoke: async (command: string, args: Record<string, any> = {}) => {
@@ -57,13 +63,13 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
           if (command === 'list_remote_targets') return [host];
           if (command === 'list_remote_library_items') return args.kind === 'rule' ? [savedRule] : [];
           if (command === 'list_remote_rule_placements') {
-            if (state.fail) throw { message: 'fixture placement denied' };
             const rows = placements();
             if (state.delay) await new Promise<void>(resolve => releases.push(resolve));
+            if (state.fail) throw { message: 'fixture placement denied' };
             return rows;
           }
-          if (command === 'save_remote_library_item') { state.saves++; Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
-          if (command === 'sync_remote_rule_clients') { if (state.failAfterSync) state.fail = true; return [{ toolId: 'codex', path: '/root/.codex/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
+          if (command === 'save_remote_library_item') { state.saves++; savedDrafts.push({ ...args.draft }); if (state.delaySave) await new Promise<void>(resolve => saveReleases.push(resolve)); Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
+          if (command === 'sync_remote_rule_clients') { if (state.delaySync) await new Promise<void>(resolve => syncReleases.push(resolve)); if (state.failAfterSync) state.fail = true; return [{ toolId: 'codex', path: '/root/.codex/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
           if (command === 'list_library_items' || command === 'list_projects' || command === 'list_accounts' || command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages' || command === 'list_remote_resource_stores') return [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -155,6 +161,9 @@ for (const initialFailure of [false, true]) test(`binding failure (${initialFail
   }
   await expect(dialog.locator('[data-dialog-save]')).toBeDisabled();
   await expect(dialog.getByRole('textbox', { name: '资料正文', exact: true })).toHaveText('preserve failed binding draft');
+  await expect(dialog.getByRole('textbox', { name: '资料正文', exact: true })).toHaveAttribute('aria-readonly', 'false');
+  await expect(dialog.getByLabel('标题', { exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(0);
   expect(await page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'sync_remote_rule_clients'))).toHaveLength(0);
   await page.evaluate(() => { (window as any).__ruleState.fail = false; });
@@ -189,4 +198,79 @@ test('a successful write followed by failed placement readback stays open with a
   await expect(dialog.getByText(/规则写入状态刷新失败/)).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(1);
   expect(await page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'sync_remote_rule_clients'))).toHaveLength(1);
+});
+
+for (const failedReadback of [false, true]) test(`rule draft controls and closing stay locked throughout saving (${failedReadback ? 'failed readback' : 'success'})`, async ({ page }) => {
+  await installRemoteRules(page, { bound: true, category: 'suggested tag' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: /长期规则/ }).click();
+  await expect(page.getByRole('button', { name: 'Codex · 已生效', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '远端规则', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const editor = dialog.getByRole('textbox', { name: '资料正文', exact: true });
+  await dialog.getByLabel('标题', { exact: true }).fill('title at submit');
+  await dialog.getByLabel('添加标签').fill('submit tag');
+  await dialog.getByLabel('添加标签').press('Enter');
+  await dialog.getByRole('button', { name: 'suggested tag ×', exact: true }).click();
+  await editor.fill('draft at submit');
+  await page.evaluate((fail) => { Object.assign((window as any).__ruleState, { delay: true, delaySave: true, delaySync: true, failAfterSync: fail }); }, failedReadback);
+  await dialog.locator('[data-dialog-save]').click();
+
+  async function expectLocked(expectSuggestion = false) {
+    await expect(dialog.getByLabel('标题', { exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '关联项目', exact: true })).toBeDisabled();
+    await expect(dialog.getByLabel('添加标签')).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'submit tag ×', exact: true })).toBeDisabled();
+    if (expectSuggestion) await expect(dialog.getByRole('button', { name: 'suggested tag', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '删除', exact: true })).toBeDisabled();
+    await expect(dialog.locator('[data-dialog-save]')).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeDisabled();
+    await expect(editor).toHaveAttribute('aria-readonly', 'true');
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.type('new edit during save');
+    await expect(editor).toHaveText('draft at submit');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  }
+
+  await expectLocked(true); // Fresh placement preflight has not written the body.
+  // Guard replacement callbacks too, including callers outside the modal's pointer boundary.
+  await page.getByRole('button', { name: '新建规则', exact: true }).evaluate(button => button.click());
+  await page.getByRole('button', { name: '远端规则', exact: true }).evaluate(button => button.click());
+  await page.getByRole('tab', { name: /提示词/ }).evaluate(tab => tab.click());
+  await expect(dialog.getByLabel('标题', { exact: true })).toHaveValue('title at submit');
+  await expect(page.getByRole('tab', { name: /长期规则/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(0);
+  await page.evaluate(() => (window as any).__releaseRulePlacements());
+  await expect.poll(() => page.evaluate(() => (window as any).__ruleState.saves)).toBe(1);
+  await expectLocked(true); // Body persistence.
+  await page.evaluate(() => (window as any).__releaseRuleSave());
+  await expect.poll(() => page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'sync_remote_rule_clients').length)).toBe(1);
+  await expectLocked(); // Actual CLI synchronization.
+  await page.evaluate(() => { (window as any).__ruleState.delay = true; (window as any).__releaseRuleSync(); });
+  await expect.poll(() => page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'list_remote_rule_placements').length)).toBeGreaterThanOrEqual(3);
+  await expectLocked(); // Post-write placement readback.
+  await page.evaluate(() => (window as any).__releaseRulePlacements());
+  expect(await page.evaluate(() => (window as any).__ruleSavedDrafts)).toMatchObject([{ title: 'title at submit', body: 'draft at submit', category: 'submit tag', projectId: null }]);
+  if (!failedReadback) {
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'title at submit', exact: true }).click();
+  } else {
+    await expect(dialog.getByText('规则已写入，但写入状态读取失败。请重试读取后核查。')).toBeVisible();
+  }
+  await expect(editor).toHaveText('draft at submit');
+  await expect(editor).toHaveAttribute('aria-readonly', 'false');
+  await expect(dialog.getByLabel('标题', { exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '关联项目', exact: true })).toBeEnabled();
+  await expect(dialog.getByLabel('添加标签')).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'submit tag ×', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '删除', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(1);
 });
