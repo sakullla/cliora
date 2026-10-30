@@ -1874,12 +1874,21 @@ test('Skill filters combine name, source, and load, and a disabled skill stays l
   await expect(list.getByRole('button')).toHaveCount(8);
   await expect(page.getByText('8 / 8')).toBeVisible();
 
-  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('alpha');
+  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('alpha-skill');
   await expect(list.getByRole('button')).toHaveCount(1);
   await expect(list.getByRole('button', { name: /alpha-skill/ })).toBeVisible();
   await expect(page.getByText('1 / 8')).toBeVisible();
-  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('Pack');
-  await expect(page.getByText('没有匹配「Pack」的 Skill。')).toBeVisible();
+  // The plugin name matches too: every skill from Alpha Pack.
+  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('alpha');
+  await expect(list.getByRole('button')).toHaveCount(3);
+  await expect(list.getByRole('button', { name: /beta-skill/ })).toBeVisible();
+  await expect(list.getByRole('button', { name: /bad-skill/ })).toBeVisible();
+  await expect(page.getByText('3 / 8')).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('Gamma Pack');
+  await expect(list.getByRole('button')).toHaveCount(1);
+  await expect(list.getByRole('button', { name: /gamma-skill/ })).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜索 Skill' }).fill('zzz');
+  await expect(page.getByText('没有匹配「zzz」的 Skill。')).toBeVisible();
   await page.getByRole('button', { name: '清除条件' }).first().click();
   await expect(list.getByRole('button')).toHaveCount(8);
 

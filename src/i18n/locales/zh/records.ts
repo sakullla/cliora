@@ -46,6 +46,9 @@ export default {
     noAlt: '未提供描述',
     link: '复制链接：{{href}}',
     code: '代码',
+    openFile: '打开 {{path}}',
+    missingFile: '找不到这个文件：{{target}}',
+    anchor: '跳到「{{anchor}}」',
   },
   range: {
     choose: '请选择',

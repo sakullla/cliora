@@ -4,9 +4,10 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type Keyb
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import type { Scope } from '../../types/native';
-import type { NativeSkillEntry, SkillFileChange, SkillFileListing, SkillFilePreview, SkillImportPreview, SkillInstallation, SkillManifest, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
+import type { NativeSkillEntry, SkillFileChange, SkillFileListing, SkillImportPreview, SkillInstallation, SkillManifest, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
 import { SkillManifestView, isSkillManifest, skillBody } from './SkillManifestView';
-import manifestStyles from './SkillManifestView.module.css';
+import { fileFormat } from '../../lib/markdownLinks';
+import { SKILL_FILE, SkillFileTrail, SkillFileView, SkillFilesPanel, useSkillReferences, type SkillFileState } from './SkillReader';
 import { displayPath } from '../../lib/paths';
 import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, PathLine, Toggle, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import { DocumentReader } from './DocumentReader';
@@ -25,13 +26,6 @@ import { Badge, Button, IconButton } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
 
 const MarkdownView = lazy(() => import('../../components/MarkdownView'));
-
-/** Attachment groups in the reading view, by the first path segment. */
-const FILE_GROUPS = ['scripts', 'references', 'assets'] as const;
-function fileGroup(path: string) {
-  const head = path.split('/')[0];
-  return path.includes('/') && (FILE_GROUPS as readonly string[]).includes(head) ? head : 'other';
-}
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -117,7 +111,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   // Backend reading of the text on screen; `manifest` is null when the reader is unavailable.
   const [manifestState, setManifestState] = useState<{ text: string; name: string; manifest: SkillManifest | null } | null>(null);
   const [attachments, setAttachments] = useState<{ path: string; listing: SkillFileListing | null; error: string } | null>(null);
-  const [attachmentPreview, setAttachmentPreview] = useState<{ path: string; preview: SkillFilePreview | null; error: string } | null>(null);
+  // Referenced files opened from SKILL.md, oldest first; empty shows SKILL.md itself.
+  const [trail, setTrail] = useState<Array<{ path: string; anchor: string | null }>>([]);
+  const [fileStates, setFileStates] = useState<Record<string, SkillFileState>>({});
+  const readerRef = useRef<HTMLDivElement | null>(null);
+  const scrollMemory = useRef(new Map<string, number>());
   const skillRequest = useRef(0);
   const skillDirty = !!skillDoc && skillDoc.draft !== skillDoc.baseline;
   const formDirty = !!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty;
@@ -315,7 +313,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setPendingTarget(null);
     setUrl('');
     setAttachments(null);
-    setAttachmentPreview(null);
+    resetFiles();
+  }
+  function resetFiles() {
+    setTrail([]);
+    setFileStates({});
+    scrollMemory.current.clear();
   }
   async function confirmLeave() {
     if (!formDirtyRef.current) return true;
@@ -340,7 +343,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setPendingTarget(null);
     setUrl('');
     setAttachments(null);
-    setAttachmentPreview(null);
+    resetFiles();
     try {
       const document = remoteTargetId
         ? { content: ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'skills') as { documents?: Record<string, string> }).documents ?? {})[entry.path] ?? '' }
@@ -364,18 +367,39 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       if (skillRequest.current === request) setAttachments({ path, listing: null, error: errorText(value) });
     }
   }
-  async function openAttachment(file: string) {
-    if (!attachments || attachmentPreview?.path === file) return;
+  async function loadFile(directory: string, file: string) {
     const request = skillRequest.current;
-    const directory = attachments.path;
-    setAttachmentPreview({ path: file, preview: null, error: '' });
+    setFileStates(current => ({ ...current, [file]: { preview: null, error: '' } }));
     try {
-      const preview = await native.readNativeSkillFile(toolId, scope, project, directory, file);
-      if (skillRequest.current === request) setAttachmentPreview(current => current?.path === file ? { path: file, preview, error: '' } : current);
+      const preview = await native.readNativeSkillReference(toolId, scope, project, directory, file);
+      if (skillRequest.current === request) setFileStates(current => ({ ...current, [file]: { preview, error: '' } }));
     } catch (value) {
-      if (skillRequest.current === request) setAttachmentPreview(current => current?.path === file ? { path: file, preview: null, error: errorText(value) } : current);
+      if (skillRequest.current === request) setFileStates(current => ({ ...current, [file]: { preview: null, error: errorText(value) } }));
     }
   }
+  /** Opens a file the skill references in the reader; SKILL.md itself returns to the top. */
+  function openFile(path: string, anchor: string | null) {
+    if (!skillDoc || remoteTargetId) return;
+    const leaving = trail.at(-1)?.path ?? SKILL_FILE;
+    if (readerRef.current) scrollMemory.current.set(leaving, readerRef.current.scrollTop);
+    if (path === SKILL_FILE) { setTrail([]); return; }
+    scrollMemory.current.delete(path);
+    setTrail(current => current.at(-1)?.path === path ? current : [...current, { path, anchor }]);
+    if (!fileStates[path]?.preview) void loadFile(skillDoc.path, path);
+  }
+  function returnTo(index: number) {
+    const leaving = trail.at(-1)?.path ?? SKILL_FILE;
+    if (readerRef.current) scrollMemory.current.set(leaving, readerRef.current.scrollTop);
+    setTrail(current => current.slice(0, index + 1));
+  }
+  const openedFile = trail.at(-1) ?? null;
+  const readerPath = openedFile?.path ?? SKILL_FILE;
+  // Back and breadcrumb return to where the reader was; a newly opened file starts at the top or its anchor.
+  useLayoutEffect(() => {
+    const node = readerRef.current;
+    const remembered = scrollMemory.current.get(readerPath);
+    if (node && remembered !== undefined) node.scrollTop = remembered;
+  }, [readerPath, fileStates[readerPath]?.preview]);
   // A jump from a plugin's contents opens that skill once the native list has it.
   const appliedFocus = useRef<number | null>(null);
   useEffect(() => {
@@ -515,7 +539,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
 
   const needle = query.trim().toLowerCase();
   const visible = entries.filter(item => {
-    if (needle && !item.name.toLowerCase().includes(needle)) return false;
+    if (needle && !item.name.toLowerCase().includes(needle) && !(skillOrigin(item) === 'plugin' && item.pluginName?.toLowerCase().includes(needle))) return false;
     if (source !== 'all' && sourceKind(item) !== source) return false;
     if (load !== 'all' && loadKind(item, enabledByPackage) !== load) return false;
     return true;
@@ -641,47 +665,39 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const packageMeta = selected && canEditSkill ? [t('tools.skills.fileCount', { count: selected.fileCount }), skillEnabled ? '' : t('tools.skills.disabledHint')].filter(Boolean).join(' · ') : '';
   const transient = targetPanel || importPanel;
   const listing = attachments && attachments.path === skillDoc?.path ? attachments : null;
-  const attachmentSection = listing && (listing.error || (listing.listing && (listing.listing.files.length > 0 || listing.listing.truncated))) ? <section className={manifestStyles.attachments} aria-label={t('tools.skills.filesTitle')}>
-    <span className={doc.sectionLabel}>{t('tools.skills.filesTitle')}</span>
-    {listing.error && <p className={manifestStyles.filesNote}>{t('tools.skills.filesFailed', { detail: listing.error })}</p>}
-    {listing.listing?.truncated && <p className={manifestStyles.filesNote}>{t('tools.skills.filesIncomplete')}</p>}
-    {[...FILE_GROUPS, 'other'].map(group => {
-      const files = listing.listing?.files.filter(file => fileGroup(file.path) === group) ?? [];
-      if (!files.length) return null;
-      return <div key={group} className={manifestStyles.fileGroup} role="group" aria-label={group === 'other' ? t('tools.skills.filesOther') : `${group}/`}>
-        <strong>{group === 'other' ? t('tools.skills.filesOther') : `${group}/`}</strong>
-        <ul>{files.map(file => <li key={file.path}>{file.readable
-          ? <button type="button" className={manifestStyles.fileRow} aria-pressed={attachmentPreview?.path === file.path} onClick={() => void openAttachment(file.path)}><span>{file.path}</span><small>{t('tools.skills.fileSize', { size: file.size ?? 0 })}</small></button>
-          : <span className={manifestStyles.fileRow} data-readable="false"><span>{file.path}</span><small>{file.detail}</small></span>}</li>)}</ul>
-      </div>;
-    })}
-    {attachmentPreview && <div className={manifestStyles.filePreview} role="group" aria-label={t('tools.skills.filePreviewLabel', { path: attachmentPreview.path })}>
-      <div className={manifestStyles.filePreviewHead}><code>{attachmentPreview.path}</code><button type="button" onClick={() => setAttachmentPreview(null)}>{t('tools.skills.filePreviewClose')}</button></div>
-      {attachmentPreview.error
-        ? <small>{attachmentPreview.error}</small>
-        : !attachmentPreview.preview
-          ? <div className={doc.pending}><span /><span /></div>
-          : attachmentPreview.preview.text !== null
-            ? <pre>{attachmentPreview.preview.text}</pre>
-            : <small>{attachmentPreview.preview.digest ? t('tools.skills.fileMeta', { size: attachmentPreview.preview.size, digest: attachmentPreview.preview.digest }) : t('tools.skills.fileTooLarge', { size: attachmentPreview.preview.size })}</small>}
-    </div>}
-  </section> : null;
   const readManifest = skillDoc && manifestState && manifestState.text === skillDoc.draft && manifestState.name === skillName ? manifestState : null;
   const readBody = skillDoc && readManifest?.manifest ? skillBody(skillDoc.draft, readManifest.manifest) : '';
+  // Links and path-like code resolve against local files; remote hosts carry SKILL.md only.
+  const skillDirectory = skillDoc?.path ?? '';
+  const resolver = skillDoc && !remoteTargetId
+    ? (from: string, targets: string[]) => native.resolveNativeSkillReferences(toolId, scope, project, skillDirectory, from, targets)
+    : null;
+  const rootText = skillDoc && mode === 'read' && !openedFile && readManifest ? readManifest.manifest ? readBody : skillDoc.draft : null;
+  const rootRefs = useSkillReferences(resolver, skillDirectory, SKILL_FILE, rootText);
+  const openedText = openedFile && mode === 'read' && fileFormat(openedFile.path) === 'markdown' ? fileStates[openedFile.path]?.preview?.text ?? null : null;
+  const fileRefs = useSkillReferences(resolver, skillDirectory, openedFile?.path ?? '', openedText);
+  const rootLinks = resolver ? { resolve: rootRefs.resolve, open: openFile } : undefined;
+  const fileLinks = resolver ? { resolve: fileRefs.resolve, open: openFile } : undefined;
+  const referenced = [...new Set([...(rootRefs.paths?.values() ?? [])].filter((path): path is string => !!path && path.startsWith('../')))];
+  const filesPanel = skillDoc && !remoteTargetId ? <SkillFilesPanel listing={listing?.listing ?? null} error={listing?.error ?? ''} referenced={referenced} onOpen={path => openFile(path, null)} /> : null;
   const readView = !skillDoc ? null
     : !readManifest
       ? <div className={doc.body} role="status" aria-label={t('tools.skills.loading')}><div className={doc.pending}><span /><span /><span /></div></div>
       : !readManifest.manifest
-        ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} />
-        : <div className={doc.body} role="region" aria-label={t('tools.skills.previewRegion')} tabIndex={0}>
+        ? <DocumentReader text={skillDoc.draft} format="markdown" label={t('tools.skills.previewRegion')} files={rootLinks} />
+        : <div ref={readerRef} className={doc.body} role="region" aria-label={t('tools.skills.previewRegion')} tabIndex={0}>
           <div className={doc.readColumn}>
             <SkillManifestView manifest={readManifest.manifest} directory={skillName} />
             {readBody.trim()
-              ? <Suspense fallback={<pre className={doc.lead}>{readBody}</pre>}><MarkdownView text={readBody} /></Suspense>
+              ? <Suspense fallback={<pre className={doc.lead}>{readBody}</pre>}><MarkdownView text={readBody} files={rootLinks} /></Suspense>
               : !readManifest.manifest.description && !readManifest.manifest.issues.length && <p className={doc.empty}>{t('common.document.empty')}</p>}
-            {attachmentSection}
+            {filesPanel}
           </div>
         </div>;
+  const fileView = skillDoc && openedFile ? <>
+    <SkillFileTrail trail={trail.map(item => item.path)} size={fileStates[openedFile.path]?.preview?.size ?? null} onBack={() => returnTo(trail.length - 2)} onCrumb={returnTo} />
+    <SkillFileView key={`${trail.length}:${openedFile.path}`} path={openedFile.path} anchor={openedFile.anchor} state={fileStates[openedFile.path]} mode={mode} label={t('tools.skills.fileRegion', { path: openedFile.path })} links={fileLinks} regionRef={readerRef} onRetry={() => void loadFile(skillDoc.path, openedFile.path)} />
+  </> : null;
   const article = <article className={doc.doc} aria-label={docTitle}>
     <DocumentHeader
       title={docTitle}
@@ -692,7 +708,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         {selected && canEditSkill && <Badge tone={installState.tone}>{installState.label}</Badge>}
       </>}
       tools={<>
-        {skillDoc && <ModeSwitch mode={mode} editable={canEditSkill} onChange={setMode} />}
+        {skillDoc && <ModeSwitch mode={mode} editable={canEditSkill && !openedFile} onChange={setMode} />}
         {selected && canEditSkill && <Toggle checked={skillEnabled} label={t('tools.skills.enableAria')} text={skillEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')} disabled={busy || (!installed && !entries.some(item => item.name === selected?.name) && !skillEnabled)} onChange={value => void toggleSkill(value)} />}
         {(skillPath || selected) && <IconButton size="sm" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.skills.pathToggle')} title={t('tools.skills.pathToggle')} onClick={() => setInfoOpen(value => !value)} icon={<Icon name="info" size={15} />} />}
       </>}
@@ -716,11 +732,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       : skillLoading
         ? <div className={doc.body} role="status" aria-label={t('tools.skills.loading')}><div className={doc.pending}><span /><span /><span /></div></div>
         : skillDoc
-          ? mode === 'read'
+          ? fileView ?? (mode === 'read'
             ? readView
-            : <div className={doc.editor} data-readonly={!canEditSkill || undefined}><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={value => setSkillDoc(current => current ? { ...current, draft: value } : current)} readOnly={busy || !canEditSkill} /></div>
+            : <div className={doc.editor} data-readonly={!canEditSkill || undefined}><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={value => setSkillDoc(current => current ? { ...current, draft: value } : current)} readOnly={busy || !canEditSkill} /></div>)
           : <div className={doc.body} />}
-    {canEditSkill && skillDoc && !transient && (mode === 'edit' || docDirty) && <DocumentFoot dirty={docDirty} note={t('tools.skills.editorNote')}>
+    {canEditSkill && skillDoc && !transient && !openedFile && (mode === 'edit' || docDirty) && <DocumentFoot dirty={docDirty} note={t('tools.skills.editorNote')}>
       {docDirty
         ? <button type="button" disabled={busy} onClick={() => void discardSkill()}>{t('common.document.discard')}</button>
         : <button type="button" onClick={() => setMode('read')}>{t('common.document.done')}</button>}

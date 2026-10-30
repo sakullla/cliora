@@ -19,21 +19,40 @@
 .long[open] .less { display: inline; margin-left: 0; }
 .full { display: block; margin-top: var(--space-1); white-space: pre-wrap; }
 
-/* Attachment list and read-only preview in the SKILL.md reading view. */
-.attachments { display: grid; gap: var(--space-2_5); min-width: 0; }
-.filesNote { margin: 0; color: var(--text-2); font-size: var(--fs-caption); }
-.fileGroup { display: grid; gap: var(--space-1); min-width: 0; }
-.fileGroup > strong { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
-.fileGroup ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
-.fileRow { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); width: 100%; min-width: 0; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text); font: inherit; font-size: var(--fs-caption); text-align: left; }
+/* Files at the end of SKILL.md: bundled files by folder, then shared references. Rows open in the reader. */
+.files { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3) var(--space-3) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.files > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); padding: 0 var(--space-1); }
+.files > header > small { color: var(--text-3); font-size: var(--fs-caption); }
+.files ul { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.filesNote { margin: 0; padding: 0 var(--space-1); color: var(--text-2); font-size: var(--fs-caption); }
+.fileGroup { display: grid; gap: 1px; min-width: 0; }
+.folder { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-1) var(--space-2); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.folder > svg { flex: none; color: var(--text-3); }
+.folder + ul { margin-left: var(--space-3); padding-left: var(--space-2); border-left: 1px solid var(--line); }
+.fileRow { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0; min-height: 32px; padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--text); font: inherit; font-size: var(--fs-body); text-align: left; }
+.fileRow > svg:first-child { flex: none; color: var(--text-3); }
+.fileRow > span { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fileRow > small { flex: none; color: var(--text-3); font-size: var(--fs-micro); }
+.fileRow > svg:last-child:not(:first-child) { flex: none; color: var(--text-3); opacity: 0; transition: opacity var(--fast) var(--ease); }
 button.fileRow { cursor: pointer; }
 button.fileRow:hover { background: var(--surface-2); }
-button.fileRow[aria-pressed="true"] { background: var(--accent-soft); }
-.fileRow > span { min-width: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
-.fileRow > small { flex: none; color: var(--text-3); }
-.fileRow[data-readable="false"] > small { flex: 0 1 auto; color: var(--warning); text-align: right; }
-.filePreview { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.filePreviewHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; font-size: var(--fs-caption); }
-.filePreviewHead > code { min-width: 0; overflow-wrap: anywhere; }
-.filePreview pre { max-height: 24rem; margin: 0; overflow: auto; font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.filePreview small { color: var(--text-2); overflow-wrap: anywhere; }
+button.fileRow:hover > span { color: var(--accent); }
+button.fileRow:hover > svg:last-child, button.fileRow:focus-visible > svg:last-child { opacity: 1; }
+.fileRow[data-readable="false"] { color: var(--text-3); }
+.fileRow[data-readable="false"] > small { flex: 0 1 auto; color: var(--warning); text-align: right; overflow-wrap: anywhere; }
+
+/* Back and breadcrumb above an open referenced file. */
+.trail { display: flex; flex: none; align-items: center; gap: var(--space-2); min-width: 0; padding: var(--space-1_5) var(--space-4); border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: var(--fs-caption); }
+.trail > ol { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; overflow: hidden; }
+.trail li { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.trail li:last-child { flex: 1 1 auto; }
+.trail li > svg { flex: none; color: var(--text-3); }
+.trail li > button { flex: none; max-width: 16ch; padding: var(--space-0_5) var(--space-1); border: 0; border-radius: var(--radius-xs); background: none; box-shadow: none; color: var(--text-2); font: inherit; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.trail li > button:hover { background: var(--surface-3); color: var(--accent); }
+.trail li > span { min-width: 0; color: var(--text); font-family: var(--font-mono); font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trail > small { flex: none; color: var(--text-3); }
+.trailBack { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding: var(--space-0_5) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface); box-shadow: none; color: var(--text); font: inherit; cursor: pointer; }
+.trailBack:hover { border-color: var(--accent-line); color: var(--accent); }
+.fileProblem { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--text-2); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.fileProblem > svg { flex: none; color: var(--text-3); }
+.fileProblem > span { flex: 1 1 220px; }

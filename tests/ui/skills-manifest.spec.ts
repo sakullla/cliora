@@ -5,7 +5,7 @@ type Manifest = { name: string | null; description: string; license: string | nu
 const manifest = (fields: Partial<Manifest>): Manifest => ({ name: null, description: '', license: null, compatibility: null, metadata: [], allowedTools: [], extra: [], bodyLine: 0, issues: [], ...fields });
 const issue = (code: string, limit: number | null = null, actual: number | null = null) => ({ code, limit, actual });
 
-const PDF = '---\nname: pdf-processing\ndescription: Extract PDFs.\nlicense: Apache-2.0\nmetadata:\n  author: example-org\n  version: "1.0"\nallowed-tools: Bash(git:*) Read\n---\n# PDF guide\n\nUse the scripts.\n';
+const PDF = '---\nname: pdf-processing\ndescription: Extract PDFs.\nlicense: Apache-2.0\nmetadata:\n  author: example-org\n  version: "1.0"\nallowed-tools: Bash(git:*) Read\n---\n# PDF guide\n\nUse the scripts. Read [the reference](references/REFERENCE.md), run `scripts/extract.py`, follow [shared usage](../_shared/core.md#usage) and skip [a missing note](references/nope.md).\n';
 const MINIMAL = '---\nname: minimal\ndescription: Only the basics.\n---\n# Minimal body\n';
 const CRUD = '---\nname: other-name\ndescription:\n---\n# page\n';
 const CRUD_FIXED = '---\nname: crud-page\ndescription: Builds CRUD pages.\n---\n# page\n';
@@ -31,9 +31,22 @@ async function mockSkills(page: Page, options: { remote?: boolean } = {}) {
       ] },
       [`${root}/crud-page`]: { truncated: true, files: [{ path: 'scripts/a.py', size: 1, readable: true, detail: '' }] },
     };
-    const previews: Record<string, unknown> = {
+    const previews: Record<string, { path: string; size: number; digest: string | null; text: string | null }> = {
       'scripts/extract.py': { path: 'scripts/extract.py', size: 12, digest: 'a'.repeat(64), text: "print('hi')\n" },
       'assets/logo.png': { path: 'assets/logo.png', size: 7, digest: 'b'.repeat(64), text: null },
+      'notes.txt': { path: 'notes.txt', size: 4, digest: 'c'.repeat(64), text: 'note' },
+      'references/REFERENCE.md': { path: 'references/REFERENCE.md', size: 12, digest: 'd'.repeat(64), text: '# Reference\n\nBack to [the core](../../_shared/core.md#用法).\n' },
+      '../_shared/core.md': { path: '../_shared/core.md', size: 40, digest: 'e'.repeat(64), text: `# Core\n\n${'Intro line.\n\n'.repeat(40)}## 用法\n\n中文说明。\n\n${'Intro line.\n\n'.repeat(40)}## Usage\n\nUsage details.\n` },
+    };
+    /** Joins like the backend: from the referencing file's folder, then a unique bare name. */
+    const resolveTarget = (from: string, target: string) => {
+      const file = target.split('#')[0];
+      const parts = from.split('/').slice(0, -1);
+      for (const part of file.split('/')) { if (part === '..') { if (parts.length && parts.at(-1) !== '..') parts.pop(); else parts.push('..'); } else if (part && part !== '.') parts.push(part); }
+      const joined = parts.join('/');
+      if (previews[joined]) return joined;
+      const named = Object.keys(previews).filter(path => !file.includes('/') && path.split('/').pop() === file);
+      return named.length === 1 ? named[0] : null;
     };
     const calls: string[] = [];
     Object.assign(window, {
@@ -55,6 +68,8 @@ async function mockSkills(page: Page, options: { remote?: boolean } = {}) {
         }
         if (command === 'list_native_skill_files') return attachments[args.directory] ?? { files: [], truncated: false };
         if (command === 'read_native_skill_file') return previews[args.path];
+        if (command === 'read_native_skill_reference') { if (!previews[args.path]) throw new Error('引用文件不存在，或不在可读取范围内'); return previews[args.path]; }
+        if (command === 'resolve_native_skill_references') return args.targets.map((target: string) => resolveTarget(args.from, target));
         if (command === 'list_skill_packages') return [{ id: 'flagged', name: 'flagged', description: 'Has notes', compatibility: null, source: 'local', digest: 'd', fileCount: 1, updatedAt: 0, inLibrary: true, issues: ['name_mismatch'] }, { id: 'clean', name: 'clean', description: 'All good', compatibility: null, source: 'local', digest: 'e', fileCount: 1, updatedAt: 0, inLibrary: true, issues: [] }];
         if (command === 'get_skill_enabled') return false;
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
@@ -179,33 +194,83 @@ test('an unreadable YAML header is reported and the whole file stays readable', 
   await expect(preview.getByRole('heading', { name: 'Broken body' })).toBeVisible();
 });
 
-test('bundled files are grouped and preview read-only', async ({ page }) => {
+test('bundled files are listed by folder and open read-only in the reader', async ({ page }) => {
   await mockSkills(page);
   const list = await openSkills(page);
   await list.getByRole('button', { name: /pdf-processing/ }).click();
-  const files = page.getByRole('region', { name: 'SKILL.md 预览' }).getByLabel('附带文件', { exact: true });
-  await expect(files.getByRole('group', { name: 'scripts/' })).toContainText('scripts/extract.py');
-  await expect(files.getByRole('group', { name: 'references/' })).toContainText('references/REFERENCE.md');
-  await expect(files.getByRole('group', { name: 'assets/' })).toContainText('assets/logo.png');
-  await expect(files.getByRole('group', { name: '其他' })).toContainText('notes.txt');
+  const skill = page.getByRole('region', { name: 'SKILL.md 预览' });
+  const files = skill.getByLabel('附带文件', { exact: true });
+  await expect(files.getByRole('group', { name: 'scripts/' }).getByRole('button', { name: 'scripts/extract.py' })).toContainText('extract.py');
+  await expect(files.getByRole('group', { name: 'references/' }).getByRole('button', { name: 'references/REFERENCE.md' })).toBeVisible();
+  await expect(files.getByRole('group', { name: 'assets/' }).getByRole('button', { name: 'assets/logo.png' })).toBeVisible();
+  await expect(files.getByRole('group', { name: 'Skill 目录' }).getByRole('button', { name: 'notes.txt' })).toBeVisible();
   await expect(files.getByRole('group', { name: 'references/' })).toContainText('符号链接不读取');
   await expect(files.getByRole('button', { name: /escape\.md/ })).toHaveCount(0);
   await expect(files).not.toContainText('清单不完整');
+  // A shared file outside the skill that SKILL.md links to is listed too.
+  await expect(skill.getByLabel('本文引用的共享文件').getByRole('button', { name: '../_shared/core.md' })).toBeVisible();
 
-  await files.getByRole('button', { name: /scripts\/extract\.py/ }).click();
-  const scriptPreview = files.getByRole('group', { name: '附带文件预览：scripts/extract.py' });
-  await expect(scriptPreview.locator('pre')).toHaveText("print('hi')");
-  await files.getByRole('button', { name: /assets\/logo\.png/ }).click();
-  const imagePreview = files.getByRole('group', { name: '附带文件预览：assets/logo.png' });
-  await expect(imagePreview).toContainText(`7 字节 · SHA-256 ${'b'.repeat(64)}`);
-  await expect(imagePreview.locator('pre')).toHaveCount(0);
-  await expect(files.getByRole('textbox')).toHaveCount(0);
-  await expect(files.getByRole('button', { name: '保存' })).toHaveCount(0);
-  await imagePreview.getByRole('button', { name: '关闭预览' }).click();
-  await expect(files.getByRole('group', { name: /附带文件预览/ })).toHaveCount(0);
+  await files.getByRole('button', { name: 'scripts/extract.py' }).click();
+  const trail = page.getByRole('navigation', { name: 'Skill 文件导航' });
+  await expect(trail).toContainText('scripts/extract.py');
+  const script = page.getByRole('textbox', { name: '引用文件：scripts/extract.py' });
+  await expect(script).toContainText("print('hi')");
+  await expect(script).toHaveAttribute('aria-readonly', 'true');
+  await expect(page.getByRole('article').getByRole('button', { name: '保存' })).toHaveCount(0);
+  await trail.getByRole('button', { name: '返回' }).click();
+  await expect(trail).toHaveCount(0);
+  await files.getByRole('button', { name: 'assets/logo.png' }).click();
+  await expect(page.getByRole('region', { name: '引用文件：assets/logo.png' })).toContainText('7 B · 二进制文件，不显示内容');
+  await trail.getByRole('button', { name: 'SKILL.md' }).click();
+  await expect(skill).toBeVisible();
 
   await list.getByRole('button', { name: /crud-page/ }).click();
   await expect(page.getByRole('region', { name: 'SKILL.md 预览' }).getByLabel('附带文件', { exact: true })).toContainText('清单不完整');
+});
+
+test('links and path-like code open referenced files, including ../ shared files, with a breadcrumb back', async ({ page }) => {
+  await mockSkills(page);
+  const list = await openSkills(page);
+  await list.getByRole('button', { name: /pdf-processing/ }).click();
+  const skill = page.getByRole('region', { name: 'SKILL.md 预览' });
+  const trail = page.getByRole('navigation', { name: 'Skill 文件导航' });
+
+  // A link that names no readable file stays plain and says so.
+  const missing = skill.getByRole('link', { name: 'a missing note' });
+  await expect(missing).toHaveAttribute('title', '找不到这个文件：references/nope.md');
+  await expect(missing).toHaveAttribute('aria-disabled', 'true');
+
+  // Inline code that is a path opens the file.
+  await skill.getByRole('link', { name: 'scripts/extract.py' }).click();
+  await expect(page.getByRole('textbox', { name: '引用文件：scripts/extract.py' })).toContainText("print('hi')");
+  await trail.getByRole('button', { name: '返回' }).click();
+
+  await skill.getByRole('link', { name: 'the reference' }).click();
+  const reference = page.getByRole('region', { name: '引用文件：references/REFERENCE.md' });
+  await expect(reference.getByRole('heading', { name: 'Reference' })).toBeVisible();
+  // `../../_shared/core.md` resolves from the reference's own folder.
+  await reference.getByRole('link', { name: 'the core' }).click();
+  const core = page.getByRole('region', { name: '引用文件：../_shared/core.md' });
+  // The percent-encoded CJK anchor still resolves and scrolls to its heading.
+  await expect(core.getByRole('heading', { name: '用法' })).toBeInViewport();
+  await expect(trail.getByRole('listitem')).toHaveCount(3);
+  await expect(trail).toContainText('SKILL.md');
+  await expect(trail).toContainText('REFERENCE.md');
+  await expect(trail).toContainText('../_shared/core.md');
+
+  // Back steps one file; the breadcrumb returns to SKILL.md.
+  await trail.getByRole('button', { name: '返回' }).click();
+  await expect(reference).toBeVisible();
+  await trail.getByRole('button', { name: 'SKILL.md' }).click();
+  await expect(trail).toHaveCount(0);
+
+  // A link with an anchor scrolls to that heading.
+  await skill.getByRole('link', { name: 'shared usage' }).click();
+  const usage = core.getByRole('heading', { name: 'Usage' });
+  await expect(usage).toBeInViewport();
+  // 源码 shows the referenced file read-only.
+  await page.getByRole('article').getByRole('button', { name: '源码', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '引用文件：../_shared/core.md' })).toHaveAttribute('aria-readonly', 'true');
 });
 
 test('the import update preview shows the incoming manifest', async ({ page }) => {
@@ -234,6 +299,8 @@ test('remote skills read the manifest but never list bundled files, and a save r
   const calls = await page.evaluate(() => (window as unknown as { __remoteCalls: Array<{ command: string }> }).__remoteCalls.map(call => call.command));
   expect(calls).not.toContain('list_native_skill_files');
   expect(calls).not.toContain('read_native_skill_file');
+  expect(calls).not.toContain('resolve_native_skill_references');
+  expect(calls).not.toContain('read_native_skill_reference');
 });
 
 test('library cards mark packages with specification notes', async ({ page }) => {

@@ -1018,7 +1018,7 @@ fn reordering_env_keys_rewrites_the_native_file_in_the_new_order() {
 }
 
 #[test]
-fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
+fn list_orders_by_name_regardless_of_update_time() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     // 存量行：直接落库、不经 save_definition，updated_at 为 NULL。
@@ -1059,20 +1059,19 @@ fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
             .map(|definition| definition.name.clone())
             .collect::<Vec<_>>()
     };
-    assert_eq!(names(&db), ["alpha", "bravo"], "存量 NULL 行按名称兜底");
+    assert_eq!(names(&db), ["alpha", "bravo"], "存量 NULL 行按名称排序");
 
     let saved = sample(&db);
     assert!(saved.updated_at.is_some(), "新建条目应写入 updated_at");
     assert_eq!(
         names(&db),
-        ["example", "alpha", "bravo"],
-        "新建条目排在存量 NULL 行之前"
+        ["alpha", "bravo", "example"],
+        "新建条目按名称插入"
     );
     let read = get_definition(&db, &saved.id).unwrap();
     assert_eq!(read.updated_at, saved.updated_at, "读回应透传 updated_at");
 
-    // 修改后 updated_at 刷新并排到最前：先用确定的时间戳固定其余行，
-    // 再把目标行拨回过去，保存后它应带着当前时间回到首位。
+    // 修改会刷新 updated_at，但列表位置只由名称决定，不随修改跳动。
     db.with_connection(|conn| {
         conn.execute(
             "INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES ('fixed-mike','mike','Stdio',?1,1,200)",
@@ -1080,8 +1079,8 @@ fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
         )
         .map_err(|error| error.to_string())?;
         conn.execute(
-            "INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES ('fixed-zulu','zulu','Stdio',?1,1,100)",
-            [legacy_json("fixed-zulu", "zulu")],
+            "INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES ('fixed-zulu','Zulu','Stdio',?1,1,100)",
+            [legacy_json("fixed-zulu", "Zulu")],
         )
         .map_err(|error| error.to_string())?;
         conn.execute(
@@ -1094,8 +1093,8 @@ fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
     .unwrap();
     assert_eq!(
         names(&db),
-        ["mike", "zulu", "example", "alpha", "bravo"],
-        "updated_at 倒序优先于名称兜底"
+        ["alpha", "bravo", "example", "mike", "Zulu"],
+        "updated_at 不影响顺序，名称不区分大小写"
     );
     let updated = save_definition(
         &db,
@@ -1119,8 +1118,8 @@ fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
     );
     assert_eq!(
         names(&db),
-        ["example", "mike", "zulu", "alpha", "bravo"],
-        "修改后条目移动到列表最前"
+        ["alpha", "bravo", "example", "mike", "Zulu"],
+        "修改后条目保持原位"
     );
 }
 

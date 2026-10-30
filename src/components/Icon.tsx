@@ -2,7 +2,7 @@ export type IconName = 'home' | 'connections' | 'library' | 'records' | 'setting
   | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play'
   | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'maximize' | 'ban' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
   | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link' | 'pin' | 'star'
-  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard' | 'server' | 'chevronsUpDown' | 'plug' | 'branch';
+  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard' | 'server' | 'chevronsUpDown' | 'plug' | 'branch' | 'file';
 const paths: Record<IconName, string> = {
   sidebarClose: 'M3 4h18v16H3zM9 4v16m7-11-3 3 3 3',
   sidebarOpen: 'M3 4h18v16H3zM9 4v16m4-11 3 3-3 3',
@@ -23,6 +23,7 @@ const paths: Record<IconName, string> = {
   check: 'm5 12.5 4.5 4.5L19 7.5',
   trash: 'M4 7h16M10 11v6M14 11v6M5.5 7l1 12.5A1.5 1.5 0 0 0 8 21h8a1.5 1.5 0 0 0 1.5-1.5L18.5 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7',
   sparkle: 'M12 3.5 13.8 9a2 2 0 0 0 1.2 1.2l5.5 1.8-5.5 1.8a2 2 0 0 0-1.2 1.2L12 20.5 10.2 15A2 2 0 0 0 9 13.8L3.5 12 9 10.2A2 2 0 0 0 10.2 9Z',
+  file: 'M6.5 3.5h7l4.5 4.5v12.5h-11.5zM13.5 3.5V8H18M9.5 12.5h5M9.5 16h5',
   folder: 'M3.5 7A1.5 1.5 0 0 1 5 5.5h3.6a1.5 1.5 0 0 1 1.2.6l1 1.4H19a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17z',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM21 21l-4.8-4.8',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 6.5V12l3.5 2',

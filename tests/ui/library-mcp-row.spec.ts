@@ -211,3 +211,31 @@ test('library MCP read failures never masquerade as empty or clear placements', 
   await workspace.getByRole('button', { name: '重试', exact: true }).click();
   await expect(workspace.getByText('MCP 列表可能已过期', { exact: true })).toHaveCount(0);
 });
+
+test('library MCP rows stay in name order through writes, removals and saves', async ({ page }) => {
+  // The mock returns rows out of order, as a recently-updated-first list would.
+  await installLibrary(page, [mcpDefinition('mcp-zeta', 'zeta', 'npx zeta'), mcpDefinition('mcp-chrome', 'Beta', 'npx beta'), mcpDefinition('mcp-alpha', 'alpha', 'npx alpha')]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openLibraryMcp(page);
+  const list = page.getByRole('list', { name: 'MCP 列表' });
+  const order = () => list.locator(':scope > li').evaluateAll(rows => rows.map(row => row.getAttribute('data-mcp-id')));
+  const expected = ['mcp-alpha', 'mcp-chrome', 'mcp-zeta'];
+  await expect.poll(order).toEqual(expected);
+
+  const marks = list.locator('li[data-mcp-id="mcp-chrome"]').getByRole('group', { name: 'Beta 的 CLI · 全局' });
+  await marks.getByRole('button', { name: 'CLI 01 · 已生效' }).click();
+  await page.getByRole('dialog', { name: '从 CLI 移除 MCP' }).getByRole('button', { name: '移除', exact: true }).click();
+  await expect(marks.getByRole('button', { name: 'CLI 01 · 未写入' })).toBeVisible();
+  expect(await order()).toEqual(expected);
+  await marks.getByRole('button', { name: 'CLI 01 · 未写入' }).click();
+  await expect(marks.getByRole('button', { name: 'CLI 01 · 已生效' })).toBeVisible();
+  expect(await order()).toEqual(expected);
+
+  await list.locator('li[data-mcp-id="mcp-alpha"]').getByRole('button', { name: '修改', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '修改 MCP' });
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(await order()).toEqual(expected);
+  await page.getByRole('region', { name: '资料库 MCP' }).getByRole('button', { name: '刷新', exact: true }).click();
+  await expect.poll(order).toEqual(expected);
+});

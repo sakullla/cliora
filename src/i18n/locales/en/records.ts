@@ -46,6 +46,9 @@ export default {
     noAlt: 'no description provided',
     link: 'Copy link: {{href}}',
     code: 'Code',
+    openFile: 'Open {{path}}',
+    missingFile: 'File not found: {{target}}',
+    anchor: 'Jump to "{{anchor}}"',
   },
   range: {
     choose: 'Choose',

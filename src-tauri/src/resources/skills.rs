@@ -290,6 +290,8 @@ struct SkillFile {
     file: PathBuf,
     writable: bool,
     plugin: bool,
+    /// Canonical root of the plugin that ships this skill.
+    plugin_root: Option<PathBuf>,
 }
 
 fn skill_directory_name(directory: &str) -> Result<&str, String> {
@@ -330,6 +332,7 @@ fn skill_markdown(
             file: dir.join("SKILL.md"),
             writable: true,
             plugin: false,
+            plugin_root: None,
         });
     }
     let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
@@ -346,6 +349,7 @@ fn skill_markdown(
                 file: dir.join("SKILL.md"),
                 writable: false,
                 plugin: false,
+                plugin_root: None,
             });
         }
     }
@@ -356,6 +360,7 @@ fn skill_markdown(
                 file: skill.path.join("SKILL.md"),
                 writable: false,
                 plugin: true,
+                plugin_root: Some(skill.root),
             });
         }
     }
@@ -542,14 +547,266 @@ fn read_attachment(root: &Path, relative: &str) -> Result<SkillFilePreview, Stri
     if !within_root(root, &path) {
         return Err("附带文件不在 Skill 目录内".into());
     }
-    if meta.len() > MAX_BYTES as u64 {
-        return Ok(SkillFilePreview { path: relative.to_owned(), size: meta.len(), digest: None, text: None });
+    preview_file(&path, relative, meta.len())
+}
+
+fn preview_file(path: &Path, display: &str, length: u64) -> Result<SkillFilePreview, String> {
+    if length > MAX_BYTES as u64 {
+        return Ok(SkillFilePreview { path: display.to_owned(), size: length, digest: None, text: None });
     }
     let mut bytes = Vec::new();
-    fs::File::open(&path).map_err(|error| error.to_string())?
+    fs::File::open(path).map_err(|error| error.to_string())?
         .take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
     let (text, size, digest) = file_summary(&bytes);
-    Ok(SkillFilePreview { path: relative.to_owned(), size: size as u64, digest: Some(digest), text })
+    Ok(SkillFilePreview { path: display.to_owned(), size: size as u64, digest: Some(digest), text })
+}
+
+/// Most targets one document may ask to resolve in a single call.
+const MAX_REFERENCE_TARGETS: usize = 400;
+/// Directory entries a bare file name search may visit per tier.
+const MAX_REFERENCE_WALK: usize = 4000;
+
+/// Where links in a skill may lead: the plugin that ships it, otherwise the
+/// Skills directory that holds it (shared `../_shared` documents live there).
+/// A container that is, or holds, the home directory is never used.
+fn reference_root(located: &SkillFile, skill_root: &Path, home: &Path) -> PathBuf {
+    if let Some(root) = located.plugin_root.as_deref() {
+        if !root.as_os_str().is_empty() && within_root(root, skill_root) && !within_root(root, home) {
+            return root.to_path_buf();
+        }
+    }
+    match skill_root.parent() {
+        Some(parent) if parent.parent().is_some() && !within_root(parent, home) => parent.to_path_buf(),
+        _ => skill_root.to_path_buf(),
+    }
+}
+
+fn same_component(left: std::path::Component, right: std::path::Component) -> bool {
+    if cfg!(windows) {
+        left.as_os_str().eq_ignore_ascii_case(right.as_os_str())
+    } else {
+        left == right
+    }
+}
+
+/// Component-wise prefix test without touching the file system.
+fn lexically_within(root: &Path, path: &Path) -> bool {
+    let root: Vec<_> = root.components().collect();
+    let path: Vec<_> = path.components().collect();
+    path.len() >= root.len() && root.iter().zip(&path).all(|(left, right)| same_component(*left, *right))
+}
+
+/// Joins a `/`-separated relative path, resolving `.` and `..` by text.
+fn join_reference(base: &Path, relative: &str) -> Option<PathBuf> {
+    let mut out = base.to_path_buf();
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            name if name.contains(['\\', ':', '\0']) => return None,
+            name => out.push(name),
+        }
+    }
+    Some(out)
+}
+
+/// `file` relative to `skill_root` with `/` separators; leading `..` for shared files.
+fn relative_reference(skill_root: &Path, file: &Path) -> Option<String> {
+    let from: Vec<_> = skill_root.components().collect();
+    let to: Vec<_> = file.components().collect();
+    let common = from.iter().zip(&to).take_while(|(left, right)| same_component(**left, **right)).count();
+    if common == 0 {
+        return None;
+    }
+    let mut parts = vec!["..".to_owned(); from.len() - common];
+    for part in &to[common..] {
+        parts.push(part.as_os_str().to_str()?.to_owned());
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// A regular, unlinked file inside `reference_root`, by path relative to the skill directory.
+fn reference_file(skill_root: &Path, reference_root: &Path, relative: &str) -> Option<PathBuf> {
+    let path = join_reference(skill_root, relative)?;
+    if !lexically_within(reference_root, &path) {
+        return None;
+    }
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if meta.file_type().is_symlink() || !meta.is_file() || !within_root(reference_root, &path) {
+        return None;
+    }
+    Some(path)
+}
+
+/// Markdown link targets arrive percent-encoded for spaces and non-ASCII names.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = (bytes[index] == b'%' && index + 2 < bytes.len())
+            .then(|| std::str::from_utf8(&bytes[index + 1..index + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()))
+            .flatten();
+        if let Some(byte) = hex {
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+const PLUGIN_ROOT_PREFIXES: [&str; 4] = ["<plugin_root>/", "${CLAUDE_PLUGIN_ROOT}/", "$CLAUDE_PLUGIN_ROOT/", "${PLUGIN_ROOT}/"];
+
+/// The path part of a link or inline code target, and whether it starts at the plugin root.
+fn reference_target(target: &str) -> Option<(bool, String)> {
+    let mut text = target.trim();
+    if text.starts_with('<') && text.ends_with('>') && !text.starts_with("<plugin_root>") {
+        text = &text[1..text.len() - 1];
+    }
+    let text = text.split(['#', '?']).next().unwrap_or_default().replace('\\', "/");
+    let text = percent_decode(&text)?;
+    let (from_plugin, rest) = match PLUGIN_ROOT_PREFIXES.iter().find(|prefix| text.starts_with(**prefix)) {
+        Some(prefix) => (true, text[prefix.len()..].to_owned()),
+        None => (false, text),
+    };
+    let invalid = rest.is_empty()
+        || rest.ends_with('/')
+        || rest.contains("://")
+        || rest.starts_with('/')
+        || rest.starts_with('~')
+        || rest.contains([':', '<', '>', '*', '|', '"', '\0', '\n', '\r']);
+    (!invalid).then_some((from_plugin, rest))
+}
+
+/// Files named `name` under `root`, skipping links, hidden and dependency folders.
+fn find_by_name(root: &Path, name: &str, depth: usize, skip: Option<&Path>) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut visited = 0;
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, level)) = pending.pop() {
+        let Ok(children) = fs::read_dir(&dir) else { continue };
+        for child in children.flatten() {
+            visited += 1;
+            if visited > MAX_REFERENCE_WALK {
+                return found;
+            }
+            let file_name = child.file_name();
+            let Some(child_name) = file_name.to_str() else { continue };
+            let Ok(meta) = fs::symlink_metadata(child.path()) else { continue };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                let path = child.path();
+                let skipped = skip.is_some_and(|skip| paths_equivalent(skip, &path));
+                if level + 1 < depth && !skipped && !child_name.starts_with('.') && child_name != "node_modules" {
+                    pending.push((path, level + 1));
+                }
+            } else if meta.is_file() && child_name == name {
+                found.push(child.path());
+            }
+        }
+    }
+    found
+}
+
+/// Resolves link and inline-code targets of one document to paths relative to
+/// the skill directory. `from` is that document, also relative (`SKILL.md`,
+/// `references/a.md`, `../_shared/b.md`). Unresolved targets are `None`.
+/// A bare file name matches a unique file in the skill, then in the Skills
+/// directory around it. Read-only.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_references(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+    from: &str,
+    targets: &[String],
+) -> Result<Vec<Option<String>>, String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
+    let skill_root = located_root(&located)?;
+    let root = reference_root(&located, &skill_root, home);
+    Ok(resolve_in(&skill_root, &root, located.plugin_root.is_some(), from, targets))
+}
+
+fn resolve_in(skill_root: &Path, root: &Path, plugin: bool, from: &str, targets: &[String]) -> Vec<Option<String>> {
+    let from_dir = reference_target(from)
+        .and_then(|(_, from)| join_reference(skill_root, &from))
+        .filter(|path| lexically_within(root, path))
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| skill_root.to_path_buf());
+    let container = skill_root.parent().filter(|parent| lexically_within(root, parent) && *parent != skill_root);
+    let mut names: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
+    targets.iter().take(MAX_REFERENCE_TARGETS).map(|target| {
+        let (from_plugin, rest) = reference_target(target)?;
+        let mut bases = Vec::new();
+        if from_plugin {
+            if !plugin {
+                return None;
+            }
+            bases.push(root.to_path_buf());
+        } else {
+            bases.extend([from_dir.clone(), skill_root.to_path_buf(), root.to_path_buf()]);
+        }
+        let mut file = bases.iter().find_map(|base| {
+            let relative = relative_reference(skill_root, &join_reference(base, &rest)?)?;
+            reference_file(skill_root, root, &relative)
+        });
+        if file.is_none() && !from_plugin && !rest.contains('/') && rest.contains('.') {
+            file = names.entry(rest.clone()).or_insert_with(|| {
+                let unique = |found: Vec<PathBuf>| if found.len() == 1 { found.into_iter().next() } else { None };
+                let here = find_by_name(skill_root, &rest, 4, None);
+                if !here.is_empty() {
+                    return unique(here);
+                }
+                container.and_then(|container| unique(find_by_name(container, &rest, 3, Some(skill_root))))
+            }).clone().filter(|path| within_root(root, path));
+        }
+        let canonical = file?.canonicalize().ok()?;
+        relative_reference(skill_root, &canonical)
+    }).collect()
+}
+
+/// One referenced file for read-only viewing: an attachment, or a shared file
+/// beside the skill (`../_shared/core.md`) inside the same reference root.
+#[allow(clippy::too_many_arguments)]
+pub fn read_reference(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+    relative: &str,
+) -> Result<SkillFilePreview, String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
+    let skill_root = located_root(&located)?;
+    let root = reference_root(&located, &skill_root, home);
+    read_reference_in(&skill_root, &root, relative)
+}
+
+fn read_reference_in(skill_root: &Path, root: &Path, relative: &str) -> Result<SkillFilePreview, String> {
+    let valid = !relative.is_empty()
+        && !relative.contains(['\\', ':', '\0'])
+        && !relative.starts_with('/')
+        && relative.split('/').all(|part| !part.is_empty() && part != ".");
+    let file = valid.then(|| reference_file(skill_root, root, relative)).flatten().ok_or("引用文件不存在，或不在可读取范围内")?;
+    let length = fs::metadata(&file).map_err(|error| error.to_string())?.len();
+    preview_file(&file, relative, length)
 }
 
 fn lock() -> &'static Mutex<()> {
@@ -1374,6 +1631,8 @@ pub fn scan_native(
 struct PluginSkillDirectory {
     name: String,
     path: PathBuf,
+    /// Canonical plugin root; set by the inventory walk.
+    root: PathBuf,
     plugin_name: String,
     plugin_enabled: Option<bool>,
     detail: String,
@@ -1435,6 +1694,7 @@ fn plugin_skill_directories(
         let Ok(root) = Path::new(root).canonicalize() else {
             continue;
         };
+        let start = found.len();
         for resource in plugin.resources.iter().filter(|resource| resource.kind == "skills") {
             expand_plugin_skill_resource(
                 &root,
@@ -1444,6 +1704,9 @@ fn plugin_skill_directories(
                 &mut found,
                 &mut seen,
             )?;
+        }
+        for skill in &mut found[start..] {
+            skill.root = root.clone();
         }
     }
     Ok(found)
@@ -1516,6 +1779,7 @@ fn push_plugin_dir(
     found.push(PluginSkillDirectory {
         name: name.to_owned(),
         path: dir.to_path_buf(),
+        root: PathBuf::new(),
         plugin_name: plugin_name.to_owned(),
         plugin_enabled,
         detail,

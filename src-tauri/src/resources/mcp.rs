@@ -206,7 +206,8 @@ fn validate(draft: &McpDraft) -> Result<(), String> {
 pub fn list_definitions(db: &Database) -> Result<Vec<McpDefinition>, String> {
     db.with_connection(|conn| {
         let mut statement = conn
-            .prepare("SELECT data_json, updated_at FROM mcp_definitions ORDER BY updated_at IS NULL, updated_at DESC, name COLLATE NOCASE")
+            // Name order keeps rows in place when an edit or CLI placement bumps updated_at.
+            .prepare("SELECT data_json, updated_at FROM mcp_definitions ORDER BY name COLLATE NOCASE, name")
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| {

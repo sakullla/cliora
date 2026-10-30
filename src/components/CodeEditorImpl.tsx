@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Compartment, EditorState, Transaction } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, crosshairCursor, drawSelection, highlightActiveLine, rectangularSelection, keymap, lineNumbers, placeholder as editorPlaceholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth, selectAll } from '@codemirror/commands';
 import { HighlightStyle, StreamLanguage, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
@@ -43,6 +43,22 @@ function language(format: CodeFormat) {
 const webkit = typeof navigator !== 'undefined' && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
 const selectionExtensions = () => webkit ? [drawSelection(), EditorState.allowMultipleSelections.of(true), rectangularSelection(), crosshairCursor()] : [];
 
+/**
+ * A press inside the current selection is a text drag to CodeMirror: nothing is selected until the pointer
+ * travels 10px, and the browser's native dragstart then turns it into dragging that text away. A read-only
+ * view has nowhere to drop it, so collapse the selection first and every press starts a fresh selection
+ * right where it lands, in either direction.
+ */
+const readOnlyPointerSelection = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0 || event.detail > 1 || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+    const main = view.state.selection.main;
+    if (!main.empty) view.dispatch({ selection: EditorSelection.cursor(main.head) });
+    return false;
+  },
+  dragstart(event) { event.preventDefault(); return true; },
+});
+
 /** A format-driven editor shared by native files, structured previews and library text. */
 export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false, errorLine, documentId }: {
   value: string; onChange?: (value: string) => void; format?: CodeFormat; label: string;
@@ -59,7 +75,7 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
   const configuration = useRef(new Compartment());
   const initialValue = useRef(value);
   const activeDocument = useRef(documentId);
-  const extensions = () => [language(format), EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly),
+  const extensions = () => [language(format), EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly), readOnly ? readOnlyPointerSelection : [],
     EditorView.contentAttributes.of({ role: 'textbox', 'aria-label': label, 'aria-multiline': 'true', 'aria-readonly': String(readOnly), spellcheck: 'false' }), editorPlaceholder(placeholder)];
   function createState(text: string) {
     // Tauri gives this bundled anchor a fresh style nonce for each document.
