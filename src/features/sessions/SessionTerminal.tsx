@@ -466,7 +466,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const fontSizeRef = useRef(fontSize);
   const lineHeightRef = useRef(lineHeight);
   const themeRef = useRef(theme);
-  const wasActiveRef = useRef(active);
   activeRef.current = active;
   focusedRef.current = focused;
   runningRef.current = running;
@@ -1119,9 +1118,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     term.options.lineHeight = lineHeight;
     // A reattached transport opens a fresh PTY at its default grid.
     if (!running) ptyGridRef.current = { cols: 0, rows: 0 };
-    // Hidden terminals can reset their viewport; reveal the latest output on re-entry.
-    const becameActive = active && !wasActiveRef.current;
-    wasActiveRef.current = active;
     if (!active) {
       linksRef.current?.dismiss();
       // Only one terminal renders at a time; releasing the GPU context on exit
@@ -1150,7 +1146,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
           webglRef.current = addon;
         } catch { /* No WebGL here: the DOM renderer stays. */ }
       }
-      if (becameActive) handles.current.get(sessionId)?.scrollToBottom();
       // A terminal that was hidden kept its IME anchor from before; place it on the input cell now.
       imeRef.current?.refresh();
       // Keyboard navigation in the session rail deliberately keeps focus on

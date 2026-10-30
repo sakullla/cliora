@@ -3660,17 +3660,18 @@ pub async fn resize_workbench_session(
 pub async fn close_workbench_session(app: AppHandle, session_id: String) -> Result<(), ApiError> {
     blocking(move || {
         let database = app.state::<AppState>().database(&app)?;
-        crate::workbench_restore::forget(&database, &session_id).map_err(native_error)?;
         let remote_id = crate::session_host::remote_session_id(&session_id);
         let remote_project_id = crate::session_host::list().into_iter().find(|item| item.id == session_id)
             .and_then(|item| item.project_id).and_then(|id| id.strip_prefix("remote:").map(str::to_owned));
         let remote_target_id = remote_project_id.as_deref().and_then(|project_id| {
             crate::remote::list_projects(&database, None).ok()?.into_iter().find(|item| item.id == project_id).map(|item| item.target_id)
         });
-        crate::session_host::close(&session_id).map_err(native_error)?;
-        if let (Some(remote_id), Some(target_id)) = (remote_id, remote_target_id) {
-            crate::launch::forget_remote_session(&database, &target_id, &remote_id).map_err(native_error)?;
-        }
+        crate::session_host::close_with_cleanup(&session_id, || {
+            if let (Some(remote_id), Some(target_id)) = (remote_id, remote_target_id) {
+                crate::launch::forget_remote_session(&database, &target_id, &remote_id)?;
+            }
+            crate::workbench_restore::forget(&database, &session_id)
+        }).map_err(native_error)?;
         Ok(())
     }).await
 }

@@ -2020,6 +2020,19 @@ fn wait_for_output(command: &mut Command, deadline: Duration) -> Result<std::pro
     wait_for_output_with_stdin(command, deadline, None)
 }
 
+/// One bounded control attempt: a destructive session operation is never retried
+/// automatically after a transport error, because it may already have executed.
+pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &[(String, String)]) -> Result<std::process::Output, RemoteError> {
+    let mut command = Command::new(binary);
+    command.args(args).envs(environment.iter().map(|(key, value)| (key, value)));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    wait_for_output(&mut command, SSH_COMMAND_DEADLINE)
+}
+
 fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_payload: Option<Vec<u8>>) -> Result<std::process::Output, RemoteError> {
     if stdin_payload.is_some() {
         command.stdin(Stdio::piped());

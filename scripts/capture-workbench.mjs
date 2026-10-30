@@ -95,8 +95,8 @@ const openCodeTranscript = [
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
 
-async function install(page, initialTheme, empty = false) {
-  await page.addInitScript(({ theme, transcripts, blank, language }) => {
+async function install(page, initialTheme, empty = false, remoteState = null) {
+  await page.addInitScript(({ theme, transcripts, blank, language, remoteState }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
     const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const facet = { state: 'available', reason: '' };
@@ -113,6 +113,18 @@ async function install(page, initialTheme, empty = false) {
       { id: 's3', toolId: 'grok', projectId: null, directory: 'C:\\Projects\\playground', mode: 'normal', running: false, exitCode: 0, startedAt: now - 46 * 60 * 1000 },
       { id: 's4', toolId: 'open_code', projectId: null, directory: 'C:\\Projects\\api-service', mode: 'normal', running: true, exitCode: null, startedAt: now - 52 * 1000 },
     ];
+    if (remoteState) {
+      localStorage.setItem('cliora:remote-target', 'remote-prod');
+      sessions.splice(0, sessions.length, ...['a', 'b', 'c'].map((letter, index) => ({
+        id: `r${index + 1}`, toolId: 'pi', projectId: 'remote:remote-project', directory: '/srv/project',
+        mode: 'normal', running: index > 0 || remoteState === 'connected' || remoteState === 'connecting',
+        exitCode: index > 0 || remoteState === 'connected' || remoteState === 'connecting' ? null : remoteState === 'disconnected' ? 255 : 46,
+        connectionState: index === 0 ? remoteState : 'connected', reattachable: index === 0 && ['unknown', 'disconnected'].includes(remoteState),
+        remoteSessionId: `cliora-same-directory-${letter}`, startedAt: now - (index + 1) * 60000,
+        remoteEndResult: index === 0 && remoteState === 'unknown' ? { outcome: 'unknown', stage: 'timeout', exitCode: null } : null,
+      })));
+      localStorage.setItem('cliora:workbench-selected', 'r1');
+    }
     const bridge = { handlers: [], listens: {} };
     Object.assign(window, {
       isTauri: true,
@@ -166,7 +178,10 @@ async function install(page, initialTheme, empty = false) {
     s2: b64('\u001b]0;实现文章目录与移动端折叠\u0007' + claudeTranscript),
     s3: b64(finished),
     s4: b64(openCodeTranscript),
-  }, blank: empty, language: english ? 'en' : 'zh' });
+    r1: b64('\u001b]0;远程项目 · 独立会话 A\u0007\u001b[36mPi · synthetic SSH terminal\u001b[0m\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-a\r\n\r\n  同一目录的其他会话独立运行，输入属于当前选中会话。\r\n\r\n> '),
+    r2: b64('\u001b]0;远程项目 · 独立会话 B\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-b\r\n\r\n> '),
+    r3: b64('\u001b]0;远程项目 · 独立会话 C\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-c\r\n\r\n> '),
+  }, blank: empty, language: english ? 'en' : 'zh', remoteState });
 }
 
 const manifest = [];
@@ -174,19 +189,22 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false) {
+async function shot(name, theme, width, run, empty = false, remoteState = null) {
+  if (!onlyPattern.test(name)) return;
   const errors = [];
   let actionError = null;
   let overflow = null;
   let page = null;
+  let resourceObservation = null;
   try {
     page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
     page.on('pageerror', (error) => errors.push(String(error)));
-    await install(page, theme, empty);
+    await install(page, theme, empty, remoteState);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     await page.waitForTimeout(900);
-    if (run) await run(page);
+    if (remoteState) await page.locator('[role="tab"][data-session-id="r1"]').click();
+    if (run) resourceObservation = await run(page) ?? null;
     await page.waitForTimeout(500);
     const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     overflow = size.scroll > size.client ? size : null;
@@ -195,7 +213,7 @@ async function shot(name, theme, width, run, empty = false) {
     actionError = String(error?.message ?? error).split('\n')[0];
     console.error(name + ': ' + actionError);
   } finally { await page?.close().catch(() => {}); }
-  manifest.push({ name, theme, width, pageErrors: errors, overflow, actionError });
+  manifest.push({ name, theme, width, pageErrors: errors, overflow, actionError, resourceObservation });
 }
 
 const option = (flag, fallback) => {
@@ -212,11 +230,48 @@ const widths = sizeOption === 'all' ? [1360, 900, 640] : [...new Set(sizeOption.
 if (!widths.length || widths.some((width) => ![1360, 900, 640].includes(width))) throw new Error('Invalid --size; use 1360,900,640');
 
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
+const onlyPattern = new RegExp('^' + option('--only', '*').split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
 try {
 if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
+  for (const state of ['connecting', 'connected', 'disconnected', 'unknown', 'remote_ended']) {
+    await shot(`workbench-remote-${state}-${theme}-${width}`, theme, width, null, false, state);
+  }
+  await shot(`workbench-remote-stream-${theme}-${width}`, theme, width, async page => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Performance.enable');
+    const snapshot = async () => {
+      await cdp.send('HeapProfiler.collectGarbage');
+      const { metrics } = await cdp.send('Performance.getMetrics');
+      return { ...(await cdp.send('Memory.getDOMCounters')), metrics: Object.fromEntries(metrics.filter(item => ['JSHeapUsedSize', 'TaskDuration'].includes(item.name)).map(item => [item.name, item.value])),
+        terminalCount: await page.locator('.xterm').count(), canvasCount: await page.locator('.xterm canvas').count() };
+    };
+    const before = await snapshot();
+    const samples = [];
+    for (let round = 0; round < 4; round++) {
+      await page.evaluate(async round => {
+        for (let batch = 0; batch < 40; batch++) {
+          for (const id of ['r1', 'r2', 'r3']) window.__output(id, Array.from({ length: 128 }, (_, line) => `stream-${round}-${batch}-${line} ${'bounded terminal output '.repeat(5)}`).join('\r\n') + '\r\n');
+          await new Promise(resolve => setTimeout(resolve, 16));
+        }
+      }, round);
+      for (let index = 0; index < 9; index++) await page.locator(`[role="tab"][data-session-id="r${index % 3 + 1}"]`).click();
+      await page.waitForTimeout(200);
+      samples.push(await snapshot());
+    }
+    for (const id of ['r1', 'r2', 'r3']) {
+      await page.locator(`[role="tab"][data-session-id="${id}"]`).click();
+      await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('结束此会话', 'End this session'), exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: copy('结束进程', 'End process'), exact: true }).click();
+    }
+    await page.waitForTimeout(200);
+    const afterClosed = await snapshot();
+    await cdp.detach();
+    return { synthetic: true, kind: 'browser-sustained-output', batches: 160, sessions: 3, rowsPerSession: 20480, switches: 36, before, samples, afterClosed,
+      nativePlatform: 'unverified', note: 'Fixed workload observations; browser GC/DOM counters are not native CPU/memory or long-duration leak acceptance.' };
+  }, false, 'connected');
   await shot('workbench-active-' + theme + '-' + width, theme, width);
   await shot('workbench-activity-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__output('s1', 'live output contrast\r\n'));
@@ -330,7 +385,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark` 与 `--size all|1360,900,640` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。',
+  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；stream 场景在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',

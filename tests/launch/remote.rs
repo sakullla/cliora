@@ -88,7 +88,7 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
         resume_latest: false, remote_intent: None,
     }).unwrap();
     let command = plan.cli_args.last().unwrap();
-    assert!(command.contains("tmux -u new-session -s"));
+    assert!(command.contains("tmux -u new-session -d -s"));
     assert!(!command.contains("new-session -A"));
     assert!(command.contains("identity already exists"));
     assert!(command.contains("export TERM=xterm-256color COLORTERM=truecolor"));
@@ -101,8 +101,12 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     assert!(command.contains("requires tmux or screen"));
     assert!(plan.remote_session_id.as_deref().is_some_and(|id| id.starts_with("cliora-")));
     assert!(plan.remote_end_args.is_some());
+    let end_args = plan.remote_end_args.as_ref().unwrap();
+    assert_eq!(end_args[0], "-T");
+    assert!(end_args.last().unwrap().contains("CLIORA_REMOTE_ABSENT:"));
+    assert!(!end_args.last().unwrap().ends_with("|| true"));
     let reattach = crate::launch::remote_reattach_command(plan.remote_session_id.as_deref().unwrap());
-    assert!(reattach.contains("tmux -u has-session"));
+    assert!(reattach.contains("tmux -u list-sessions"));
     assert!(reattach.contains("tmux -u attach-session"));
     assert!(reattach.contains("COLORTERM=truecolor"));
     assert!(reattach.contains("screen -U -r"));
@@ -178,7 +182,8 @@ fn same_directory_new_launch_never_reuses_or_probes_indexed_sessions() {
     assert_ne!(a.remote_session_id.as_deref(), Some("cliora-existing-a"));
     for command in [a.cli_args.last().unwrap(), b.cli_args.last().unwrap()] {
         assert!(!command.contains("new-session -A"));
-        assert!(!command.contains("attach-session"));
+        assert!(!command.contains("cliora-existing-a"));
+        assert!(command.find("new-session -d -s").unwrap() < command.find("attach-session").unwrap());
     }
     // The fixture host is unreachable; listing remains local and lossless.
     assert_eq!(list_remote_sessions(&db).unwrap()[0].remote_session_id, "cliora-existing-a");
@@ -269,7 +274,7 @@ while ($null -ne ($line = [Console]::ReadLine())) { [Console]::WriteLine('PROCES
 "#).unwrap();
     struct Attachments(Vec<String>);
     impl Drop for Attachments {
-        fn drop(&mut self) { for id in &self.0 { let _ = crate::session_host::close(id); } }
+        fn drop(&mut self) { for id in &self.0 { crate::session_host::detach_for_tests(id); } }
     }
     let mut attachments = Attachments(Vec::new());
     let mut names = Vec::new();

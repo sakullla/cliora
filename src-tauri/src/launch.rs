@@ -369,16 +369,38 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     let session_q = remote_shell_quote(session);
     let path_q = remote_shell_quote(path);
     format!(
-        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then if screen -list | grep -Fq -- {session_q}; then echo 'Cliora remote session identity already exists' >&2; exit 45; fi; screen -U -dmS {session_q} sh -lc {interactive} && screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi",
-        crate::remote::LINUX_TMUX_INSTALL
+        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -d -s {session_q} -c {path_q} -- sh -lc {interactive} || exit $?; elif command -v screen >/dev/null 2>&1; then if screen -list | grep -Fq -- {session_q}; then echo 'Cliora remote session identity already exists' >&2; exit 45; fi; screen -U -dmS {session_q} sh -lc {interactive} || exit $?; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi; {}",
+        crate::remote::LINUX_TMUX_INSTALL, remote_reattach_command(session)
     )
 }
 
 pub(crate) fn remote_reattach_command(session: &str) -> String {
     let session_q = remote_shell_quote(session);
-    let screen_token = session.replace(['.', '\\', '\n'], "");
     format!(
-        "{REMOTE_TERMINAL_ENV}; if command -v tmux >/dev/null 2>&1 && tmux -u has-session -t {session_q} 2>/dev/null; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; exec tmux -u attach-session -t {session_q}; elif command -v screen >/dev/null 2>&1 && screen -list | grep -q '[.]{screen_token}'; then exec screen -U -r {session_q}; else echo 'Cliora remote session is unavailable' >&2; exit 44; fi"
+        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t '={session}'; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
+        remote_mux_probe(session), remote_state_signal(session, "ended"), remote_state_signal(session, "ready"),
+        remote_state_signal(session, "ended"), remote_state_signal(session, "disconnected")
+    )
+}
+
+fn remote_state_signal(session: &str, state: &str) -> String {
+    format!("printf '\\033]777;cliora;{session};{state}\\007'")
+}
+
+/// An exact identity probe. An SSH/mux error must never count as confirmed absence.
+/// All session names originate in the validated durable index or our UUID generator.
+pub(crate) fn remote_mux_probe(session: &str) -> String {
+    let session_q = remote_shell_quote(session);
+    format!(
+        "{}; cliora_probe() {{ cliora_known=0; cliora_unknown=0; if command -v tmux >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C tmux -u list-sessions -F '#{{session_name}}' 2>&1); cliora_rc=$?; if [ \"$cliora_rc\" -eq 0 ]; then if printf '%s\\n' \"$cliora_list\" | grep -Fxq -- {session_q}; then cliora_mux=tmux; return 0; fi; else case \"$cliora_list\" in *'no server running'*|*'no sessions'*|*'No such file or directory'*) ;; *) cliora_unknown=1 ;; esac; fi; fi; if command -v screen >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C screen -ls 2>&1); cliora_rc=$?; if printf '%s\\n' \"$cliora_list\" | grep -Eq '[.]{session}[[:space:]]'; then cliora_mux=screen; return 0; fi; if [ \"$cliora_rc\" -ne 0 ]; then case \"$cliora_list\" in *'No Sockets found'*) ;; *) cliora_unknown=1 ;; esac; fi; fi; if [ \"$cliora_known\" -eq 0 ] || [ \"$cliora_unknown\" -ne 0 ]; then return 2; fi; return 1; }}",
+        crate::remote::REMOTE_USER_PATH
+    )
+}
+
+pub(crate) fn remote_end_command(session: &str) -> String {
+    format!(
+        "{}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 0 ]; then if [ \"$cliora_mux\" = tmux ]; then tmux -u kill-session -t '={session}' || exit 47; else screen -S {} -X quit || exit 47; fi; elif [ \"$cliora_status\" -ne 1 ]; then exit 46; fi; cliora_attempt=0; while [ \"$cliora_attempt\" -lt 5 ]; do cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then printf '%s\\n' 'CLIORA_REMOTE_ABSENT:{session}'; exit 0; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; cliora_attempt=$((cliora_attempt + 1)); sleep 1; done; exit 47",
+        remote_mux_probe(session), remote_shell_quote(session)
     )
 }
 
@@ -492,7 +514,8 @@ fn remote_launch_plan(
         remote_persistent_command(path, adapter.command(), &launch_args, &session, adapter.remote_launch_environment(request.mode))
     };
     let mut remote_end_args = args.clone();
-    remote_end_args.push(format!("tmux kill-session -t {} 2>/dev/null || screen -S {} -X quit 2>/dev/null || true", remote_shell_quote(&session), remote_shell_quote(&session)));
+    remote_end_args[0] = "-T".into();
+    remote_end_args.push(remote_end_command(&session));
     args.push(remote_command);
     let terminal = session_terminal(db)
         .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;

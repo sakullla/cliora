@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -23,6 +23,12 @@ const OUTPUT_FLUSH_BYTES: usize = 64 * 1024;
 const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const OUTPUT_EVENT: &str = "cliora:session-output";
 const EXIT_EVENT: &str = "cliora:session-exit";
+const STATE_EVENT: &str = "cliora:session-state";
+const CONNECTING: u8 = 0;
+const CONNECTED: u8 = 1;
+const DISCONNECTED: u8 = 2;
+const REMOTE_ENDED: u8 = 3;
+const UNKNOWN: u8 = 4;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -93,6 +99,16 @@ pub struct SessionSnapshot {
     pub exit_reason: &'static str,
     pub reattachable: bool,
     pub remote_session_id: Option<String>,
+    pub remote_end_result: Option<RemoteEndResult>,
+    pub state_revision: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteEndResult {
+    pub outcome: &'static str,
+    pub stage: &'static str,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Clone, Serialize)]
@@ -121,6 +137,7 @@ pub struct ReplaySnapshot {
 struct SessionExit {
     session_id: String,
     exit_code: Option<i32>,
+    state_revision: u64,
 }
 
 struct Session {
@@ -133,15 +150,22 @@ struct Session {
     mode: LaunchMode,
     running: AtomicBool,
     exit_code: Mutex<Option<i32>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    grid: Mutex<PtySize>,
+    transport_generation: AtomicU64,
     child: Mutex<Box<dyn Child + Send + Sync>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     replay: Mutex<ReplayBuffer>,
     remote: bool,
+    executable: std::path::PathBuf,
     remote_session_id: Option<String>,
     remote_end_args: Option<Vec<String>>,
     environment: Vec<(String, String)>,
-    connection_lost: AtomicBool,
+    connection: AtomicU8,
+    state_revision: AtomicU64,
+    remote_end_result: Mutex<Option<RemoteEndResult>>,
+    operation: Mutex<()>,
     #[cfg(windows)]
     job: Mutex<Option<process_tree::Job>>,
 }
@@ -164,7 +188,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     // such a working directory and silently falls back to C:\Windows.
     let directory = crate::launch::terminal_path(&plan.directory)?;
     let (program, args) = hosted_command(&plan)?;
-    let mut command = CommandBuilder::new(program);
+    let mut command = CommandBuilder::new(&program);
     if !remote {
         command.cwd(&directory);
     }
@@ -208,24 +232,32 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         mode: plan.mode,
         running: AtomicBool::new(true),
         exit_code: Mutex::new(None),
-        master: Mutex::new(pair.master),
-        writer: Mutex::new(writer),
+        master: Mutex::new(Some(pair.master)),
+        writer: Mutex::new(Some(writer)),
+        grid: Mutex::new(size),
+        transport_generation: AtomicU64::new(0),
+        killer: Mutex::new(child.clone_killer()),
         child: Mutex::new(child),
         replay: Mutex::new(ReplayBuffer::new(REPLAY_LIMIT)),
         remote,
+        executable: program,
         remote_session_id: plan.remote_session_id.clone(),
         remote_end_args: plan.remote_end_args.clone(),
         environment: plan.environment.clone(),
-        connection_lost: AtomicBool::new(false),
+        connection: AtomicU8::new(if remote { CONNECTING } else { CONNECTED }),
+        state_revision: AtomicU64::new(0),
+        remote_end_result: Mutex::new(None),
+        operation: Mutex::new(()),
         #[cfg(windows)]
         job: Mutex::new(job),
     });
     let id = session.id.clone();
+    sessions().insert(id.clone(), Arc::clone(&session));
     if let Err(error) = attach_reader(Arc::clone(&session), reader) {
-        end_child(&session, false);
+        sessions().remove(&id);
+        end_child(&session);
         return Err(error);
     }
-    sessions().insert(id.clone(), session);
     Ok(LaunchResult {
         tool_id: plan.tool_id,
         project_id: plan.project_id,
@@ -257,12 +289,45 @@ fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<
     if REJECT_READER_THREAD.load(Ordering::SeqCst) {
         return Err("无法接收会话输出：测试拒绝创建读取线程".into());
     }
+    let generation = session.transport_generation.load(Ordering::SeqCst);
     let name = format!("cliora-session-{}", session.id);
+    let reading = Arc::clone(&session);
     thread::Builder::new()
         .name(name)
-        .spawn(move || read_output(session, reader))
+        .spawn(move || read_output(reading, reader, generation))
         .map_err(|error| format!("无法接收会话输出：{error}"))?;
+    // ConPTY keeps its output pipe open until the master closes, even after
+    // SSH exits. Local launch shims may transfer execution to descendants, so
+    // their lifetime remains tied to PTY EOF instead of the direct shim child.
+    if session.remote {
+        thread::Builder::new()
+            .name(format!("cliora-session-exit-{}", session.id))
+            .spawn(move || watch_child(session, generation))
+            .map_err(|error| format!("无法监视会话进程：{error}"))?;
+    }
     Ok(())
+}
+
+fn watch_child(session: Arc<Session>, generation: u64) {
+    {
+        let Ok(mut child) = session.child.lock() else { return };
+        if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
+        if child.wait().is_err() { let _ = child.kill(); }
+    }
+    let Ok(_operation) = session.operation.lock() else { return };
+    if session.transport_generation.load(Ordering::SeqCst) == generation {
+        #[cfg(windows)]
+        if let Ok(mut job) = session.job.lock() { *job = None; }
+        close_pty(&session);
+    }
+}
+
+fn close_pty(session: &Session) {
+    if let Ok(mut writer) = session.writer.lock() { *writer = None; }
+    let master = session.master.lock().ok().and_then(|mut master| master.take());
+    // Drop without holding a Session lock: ClosePseudoConsole drains its final
+    // output while the reader continues forwarding it in stream order.
+    drop(master);
 }
 
 pub fn list() -> Vec<SessionSnapshot> {
@@ -305,7 +370,7 @@ pub fn set_directory(id: &str, directory: &str) -> Result<String, String> {
 
 pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
     let session = lookup(id)?;
-    let size = session.master.lock().map_err(|_| "会话状态不可用")?.get_size().map_err(|_| "无法读取终端尺寸")?;
+    let size = *session.grid.lock().map_err(|_| "会话状态不可用")?;
     let (bytes, end_offset) = session.replay.lock().map_err(|_| "会话状态不可用")?.snapshot();
     Ok(ReplaySnapshot { data_base64: base64::engine::general_purpose::STANDARD.encode(bytes), end_offset, cols: size.cols, rows: size.rows })
 }
@@ -317,6 +382,7 @@ pub fn write(id: &str, data_base64: &str) -> Result<(), String> {
         return Err("会话已经结束".into());
     }
     let mut writer = session.writer.lock().map_err(|_| "会话状态不可用")?;
+    let writer = writer.as_mut().ok_or("会话连接已关闭")?;
     writer.write_all(&bytes).map_err(|error| format!("无法写入会话：{error}"))?;
     writer.flush().map_err(|error| format!("无法写入会话：{error}"))?;
     Ok(())
@@ -331,6 +397,7 @@ pub fn resize(id: &str, cols: u16, rows: u16) -> Result<(), String> {
         return Err("会话已经结束".into());
     }
     let master = session.master.lock().map_err(|_| "会话状态不可用")?;
+    let master = master.as_ref().ok_or("会话连接已关闭")?;
     // A resize to the grid the PTY already has is not a no-op for the CLI: ConPTY and
     // SIGWINCH both make full-screen CLIs redraw their live region, and switching back to
     // a session re-sends its unchanged grid. Inline TUIs (Kiro, Ink-based CLIs) then
@@ -340,13 +407,57 @@ pub fn resize(id: &str, cols: u16, rows: u16) -> Result<(), String> {
     }
     master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-        .map_err(|error| format!("无法调整会话尺寸：{error}"))
+        .map_err(|error| format!("无法调整会话尺寸：{error}"))?;
+    *session.grid.lock().map_err(|_| "会话状态不可用")? = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+    Ok(())
 }
 
 pub fn close(id: &str) -> Result<(), String> {
-    let session = sessions().remove(id).ok_or("会话不存在")?;
-    end_child(&session, true);
+    close_with_cleanup(id, || Ok(()))
+}
+
+pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    let session = lookup(id)?;
+    let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
+    if session.remote {
+        let args = session.remote_end_args.as_ref().ok_or("远程会话缺少结束上下文，保留记录以便核查")?;
+        let result = crate::remote::run_session_control(&session.executable, args, &session.environment);
+        let (end_result, error) = remote_end_outcome(result, session.remote_session_id.as_deref().unwrap_or_default());
+        let confirmed = end_result.outcome == "confirmed_absent";
+        *session.remote_end_result.lock().map_err(|_| "会话状态不可用")? = Some(end_result);
+        if !confirmed {
+            session.connection.store(UNKNOWN, Ordering::SeqCst);
+            session.notify_state();
+            return Err(error.unwrap_or_else(|| "远程结束结果未知，记录已保留，请重试结束以核查".into()));
+        }
+        session.connection.store(REMOTE_ENDED, Ordering::SeqCst);
+    }
+    // Keep the attachment addressable if persistent cleanup fails. A retry can
+    // verify absence again and finish storage cleanup without losing recovery.
+    cleanup()?;
+    end_child(&session);
+    sessions().remove(id);
     Ok(())
+}
+
+fn remote_end_outcome(result: Result<std::process::Output, crate::remote::RemoteError>, remote_id: &str) -> (RemoteEndResult, Option<String>) {
+    match result {
+        Ok(output) => {
+            let code = output.status.code();
+            let confirmed = output.status.success() && String::from_utf8_lossy(&output.stdout).lines()
+                .any(|line| line == format!("CLIORA_REMOTE_ABSENT:{remote_id}"));
+            if confirmed {
+                (RemoteEndResult { outcome: "confirmed_absent", stage: "verify_absence", exit_code: code }, None)
+            } else {
+                let outcome = if matches!(code, Some(47)) { "failed" } else { "unknown" };
+                (RemoteEndResult { outcome, stage: "verify_absence", exit_code: code }, Some(format!("未确认远程会话已结束（退出码 {}），记录已保留；请检查连接并重试结束", code.map_or_else(|| "未知".into(), |code| code.to_string()))))
+            }
+        }
+        Err(error) => {
+            let stage = match &error { crate::remote::RemoteError::Transport { stage, .. } => *stage, _ => "remote_control" };
+            (RemoteEndResult { outcome: "unknown", stage, exit_code: None }, Some(format!("{error}；远程结束结果未知，记录已保留，请重试结束以核查")))
+        }
+    }
 }
 
 /// Return the persistent remote session name before the local transport is
@@ -359,6 +470,7 @@ pub fn remote_session_id(id: &str) -> Option<String> {
 /// The remote process is never recreated; only the local PTY attachment changes.
 pub fn reattach(id: &str) -> Result<(), String> {
     let session = lookup(id)?;
+    let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
     if !session.remote {
         return Err("仅远程会话支持重新附着".into());
     }
@@ -367,11 +479,11 @@ pub fn reattach(id: &str) -> Result<(), String> {
     }
     let mut args = session.remote_end_args.clone().ok_or("远程会话缺少持久上下文")?;
     let _ = args.pop();
+    if let Some(tty) = args.iter_mut().find(|arg| arg.as_str() == "-T") { *tty = "-tt".into(); }
     let remote_id = session.remote_session_id.clone().ok_or("远程会话缺少稳定 ID")?;
     args.push(crate::launch::remote_reattach_command(&remote_id));
-    let executable = std::env::var_os("CLIORA_SSH_BINARY").unwrap_or_else(|| "ssh".into());
     let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).map_err(|error| format!("无法创建重新附着终端：{error}"))?;
-    let mut command = CommandBuilder::new(executable);
+    let mut command = CommandBuilder::new(&session.executable);
     command.args(args);
     command.env("TERM", "xterm-256color");
     for (key, value) in &session.environment {
@@ -380,18 +492,33 @@ pub fn reattach(id: &str) -> Result<(), String> {
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法重新附着远程会话：{error}"))?;
     let reader = pair.master.try_clone_reader().map_err(|error| { let _ = child.kill(); format!("无法读取重新附着输出：{error}") })?;
     let writer = pair.master.take_writer().map_err(|error| { let _ = child.kill(); format!("无法写入重新附着会话：{error}") })?;
-    *session.master.lock().map_err(|_| "会话状态不可用")? = pair.master;
-    *session.writer.lock().map_err(|_| "会话状态不可用")? = writer;
+    #[cfg(windows)]
+    let job = child.as_raw_handle().and_then(process_tree::Job::assign);
+    session.transport_generation.fetch_add(1, Ordering::SeqCst);
+    *session.master.lock().map_err(|_| "会话状态不可用")? = Some(pair.master);
+    *session.writer.lock().map_err(|_| "会话状态不可用")? = Some(writer);
+    *session.grid.lock().map_err(|_| "会话状态不可用")? = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    *session.killer.lock().map_err(|_| "会话状态不可用")? = child.clone_killer();
     *session.child.lock().map_err(|_| "会话状态不可用")? = child;
-    session.connection_lost.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    { *session.job.lock().map_err(|_| "会话状态不可用")? = job; }
+    *session.exit_code.lock().map_err(|_| "会话状态不可用")? = None;
+    session.connection.store(CONNECTING, Ordering::SeqCst);
     session.running.store(true, Ordering::SeqCst);
-    attach_reader(Arc::clone(&session), reader)
+    if let Err(error) = attach_reader(Arc::clone(&session), reader) {
+        end_child(&session);
+        session.connection.store(DISCONNECTED, Ordering::SeqCst);
+        session.notify_state();
+        return Err(error);
+    }
+    session.notify_state();
+    Ok(())
 }
 
 pub fn shutdown() {
     let taken: Vec<_> = sessions().drain().map(|(_, session)| session).collect();
     for session in taken {
-        end_child(&session, false);
+        end_child(&session);
     }
 }
 
@@ -403,26 +530,9 @@ fn lookup(id: &str) -> Result<Arc<Session>, String> {
     sessions().get(id).cloned().ok_or_else(|| "会话不存在".into())
 }
 
-fn end_child(session: &Session, explicit_end: bool) {
-    if explicit_end && session.remote {
-        if let Some(args) = session.remote_end_args.as_ref() {
-            let binary = std::env::var_os("CLIORA_SSH_BINARY").unwrap_or_else(|| "ssh".into());
-            let mut command = std::process::Command::new(binary);
-            command.args(args);
-            command.envs(session.environment.iter().map(|(key, value)| (key, value)));
-            // Ending a remote session is a background control operation. On
-            // Windows, OpenSSH otherwise inherits the desktop application's
-            // console policy and briefly opens a black cmd window.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-            }
-            let _ = command.status();
-        }
-    }
-    if let Ok(mut child) = session.child.lock() {
-        let _ = child.kill();
+fn end_child(session: &Session) {
+    if let Ok(mut killer) = session.killer.lock() {
+        let _ = killer.kill();
     }
     // Closing the job handle terminates whatever the process tree still runs.
     #[cfg(windows)]
@@ -430,6 +540,7 @@ fn end_child(session: &Session, explicit_end: bool) {
         *job = None;
     }
     session.running.store(false, Ordering::SeqCst);
+    close_pty(session);
 }
 
 static OUTPUT_CHANNEL: LazyLock<SyncSender<(String, Vec<u8>)>> = LazyLock::new(|| {
@@ -479,31 +590,78 @@ fn flush_output(id: &str, bytes: &[u8]) {
     });
 }
 
-fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
+/// Strip only this attachment's bounded control sequences, including split reads.
+/// Bytes that merely resemble a signal are forwarded unchanged and retain order.
+struct RemoteControlParser {
+    signals: Vec<(Vec<u8>, u8)>,
+    pending: Vec<u8>,
+}
+
+impl RemoteControlParser {
+    fn new(remote_id: Option<&str>) -> Self {
+        let signals = remote_id.map(|id| [("ready", CONNECTED), ("ended", REMOTE_ENDED), ("disconnected", DISCONNECTED)]
+            .into_iter().map(|(state, value)| (format!("\x1b]777;cliora;{id};{state}\x07").into_bytes(), value)).collect()).unwrap_or_default();
+        Self { signals, pending: Vec::new() }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        self.pending.extend_from_slice(bytes);
+        let mut output = Vec::with_capacity(self.pending.len());
+        let mut states = Vec::new();
+        let mut cursor = 0;
+        while cursor < self.pending.len() {
+            let rest = &self.pending[cursor..];
+            if let Some((signal, state)) = self.signals.iter().find(|(signal, _)| rest.starts_with(signal)) {
+                states.push(*state);
+                cursor += signal.len();
+            } else if self.signals.iter().any(|(signal, _)| signal.starts_with(rest)) {
+                break;
+            } else {
+                output.push(self.pending[cursor]);
+                cursor += 1;
+            }
+        }
+        self.pending.drain(..cursor);
+        (output, states)
+    }
+}
+
+fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generation: u64) {
     let mut buffer = [0_u8; 32 * 1024];
+    let mut control = RemoteControlParser::new(session.remote_session_id.as_deref());
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
             Ok(size) => {
-                forward_output(&session.id, &buffer[..size]);
+                if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
+                let (output, states) = control.push(&buffer[..size]);
+                for state in states {
+                    session.connection.store(state, Ordering::SeqCst);
+                    session.notify_state();
+                }
+                if !output.is_empty() { forward_output(&session.id, &output); }
             }
         }
     }
+    if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
     let code = session.child.lock().ok().and_then(|mut child| child.wait().ok()).map(|status| status.exit_code() as i32);
-    if session.remote && code == Some(255) {
-        session.connection_lost.store(true, Ordering::SeqCst);
+    if !control.pending.is_empty() { forward_output(&session.id, &control.pending); }
+    if session.remote && session.connection.load(Ordering::SeqCst) != REMOTE_ENDED {
+        let state = if code == Some(255) || session.connection.load(Ordering::SeqCst) == DISCONNECTED { DISCONNECTED } else { UNKNOWN };
+        session.connection.store(state, Ordering::SeqCst);
     }
     session.running.store(false, Ordering::SeqCst);
     if let Ok(mut exit_code) = session.exit_code.lock() {
         *exit_code = code;
     }
-    emit_exit(&session.id, code);
+    let revision = session.notify_state();
+    emit_exit(&session.id, code, revision);
 }
 
-fn emit_exit(id: &str, exit_code: Option<i32>) {
-    emit(EXIT_EVENT, SessionExit { session_id: id.to_owned(), exit_code });
+fn emit_exit(id: &str, exit_code: Option<i32>, state_revision: u64) {
+    emit(EXIT_EVENT, SessionExit { session_id: id.to_owned(), exit_code, state_revision });
 }
 
 fn emit<T: Serialize + Clone>(event: &str, payload: T) {
@@ -550,20 +708,30 @@ fn apply_environment(command: &mut CommandBuilder, plan: &LaunchPlan, credential
 }
 
 impl Session {
+    fn notify_state(&self) -> u64 {
+        let revision = self.state_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        emit(STATE_EVENT, self.snapshot());
+        revision
+    }
+
     fn snapshot(&self) -> SessionSnapshot {
+        let running = self.running.load(Ordering::SeqCst);
+        let connection = self.connection.load(Ordering::SeqCst);
         SessionSnapshot {
             id: self.id.clone(),
             tool_id: self.tool_id.clone(),
             project_id: self.project_id.clone(),
             directory: self.directory.lock().map(|value| value.clone()).unwrap_or_default(),
             mode: self.mode,
-            running: self.running.load(Ordering::SeqCst),
+            running,
             exit_code: self.exit_code.lock().ok().and_then(|code| *code),
             started_at: self.started_at,
-            connection_state: if self.running.load(Ordering::SeqCst) { "connected" } else if self.connection_lost.load(Ordering::SeqCst) { "disconnected" } else { "closed" },
-            exit_reason: if self.running.load(Ordering::SeqCst) { "running" } else if self.connection_lost.load(Ordering::SeqCst) { "connection_lost" } else { "process_exit" },
-            reattachable: self.remote && self.connection_lost.load(Ordering::SeqCst),
+            connection_state: if !self.remote { if running { "connected" } else { "closed" } } else { match connection { CONNECTING => "connecting", CONNECTED => "connected", DISCONNECTED => "disconnected", REMOTE_ENDED => "remote_ended", _ => "unknown" } },
+            exit_reason: if running { "running" } else if !self.remote { "process_exit" } else { match connection { DISCONNECTED => "connection_lost", REMOTE_ENDED => "remote_ended", _ => "unknown" } },
+            reattachable: self.remote && !running && connection != REMOTE_ENDED,
             remote_session_id: self.remote_session_id.clone(),
+            remote_end_result: self.remote_end_result.lock().ok().and_then(|result| result.clone()),
+            state_revision: self.state_revision.load(Ordering::SeqCst),
         }
     }
 }
@@ -619,6 +787,160 @@ static REJECT_READER_THREAD: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 pub(crate) fn reject_reader_thread(reject: bool) {
     REJECT_READER_THREAD.store(reject, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn detach_for_tests(id: &str) {
+    if let Some(session) = sessions().remove(id) { end_child(&session); }
+}
+
+#[cfg(test)]
+mod remote_state_tests {
+    use super::*;
+
+    #[test]
+    fn control_signals_survive_every_read_boundary_and_never_enter_output() {
+        let signal = b"\x1b]777;cliora;cliora-test;ready\x07";
+        for split in 0..=signal.len() {
+            let mut parser = RemoteControlParser::new(Some("cliora-test"));
+            let mut output = parser.push(b"before\r\n").0;
+            let (first, mut states) = parser.push(&signal[..split]);
+            output.extend(first);
+            let (second, next) = parser.push(&signal[split..]);
+            output.extend(second);
+            states.extend(next);
+            output.extend(parser.push(b"after\r\n").0);
+            assert_eq!(states, [CONNECTED], "split {split}");
+            assert_eq!(output, b"before\r\nafter\r\n", "split {split}");
+            assert!(parser.pending.is_empty());
+        }
+        let mut parser = RemoteControlParser::new(Some("cliora-test"));
+        let other = b"\x1b]777;cliora;cliora-other;ready\x07\x1b[6n";
+        assert_eq!(parser.push(other), (other.to_vec(), vec![]));
+        assert_eq!(parser.push(b"\x1b]777;cliora;cliora-test;ended\x07").1, [REMOTE_ENDED]);
+    }
+
+    #[test]
+    fn remote_end_requires_success_and_matching_absence_confirmation() {
+        fn output(code: i32, stdout: &str) -> std::process::Output {
+            #[cfg(windows)]
+            let status = { use std::os::windows::process::ExitStatusExt; std::process::ExitStatus::from_raw(code as u32) };
+            #[cfg(unix)]
+            let status = { use std::os::unix::process::ExitStatusExt; std::process::ExitStatus::from_raw(code << 8) };
+            std::process::Output { status, stdout: stdout.as_bytes().to_vec(), stderr: vec![] }
+        }
+        for (code, marker, expected) in [
+            (0, "CLIORA_REMOTE_ABSENT:cliora-test\n", "confirmed_absent"),
+            (0, "CLIORA_REMOTE_ABSENT:cliora-other\n", "unknown"),
+            (0, "", "unknown"),
+            (255, "CLIORA_REMOTE_ABSENT:cliora-test\n", "unknown"),
+            (47, "", "failed"),
+        ] {
+            let (result, error) = remote_end_outcome(Ok(output(code, marker)), "cliora-test");
+            assert_eq!(result.outcome, expected);
+            assert_eq!(result.exit_code, Some(code));
+            assert_eq!(error.is_none(), expected == "confirmed_absent");
+        }
+        let (result, error) = remote_end_outcome(Err(crate::remote::RemoteError::Transport { stage: "timeout", detail: "controlled".into() }), "cliora-test");
+        assert_eq!(result.outcome, "unknown");
+        assert_eq!(result.stage, "timeout");
+        assert_eq!(result.exit_code, None);
+        assert!(error.unwrap().contains("记录已保留"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_pty_ready_signal_changes_connecting_without_rendering_control_text() {
+        let _guard = lock_for_tests();
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("controlled-ready.ps1");
+        std::fs::write(&script, r#"
+[Console]::WriteLine('WAITING_FOR_REMOTE')
+$null = [Console]::ReadLine()
+[Console]::Write([char]27 + ']777;cliora;cliora-controlled;ready' + [char]7)
+[Console]::WriteLine('PAYLOAD_READY')
+$null = [Console]::ReadLine()
+[Console]::WriteLine('TAIL_BEFORE_EXIT')
+exit 255
+"#).unwrap();
+        let plan = LaunchPlan {
+            resume_native_id: None, account_version: None, account_context: None,
+            tool_id: "controlled".into(), project_id: Some("remote:controlled".into()),
+            mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
+            terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+            remote_session_id: Some("cliora-controlled".into()), remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
+        };
+        let id = start(plan, None).unwrap().session_id.unwrap();
+        struct Cleanup(String);
+        impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+        let _cleanup = Cleanup(id.clone());
+        wait_for_replay(&id, "WAITING_FOR_REMOTE").unwrap();
+        assert_eq!(lookup(&id).unwrap().snapshot().connection_state, "connecting");
+        write(&id, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+        wait_for_replay(&id, "PAYLOAD_READY").unwrap();
+        assert_eq!(lookup(&id).unwrap().snapshot().connection_state, "connected");
+        assert!(!replay_text(&id).contains("777;cliora"));
+        let session = lookup(&id).unwrap();
+        write(&id, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+        wait_for_replay(&id, "TAIL_BEFORE_EXIT").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while session.running.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(session.snapshot().connection_state, "disconnected");
+        assert_eq!(session.snapshot().exit_code, Some(255));
+        reject_reader_thread(true);
+        let result = reattach(&id);
+        reject_reader_thread(false);
+        assert!(result.unwrap_err().contains("测试拒绝"));
+        let snapshot = session.snapshot();
+        assert!(!snapshot.running);
+        assert!(snapshot.reattachable);
+        assert_eq!(snapshot.connection_state, "disconnected");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_end_preserves_attachment_and_cleanup_runs_only_after_confirmed_absence() {
+        let _guard = lock_for_tests();
+        let directory = tempfile::tempdir().unwrap();
+        let control = directory.path().join("end-status.txt");
+        std::fs::write(&control, "47").unwrap();
+        let script = directory.path().join("controlled-session.ps1");
+        std::fs::write(&script, "[Console]::WriteLine('CONTROLLED_RUNNING'); while ($null -ne [Console]::ReadLine()) {}").unwrap();
+        let plan = LaunchPlan {
+            resume_native_id: None, account_version: None, account_context: None,
+            tool_id: "controlled".into(), project_id: Some("remote:controlled".into()),
+            mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
+            terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+            remote_session_id: Some("cliora-controlled".into()),
+            remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "$code=[int](Get-Content -LiteralPath $env:CLIORA_TEST_END_STATUS); if ($code -eq 0) { [Console]::WriteLine('CLIORA_REMOTE_ABSENT:cliora-controlled') }; exit $code".into()]),
+            environment: vec![("CLIORA_TEST_END_STATUS".into(), control.display().to_string())],
+        };
+        let id = start(plan, None).unwrap().session_id.unwrap();
+        struct Cleanup(String);
+        impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+        let _cleanup = Cleanup(id.clone());
+        wait_for_replay(&id, "CONTROLLED_RUNNING").unwrap();
+        let called = AtomicBool::new(false);
+        let result = close_with_cleanup(&id, || { called.store(true, Ordering::SeqCst); Ok(()) });
+        assert!(result.unwrap_err().contains("47"));
+        assert!(!called.load(Ordering::SeqCst));
+        let snapshot = lookup(&id).unwrap().snapshot();
+        assert!(snapshot.running);
+        assert_eq!(snapshot.connection_state, "unknown");
+        assert_eq!(snapshot.remote_end_result.unwrap().outcome, "failed");
+        std::fs::write(&control, "255").unwrap();
+        assert!(close(&id).unwrap_err().contains("255"));
+        assert_eq!(lookup(&id).unwrap().snapshot().remote_end_result.unwrap().outcome, "unknown");
+        std::fs::write(&control, "0").unwrap();
+        assert_eq!(close_with_cleanup(&id, || Err("controlled storage failure".into())).unwrap_err(), "controlled storage failure");
+        assert_eq!(lookup(&id).unwrap().snapshot().connection_state, "remote_ended");
+        close_with_cleanup(&id, || { called.store(true, Ordering::SeqCst); Ok(()) }).unwrap();
+        assert!(called.load(Ordering::SeqCst));
+        assert!(lookup(&id).is_err());
+    }
 }
 
 #[cfg(test)]

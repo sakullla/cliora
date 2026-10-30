@@ -1145,6 +1145,32 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
   await expect(page.locator('[data-pane-session="s2"] textarea')).toBeEnabled();
 });
 
+test('switching sessions preserves a reading position while background output keeps arriving', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(Array.from({ length: 240 }, (_, index) => `reading-row-${index}`).join('\r\n') + '\r\n'));
+  const viewport = page.locator('[data-pane-session="s1"] .xterm-viewport');
+  await expect.poll(() => viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
+  await scrollbar.focus();
+  await page.keyboard.press('Home');
+  await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBe(0);
+  await expect(page.getByRole('button', { name: '回到最新输出', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  for (let index = 0; index < 12; index++) {
+    await page.evaluate(index => (window as unknown as { __output: (text: string, id: string) => void }).__output(`background-ordered-${index}\r\n`, 's1'), index);
+  }
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(viewport).toBeVisible();
+  await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBeLessThanOrEqual(24);
+  await expect(page.getByRole('button', { name: '回到最新输出', exact: true })).toBeVisible();
+  const terminalTree = page.locator('[data-pane-session="s1"] .xterm-accessibility-tree');
+  // Explicitly returning to live output remains available after preserving history.
+  await page.getByRole('button', { name: '回到最新输出', exact: true }).click();
+  await expect(terminalTree).toContainText('background-ordered-11');
+  await expect.poll(() => viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+});
+
 test('restoration keeps selected and pinned sessions and runs once across page switches', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, { __twoSessions: true, __restoreReport: { restored: { previous: 's2' }, failures: [] } });

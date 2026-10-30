@@ -6,6 +6,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -21,6 +23,33 @@ const pending = new Map();
 let sequence = 0;
 let config;
 const hash = value => createHash('sha256').update(value).digest('hex');
+const execFileAsync = promisify(execFile);
+const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
+const remoteInspect = async command => {
+  // This is an independent observer, never a substitute for product IPC. Use
+  // exactly the explicitly configured key/config and strict host verification.
+  const result = await execFileAsync('ssh', ['-T', '-F', config.target.sshConfig, '-i', config.target.identityFile,
+    '-p', String(config.target.port), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    '-o', 'ConnectTimeout=10', `${config.target.user}@${config.target.host}`,
+    `export PATH="$HOME/.local/bin:$HOME/bin:$PATH"; ${command}`], { timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  return result.stdout;
+};
+const muxNames = async () => {
+  const stdout = await remoteInspect(`command -v tmux >/dev/null 2>&1 || exit 42; names=$(LC_ALL=C tmux -u list-sessions -F '#{session_name}' 2>&1); rc=$?; if [ "$rc" -eq 0 ]; then printf '%s\\n' "$names"; else case "$names" in *'no server running'*|*'no sessions'*) ;; *) printf '%s' "$names" >&2; exit 46 ;; esac; fi`);
+  return stdout.trim().split(/\r?\n/).filter(Boolean);
+};
+const captureRemote = async remoteId => {
+  requireThat(/^cliora-[a-zA-Z0-9_-]+$/.test(remoteId), 'Invalid checkpoint remote identity.');
+  return remoteInspect(`command -v tmux >/dev/null 2>&1 || exit 42; tmux -u capture-pane -p -J -t ${shellQuote(`=${remoteId}:`)}`);
+};
+const awaitRemoteInput = async (remoteId, expected) => {
+  const deadline = performance.now() + 30000;
+  while (performance.now() < deadline) {
+    if ((await captureRemote(remoteId)).includes(expected)) return;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error('Failed: expected input absent from actual tmux screen.');
+};
 const requireThat = (condition, message) => { if (!condition) throw new Error(message); };
 const check = (name, condition) => { requireThat(condition, `Failed: ${name}`); report.checks.push(name); };
 const send = (method, params = {}) => new Promise((resolve, reject) => {
@@ -174,9 +203,12 @@ try {
     check('three actual remote identities differ', report.observations.distinctRemoteIdentities === 3);
     const index = await invoke('list_remote_sessions');
     check('same-directory identities all persisted', sessions.every(item => index.some(entry => entry.remoteSessionId === item.remoteId && entry.projectId === project.id)));
+    const actualNames = await muxNames();
+    check('independent SSH observer sees all three tmux sessions', sessions.every(item => actualNames.includes(item.remoteId)));
     await invoke('write_workbench_session', { sessionId: sessions[1].localId, dataBase64: Buffer.from(config.inputProbe.input).toString('base64') });
-    await awaitOutput(sessions[1].localId, config.inputProbe.expected);
-    check('input remains in selected remote process', !(await readReplay(sessions[0].localId)).includes(config.inputProbe.expected) && !(await readReplay(sessions[2].localId)).includes(config.inputProbe.expected));
+    await awaitRemoteInput(sessions[1].remoteId, config.inputProbe.expected);
+    check('input remains in selected remote process', !(await captureRemote(sessions[0].remoteId)).includes(config.inputProbe.expected) && !(await captureRemote(sessions[2].remoteId)).includes(config.inputProbe.expected));
+    report.limitations.push('Independent screen/absence observation requires tmux; screen fallback needs separate native evidence. Raw ANSI replay is not treated as a rendered input oracle.');
     report.status = 'restart_pending';
     report.limitations.push('Exit and restart the isolated desktop, then run --phase resume. This phase is not complete acceptance.');
   } else if (phase === 'resume') {
@@ -205,11 +237,14 @@ try {
       resumed.push(session);
     }
     check('restored exact identities', resumed.every((item, index) => item.remoteSessionId === checkpoint.sessions[index].remoteId));
+    check('restored connections report remote readiness', resumed.every(item => item.connectionState === 'connected'));
     await invoke('close_workbench_session', { sessionId: resumed[1].id });
     listed = await invoke('list_workbench_sessions');
     check('ending B leaves A and C connected', [resumed[0], resumed[2]].every(item => listed.some(entry => entry.id === item.id && entry.running)));
     const remaining = await invoke('list_remote_sessions');
     check('only B removed from durable index', !remaining.some(item => item.remoteSessionId === resumed[1].remoteSessionId) && [resumed[0], resumed[2]].every(item => remaining.some(entry => entry.remoteSessionId === item.remoteSessionId)));
+    const actualNames = await muxNames();
+    check('independent SSH observer confirms B absent and A/C present', !actualNames.includes(resumed[1].remoteSessionId) && [resumed[0], resumed[2]].every(item => actualNames.includes(item.remoteSessionId)));
     report.status = 'session_checks_passed';
     report.limitations.push('This report covers the listed session checks. Network fault, all platform and performance acceptance require their own evidence.');
   } else if (phase === 'measure') {
