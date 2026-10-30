@@ -22,6 +22,12 @@ export type RemoteProject = {
   updatedAt: number;
 };
 
+export type RemoteDirectoryListing = {
+  parent: string;
+  items: string[];
+  truncated: boolean;
+};
+
 export type RemoteProbe = {
   targetId: string;
   stage: string;

@@ -36,6 +36,7 @@ export default {
     preservedUnknown: 'No adapter installed, {{count}} profile(s) preserved, read-only',
   },
   remoteSsh: {
+    cancelTest: 'Cancel test',
     hostsTitle: 'Remote hosts', hostsDescription: 'Save the servers you use. Switch to one from the sidebar to run its CLIs right in the workbench.',
     addHost: 'Add host', newHost: 'Add remote host', editHost: 'Edit host',
     address: 'Host address', addressPlaceholder: 'IP, domain, or an alias from your SSH config', hostRequired: 'Enter a host address (no spaces or slashes)', userRequired: 'Enter a user name', invalidPort: 'Port must be 1–65535',

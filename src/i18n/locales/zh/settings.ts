@@ -36,6 +36,7 @@ export default {
     preservedUnknown: '未安装适配器，保留 {{count}} 份配置，只读',
   },
   remoteSsh: {
+    cancelTest: '取消测试',
     hostsTitle: '远程主机', hostsDescription: '保存常用服务器。之后可在侧栏切换到这台主机，直接在工作台运行它上面的 CLI。',
     addHost: '添加主机', newHost: '添加远程主机', editHost: '编辑主机',
     address: '主机地址', addressPlaceholder: 'IP、域名或 SSH 配置中的别名', hostRequired: '请填写主机地址（不含空格和斜杠）', userRequired: '请填写用户名', invalidPort: '端口应为 1–65535',

@@ -15,7 +15,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, Remote
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
-import type { RemoteCliProbe, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore } from '../types/remote';
+import type { RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
@@ -39,7 +39,15 @@ function readError(error: unknown): RemoteApiError {
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(name, args);
+    const result = await invoke<T>(name, args);
+    if (name === 'list_remote_directories') {
+      const listing = result as RemoteDirectoryListing | null;
+      if (!listing || listing.parent !== args?.parent || !Array.isArray(listing.items) || listing.items.length > 200
+        || listing.items.some(item => typeof item !== 'string') || typeof listing.truncated !== 'boolean') {
+        throw { code: 'remote_directory_response', message: i18n.t('home.remote.invalidDirectoryResponse'), action: i18n.t('common.nativeError.checkAndRetry') };
+      }
+    }
+    return result;
   } catch (error) {
     throw readError(error);
   }
@@ -262,7 +270,7 @@ export const native = {
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
   deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); rememberedRemoteTargets.delete(id); for (const listener of remoteIdentityListeners) listener(); },
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
-  listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<string[]>('list_remote_directories', { targetId, parent }, 'read', options),
+  listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<RemoteDirectoryListing>('list_remote_directories', { targetId, parent }, 'read', options),
   createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),
   saveRemoteProject: (project: RemoteProject) => command<RemoteProject>('save_remote_project', { project }),
   deleteRemoteProject: (id: string) => command<void>('delete_remote_project', { id }),

@@ -4616,7 +4616,7 @@ pub async fn list_remote_directories(
     state: State<'_, AppState>,
     target_id: String,
     parent: String,
-) -> Result<Vec<String>, ApiError> {
+) -> Result<crate::remote::DirectoryListing, ApiError> {
     let _ = state;
     remote_blocking(window, operation, crate::remote::operations::Kind::Read, move || {
         let database = app.state::<AppState>().database(&app)?;

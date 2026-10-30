@@ -4,7 +4,7 @@
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -147,7 +147,7 @@ const showWorkbench = async id => {
 };
 
 try {
-  requireThat(['preflight', 'create', 'resume', 'measure', 'cleanup'].includes(phase), 'Unknown phase.');
+  requireThat(['preflight', 'create', 'resume', 'measure', 'directories', 'cleanup'].includes(phase), 'Unknown phase.');
   requireThat(configPath, 'Set CLIORA_REMOTE_TEST_CONFIG or --config to an explicitly isolated test configuration.');
   config = JSON.parse(await readFile(path.resolve(configPath), 'utf8'));
   requireThat(config.isolated === true, 'Configuration must acknowledge an isolated app and remote test directory.');
@@ -256,6 +256,83 @@ try {
     check('independent SSH observer confirms B absent and A/C present', !actualNames.includes(resumed[1].remoteSessionId) && [resumed[0], resumed[2]].every(item => actualNames.includes(item.remoteSessionId)));
     report.status = 'session_checks_passed';
     report.limitations.push('This report covers the listed session checks. Network fault, all platform and performance acceptance require their own evidence.');
+  } else if (phase === 'directories') {
+    // Both targets must reach the same dedicated test filesystem. The key is
+    // an independent observer; password IPC uses only the system secret store.
+    requireThat(config.passwordTarget?.authMethod === 'password' && config.passwordFile, 'Provide passwordTarget and an external passwordFile for both authentication paths.');
+    requireThat(!config.passwordTarget.password && !config.passwordTarget.privateKey, 'Raw credentials are not accepted in passwordTarget.');
+    requireThat(config.passwordTarget.host === config.target.host && config.passwordTarget.user === config.target.user, 'Directory targets must use the same isolated host and user.');
+    requireThat(config.readyOutput && config.inputProbe?.input, 'Provide the actual harmless CLI fixture and readyOutput.');
+    const secretFile = JSON.parse(await readFile(path.resolve(config.passwordFile), 'utf8'));
+    requireThat(typeof secretFile.password === 'string' && secretFile.password.length > 0, 'External passwordFile must contain a password field.');
+    const root = `${config.testDirectory}/directory-${config.testRunId}`;
+    const paths = { empty: `${root}/empty`, denied: `${root}/denied`, readonly: `${root}/readonly`, file: `${root}/file` };
+    const leaves = ['key-created', 'password-created'].map(name => `${root}/${name}`);
+    const projects = [];
+    const sessions = [];
+    let fixtureOwned = false;
+    const read = (target, parent) => invoke('list_remote_directories', { targetId: target.id, parent, operation: {
+      requestId: randomUUID(), cancelToken: randomUUID(), targetId: target.id, targetRevision: target.updatedAt,
+      kind: 'read', priority: 'interactive', refresh: true, deadlineUnixMs: Date.now() + 40000,
+    } });
+    const outcome = (command, data) => evaluate(`(async () => { try { await window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(data)}); return {ok:true}; } catch (error) { return {ok:false,stage:error.remote?.stage,reason:error.remote?.reason,outcome:error.remote?.outcome}; } })()`);
+    try {
+      await invoke('set_remote_ssh_enabled', { enabled: true });
+      // mkdir without -p makes a collision a hard failure, never somebody
+      // else's directory to clean up.
+      await remoteInspect(`mkdir -- ${shellQuote(root)}`);
+      fixtureOwned = true;
+      await remoteInspect(`mkdir -- ${Object.values(paths).filter(value => value !== paths.file).map(shellQuote).join(' ')} && : > ${shellQuote(paths.file)} && chmod 000 ${shellQuote(paths.denied)} && chmod 500 ${shellQuote(paths.readonly)}`);
+      for (const [index, auth] of ['key', 'password'].entries()) {
+        const source = auth === 'key' ? config.target : config.passwordTarget;
+        const target = await invoke('save_remote_target', { target: { ...source, id: targetId, name: 'Isolated SSH acceptance', enabled: true, createdAt: 0, updatedAt: 0, defaultPath: root }, password: auth === 'password' ? secretFile.password : null });
+        const listed = await read(target, root);
+        check(`${auth}: real directory listing includes fixture`, listed.parent === root && listed.items.includes(paths.empty) && !listed.truncated);
+        const empty = await read(target, paths.empty);
+        check(`${auth}: empty directory is a successful empty result`, empty.parent === paths.empty && empty.items.length === 0 && !empty.truncated);
+        for (const [parent, stage] of [[`${root}/missing`, 'directory_missing'], [paths.file, 'directory_type'], [paths.denied, 'permission']]) {
+          const result = await outcome('list_remote_directories', { targetId, parent });
+          check(`${auth}: directory failure preserves ${stage}`, !result.ok && result.stage === stage);
+        }
+        for (const [path, stage] of [[`${root}/missing/child`, 'directory_missing'], [`${paths.file}/child`, 'directory_type']]) {
+          const result = await outcome('create_remote_directory', { targetId, path });
+          check(`${auth}: creation failure preserves ${stage}`, !result.ok && result.stage === stage);
+        }
+        check(`${auth}: missing creation parent was not implicitly created`, (await remoteInspect(`[ ! -e ${shellQuote(`${root}/missing`)} ] && printf yes`)).trim() === 'yes');
+        const denied = await outcome('create_remote_directory', { targetId, path: `${paths.readonly}/refused` });
+        check(`${auth}: creation denied without losing permission stage`, !denied.ok && denied.stage === 'permission');
+        await invoke('create_remote_directory', { targetId, path: leaves[index] });
+        const refreshed = await read(target, root);
+        check(`${auth}: refresh observes created directory`, refreshed.parent === root && refreshed.items.includes(leaves[index]));
+        check(`${auth}: independent SSH observer confirms creation`, (await remoteInspect(`[ -d ${shellQuote(leaves[index])} ] && printf yes`)).trim() === 'yes');
+        const project = await invoke('save_remote_project', { project: { id: `directory-project-${config.testRunId}-${auth}`, targetId, name: 'Directory launch acceptance', path: leaves[index], preferredTool: config.toolId, updatedAt: 0 } });
+        projects.push(project.id);
+        await invoke('set_preferred_terminal', { terminal: 'workbench' });
+        await prepareWorkbench();
+        const launched = await invoke('launch_cli', { request: { toolId: config.toolId, projectId: `remote:${project.id}`, sessionId: null, remoteIntent: { kind: 'new' }, mode: 'normal', resumeLatest: false } });
+        requireThat(launched.sessionId && launched.remoteSessionId, 'Native directory launch returned no identity.');
+        sessions.push(launched.sessionId);
+        await showWorkbench(launched.sessionId);
+        await awaitOutput(launched.sessionId, config.readyOutput);
+        await awaitConnected(launched.sessionId, launched.remoteSessionId);
+        const cwd = await remoteInspect(`tmux -u display-message -p -t ${shellQuote(`=${launched.remoteSessionId}:`)} '#{pane_current_path}'`);
+        check(`${auth}: real CLI starts from the created directory`, cwd.trim() === leaves[index]);
+        await invoke('close_workbench_session', { sessionId: launched.sessionId });
+        check(`${auth}: created-directory CLI ended`, !(await muxNames()).includes(launched.remoteSessionId));
+        sessions.pop();
+      }
+      const bad = await outcome('test_remote_target', { target: { ...config.passwordTarget, id: `${targetId}-invalid`, name: 'Invalid password fixture', enabled: true, createdAt: 0, updatedAt: 0 }, password: `${secretFile.password}-invalid` });
+      check('password: authentication failure remains distinct', !bad.ok && bad.stage === 'authentication');
+      report.status = 'directory_checks_passed';
+    } finally {
+      // Cleanup is explicit and limited to this run's known leaves. If a CLI
+      // writes unexpected files, rmdir fails and the report remains unverified.
+      for (const id of sessions) await invoke('close_workbench_session', { sessionId: id });
+      for (const id of projects) await invoke('delete_remote_project', { id });
+      await invoke('delete_remote_target', { id: targetId });
+      if (fixtureOwned) await remoteInspect(`for entry in ${[paths.denied, paths.readonly].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then chmod 700 "$entry" || exit 49; fi; done; rm -f -- ${shellQuote(paths.file)} || exit 49; for entry in ${[...leaves, paths.empty, paths.denied, paths.readonly].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then rmdir -- "$entry" || exit 49; fi; done; rmdir -- ${shellQuote(root)} || exit 49`);
+      report.cleanupComplete = true;
+    }
   } else if (phase === 'measure') {
     // Baseline builds may fail the independent-session scenario. Read timings
     // must remain runnable without a successful lifecycle checkpoint.

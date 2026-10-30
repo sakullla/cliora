@@ -1500,6 +1500,10 @@ fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
         || detail.contains("too many authentication failures"))
     {
         "authentication"
+    } else if detail.contains("cliora:directory-missing") {
+        "directory_missing"
+    } else if detail.contains("cliora:directory-type") {
+        "directory_type"
     } else if detail.contains("cliora:remote-path-failed") {
         "remote_path"
     } else if detail.contains("permission denied") || detail.contains("operation not permitted") {
@@ -2365,38 +2369,63 @@ fn run_command_bytes_inner(target: &RemoteTarget, command_line: &str) -> Result<
 /// List immediate child directories below a remote POSIX path. The shell
 /// loop avoids depending on a particular `find` implementation while keeping
 /// the caller's path quoted as data.
-pub fn list_directories(target: &RemoteTarget, parent: &str) -> Result<Vec<String>, RemoteError> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryListing {
+    pub parent: String,
+    pub items: Vec<String>,
+    pub truncated: bool,
+}
+
+pub fn list_directories(target: &RemoteTarget, parent: &str) -> Result<DirectoryListing, RemoteError> {
     let key = format!("list_directories:{:?}", (parent,));
     let owned = target.clone();
     let parent = parent.to_owned();
     read_cache::read(target, &key, false, move || list_directories_uncached(&owned, &parent))
 }
 
-fn list_directories_uncached(target: &RemoteTarget, parent: &str) -> Result<Vec<String>, RemoteError> {
+fn directory_list_command(parent: &str) -> Result<String, RemoteError> {
     if !valid_text(parent, 4096) || parent.starts_with('~') {
         return Err(RemoteError::InvalidPath);
     }
-    let command = format!(
-        "for entry in {}/*; do if [ -d \"$entry\" ]; then printf '%s\\n' \"$entry\"; fi; done",
-        shell_quote(parent)
-    );
-    let result = run_command(target, &command)?;
-    Ok(result
-        .stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(200)
-        .map(ToOwned::to_owned)
-        .collect())
+    Ok(format!(
+        "parent={}; if [ ! -e \"$parent\" ]; then printf '%s\\n' 'cliora:directory-missing: Directory does not exist' >&2; exit 44; fi; \
+         if [ ! -d \"$parent\" ]; then printf '%s\\n' 'cliora:directory-type: Path is not a directory' >&2; exit 45; fi; \
+         if [ ! -r \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: directory requires read and search access' >&2; exit 43; fi; \
+         count=0; for entry in \"${{parent%/}}\"/* \"${{parent%/}}\"/.[!.]* \"${{parent%/}}\"/..?*; do \
+         if [ -d \"$entry\" ]; then count=$((count + 1)); if [ \"$count\" -gt 200 ]; then printf '%s\\n' 'cliora:directory-truncated'; break; fi; printf '%s\\n' \"$entry\"; fi; done",
+        shell_quote(parent)))
 }
 
-/// Create a remote directory tree after the user explicitly requests it.
-pub fn create_directory(target: &RemoteTarget, path: &str) -> Result<(), RemoteError> {
+fn list_directories_uncached(target: &RemoteTarget, parent: &str) -> Result<DirectoryListing, RemoteError> {
+    let command = directory_list_command(parent)?;
+    let result = run_command(target, &command)?;
+    Ok(parse_directory_listing(parent, &result.stdout))
+}
+
+fn parse_directory_listing(parent: &str, stdout: &str) -> DirectoryListing {
+    let mut items: Vec<String> = stdout.lines().map(ToOwned::to_owned).collect();
+    let truncated = items.last().is_some_and(|line| line == "cliora:directory-truncated");
+    if truncated { items.pop(); }
+    DirectoryListing { parent: parent.into(), items, truncated }
+}
+
+fn directory_create_command(path: &str) -> Result<String, RemoteError> {
     if !valid_text(path, 4096) || path.starts_with('~') {
         return Err(RemoteError::InvalidPath);
     }
-    let command = format!("mkdir -p -- {}", shell_quote(path));
+    Ok(format!(
+        "path={}; parent=$(dirname -- \"$path\") || exit 45; \
+         if [ ! -e \"$parent\" ]; then printf '%s\\n' 'cliora:directory-missing: Parent directory does not exist' >&2; exit 44; fi; \
+         if [ ! -d \"$parent\" ]; then printf '%s\\n' 'cliora:directory-type: Parent path is not a directory' >&2; exit 45; fi; \
+         if [ ! -w \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: parent requires write and search access' >&2; exit 43; fi; \
+         mkdir -- \"$path\"", shell_quote(path)))
+}
+
+/// Create one direct child of an existing writable directory. Do not silently
+/// create a missing parent tree or treat an already existing path as a new one.
+pub fn create_directory(target: &RemoteTarget, path: &str) -> Result<(), RemoteError> {
+    let command = directory_create_command(path)?;
     run_command(target, &command).map(|_| ())
 }
 
@@ -2440,6 +2469,65 @@ pub fn ensure_enabled(db: &Database) -> Result<(), RemoteError> {
 mod tests {
     use super::*;
     use base64::Engine;
+
+    #[test]
+    fn directory_errors_preserve_path_type_permission_and_authentication() {
+        for (detail, code, stage) in [
+            ("cliora:directory-missing: Directory does not exist", 44, "directory_missing"),
+            ("cliora:directory-type: Path is not a directory", 45, "directory_type"),
+            ("Permission denied: directory requires read and search access", 43, "permission"),
+            ("Permission denied (publickey,password)", 255, "authentication"),
+        ] {
+            assert_eq!(classify_ssh_failure(detail, Some(code)), stage);
+        }
+        assert!(directory_list_command("~/private").is_err());
+        assert!(directory_create_command("/path\nother").is_err());
+        let empty = parse_directory_listing("/empty", "");
+        assert!(empty.items.is_empty() && !empty.truncated);
+        let listing = parse_directory_listing("/parent", "/parent/ spaced name \ncliora:directory-truncated\n");
+        assert_eq!(listing.items, ["/parent/ spaced name "]);
+        assert!(listing.truncated);
+    }
+
+    #[test]
+    fn directory_shell_distinguishes_empty_missing_file_and_bounded_children() {
+        #[cfg(windows)]
+        let shell = std::env::var("CLIORA_TEST_POSIX_SHELL").unwrap_or_else(|_| "C:/Program Files/Git/bin/bash.exe".into());
+        #[cfg(not(windows))]
+        let shell = "/bin/sh".to_owned();
+        if !Path::new(&shell).exists() { eprintln!("POSIX shell unavailable; native directory checks still required"); return; }
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().to_string_lossy().replace('\\', "/");
+        let run = |script: &str| {
+            let mut command = Command::new(&shell);
+            command.args(["-c", script]);
+            hide_console_window(&mut command);
+            command.output().unwrap()
+        };
+        let empty = run(&directory_list_command(&parent).unwrap());
+        assert!(empty.status.success(), "{}", String::from_utf8_lossy(&empty.stderr));
+        assert!(empty.stdout.is_empty());
+        let missing = run(&directory_list_command(&format!("{parent}/missing")).unwrap());
+        assert_eq!(missing.status.code(), Some(44));
+        std::fs::write(fixture.path().join("file"), b"fixture").unwrap();
+        assert_eq!(run(&directory_list_command(&format!("{parent}/file")).unwrap()).status.code(), Some(45));
+        let child = format!("{parent}/quoted ' space");
+        assert!(run(&directory_create_command(&child).unwrap()).status.success());
+        assert!(fixture.path().join("quoted ' space").is_dir());
+        assert!(!run(&directory_create_command(&child).unwrap()).status.success(), "existing directory is not a new creation");
+        assert_eq!(run(&directory_create_command(&format!("{parent}/missing/child")).unwrap()).status.code(), Some(44));
+        assert_eq!(run(&directory_create_command(&format!("{parent}/file/child")).unwrap()).status.code(), Some(45));
+        std::fs::create_dir(fixture.path().join(".hidden")).unwrap();
+        let listed = run(&directory_list_command(&parent).unwrap());
+        let listing = parse_directory_listing(&parent, &String::from_utf8(listed.stdout).unwrap());
+        assert_eq!(listing.items.len(), 2);
+        assert!(listing.items.iter().any(|item| item.ends_with("/.hidden")));
+        for index in 0..201 { std::fs::create_dir(fixture.path().join(format!("child-{index}"))).unwrap(); }
+        let bounded = run(&directory_list_command(&parent).unwrap());
+        let listing = parse_directory_listing(&parent, &String::from_utf8(bounded.stdout).unwrap());
+        assert_eq!(listing.items.len(), 200);
+        assert!(listing.truncated);
+    }
 
     #[test]
     fn controlled_operation_child() {

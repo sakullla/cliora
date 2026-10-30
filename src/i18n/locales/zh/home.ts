@@ -38,6 +38,13 @@ export default {
     panelDetail: '可以关联本机目录，并用选定的 CLI 在外部终端启动。',
   },
   remote: {
+    invalidDirectoryResponse: '目录响应无效，请刷新后重试。',
+    parentDirectory: '浏览目录',
+    cancelOperation: '取消当前操作',
+    directoryTruncated: '仅显示前 200 个目录；可手工输入其他路径。',
+    directoryNotLoaded: '尚未读取目录',
+    manualPathHint: '手工路径会在启动时校验；保存项目不代表已验证路径。',
+
     title: '远程项目',
     add: '添加远程',
     dialogTitle: '选择远程目录',
@@ -61,7 +68,6 @@ export default {
     createDirectory: '在远端新建目录',
     creatingDirectory: '正在创建…',
     directoryCreated: '远端目录已创建。',
-    passwordDirectoryHint: '密码登录会在工作台中提示输入；这里请直接填写已知目录。',
     saving: '正在保存…',
     save: '继续启动',
     saved: '远程项目已保存，可直接启动。',

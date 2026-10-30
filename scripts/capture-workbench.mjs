@@ -95,8 +95,8 @@ const openCodeTranscript = [
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
 
-async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null) {
-  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure }) => {
+async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null) {
+  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
     const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const facet = { state: 'available', reason: '' };
@@ -108,6 +108,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       { id: 'site', name: '个人网站', path: 'C:\\Projects\\personal-site', available: true, preferredTool: 'claude_code', lastOpened: 1790738800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
     ];
     const remoteTargets = [{ id: 'remote-prod', name: '测试远程主机', host: '212.60.153.19', port: 22, user: 'root', authMethod: 'key', identityFile: 'C:/Users/demo/.ssh/id_ed25519', sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: now, updatedAt: now }];
+    if (directoryMode === 'password') remoteTargets[0].authMethod = 'password';
+    const directoryFixture = { failure: false };
     const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
@@ -131,6 +133,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     Object.assign(window, {
       isTauri: true,
       __promptFixture: promptFixture,
+      __directoryFixture: directoryFixture,
       __failRemotePrompts: () => { promptFixture.fail = true; clockOffset += 31000; },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
@@ -147,7 +150,11 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'list_remote_targets') return remoteTargets;
           if (command === 'list_remote_projects') return remoteProjects;
           if (command === 'probe_remote_cli') return { targetId: args.targetId, toolId: args.toolId, executable: args.toolId === 'pi' ? 'pi' : args.toolId, installed: true, version: '0.164.0', detail: null };
-          if (command === 'list_remote_directories') return ['/srv/project', '/srv/services', '/srv/tools'];
+          if (command === 'list_remote_directories') {
+            if (directoryMode === 'loading') await new Promise(() => {});
+            if (directoryFixture.failure) throw { message: 'Permission denied: directory requires read and search access', action: '检查远端目标目录和文件权限。' };
+            return { parent: args.parent, items: ['/srv/project', '/srv/services', '/srv/tools'], truncated: false };
+          }
           if (command === 'create_remote_directory') return null;
           if (command === 'save_remote_project') { const saved = { ...args.project, id: args.project.id || 'remote-created', updatedAt: Date.now() }; remoteProjects.splice(0, remoteProjects.length, ...remoteProjects.filter((item) => item.id !== saved.id), saved); return saved; }
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
@@ -191,7 +198,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     r1: b64('\u001b]0;远程项目 · 独立会话 A\u0007\u001b[36mPi · synthetic SSH terminal\u001b[0m\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-a\r\n\r\n  同一目录的其他会话独立运行，输入属于当前选中会话。\r\n\r\n> '),
     r2: b64('\u001b]0;远程项目 · 独立会话 B\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-b\r\n\r\n> '),
     r3: b64('\u001b]0;远程项目 · 独立会话 C\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-c\r\n\r\n> '),
-  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure });
+  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode });
 }
 
 const manifest = [];
@@ -199,7 +206,7 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null) {
+async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null) {
   if (!onlyPattern.test(name)) return;
   const errors = [];
   let actionError = null;
@@ -209,7 +216,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
   try {
     page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
     page.on('pageerror', (error) => errors.push(String(error)));
-    await install(page, theme, empty, remoteState, promptFailure);
+    await install(page, theme, empty, remoteState, promptFailure, directoryMode);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     await page.waitForTimeout(900);
@@ -246,6 +253,21 @@ if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
+  for (const directoryMode of ['key', 'password', 'permission', 'loading']) {
+    await shot(`workbench-t5-directory-${directoryMode}-${theme}-${width}`, theme, width, async page => {
+      await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
+      const dialog = page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') });
+      await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill('/srv/project/a-long-remote-directory-with-editable-input');
+      await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('保留正在编辑的远程项目名称');
+      if (directoryMode === 'permission') {
+        await page.evaluate(() => { window.__directoryFixture.failure = true; });
+        await dialog.getByRole('button', { name: copy('刷新目录', 'Refresh directories'), exact: true }).click();
+        await dialog.getByRole('status').filter({ hasText: 'Permission denied' }).waitFor();
+      }
+      if (directoryMode === 'loading') await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation') }).waitFor();
+      if (directoryMode === 'key' || directoryMode === 'password') await dialog.getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).scrollIntoViewIfNeeded();
+    }, true, 'connected', null, directoryMode);
+  }
   for (const failure of ['stale', 'failed']) for (const surface of ['composer', 'dialog']) {
     await shot(`workbench-remote-prompts-${surface}-${failure}-${theme}-${width}`, theme, width, async (page) => {
       const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });

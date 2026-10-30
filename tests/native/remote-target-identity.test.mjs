@@ -18,7 +18,7 @@ test('a late target list cannot roll back saved identity, notify consumers, or i
     calls.push({ name, args });
     if (name === 'list_remote_targets') return hold ? new Promise(resolve => { release = () => resolve([old]); }) : [old];
     if (name === 'save_remote_target') return saved;
-    if (name === 'list_remote_directories') return ['nonempty'];
+    if (name === 'list_remote_directories') return { parent: args.parent, items: ['nonempty'], truncated: false };
     return null;
   };
   const code = transpile('native').replace(/^import .+;$/gm, line => {

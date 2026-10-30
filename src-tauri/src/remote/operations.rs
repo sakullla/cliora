@@ -203,6 +203,8 @@ impl Context {
             "authentication" => "检查所选主机的凭据或密钥后重试。",
             "host_key" => "通过可信渠道核实主机指纹，再更新 known_hosts。",
             "permission" => "检查远端目标目录和文件权限。",
+            "directory_missing" => "检查父目录路径；请先创建已有目录下的直接子目录。",
+            "directory_type" => "选择一个目录，不能使用普通文件作为父目录。",
             "dependency" => "检查远端所需命令和会话依赖。",
             "cancelled" => "需要时重新发起读取。",
             "identity" => "刷新主机配置并重新发起操作。",

@@ -42,7 +42,7 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
             if (holdTargets) await targetsReady;
             return [host];
           }
-          if (command === 'list_remote_directories') return [];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions' || command === 'list_projects' || command === 'list_remote_projects' || command === 'list_remote_sessions' || command === 'list_library_items') return [];
@@ -151,6 +151,7 @@ test('a remote session composer lists that host library, not this computer', asy
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
           if (command === 'list_remote_projects') return [{ id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 }];
           if (command === 'save_remote_project') return { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
@@ -252,7 +253,7 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
           if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'list_remote_targets') return [host];
           if (command === 'list_remote_projects') return [project];
-          if (command === 'list_remote_directories') return [project.path];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [project.path], truncated: false };
           if (command === 'save_remote_project') return { ...project, ...(args.project as object), id: project.id };
           if (command === 'list_workbench_sessions') {
             const snapshot = sessions.map(item => ({ ...item }));

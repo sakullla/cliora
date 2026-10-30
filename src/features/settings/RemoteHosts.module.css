@@ -75,3 +75,5 @@
   .host { flex-wrap: wrap; }
   .hostActions { width: 100%; justify-content: flex-end; }
 }
+
+.fields { display: contents; min-width: 0; margin: 0; padding: 0; border: 0; }

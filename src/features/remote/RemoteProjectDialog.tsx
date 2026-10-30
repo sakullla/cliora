@@ -1,29 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
+import { RemoteReadStatus, useRemoteReads } from '../../lib/remoteReads';
 import type { AdapterDescriptor } from '../../types/native';
-import type { RemoteProject, RemoteTarget } from '../../types/remote';
+import type { RemoteDirectoryListing, RemoteProject, RemoteTarget } from '../../types/remote';
 import { GuideDialog } from '../../components/GuideDialog';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { Button } from '../../components/ui';
 import styles from './RemoteProjectDialog.module.css';
 
-const DIRECTORY_CACHE_MS = 20_000;
-const directoryCache = new Map<string, { at: number; items: string[] }>();
-
-function directoryCacheKey(targetId: string, parent: string) {
-  return `${targetId}\n${parent}`;
-}
-
-function readDirectoryCache(targetId: string, parent: string): string[] | null {
-  const hit = directoryCache.get(directoryCacheKey(targetId, parent));
-  if (!hit || Date.now() - hit.at > DIRECTORY_CACHE_MS) return null;
-  return hit.items;
-}
-
-function writeDirectoryCache(targetId: string, parent: string, items: string[]) {
-  directoryCache.set(directoryCacheKey(targetId, parent), { at: Date.now(), items });
+function errorText(error: unknown) {
+  const value = error as { message?: string; action?: string };
+  return [value?.message || String(error), value?.action].filter(Boolean).join(' · ');
 }
 
 export function RemoteProjectDialog({
@@ -50,10 +39,20 @@ export function RemoteProjectDialog({
   const [name, setName] = useState('');
   const [path, setPath] = useState(initialPath ?? '');
   const [parent, setParent] = useState('/');
-  const [directories, setDirectories] = useState<string[]>([]);
+  const [listing, setListing] = useState<{ key: string; value: RemoteDirectoryListing } | null>(null);
   const [toolId, setToolId] = useState('');
   const [busy, setBusy] = useState<'list' | 'mkdir' | 'save' | ''>('');
   const [message, setMessage] = useState('');
+
+  const reads = useRemoteReads(targetId, parent.trim(), open);
+  const context = JSON.stringify([reads.identity, targets.find(item => item.id === targetId)?.updatedAt, parent.trim(), open]);
+  const current = useRef(context);
+  current.current = context;
+  const operation = useRef<{ controller: AbortController; serial: number } | null>(null);
+  const serial = useRef(0);
+  const draftRevision = useRef(0);
+  const directories = listing?.key === context ? listing.value.items : [];
+  const truncated = listing?.key === context && listing.value.truncated;
 
   const target = targets.find((item) => item.id === targetId) ?? null;
   const targetProjects = useMemo(() => projects.filter((item) => item.targetId === targetId), [projects, targetId]);
@@ -87,24 +86,16 @@ export function RemoteProjectDialog({
   }, [open, initialPath, initialTargetId, targets, targetId]);
 
   useEffect(() => {
-    if (!open || !targetId || !parent.trim() || target?.authMethod === 'password') return;
-    let active = true;
-    const parentPath = parent.trim();
-    const cached = readDirectoryCache(targetId, parentPath);
-    if (cached) setDirectories(cached);
-    else setBusy('list');
-    void native.listRemoteDirectories(targetId, parentPath).then((items) => {
-      const next = Array.isArray(items) ? items : [];
-      writeDirectoryCache(targetId, parentPath, next);
-      if (active) setDirectories(next);
-    }).catch((error) => {
-      if (active) setMessage(error instanceof Error ? error.message : String(error));
-    }).finally(() => { if (active) setBusy(''); });
-    return () => { active = false; };
-  }, [open, parent, targetId, target?.authMethod]);
+    setMessage('');
+    setBusy('');
+    if (open && targetId && parent.trim()) void loadDirectories();
+    return () => { operation.current?.controller.abort(); operation.current = null; };
+  }, [context]);
 
   function chooseTarget(value: string) {
     const next = targets.find((item) => item.id === value);
+    draftRevision.current++;
+    operation.current?.controller.abort();
     setTargetId(value);
     setPath(next?.defaultPath ?? '');
     setParent(next?.defaultPath ?? '/');
@@ -114,41 +105,67 @@ export function RemoteProjectDialog({
 
   function chooseExisting(value: string) {
     if (!value) return;
+    draftRevision.current++;
     setPath(value);
+    setParent(value);
     if (!name.trim()) setName(value.split('/').filter(Boolean).pop() ?? '');
   }
 
-  async function refreshDirectories() {
+  function begin() {
+    operation.current?.controller.abort();
+    const request = { controller: new AbortController(), serial: ++serial.current };
+    operation.current = request;
+    const key = context;
+    return { ...request, isCurrent: () => current.current === key && operation.current?.serial === request.serial };
+  }
+
+  async function loadDirectories(fresh = false) {
     if (!targetId || !parent.trim()) return;
-    if (target?.authMethod === 'password') { setMessage(t('home.remote.passwordDirectoryHint')); return; }
+    const request = begin();
     setBusy('list'); setMessage('');
     try {
-      const parentPath = parent.trim();
-      const items = await native.listRemoteDirectories(targetId, parentPath);
-      const next = Array.isArray(items) ? items : [];
-      writeDirectoryCache(targetId, parentPath, next);
-      setDirectories(next);
-    }
-    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(''); }
+      const value = await reads.native.listRemoteDirectories(targetId, parent.trim(), { fresh, signal: request.controller.signal });
+      if (request.isCurrent()) setListing({ key: context, value });
+    } catch (error) { if (request.isCurrent()) setMessage(errorText(error)); }
+    finally { if (request.isCurrent()) { setBusy(''); operation.current = null; } }
   }
 
   async function createDirectory() {
     const next = path.trim();
     if (!targetId || !next) return;
-    if (target?.authMethod === 'password') { setMessage(t('home.remote.passwordDirectoryHint')); return; }
+    const request = begin();
+    const revision = draftRevision.current;
+    let created = false;
     setBusy('mkdir'); setMessage('');
     try {
-      await native.createRemoteDirectory(targetId, next);
+      await native.createRemoteDirectory(targetId, next, { signal: request.controller.signal });
+      created = true;
+      if (!request.isCurrent() || draftRevision.current !== revision) return;
       setMessage(t('home.remote.directoryCreated'));
-      await refreshDirectories();
-    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(''); }
+      if (request.controller.signal.aborted) return;
+      const value = await reads.native.listRemoteDirectories(targetId, parent.trim(), { fresh: true, signal: request.controller.signal });
+      if (request.isCurrent() && draftRevision.current === revision) {
+        setListing({ key: context, value });
+        setMessage(t('home.remote.directoryCreated'));
+      }
+    } catch (error) {
+      if (request.isCurrent() && draftRevision.current === revision) setMessage([created ? t('home.remote.directoryCreated') : '', errorText(error)].filter(Boolean).join(' · '));
+    }
+    finally { if (request.isCurrent()) { setBusy(''); operation.current = null; } }
+  }
+
+  function close() {
+    if (busy === 'save') return;
+    operation.current?.controller.abort();
+    operation.current = null;
+    onClose();
   }
 
   async function save() {
     const nextPath = path.trim();
     if (!targetId || !nextPath) return;
+    if (busy) return;
+    const key = context;
     setBusy('save'); setMessage('');
     const existing = projects.find((item) => item.targetId === targetId && item.path === nextPath);
     try {
@@ -160,32 +177,37 @@ export function RemoteProjectDialog({
         preferredTool: toolId || existing?.preferredTool || null,
         updatedAt: 0,
       });
+      if (current.current !== key) return;
       onSaved(saved);
       onClose();
-    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(''); }
+    } catch (error) { if (current.current === key) setMessage(errorText(error)); }
+    finally { if (current.current === key) setBusy(''); }
   }
 
-  return <GuideDialog open={open} title={t('home.remote.dialogTitle')} hint={t('home.remote.dialogHint')} wide onClose={onClose}>
+  return <GuideDialog open={open} title={t('home.remote.dialogTitle')} hint={t('home.remote.dialogHint')} wide closeDisabled={busy === 'save'} onClose={close}>
     <div className={styles.dialog}>
+      <RemoteReadStatus state={reads} />
       {message && <p className={styles.message} role="status">{message}</p>}
       {!targets.length ? <div className={styles.empty}><Icon name="globe" size={20} /><span>{t('home.remote.noTargets')}</span></div> : <>
-        <label className={styles.field}><span>{t('home.remote.target')}</span><select value={targetId} onChange={(event) => chooseTarget(event.target.value)}><option value="">{t('home.remote.pickTarget')}</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.user}@{item.host}</option>)}</select></label>
+        <label className={styles.field}><span>{t('home.remote.target')}</span><select disabled={busy === 'save'} value={targetId} onChange={(event) => chooseTarget(event.target.value)}><option value="">{t('home.remote.pickTarget')}</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.user}@{item.host}</option>)}</select></label>
         {target && <div className={styles.targetMeta}><Icon name="globe" size={14} /><span>{target.user}@{target.host}:{target.port}</span><span>{target.defaultPath || '/'}</span></div>}
         <div className={styles.directoryCard}>
-          <div className={styles.cardHeader}><div><strong>{t('home.remote.directoryTitle')}</strong><small>{t('home.remote.directoryHint')}</small></div><Button size="sm" variant="ghost" icon={<Icon name="refresh" size={14} />} disabled={!targetId || busy !== ''} onClick={() => void refreshDirectories()}>{t('home.remote.refreshDirectories')}</Button></div>
+          <div className={styles.cardHeader}><div><strong>{t('home.remote.directoryTitle')}</strong><small>{t('home.remote.directoryHint')}</small></div><Button size="sm" variant="ghost" icon={<Icon name="refresh" size={14} />} disabled={!targetId || busy !== ''} onClick={() => void loadDirectories(true)}>{t('home.remote.refreshDirectories')}</Button></div>
+          <label className={styles.field}><span>{t('home.remote.parentDirectory')}</span><input disabled={busy === 'save'} value={parent} spellCheck={false} onChange={(event) => { draftRevision.current++; setParent(event.target.value); }} /></label>
+          {busy && busy !== 'save' && <Button size="sm" onClick={() => operation.current?.controller.abort()}>{t('home.remote.cancelOperation')}</Button>}
+          {truncated && <small className={styles.fieldHint}>{t('home.remote.directoryTruncated')}</small>}
           <div className={styles.directoryRow}>
-            <label className={styles.field}><span>{t('home.remote.savedDirectory')}</span><select value="" onChange={(event) => chooseExisting(event.target.value)} disabled={!targetId || busy !== ''}><option value="">{directories.length || targetProjects.length ? t('home.remote.chooseDirectory') : t('home.remote.noDirectories')}</option>{directories.map((item) => <option key={item} value={item}>{item}</option>)}{targetProjects.map((item) => <option key={`saved:${item.id}`} value={item.path}>{item.path} · {t('home.remote.saved')}</option>)}</select></label>
-            <label className={styles.field}><span>{t('home.remote.path')}</span><input value={path} spellCheck={false} autoComplete="off" onChange={(event) => setPath(event.target.value)} placeholder={t('home.remote.pathPlaceholder')} /></label>
+            <label className={styles.field}><span>{t('home.remote.savedDirectory')}</span><select value="" onChange={(event) => chooseExisting(event.target.value)} disabled={!targetId || busy !== ''}><option value="">{directories.length || targetProjects.length ? t('home.remote.chooseDirectory') : listing?.key === context ? t('home.remote.noDirectories') : t('home.remote.directoryNotLoaded')}</option>{directories.map((item) => <option key={item} value={item}>{item}</option>)}{targetProjects.map((item) => <option key={`saved:${item.id}`} value={item.path}>{item.path} · {t('home.remote.saved')}</option>)}</select></label>
+            <label className={styles.field}><span>{t('home.remote.path')}</span><input disabled={busy === 'save'} value={path} spellCheck={false} autoComplete="off" onChange={(event) => { draftRevision.current++; setPath(event.target.value); setMessage(''); }} placeholder={t('home.remote.pathPlaceholder')} /></label>
           </div>
-          {target?.authMethod === 'password' && <small className={styles.fieldHint}>{t('home.remote.passwordDirectoryHint')}</small>}
-          <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== '' || target?.authMethod === 'password'} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
+          <small className={styles.fieldHint}>{t('home.remote.manualPathHint')}</small>
+          <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== ''} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
         </div>
         <div className={styles.grid}>
-          <label className={styles.field}><span>{t('home.remote.name')}</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('home.remote.namePlaceholder')} /></label>
-          <label className={styles.field}><span>{t('home.remote.tool')}</span><select value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">{t('home.remote.chooseLater')}</option>{toolOptionsList.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label className={styles.field}><span>{t('home.remote.name')}</span><input disabled={busy === 'save'} value={name} onChange={(event) => { draftRevision.current++; setName(event.target.value); }} placeholder={t('home.remote.namePlaceholder')} /></label>
+          <label className={styles.field}><span>{t('home.remote.tool')}</span><select disabled={busy === 'save'} value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">{t('home.remote.chooseLater')}</option>{toolOptionsList.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
-        <div className={styles.actions}><Button onClick={onClose}>{t('common.dialog.cancel')}</Button><Button variant="primary" loading={busy === 'save'} disabled={!targetId || !path.trim() || busy !== ''} onClick={() => void save()}>{busy === 'save' ? t('home.remote.saving') : t('home.remote.save')}</Button></div>
+        <div className={styles.actions}><Button disabled={busy === 'save'} onClick={close}>{t('common.dialog.cancel')}</Button><Button variant="primary" loading={busy === 'save'} disabled={!targetId || !path.trim() || busy !== ''} onClick={() => void save()}>{busy === 'save' ? t('home.remote.saving') : t('home.remote.save')}</Button></div>
       </>}
     </div>
   </GuideDialog>;

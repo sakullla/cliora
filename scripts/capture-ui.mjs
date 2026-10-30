@@ -28,9 +28,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules'].includes(arg));
-const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts'].includes(arg));
+const captureMode=process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -46,8 +46,11 @@ async function mock(initialTheme){
  const names={codex:'Codex',claude_code:'Claude Code',grok:'Grok',pi:'Pi',open_code:'OpenCode'};
  const versions={codex:'0.160.0',claude_code:'2.1.287',grok:'1.0.46',pi:'1.0.0',open_code:'1.18.34'};
  const connectionPolicy=(id,scope)=>({apiKey:{state:scope==='project'&&id!=='claude_code'?'scope_denied':'writable',reason:scope==='project'&&id!=='claude_code'?names[id]+' 项目层不能写入供应商密钥；请使用全局配置':''},providerAddress:{state:'configurable',reason:''},projection:id==='pi'||id==='open_code'?'provider_models':id==='codex'?'current_model':'single_connection'});
+ const captureHosts=typeof initialTheme==='object'&&initialTheme.remoteHosts;
+ const hostFixture={hold:false,failure:false};
+ if(captureHosts)window.__hostCapture=hostFixture;
  const captureRules=typeof initialTheme==='object'&&initialTheme.rules;
- const ids=Object.keys(names); let theme=captureRules?initialTheme.theme:initialTheme; const tool_icons={};
+ const ids=Object.keys(names); let theme=captureRules||captureHosts?initialTheme.theme:initialTheme; const tool_icons={};
  const bindingFixture={hold:!!captureRules,fail:false,saves:0,syncs:0}; const bindingReleases=[];
  if(captureRules){localStorage.setItem('cliora:remote-target','capture-rule-host');const clockNow=Date.now;let offset=0;Date.now=()=>clockNow()+offset;window.__expireBindings=()=>{offset+=31000;};}
  window.__captureBindings=bindingFixture;window.__releaseBindings=()=>{bindingFixture.hold=false;bindingReleases.splice(0).forEach(release=>release());};
@@ -88,7 +91,7 @@ async function mock(initialTheme){
  Object.assign(window,{isTauri:true,__uiCalls:[],__TAURI_INTERNALS__:{transformCallback(callback){const id=++callbackId;callbacks.set(id,callback);return id;},unregisterCallback(id){callbacks.delete(id);},runCallback(id,data){callbacks.get(id)?.(data);},callbacks,invoke:async(command,args={})=>{
   window.__uiCalls.push({command,args});
   if(command.startsWith('plugin:event|'))return 1;
-  if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons,remote_ssh_enabled:!!captureRules},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
+  if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons,remote_ssh_enabled:!!(captureRules||captureHosts)},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
   if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok',nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
   if(command==='list_accounts')return window.__captureNativeOnly ? accounts.filter(account=>account.toolId!=='open_code') : accounts.map(account=>window.__captureLoginPending && account.toolId==='open_code'?{...account,state:'pending',pendingLogin:{id:'capture-attempt',operation:'login',expiresAt:1999999999}}:account);
   if(command==='account_impact')return {accountId:args.id,accountVersion:1,toolId:accounts.find(account=>account.id===args.id)?.toolId??'codex',currentContextId:null,contexts:[],profiles:[],scopes:[],usageReferences:[]};
@@ -111,6 +114,10 @@ async function mock(initialTheme){
    return {status:'native_result_observed',detail:'插件操作已完成',transactionId:'capture-operation',snapshot:pluginSnapshot(args.request.target)};
   }
   if(command==='scan_native_agents')return {target:args.target,capability:{version:versions[args.target.toolId],supported:true,format:'markdown',template:agentEntry.content,detail:'下一次委派读取定义'},entries:[agentEntry,{...agentEntry,id:'plugin-reviewer',name:'plugin-reviewer',owner:'插件：code-review@official',readOnly:true}],baseline:'capture-agents',detail:'合成原生定义，插件所属定义只读'};
+  if(captureHosts&&['list_remote_projects','list_remote_sessions','probe_remote_clis'].includes(command))return [];
+  if(captureHosts&&command==='list_remote_targets')return [{id:'capture-host',name:'开发环境 · 远程 SSH',host:'fixture.invalid',port:2222,user:'developer',authMethod:'password',defaultPath:'/srv/projects/long-project-directory',enabled:true,createdAt:1,updatedAt:1}];
+  if(captureHosts&&command==='list_remote_saved_passwords')return ['capture-host'];
+  if(captureHosts&&command==='test_remote_target'){if(hostFixture.hold)await new Promise(()=>{});if(hostFixture.failure)throw {message:'Permission denied (publickey,password).',action:'检查所选主机的凭据或密钥后重试。'};return {reachable:true,system:'Linux fixture'};}
   if(captureRules&&command==='list_remote_targets')return [{id:'capture-rule-host',name:'规则测试主机',host:'fixture.invalid',port:22,user:'fixture',authMethod:'key',enabled:true,createdAt:1,updatedAt:1}];
   if(captureRules&&['probe_remote_clis','list_remote_projects'].includes(command))return [];
   if(captureRules&&command==='list_remote_library_items')return library.filter(item=>item.kind===args.kind&&(!args.search||(item.title+item.body).includes(args.search))).map(item=>({...item,projectId:null}));
@@ -612,7 +619,7 @@ async function capturePluginScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -620,6 +627,27 @@ for(const width of widths)for(const theme of themes){
  // Navigation is inside the try so a boot timeout under load is recorded instead of crashing the run.
  try{
  await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ if(process.argv.includes('--remote-hosts')){
+  await nav.getByRole('button',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'管理主机',exact:true}).click();
+  await page.getByRole('button',{name:'编辑 开发环境 · 远程 SSH',exact:true}).click();
+  const form=page.getByRole('form',{name:'编辑主机',exact:true});
+  await capture('t5-host-editor');
+  await page.evaluate(()=>{window.__hostCapture.hold=true;});
+  await form.getByRole('button',{name:'测试连接',exact:true}).click();
+  await form.getByRole('button',{name:'取消测试',exact:true}).waitFor();
+  await capture('t5-host-testing');
+  await form.getByRole('button',{name:'取消测试',exact:true}).click();
+  await page.evaluate(()=>{window.__hostCapture.hold=false;window.__hostCapture.failure=true;});
+  await form.getByRole('button',{name:'测试连接',exact:true}).click();
+  await form.getByRole('status').filter({hasText:'Permission denied'}).waitFor();
+  await capture('t5-host-authentication-failure');
+  await form.getByRole('textbox',{name:'主机地址',exact:true}).fill('bad/path');
+  await form.getByRole('button',{name:'保存',exact:true}).click();
+  await form.getByText('请填写主机地址（不含空格和斜杠）',{exact:true}).waitFor();
+  await capture('t5-host-validation');
+  await page.close();continue;
+ }
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');

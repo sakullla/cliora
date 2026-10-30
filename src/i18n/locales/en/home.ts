@@ -38,6 +38,13 @@ export default {
     panelDetail: 'Link local folders and launch them with a CLI in an external terminal.',
   },
   remote: {
+    invalidDirectoryResponse: 'Invalid directory response. Refresh and try again.',
+    parentDirectory: 'Browse directory',
+    cancelOperation: 'Cancel current operation',
+    directoryTruncated: 'Showing the first 200 directories. You can type another path.',
+    directoryNotLoaded: 'Directories not loaded',
+    manualPathHint: 'Manual paths are checked on launch. Saving a project does not verify its path.',
+
     title: 'Remote projects',
     add: 'Add remote',
     dialogTitle: 'Choose remote directory',
@@ -61,7 +68,6 @@ export default {
     createDirectory: 'Create directory remotely',
     creatingDirectory: 'Creating…',
     directoryCreated: 'Remote directory created.',
-    passwordDirectoryHint: 'Password sign-in asks in the workbench; enter a known directory here.',
     saving: 'Saving…',
     save: 'Continue launch',
     saved: 'Remote project saved and selected for launch.',
