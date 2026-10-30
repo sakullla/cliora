@@ -10,7 +10,7 @@ import { ToolIcon } from '../../components/ToolIcon';
 import { ToastStack } from '../../components/Toast';
 import { ToolIconSettings } from './ToolIconSettings';
 import { TerminalSettings } from './TerminalSettings';
-import { nativeAvailable } from '../../lib/native';
+import { native, nativeAvailable } from '../../lib/native';
 import { useToasts } from '../../lib/toast';
 import { setUpdateOffer, useUpdateOffer, type UpdateOffer } from '../../lib/appUpdate';
 import brandIcon from '../../../src-tauri/icons/128x128@2x.png';
@@ -76,7 +76,7 @@ function UpdateSettings({ busy }: { busy: boolean }) {
         setStage('latest');
       }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error));
       setStage('failed');
     }
   }
@@ -102,19 +102,23 @@ function UpdateSettings({ busy }: { busy: boolean }) {
       setProgress({ downloaded: 0, total: null });
       setStage('downloading');
       // 插件在写入前强制验签；验签/下载/安装失败都会抛错，当前版本保持可用（ADR-4）。
-      await update.downloadAndInstall((event) => {
+      await update.download((event) => {
         if (event.event === 'Started') {
           setProgress({ downloaded: 0, total: event.data.contentLength ?? null });
         } else if (event.event === 'Progress') {
           setProgress((current) => ({ ...current, downloaded: current.downloaded + event.data.chunkLength }));
         }
       });
+      // Windows installs exit the process directly, bypassing ExitRequested.
+      // Checkpoint after the download, immediately before invoking the installer.
+      await native.checkpointWorkbenchSessions();
+      await update.install();
       setStage('installed');
       try {
         await relaunch();
       } catch { /* 重启失败时保留“已安装”提示，用户手动重新打开即可。 */ }
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error));
       setStage('failed');
     } finally {
       installing.current = false;

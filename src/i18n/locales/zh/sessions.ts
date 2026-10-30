@@ -1,4 +1,9 @@
 export default {
+  restoringPrevious: '正在恢复上次工作台会话…',
+  restoreFailed: '上次会话未能恢复',
+  restorePending: '{{tool}} 会话待恢复',
+  retryRestore: '重试恢复',
+  dismissRestore: '不再恢复',
   label: '会话工作台',
   listLabel: '会话列表',
   stageLabel: '当前会话',

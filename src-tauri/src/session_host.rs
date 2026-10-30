@@ -112,6 +112,8 @@ pub struct ReplaySnapshot {
     pub data_base64: String,
     /// Stream offset just past the newest byte in `data_base64`.
     pub end_offset: u64,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 #[derive(Clone, Serialize)]
@@ -302,8 +304,9 @@ pub fn set_directory(id: &str, directory: &str) -> Result<String, String> {
 
 pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
     let session = lookup(id)?;
+    let size = session.master.lock().map_err(|_| "会话状态不可用")?.get_size().map_err(|_| "无法读取终端尺寸")?;
     let (bytes, end_offset) = session.replay.lock().map_err(|_| "会话状态不可用")?.snapshot();
-    Ok(ReplaySnapshot { data_base64: base64::engine::general_purpose::STANDARD.encode(bytes), end_offset })
+    Ok(ReplaySnapshot { data_base64: base64::engine::general_purpose::STANDARD.encode(bytes), end_offset, cols: size.cols, rows: size.rows })
 }
 
 pub fn write(id: &str, data_base64: &str) -> Result<(), String> {
@@ -444,10 +447,13 @@ fn forward_output(id: &str, bytes: &[u8]) {
 
 fn coalesce_output(receiver: Receiver<(String, Vec<u8>)>) {
     let mut pending: HashMap<String, Vec<u8>> = HashMap::new();
-    while let Some((id, bytes)) = receiver.recv().ok() {
+    while let Ok((id, bytes)) = receiver.recv() {
         pending.entry(id).or_default().extend_from_slice(&bytes);
+        let deadline = std::time::Instant::now() + OUTPUT_FLUSH_WINDOW;
         while pending.values().map(Vec::len).sum::<usize>() < OUTPUT_FLUSH_BYTES {
-            match receiver.recv_timeout(OUTPUT_FLUSH_WINDOW) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() { break; }
+            match receiver.recv_timeout(remaining) {
                 Ok((id, bytes)) => { pending.entry(id).or_default().extend_from_slice(&bytes); }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -645,6 +651,7 @@ fn ending_a_session_terminates_the_process_tree() {
     let _guard = lock_for_tests();
     let (program, _) = shell_executable().expect("shell available");
     let plan = LaunchPlan {
+        resume_native_id: None,
         account_version: None,
         account_context: None,
         tool_id: "cliora-test".into(),

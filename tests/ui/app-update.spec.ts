@@ -5,7 +5,7 @@ async function setup(page: Page, theme = 'light') {
     const callbacks = new Map<number, (event: unknown) => void>();
     const handlers = new Map<string, number[]>();
     let callbackId = 0;
-    const control = { checkResult: null as null | Record<string, unknown>, checks: 0 };
+    const control = { checkResult: null as null | Record<string, unknown>, checks: 0, calls: [] as string[], checkpointFails: false };
     Object.assign(window, {
       isTauri: true,
       __updateTest: {
@@ -16,6 +16,11 @@ async function setup(page: Page, theme = 'light') {
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: unknown) => void) => { callbacks.set(++callbackId, callback); return callbackId; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (['plugin:updater|download', 'checkpoint_workbench_sessions', 'plugin:updater|install', 'plugin:process|restart'].includes(command)) {
+            control.calls.push(command);
+            if (command === 'checkpoint_workbench_sessions' && control.checkpointFails) throw new Error('checkpoint failed');
+            return command === 'plugin:updater|download' ? 2 : null;
+          }
           if (command === 'plugin:event|listen') { handlers.set(args.event, [...(handlers.get(args.event) ?? []), args.handler]); return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
           if (command === 'plugin:app|version') return '0.4.29';
@@ -58,6 +63,23 @@ test('a manual check without a release reports the current version is latest', a
   await card.getByRole('button', { name: '检查更新' }).click();
   await expect(card.getByRole('status')).toHaveText('已是最新版本。');
   await expect(page.getByRole('complementary').getByRole('button', { name: /已发布/ })).toHaveCount(0);
+});
+
+for (const fails of [false, true]) test(`updater checkpoints sessions before Windows installer exits (checkpoint fails: ${fails})`, async ({ page }) => {
+  await setup(page);
+  await page.evaluate(fails => {
+    const control = (window as any).__updateTest.control;
+    control.checkResult = { rid: 1, version: '0.5.0', currentVersion: '0.4.29', body: 'test update' };
+    control.checkpointFails = fails;
+  }, fails);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const card = page.locator('#app-update');
+  await card.getByRole('button', { name: '检查更新' }).click();
+  await card.getByRole('button', { name: '下载并安装' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__updateTest.control.calls)).toEqual(fails
+    ? ['plugin:updater|download', 'checkpoint_workbench_sessions']
+    : ['plugin:updater|download', 'checkpoint_workbench_sessions', 'plugin:updater|install', 'plugin:process|restart']);
+  if (fails) await expect(card.getByText(/checkpoint failed/)).toBeVisible();
 });
 
 test('the General tab lists its sections beside them from 900px and scrolls to the one chosen', async ({ page }) => {

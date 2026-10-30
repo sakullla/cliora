@@ -40,6 +40,12 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           if (command === 'set_workbench_directory') return args.directory;
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'restore_workbench_sessions') {
+            const harness = window as unknown as { __restoreReport?: unknown; __restoreCalls?: number };
+            harness.__restoreCalls = (harness.__restoreCalls ?? 0) + 1;
+            return harness.__restoreReport ?? { restored: {}, failures: [] };
+          }
+          if (command === 'forget_workbench_restore') { Object.assign(window, { __forgottenRestore: args.sessionId }); return null; }
           if (command === 'open_external_url') {
             if ((window as unknown as { __failOpen?: boolean }).__failOpen) throw new Error('浏览器不可用');
             opened.push(args.url);
@@ -515,6 +521,26 @@ test('terminal cursor-position replies are forwarded through the binary input ch
   await expect.poll(async () => (await writes(page)).some((item) => /\u001b\[\d+;\d+R/.test(item))).toBe(true);
 });
 
+test('initial replay waits for the workbench to receive layout space', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.setViewportSize({ width: 1360, height: 898 });
+  await page.addInitScript(() => {
+    Object.assign(window, { __replayOverride: btoa(Array.from({ length: 100 }, (_, index) => `history-${index}`).join('\r\n')) });
+  });
+  await page.goto('/');
+  const collapsed = await page.addStyleTag({ content: '[data-term-theme] { height: 0 !important; max-height: 0 !important; }' });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm')).toHaveCount(1);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await page.evaluate(() => (window as unknown as { __resizes: unknown[] }).__resizes)).toEqual([]);
+  await collapsed.evaluate(node => node.remove());
+  await expect(page.locator('.xterm-accessibility-tree')).toContainText('history-99');
+  await expect.poll(() => page.locator('.xterm-rows > div').evaluateAll(rows => rows.filter(row => row.textContent?.includes('history-')).length)).toBeGreaterThan(20);
+  const grids = await page.evaluate(() => (window as unknown as { __resizes: Array<{ rows: number }> }).__resizes);
+  expect(grids.length).toBeGreaterThan(0);
+  expect(grids.every(grid => grid.rows > 20)).toBe(true);
+});
+
 test('a replayed session with long output opens scrolled to the latest line', async ({ page }) => {
   await installWorkbenchMock(page);
   const lines = Array.from({ length: 300 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
@@ -978,6 +1004,53 @@ test('switching back to a session does not resend its unchanged grid', async ({ 
   }
   await page.waitForTimeout(300);
   expect(await resizes('s1')).toBe(settled);
+});
+
+test('hidden live terminals answer cursor queries without accepting keyboard input', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await resetWrites(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id: string) => void }).__output('\x1b[6n', 's1'));
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog.filter(item => item.sessionId === 's1').map(item => item.text))).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+  await expect(page.locator('[data-pane-session="s1"] textarea')).toBeDisabled();
+  await expect(page.locator('[data-pane-session="s2"] textarea')).toBeEnabled();
+});
+
+test('restoration keeps selected and pinned sessions and runs once across page switches', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __twoSessions: true, __restoreReport: { restored: { previous: 's2' }, failures: [] } });
+    localStorage.setItem('cliora:workbench-selected', 'previous');
+    localStorage.setItem('cliora:workbench-rail-arrange', JSON.stringify({ pinned: ['previous'], order: [] }));
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange')!).pinned)).toEqual(['s2']);
+  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
+});
+
+test('unresolved restoration stays visible and can be dismissed explicitly', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, { __restoreReport: { restored: {}, failures: [{ session: { id: 'missing', toolId: 'codex', directory: 'C:/work' }, detail: '原会话不存在' }] } }));
+  await openWorkbench(page);
+  await expect(page.getByText('原会话不存在', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: '重试恢复', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(2);
+  await page.getByRole('button', { name: '不再恢复', exact: true }).click();
+  await expect(page.getByRole('button', { name: '不再恢复', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __forgottenRestore: string }).__forgottenRestore)).toBe('missing');
+});
+
+test('replay uses the native grid before interpreting cursor-addressed output', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __twoSessions: true, __replayOverride: { dataBase64: btoa('codex-ready\x1b[1;100HX\x1b[6n'), endOffset: 27, cols: 120, rows: 30 } });
+  });
+  await openWorkbench(page);
+  await expect.poll(() => writes(page)).toContain('\x1b[1;101R');
 });
 
 test('find can match case, line spacing persists, shortcuts are listed, and the rail collapses to icons', async ({ page }) => {

@@ -283,6 +283,7 @@ fn spawn_rejects_logout_or_reauthentication_since_plan_before_terminal_side_effe
     let db = Database::open(&temp.path().join("app.db")).unwrap();
     let mut a = account(&db, temp.path(), "a");
     let plan = crate::launch::LaunchPlan {
+        resume_native_id: None,
         account_context: Some((a.id.clone(), a.context.clone().unwrap())),
         account_version: Some(a.version),
         tool_id: "codex".into(),

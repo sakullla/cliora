@@ -17,7 +17,7 @@ export type TerminalMatch = { row: number; col: number; length: number };
 export type OutputChunk = { data: string; offset?: number };
 
 /** Replay from the host: the current contract carries the stream end, older mocks send bare base64. */
-export type ReplayPayload = string | { dataBase64: string; endOffset: number };
+export type ReplayPayload = string | { dataBase64: string; endOffset: number; cols?: number; rows?: number };
 
 /**
  * Keep only the bytes of `bytes` (starting at stream `offset`) that lie past `end`.
@@ -251,6 +251,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   linkHintRef.current = t('sessions.openLinkHint', { modifier: MAC ? '⌘' : 'Ctrl' });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const fitNowRef = useRef<(() => void) | null>(null);
   // The last grid sent to the PTY. A one-row proposal with no real height change is glyph
   // measurement noise; applying it makes a live TUI redraw and the view jumps.
   const fitLockRef = useRef({ cols: 0, rows: 0, height: 0 });
@@ -360,6 +361,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     textarea?.addEventListener('compositionend', onCompositionEnd);
     const cursorSub = term.onCursorMove(syncImeAnchor);
     let acceptLive = false;
+    let replayReady = false;
     let liveStreaming = false;
     let liveTimer = 0;
     // Stream offset past the newest byte already written. Live events and the replay
@@ -433,7 +435,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     writers.current.set(sessionId, publish);
 
     const sendToPty = (data: string, binary = false) => {
-      if (!activeRef.current || !runningRef.current || !data) return;
+      // xterm also emits device/cursor replies here. Hidden live terminals must
+      // answer them; the textarea and key/paste handlers gate user input.
+      if (!runningRef.current || !data) return;
       if (!binary && (data.includes('\r') || data.includes('\n'))) markLiveOutput();
       void native.writeWorkbenchSession(sessionId, encodeBase64(ptyBytes(data, binary))).catch((error) => bridge.current.writeError(error));
     };
@@ -447,6 +451,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
 
     term.attachCustomKeyEventHandler((event) => {
+      if (!activeRef.current) return false;
       if (terminalYieldsToIme(event)) return true;
       const action = terminalKeyAction(event, { hasSelection: term.hasSelection(), canSwitch: bridge.current.canSwitch(), mac: MAC });
       if (!action) return true;
@@ -481,6 +486,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
 
     // An image-only clipboard stays available to the CLI through Ctrl+V.
     const onPaste = (event: ClipboardEvent) => {
+      if (!activeRef.current) { event.preventDefault(); event.stopPropagation(); return; }
       const data = event.clipboardData;
       if (!data) return;
       const text = data.getData('text/plain');
@@ -634,7 +640,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       selectAll: () => { if (!disposed) term.selectAll(); },
       hasSelection: () => !disposed && term.hasSelection(),
       copySelection: () => !disposed && copySelection(),
-      paste: (text: string) => { if (!disposed && runningRef.current && text) term.paste(text); },
+      paste: (text: string) => { if (!disposed && activeRef.current && runningRef.current && text) term.paste(text); },
       readOutput: () => {
         if (disposed) return '';
         if (term.hasSelection()) {
@@ -706,8 +712,12 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
     const osc7 = term.parser.registerOscHandler(7, reportDirectory);
     const osc1337 = term.parser.registerOscHandler(1337, reportDirectory);
+    const layoutAvailable = () => {
+      const workbench = node.closest<HTMLElement>('[data-term-theme]');
+      return node.clientWidth >= 8 && node.clientHeight >= 8 && (!workbench || workbench.clientHeight >= 8);
+    };
     const fitNow = () => {
-      if (disposed || !activeRef.current || node.clientWidth < 8 || node.clientHeight < 8) return;
+      if (disposed || !replayReady || !activeRef.current || !layoutAvailable()) return;
       const dims = fit.proposeDimensions();
       if (!dims) return;
       const height = node.clientHeight;
@@ -732,18 +742,39 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (term.cols < 2 || term.rows < 1) return;
       if (changed && !awayFromBottom) scrollToLatest();
       reportScroll();
-      if (!changed || !runningRef.current) return;
+      const sent = ptyGridRef.current;
+      if (!runningRef.current || (sent.cols === term.cols && sent.rows === term.rows)) return;
       ptyGridRef.current = { cols: term.cols, rows: term.rows };
       void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
     };
+    fitNowRef.current = fitNow;
     let resizeFrame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(resizeFrame);
       resizeFrame = requestAnimationFrame(fitNow);
     });
     observer.observe(node);
-    void native.replayWorkbenchSession(sessionId).then((payload: ReplayPayload) => {
+    void native.replayWorkbenchSession(sessionId).then(async (payload: ReplayPayload) => {
+      // The canvas has a minimum height even while the containing workbench
+      // has no allocated space. Wait for that layout before interpreting legacy
+      // replay: ConPTY cannot reflow history parsed into that temporary grid.
+      while (!disposed && activeRef.current && !layoutAvailable()) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
       if (disposed) return;
+      // Interpret cursor-addressed replay at the host's grid, including when
+      // this session mounts hidden. Fitting an 80-column replay later cannot
+      // undo cursor movements that have already overwritten the wrong rows.
+      if (typeof payload === 'object' && payload.cols && payload.rows) {
+        term.resize(payload.cols, payload.rows);
+        ptyGridRef.current = { cols: payload.cols, rows: payload.rows };
+      } else {
+        // Legacy bridges have no recorded grid. Measure before replay, as
+        // parsing their entire history at the default size then expanding it
+        // leaves blank rows with ConPTY's no-reflow behaviour.
+        replayReady = true;
+        fitNow();
+      }
       const encoded = typeof payload === 'string' ? payload : typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : '';
       const replayEnd = typeof payload === 'object' && payload && Number.isFinite(payload.endOffset) ? payload.endOffset : null;
       let snapshot = new Uint8Array(0);
@@ -773,17 +804,23 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         streamEnd = null;
       }
       acceptLive = true;
-      try {
-        if (snapshot.length) term.write(snapshot);
-        if (suffix.length) term.write(suffix);
-      } catch { /* Malformed bytes stay out of the terminal. */ }
-      requestAnimationFrame(() => {
+      const finishReplay = () => {
+        if (disposed) return;
+        replayReady = true;
         fitNow();
         scrollToLatest();
-        if (!disposed) bridge.current.grid(sessionId, term.cols, term.rows);
-      });
+        bridge.current.grid(sessionId, term.cols, term.rows);
+      };
+      try {
+        const bytes = suffix.length ? concatBytes([snapshot, suffix]) : snapshot;
+        if (bytes.length) term.write(bytes, finishReplay);
+        else finishReplay();
+      } catch { finishReplay(); }
     }).catch(() => {
+      if (disposed) return;
       acceptLive = true;
+      replayReady = true;
+      fitNow();
       (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeChunk(item));
       queued.splice(0).forEach((item) => writeChunk(item));
       pending.current.delete(sessionId);
@@ -828,6 +865,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       window.setTimeout(() => term.dispose(), 0);
       termRef.current = null;
       fitRef.current = null;
+      fitNowRef.current = null;
     };
   }, [sessionId, writers, pending, handles, bridge]);
 
@@ -841,7 +879,13 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.disableStdin = !active || !running;
+    // disableStdin suppresses protocol replies as well as keyboard events.
+    // A hidden live CLI must still receive DSR/DA responses from its own buffer.
+    term.options.disableStdin = !running;
+    if (term.textarea) term.textarea.disabled = !active || !running;
+    if (term.options.fontSize !== fontSize || term.options.lineHeight !== lineHeight) {
+      fitLockRef.current = { cols: 0, rows: 0, height: 0 };
+    }
     term.options.fontSize = fontSize;
     term.options.lineHeight = lineHeight;
     // A reattached transport opens a fresh PTY at its default grid.
@@ -861,9 +905,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       const fit = fitRef.current;
       const node = host.current;
       if (!fit || !node || node.clientWidth < 8) return;
-      fitLockRef.current = { cols: 0, rows: 0, height: 0 };
-      try { fit.fit(); } catch { return; }
-      fitLockRef.current = { cols: term.cols, rows: term.rows, height: node.clientHeight };
+      // Use the same stable-grid guard as ResizeObserver. Resetting its lock
+      // on every reveal reintroduced one-row oscillation and duplicate TUI lines.
+      fitNowRef.current?.();
       // Test automation locates glyphs through the DOM rows; keep that renderer
       // under webdriver so coordinates stay measurable. Everyone else gets WebGL.
       if (!webglRef.current && navigator.webdriver !== true) {
@@ -878,11 +922,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         } catch { /* No WebGL here: the DOM renderer stays. */ }
       }
       if (becameActive) handles.current.get(sessionId)?.scrollToBottom();
-      const sent = ptyGridRef.current;
-      if (term.cols >= 2 && term.rows >= 1 && running && (sent.cols !== term.cols || sent.rows !== term.rows)) {
-        ptyGridRef.current = { cols: term.cols, rows: term.rows };
-        void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
-      }
       // Keyboard navigation in the session rail deliberately keeps focus on
       // the selected tab while React swaps the active terminal. Do not steal
       // it during that render; direct terminal activation still focuses here.

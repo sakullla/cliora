@@ -54,6 +54,14 @@ export type WorkspaceOpenIntent = { resource?: ResourceView; create?: boolean };
 
 const resourceViews: ResourceView[] = ['config', 'accounts', 'mcp', 'skills', 'agents', 'plugins', 'memory'];
 const contextStoreKey = 'cliora:workspace-context';
+// Presentation-only snapshots. Always re-read bindings and native files;
+// editor opens and mutations still obtain their own current baselines.
+const workspaceSnapshots = new Map<string, RegisteredToolWorkspace>();
+function rememberWorkspace(key: string, value: RegisteredToolWorkspace) {
+  workspaceSnapshots.delete(key);
+  workspaceSnapshots.set(key, value);
+  if (workspaceSnapshots.size > 24) workspaceSnapshots.delete(workspaceSnapshots.keys().next().value!);
+}
 type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: string };
 function readStoredContexts(): Record<string, StoredContext> {
   try { return JSON.parse(localStorage.getItem(contextStoreKey) ?? '{}') as Record<string, StoredContext>; } catch { return {}; }
@@ -187,11 +195,19 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     // Resource pages need the binding, not CLI version processes. A full
     // workspace result remains authoritative if it finishes first.
     void native.getRegisteredToolContext(nextTool, nextScope, nextProject, fresh).then(value => {
-      if (value && !completed && alive.current && request === loadSequence.current) setScopedContext({ key, value });
+      if (value && !completed && alive.current && request === loadSequence.current) {
+        setScopedContext({ key, value });
+        const cached = !fresh ? workspaceSnapshots.get(key) : undefined;
+        if (cached && !value.nativeContextError && cached.effectiveContextId === value.effectiveContextId) {
+          setWorkspace(cached);
+          setCustomPath(cached.customPath ?? '');
+        }
+      }
     }).catch(() => { /* The workspace read supplies the final error/retry state. */ });
     try {
       const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, fresh);
       if (!alive.current || request !== loadSequence.current) return null;
+      rememberWorkspace(key, value);
       setWorkspace(value); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
