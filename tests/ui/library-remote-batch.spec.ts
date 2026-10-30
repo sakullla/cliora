@@ -51,6 +51,8 @@ async function installRemoteLibrary(page: Page) {
             calls.push({ command, kind: args.kind, toolId: args.toolId });
             return { entries: [] };
           }
+          if (command === 'list_remote_library_items' && args.search === 'bad') throw { message: 'bad query denied' };
+          if (command === 'list_remote_library_items' && args.search === 'good') return [{ id: 'good', kind: args.kind, title: 'fresh-good-row', body: 'good-body', category: '', projectId: null, version: 1, updatedAt: 1 }];
           if (command === 'list_remote_library_items' || command === 'list_library_items' || command === 'list_projects' || command === 'list_accounts' || command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages') return [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -105,6 +107,15 @@ test('nonempty MCP remount is warm, explicit refresh revalidates, and failure re
   await workspace.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(workspace.getByText('node_repl')).toBeVisible();
   await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toBeVisible();
+  const failedCalls = (await mcpCalls(page)).length;
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(workspace.getByText('node_repl')).toBeVisible();
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toBeVisible();
+  expect((await mcpCalls(page)).length).toBe(failedCalls);
+  await page.evaluate(() => { (window as any).__resourceState.fail = false; });
+  await workspace.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toHaveCount(0);
 });
 
 test('a delayed old host refresh is cancelled and cannot overwrite the selected host', async ({ page }) => {
@@ -134,4 +145,16 @@ test('refresh completion preserves an MCP draft edited while the list was loadin
   await page.evaluate(() => (window as any).__releaseResources());
   await expect(name).toHaveValue('unsaved-draft');
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
+});
+
+test('a successful library query does not inherit another query freshness failure', async ({ page }) => {
+  await installRemoteLibrary(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  const search = page.getByRole('textbox', { name: '搜索资料' });
+  await search.fill('bad');
+  await expect(page.getByText(/bad query denied/)).toBeVisible();
+  await search.fill('good');
+  await expect(page.getByRole('button', { name: 'fresh-good-row', exact: true })).toBeVisible();
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toHaveCount(0);
 });

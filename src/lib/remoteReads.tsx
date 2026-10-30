@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyn
 import { useTranslation } from 'react-i18next';
 import { StatusBanner } from '../components/StatusBanner';
 import { getRemoteIdentity, native, subscribeRemoteIdentity } from './native';
-import type { RemoteOperationOptions } from './remoteOperations';
+import type { RemoteFreshness, RemoteOperationOptions } from './remoteOperations';
 
 // Argument positions belong to IPC methods, never concrete CLI identities.
 const readOptions: Record<string, number> = {
@@ -24,11 +24,11 @@ export function useRemoteReads(targetId?: string | null, context = '', active = 
   const visible = useContext(RemoteReadVisibility);
   active = active && visible;
   const identity = useRemoteIdentity(targetId);
-  const [status, setStatus] = useState({ stale: false, at: 0 });
+  const [snapshot, setSnapshot] = useState({ key: '', stale: false, at: 0 });
   const current = useRef('');
   const key = JSON.stringify([identity, context, active]);
   current.current = key;
-  const owner = useMemo(() => ({ controller: new AbortController(), failures: new Set<string>() }), [key]);
+  const owner = useMemo(() => ({ controller: new AbortController(), resources: new Map<string, RemoteFreshness>() }), [key]);
   useEffect(() => {
     // StrictMode replays effects; replace an already disposed controller.
     if (owner.controller.signal.aborted) owner.controller = new AbortController();
@@ -43,24 +43,30 @@ export function useRemoteReads(targetId?: string | null, context = '', active = 
       return async (...args: unknown[]) => {
         const options = args[position] as RemoteOperationOptions | undefined;
         const signal = options?.signal ? AbortSignal.any([owner.controller.signal, options.signal]) : owner.controller.signal;
-        args[position] = { ...options, signal };
-        const resource = JSON.stringify([property, args.slice(0, position)]);
+        const resource = JSON.stringify([identity, property, args.slice(0, position)]);
+        const report = (state: RemoteFreshness) => {
+          if (signal.aborted || current.current !== key) return;
+          state = { ...state, at: state.at || (state.stale ? owner.resources.get(resource)?.at ?? 0 : 0) };
+          owner.resources.set(resource, state);
+          const values = [...owner.resources.values()];
+          setSnapshot({ key, stale: values.some(value => value.stale), at: Math.max(0, ...values.map(value => value.at)) });
+          options?.onFreshness?.(state);
+        };
+        args[position] = { ...options, signal, onFreshness: report };
         try {
           const value = await original(...args);
           if (signal.aborted || current.current !== key) throw { message: '远程读取已取消', reason: 'cancelled' };
-          owner.failures.delete(resource);
-          setStatus({ stale: owner.failures.size > 0, at: Date.now() });
           return value;
         } catch (error) {
           if (!signal.aborted && current.current === key) {
-            owner.failures.add(resource);
-            setStatus(previous => ({ ...previous, stale: true }));
+            report({ stale: true, at: owner.resources.get(resource)?.at ?? 0 });
           }
           throw error;
         }
       };
     },
   }), [owner, targetId, key]);
+  const status = snapshot.key === key ? snapshot : { stale: false, at: 0 };
   return { native: api, status, identity, active, signal: owner.controller.signal };
 }
 

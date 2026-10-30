@@ -1,4 +1,7 @@
 export default {
+  promptsStale: '提示词刷新失败，当前显示上次成功读取的内容。',
+  promptsFailed: '暂时无法读取此位置的提示词。',
+  retryPrompts: '重试提示词',
   restoringPrevious: '正在恢复上次工作台会话…',
   restoreFailed: '上次会话未能恢复',
   restorePending: '{{tool}} 会话待恢复',

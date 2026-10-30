@@ -7,6 +7,30 @@ const source = readFileSync(new URL('../../src/lib/remoteOperations.ts', import.
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { RemoteOperations } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 
+test('freshness follows the full cached resource across subscriptions and recovers only after revalidation', async () => {
+  let fail = false;
+  let calls = 0;
+  const operations = new RemoteOperations(async () => { calls++; if (fail) throw new Error('denied'); return ['nonempty']; });
+  const states = [];
+  const options = { shareKey: 'resource', targetRevision: 1, onFreshness: value => states.push(value) };
+  await operations.start('read', { query: 'bad' }, 'host', 'read', options).promise;
+  fail = true;
+  await assert.rejects(operations.start('read', { query: 'bad' }, 'host', 'read', { ...options, fresh: true }).promise);
+  await operations.start('read', { query: 'bad' }, 'host', 'read', options).promise;
+  assert.equal(calls, 2);
+  assert.equal(states.at(-1).stale, true);
+  assert.ok(states.at(-1).at > 0);
+  fail = false;
+  await operations.start('read', { query: 'good' }, 'host', 'read', options).promise;
+  assert.equal(states.at(-1).stale, false);
+  await operations.start('read', { query: 'bad' }, 'host', 'read', options).promise;
+  assert.equal(states.at(-1).stale, true);
+  await operations.start('read', { query: 'bad' }, 'host', 'read', { ...options, fresh: true }).promise;
+  await operations.start('read', { query: 'bad' }, 'host', 'read', options).promise;
+  assert.equal(states.at(-1).stale, false);
+  assert.equal(calls, 4);
+});
+
 function fixture() {
   const calls = [];
   let finish, fail;

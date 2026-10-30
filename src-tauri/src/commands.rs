@@ -901,7 +901,10 @@ async fn remote_blocking<T: Send + 'static>(
             // A persistent launch has crossed its acceptance boundary and has
             // a durable remote identity. Return that identity on late cancel;
             // it is not an ordinary cancellable SSH read or an undone launch.
-            if !(result.is_ok() && context.accepted_persistent_launch()) {
+            // Structured failures already carry the execution phase and caller
+            // identity. A late caller check must not replace that evidence.
+            let structured_failure = result.as_ref().err().is_some_and(|error| error.remote.is_some());
+            if !structured_failure && !(result.is_ok() && context.accepted_persistent_launch()) {
                 context.check().map_err(|error| native_error(error.to_string()))?;
             }
             result.map_err(|error| {

@@ -50,15 +50,19 @@ const remoteIdentityListeners = new Set<() => void>();
 export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentityListeners.add(listener); return () => { remoteIdentityListeners.delete(listener); }; };
 const remoteViewIdentities = new Map<string, number>();
 const remoteConnectionKeys = new Map<string, string>();
+const rememberedRemoteTargets = new Map<string, RemoteTarget>();
 export const getRemoteIdentity = (targetId: string | null | undefined) => `${targetId ?? 'local'}:${remoteViewIdentities.get(targetId ?? '') ?? ''}`;
 function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged = true) {
-  if (remoteRevisions.get(target.id) === target.updatedAt) return;
+  const knownRevision = remoteRevisions.get(target.id);
+  if (knownRevision !== undefined && target.updatedAt <= knownRevision) return rememberedRemoteTargets.get(target.id) ?? target;
+  rememberedRemoteTargets.set(target.id, target);
   const connectionKey = JSON.stringify([target.host, target.port, target.user, target.authMethod, target.identityFile, target.sshConfig, target.enabled]);
   if (remoteConnectionKeys.get(target.id) !== connectionKey || authenticationMayHaveChanged) remoteViewIdentities.set(target.id, target.updatedAt);
   remoteConnectionKeys.set(target.id, connectionKey);
   remoteRevisions.set(target.id, target.updatedAt);
   remoteOperations.invalidate(target.id);
   for (const listener of remoteIdentityListeners) listener();
+  return target;
 }
 const cachedRemoteReads = new Set(['list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
 const remoteRevisions = new Map<string, number>();
@@ -247,8 +251,7 @@ export const native = {
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
   listRemoteTargets: async () => {
     const targets = await command<RemoteTarget[]>('list_remote_targets');
-    for (const target of targets) rememberRemoteTarget(target);
-    return targets;
+    return targets.map(target => rememberRemoteTarget(target));
   },
   /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
   saveRemoteTarget: async (target: RemoteTarget, password?: string | null) => {
@@ -257,7 +260,7 @@ export const native = {
     return saved;
   },
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
-  deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); for (const listener of remoteIdentityListeners) listener(); },
+  deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); rememberedRemoteTargets.delete(id); for (const listener of remoteIdentityListeners) listener(); },
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
   listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<string[]>('list_remote_directories', { targetId, parent }, 'read', options),
   createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),

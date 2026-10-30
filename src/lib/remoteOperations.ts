@@ -1,5 +1,7 @@
 import type { RemoteFailure, RemoteOperationKind, RemoteOperationRequest, RemotePriority } from '../types/remote';
 
+export type RemoteFreshness = { stale: boolean; at: number };
+
 export type RemoteOperationOptions = {
   signal?: AbortSignal;
   targetId?: string;
@@ -11,6 +13,7 @@ export type RemoteOperationOptions = {
   /** Bypass settled freshness; overlapping refreshes still share work. */
   fresh?: boolean;
   cacheTtlMs?: number;
+  onFreshness?: (state: RemoteFreshness) => void;
 };
 
 export type RemoteOperationHandle<T> = {
@@ -43,7 +46,7 @@ export function remoteFailure(stage: string, request: RemoteOperationRequest): R
 export class RemoteOperations {
   private readonly flights = new Map<string, Flight>();
 
-  private readonly cache = new Map<string, { targetId: string; at: number; value: unknown; bytes: number }>();
+  private readonly cache = new Map<string, { targetId: string; at: number; value: unknown; bytes: number; stale: boolean }>();
   private cacheBytes = 0;
 
   constructor(private readonly transport: Transport) {}
@@ -66,7 +69,7 @@ export class RemoteOperations {
     const old = this.cache.get(key);
     if (old) this.cacheBytes -= old.bytes;
     this.cache.delete(key);
-    this.cache.set(key, { targetId, at: Date.now(), value: structuredClone(value), bytes });
+    this.cache.set(key, { targetId, at: Date.now(), value: structuredClone(value), bytes, stale: false });
     this.cacheBytes += bytes;
     while (this.cache.size > 96 || this.cacheBytes > 24 * 1024 * 1024) {
       const first = this.cache.entries().next().value!;
@@ -93,6 +96,7 @@ export class RemoteOperations {
           if (done) return;
           done = true;
           options.signal?.removeEventListener('abort', cancel);
+          options.onFreshness?.({ stale: cached.stale, at: cached.at });
           resolve(structuredClone(cached.value) as T);
         });
       });
@@ -120,6 +124,10 @@ export class RemoteOperations {
         if (created.invalidated) throw remoteFailure('identity', request);
         if (key && created.subscribers > 0 && (options.cacheTtlMs ?? 30_000) > 0) this.remember(key, targetId, value);
         return value;
+      }).catch(error => {
+        const previous = key ? this.cache.get(key) : undefined;
+        if (previous && !created.invalidated) previous.stale = true;
+        throw error;
       }).finally(() => {
         created.settled = true;
         if (key && this.flights.get(key) === created) this.flights.delete(key);
@@ -164,8 +172,12 @@ export class RemoteOperations {
       options.signal?.addEventListener('abort', abort, { once: true });
       timer = setTimeout(() => stop('timeout'), Math.max(0, deadline - Date.now()));
       subscribed.promise.then(
-        value => { if (release()) resolve(structuredClone(value) as T); },
-        error => { if (release()) reject(error); },
+        value => { if (release()) { options.onFreshness?.({ stale: false, at: Date.now() }); resolve(structuredClone(value) as T); } },
+        error => { if (release()) {
+          const previous = key ? this.cache.get(key) : undefined;
+          options.onFreshness?.({ stale: true, at: previous?.at ?? 0 });
+          reject(error);
+        } },
       );
       if (options.signal?.aborted) abort();
     });

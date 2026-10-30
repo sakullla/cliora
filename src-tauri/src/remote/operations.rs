@@ -1,7 +1,7 @@
 //! Remote request ownership, one total deadline, and bounded fair admission.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Condvar, Mutex, OnceLock};
+use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -72,6 +72,8 @@ pub struct Context {
     target_id: Mutex<Option<String>>,
     destination: Mutex<Option<String>>,
     phase: Mutex<&'static str>,
+    observations: Mutex<Vec<(u64, Weak<Context>)>>,
+    parent_observation: Mutex<Option<u64>>,
 }
 
 thread_local! { static CURRENT: RefCell<Option<Arc<Context>>> = const { RefCell::new(None) }; }
@@ -89,11 +91,16 @@ impl Context {
     pub fn local(kind: Kind, timeout: Duration) -> Arc<Self> {
         Arc::new(Self { request: None, kind, priority: Priority::Interactive, refresh_reads: false, parent: None,
             deadline: Instant::now() + timeout, cancelled: AtomicBool::new(false),
-            dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue") })
+            dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), observations: Mutex::new(Vec::new()), parent_observation: Mutex::new(None) })
     }
 
     pub fn check(&self) -> Result<(), RemoteError> {
-        if let Some(parent) = &self.parent { parent.check()?; }
+        if let Some(parent) = &self.parent {
+            if let Err(error) = parent.check() {
+                let reason = match &error { RemoteError::Operation(failure) => failure.reason.as_str(), _ => "cancelled" };
+                return Err(self.failure(reason, "远程操作已取消或超时"));
+            }
+        }
         if self.cancelled.load(Ordering::Acquire) { return Err(self.failure("cancelled", "远程操作已取消")); }
         if Instant::now() >= self.deadline { return Err(self.failure("timeout", "远程连接超时（包含排队和重试）")); }
         Ok(())
@@ -110,6 +117,8 @@ impl Context {
         if let Some(context) = Arc::get_mut(&mut child) {
             context.priority = self.priority; context.refresh_reads = self.refresh(); context.parent = Some(self.clone());
         }
+        let token = self.add_observation(&child);
+        *child.parent_observation.lock().unwrap_or_else(|e| e.into_inner()) = Some(token);
         child
     }
 
@@ -117,6 +126,51 @@ impl Context {
         let mut context = Self::local(Kind::Read, Duration::from_secs(120));
         if let Some(shared) = Arc::get_mut(&mut context) { shared.priority = self.priority; shared.refresh_reads = self.refresh(); }
         context
+    }
+
+    fn add_observation(&self, execution: &Arc<Context>) -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let token = NEXT.fetch_add(1, Ordering::Relaxed);
+        self.observations.lock().unwrap_or_else(|e| e.into_inner()).push((token, Arc::downgrade(execution)));
+        token
+    }
+
+    pub fn observe(self: &Arc<Self>, execution: &Arc<Context>) -> PhaseObservation {
+        PhaseObservation { owner: self.clone(), execution: execution.clone(), token: self.add_observation(execution) }
+    }
+
+    fn finish_observation(&self, token: u64, phase: &'static str) {
+        self.set_phase(phase);
+        self.observations.lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _)| *id != token);
+    }
+
+    fn effective_phase(&self) -> &'static str {
+        let observations: Vec<_> = self.observations.lock().unwrap_or_else(|e| e.into_inner()).iter()
+            .filter_map(|(_, observed)| observed.upgrade()).collect();
+        // An aggregate may have independent sources in several phases. Report
+        // real active process work before queued work, never a fabricated stage.
+        observations.iter().map(|context| context.effective_phase()).max_by_key(|phase| match *phase {
+            "process_wait" => 4, "dispatch" => 3, "retry_wait" => 2, "queue" => 1, _ => 0,
+        }).unwrap_or_else(|| *self.phase.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    fn request_identity(&self) -> Option<&Request> {
+        self.request.as_ref().or_else(|| self.parent.as_ref().and_then(|parent| parent.request_identity()))
+    }
+
+    pub fn subscriber_error(&self, error: RemoteError) -> RemoteError {
+        let mut failure = match error {
+            RemoteError::Operation(failure) => failure,
+            RemoteError::Storage(ref message) => match message.strip_prefix("cliora:remote:").and_then(|json| serde_json::from_str::<Failure>(json).ok()) {
+                Some(failure) => failure, None => return error,
+            },
+            _ => return error,
+        };
+        let request = self.request_identity();
+        failure.request_id = request.map(|request| request.request_id.clone());
+        failure.target_id = request.map(|request| request.target_id.clone());
+        failure.target_revision = request.and_then(|request| request.target_revision);
+        RemoteError::Operation(failure)
     }
 
     pub fn remaining(&self) -> Duration { self.deadline.saturating_duration_since(Instant::now()) }
@@ -156,11 +210,11 @@ impl Context {
         };
         RemoteError::Operation(Failure {
             code: if uncertain { "remote_unknown".into() } else { format!("remote_{stage}") },
-            stage: if matches!(stage, "cancelled" | "timeout") { (*self.phase.lock().unwrap_or_else(|e| e.into_inner())).into() } else { stage.into() },
+            stage: if matches!(stage, "cancelled" | "timeout") { self.effective_phase().into() } else { stage.into() },
             reason: stage.into(), message: message.chars().take(500).collect(), action: action.into(),
-            request_id: self.request.as_ref().map(|r| r.request_id.clone()),
-            target_id: self.request.as_ref().map(|r| r.target_id.clone()),
-            target_revision: self.request.as_ref().and_then(|r| r.target_revision),
+            request_id: self.request_identity().map(|r| r.request_id.clone()),
+            target_id: self.request_identity().map(|r| r.target_id.clone()),
+            target_revision: self.request_identity().and_then(|r| r.target_revision),
             outcome: if uncertain { "unknown" } else { "failed" }.into(),
             exit_code: None,
             retryable: !uncertain && self.kind == Kind::Read && stage == "connect",
@@ -181,6 +235,18 @@ impl Context {
             std::thread::sleep(Duration::from_millis(10).min(end.saturating_duration_since(Instant::now())).min(self.remaining()));
         }
         self.check()
+    }
+}
+
+pub struct PhaseObservation { owner: Arc<Context>, execution: Arc<Context>, token: u64 }
+impl Drop for PhaseObservation {
+    fn drop(&mut self) { self.owner.finish_observation(self.token, self.execution.effective_phase()); }
+}
+impl Drop for Context {
+    fn drop(&mut self) {
+        if let (Some(parent), Some(token)) = (&self.parent, *self.parent_observation.lock().unwrap_or_else(|e| e.into_inner())) {
+            parent.finish_observation(token, self.effective_phase());
+        }
     }
 }
 
@@ -213,7 +279,7 @@ pub fn register(owner: &str, request: Request, kind: Kind) -> Result<Lease, Remo
     if registry.active.contains_key(&request.request_id) || registry.active.len() >= 1024 { return Err(invalid()); }
     let cancelled = registry.cancelled.remove(&(owner.into(), request.request_id.clone(), request.cancel_token.clone())).is_some();
     let context = Arc::new(Context { priority: request.priority, refresh_reads: request.refresh, parent: None, kind, deadline: Instant::now() + Duration::from_millis(remaining),
-        cancelled: AtomicBool::new(cancelled), dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), request: Some(request.clone()) });
+        cancelled: AtomicBool::new(cancelled), dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), observations: Mutex::new(Vec::new()), parent_observation: Mutex::new(None), request: Some(request.clone()) });
     registry.active.insert(request.request_id.clone(), Registration { owner: owner.into(), token: request.cancel_token, context: context.clone() });
     Ok(Lease { id: request.request_id, context })
 }

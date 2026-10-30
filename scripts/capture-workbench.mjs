@@ -95,11 +95,13 @@ const openCodeTranscript = [
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
 
-async function install(page, initialTheme, empty = false, remoteState = null) {
-  await page.addInitScript(({ theme, transcripts, blank, language, remoteState }) => {
+async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null) {
+  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
     const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const facet = { state: 'available', reason: '' };
+    const clockNow = Date.now; let clockOffset = 0; Date.now = () => clockNow() + clockOffset;
+    const promptFixture = { fail: promptFailure === 'failed', reads: 0, failures: 0 };
     const now = Date.now();
     const projects = [
       { id: 'cliora', name: '栖点 · 桌面工具', path: 'C:\\Projects\\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
@@ -128,6 +130,8 @@ async function install(page, initialTheme, empty = false, remoteState = null) {
     const bridge = { handlers: [], listens: {} };
     Object.assign(window, {
       isTauri: true,
+      __promptFixture: promptFixture,
+      __failRemotePrompts: () => { promptFixture.fail = true; clockOffset += 31000; },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
@@ -152,6 +156,12 @@ async function install(page, initialTheme, empty = false, remoteState = null) {
           if (command === 'replay_workbench_session') return transcripts[args.sessionId] ?? transcripts.s1;
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
           if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
+          if (command === 'list_remote_library_items') {
+            if (args.kind !== 'prompt') return [];
+            promptFixture.reads++;
+            if (promptFixture.fail) { promptFixture.failures++; throw { message: 'Synthetic prompt permission failure' }; }
+            return [{ id: 'remote-prompt', kind: 'prompt', title: '远程代码审查', body: '检查远程项目的改动并保留未提交内容。', category: '开发', projectId: null, version: 1, updatedAt: 1 }];
+          }
           if (command === 'list_library_items') return args.kind === 'prompt' ? [
             { id: 'p1', kind: 'prompt', title: '代码审查', body: '检查代码变更是否正确、安全、易于维护。', category: '开发', projectId: null, version: 1, updatedAt: 1 },
             { id: 'p2', kind: 'prompt', title: '整理发布说明', body: '根据变更清单写一份简洁的发布说明。', category: '写作', projectId: null, version: 1, updatedAt: 1 },
@@ -181,7 +191,7 @@ async function install(page, initialTheme, empty = false, remoteState = null) {
     r1: b64('\u001b]0;远程项目 · 独立会话 A\u0007\u001b[36mPi · synthetic SSH terminal\u001b[0m\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-a\r\n\r\n  同一目录的其他会话独立运行，输入属于当前选中会话。\r\n\r\n> '),
     r2: b64('\u001b]0;远程项目 · 独立会话 B\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-b\r\n\r\n> '),
     r3: b64('\u001b]0;远程项目 · 独立会话 C\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-c\r\n\r\n> '),
-  }, blank: empty, language: english ? 'en' : 'zh', remoteState });
+  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure });
 }
 
 const manifest = [];
@@ -189,7 +199,7 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null) {
+async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null) {
   if (!onlyPattern.test(name)) return;
   const errors = [];
   let actionError = null;
@@ -199,7 +209,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null) 
   try {
     page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
     page.on('pageerror', (error) => errors.push(String(error)));
-    await install(page, theme, empty, remoteState);
+    await install(page, theme, empty, remoteState, promptFailure);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     await page.waitForTimeout(900);
@@ -236,6 +246,34 @@ if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
+  for (const failure of ['stale', 'failed']) for (const surface of ['composer', 'dialog']) {
+    await shot(`workbench-remote-prompts-${surface}-${failure}-${theme}-${width}`, theme, width, async (page) => {
+      const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+      if (surface === 'composer' || failure === 'stale') {
+        await stage.getByRole('button', { name: copy('快捷输入', 'Quick input'), exact: true }).click();
+      }
+      if (failure === 'stale') {
+        await stage.getByRole('button', { name: '远程代码审查', exact: true }).waitFor();
+        await page.evaluate(() => window.__failRemotePrompts());
+        if (surface === 'composer') {
+          await stage.getByRole('region', { name: copy('多行输入与提示词投递', 'Multi-line input & library prompts') }).getByRole('textbox').fill('保留当前会话的输入草稿');
+          const navigation = page.getByRole('navigation', { name: copy('页面', 'Pages') });
+          await navigation.getByRole('button', { name: copy('快速开始', 'Quick start'), exact: true }).click();
+          await navigation.getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
+        }
+      }
+      let area = stage.getByRole('region', { name: copy('多行输入与提示词投递', 'Multi-line input & library prompts') });
+      if (surface === 'dialog') {
+        await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
+        await page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') }).getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).click();
+        area = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
+        await area.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('保留新会话的初始提示词草稿');
+      }
+      await area.getByText(failure === 'stale' ? copy('提示词刷新失败，当前显示上次成功读取的内容。', 'Prompt refresh failed. Showing the last successful prompts.') : copy('暂时无法读取此位置的提示词。', 'Could not read prompts from this location.'), { exact: true }).waitFor();
+      await area.getByRole('button', { name: copy('重试提示词', 'Retry prompts'), exact: true }).waitFor();
+      return page.evaluate(() => ({ ...window.__promptFixture }));
+    }, false, 'connected', failure);
+  }
   for (const state of ['connecting', 'connected', 'disconnected', 'unknown', 'remote_ended']) {
     await shot(`workbench-remote-${state}-${theme}-${width}`, theme, width, null, false, state);
   }
@@ -385,7 +423,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；stream 场景在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
+  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；stream 场景在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',

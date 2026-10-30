@@ -93,9 +93,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [createSignal, setCreateSignal] = useState(0);
   const [projectFilter, setProjectFilter] = useState('*');
   const [categoryFilter, setCategoryFilter] = useState('*');
-  const remoteReads = useRemoteReads(remoteTargetId, '', active);
+  const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([section, kind, search]), active);
   const native = remoteReads.native;
   const [items, setItems] = useState<LibraryItem[]>([]);
+  useEffect(() => { if (remoteTargetId !== 'local') setItems([]); }, [remoteTargetId, section, kind, search]);
   const [counts, setCounts] = useState<Partial<Record<LibrarySection, number>>>({});
   const [countStamp, setCountStamp] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);

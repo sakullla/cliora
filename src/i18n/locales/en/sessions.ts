@@ -1,4 +1,7 @@
 export default {
+  promptsStale: 'Prompt refresh failed. Showing the last successful prompts.',
+  promptsFailed: 'Could not read prompts from this location.',
+  retryPrompts: 'Retry prompts',
   restoringPrevious: 'Restoring your previous workbench sessions…',
   restoreFailed: 'Could not restore previous sessions',
   restorePending: '{{tool}} session awaiting restoration',

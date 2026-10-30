@@ -134,11 +134,15 @@ test('a remote session composer lists that host library, not this computer', asy
     localStorage.setItem('cliora:remote-target', host.id);
     const sessions = [{ id: 'remote-1', toolId: 'codex', projectId: 'remote:proj-1', directory: '/srv/project', mode: 'normal', running: true, exitCode: null, startedAt: 1 }];
     const calls: Array<{ command: string; targetId?: string; kind?: string }> = [];
+    const state = { fail: false, failures: 0 };
+    const actualNow = Date.now; let advance = 0; Date.now = () => actualNow() + advance;
     const names: Record<string, string> = { codex: 'Codex' };
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     Object.assign(window, {
       isTauri: true,
       __libraryCalls: calls,
+      __promptState: state,
+      __expirePromptCache: () => { advance += 31000; },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
@@ -148,8 +152,10 @@ test('a remote session composer lists that host library, not this computer', asy
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host];
           if (command === 'list_remote_projects') return [{ id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 }];
+          if (command === 'save_remote_project') return { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'local-1', kind: 'prompt', title: 'ui/ux重做', body: 'local-only-body', category: '', projectId: null, version: 1, updatedAt: 1 }] : [];
+          if (command === 'list_remote_library_items' && state.fail) { state.failures++; throw { message: 'prompt fixture denied' }; }
           if (command === 'list_remote_library_items') return args.targetId === host.id && args.kind === 'prompt' ? [{ id: 'remote-prompt', kind: 'prompt', title: '远端提示', body: 'remote-only-body', category: '', projectId: null, version: 1, updatedAt: 1 }] : [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -174,6 +180,36 @@ test('a remote session composer lists that host library, not this computer', asy
   const remoteCalls = await page.evaluate(() => (window as unknown as { __libraryCalls: Array<{ command: string; targetId?: string; kind?: string }> }).__libraryCalls.filter((item) => item.command === 'list_remote_library_items'));
   expect(remoteCalls.length).toBeGreaterThan(0);
   expect(remoteCalls.every((item) => item.targetId === host.id && item.kind === 'prompt')).toBe(true);
+  const input = composer.getByRole('textbox');
+  await input.fill('keep-composer-draft');
+  await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
+  await expect(input).toHaveValue('keep-composer-draft');
+  expect(await page.evaluate(() => (window as any).__promptState.failures)).toBeGreaterThan(0);
+  await page.evaluate(() => { (window as any).__promptState.fail = false; });
+  await composer.getByRole('button', { name: '重试提示词' }).click();
+  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(input).toHaveValue('keep-composer-draft');
+  await expect(stage).toContainText('/srv/project');
+  await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  await page.getByRole('dialog', { name: '选择远程目录' }).getByRole('button', { name: '继续启动', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  const initial = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
+  await initial.fill('keep-new-session-draft');
+  await page.evaluate(() => { (window as any).__promptState.fail = false; });
+  await dialog.getByRole('button', { name: '重试提示词' }).click();
+  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '远端提示' })).toBeVisible();
+  await expect(initial).toHaveValue('keep-new-session-draft');
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(input).toHaveValue('keep-composer-draft');
+  await expect(stage).toContainText('/srv/project');
 });
 
 /** Product entry-point checks; the SSH/process identity is verified separately in Rust/native runs. */

@@ -386,6 +386,37 @@ mod tests {
     }
 
     #[test]
+    fn structured_source_failures_keep_outer_subscriber_identity() {
+        use crate::remote::operations::{self, Kind, Priority, Request};
+        let target = RemoteTarget { id: uuid::Uuid::new_v4().to_string(), name: "source identity".into(),
+            host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(),
+            identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 17 };
+        for reason in ["authentication", "permission"] {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let lease = operations::register("source-test", Request {
+                request_id: request_id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(), target_id: target.id.clone(),
+                target_revision: Some(17), kind: Kind::Read, priority: Priority::Interactive, refresh: true,
+                deadline_unix_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 3000,
+            }, Kind::Read).unwrap();
+            let loader: SourceLoader = std::sync::Arc::new(move |_, _| {
+                let context = operations::current().unwrap(); context.dispatched();
+                Err(context.failure(reason, "source denied").to_string())
+            });
+            let (_, failures) = operations::scoped(lease.context.clone(), || snapshot_with_loader(&Registry::builtins(), &target, true, loader)).unwrap();
+            assert_eq!(failures.len(), 2);
+            for source in failures {
+                let failure = source.remote.expect("structured source failure");
+                assert_eq!(failure.stage, reason); assert_eq!(failure.reason, reason);
+                assert_eq!(failure.request_id.as_deref(), Some(request_id.as_str()));
+                assert_eq!(failure.target_id.as_deref(), Some(target.id.as_str())); assert_eq!(failure.target_revision, Some(17));
+            }
+            lease.context.cancel();
+            let crate::remote::RemoteError::Operation(failure) = lease.context.check().unwrap_err() else { panic!("structured cancellation") };
+            assert_eq!(failure.stage, "process_wait"); assert_eq!(failure.request_id, Some(request_id));
+        }
+    }
+
+    #[test]
     fn archive_command_stays_a_single_quoted_shell_line() {
         let command = archive_command(crate::adapters::CODEX.remote_history_layout().unwrap()).unwrap();
         assert!(command.contains("'.codex'"));

@@ -31,6 +31,7 @@ import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { railPlace, railTaskTitle } from './railTitle';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
+import { StatusBanner } from '../../components/StatusBanner';
 import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
@@ -217,6 +218,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
   const [hostManagerOpen, setHostManagerOpen] = useState(false);
   const [promptsByHost, setPromptsByHost] = useState<Record<string, LibraryItem[]>>({});
+  const [promptStatus, setPromptStatus] = useState<Record<string, { identity: string; stale: boolean; at: number; failed: boolean }>>({});
+  const [promptReload, setPromptReload] = useState(0);
+  const promptFreshHosts = useRef(new Set<string>());
   const promptRequestSeq = useRef(new Map<string, number>());
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
@@ -542,15 +546,33 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
       promptRequestSeq.current.set(hostId, seq);
       const current = () => !controller.signal.aborted && promptRequestSeq.current.get(hostId) === seq;
+      const report = (state: { stale: boolean; at: number }) => {
+        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: { identity, ...state, at: state.at || (state.stale && previous[hostId]?.identity === identity ? previous[hostId].at : 0), failed: state.stale } }));
+      };
+      const fresh = promptFreshHosts.current.delete(hostId);
       const request = hostId === 'local'
         ? native.listLibraryItems('prompt', null, '')
-        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal });
+        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal, fresh, onFreshness: report });
       void request.then(items => {
-        if (current()) setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
-      }).catch(() => { /* Preserve this identity's prior successful prompts. */ });
+        if (current()) {
+          setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
+          if (hostId === 'local') report({ stale: false, at: Date.now() });
+        }
+      }).catch(() => {
+        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: {
+          identity, stale: true, at: previous[hostId]?.identity === identity ? previous[hostId].at : 0, failed: true,
+        } }));
+      });
     }
     return () => controller.abort();
-  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity]);
+  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity, promptReload]);
+  function promptFeedback(hostId: string | null, identity: string) {
+    const state = hostId ? promptStatus[hostId] : undefined;
+    if (!hostId || !state?.failed || state.identity !== identity) return null;
+    return <StatusBanner tone={state.at ? 'warning' : 'error'} action={<Button size="sm" onClick={() => { promptFreshHosts.current.add(hostId); setPromptReload(value => value + 1); }}>{t('sessions.retryPrompts')}</Button>}>
+      {t(state.at ? 'sessions.promptsStale' : 'sessions.promptsFailed')}
+    </StatusBanner>;
+  }
   const showEmpty = !loading && !scopedSessions.length;
   const runningCount = scopedSessions.filter((item) => item.running).length;
   const endedCount = scopedSessions.filter(sessionConfirmedEnded).length;
@@ -1756,7 +1778,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
@@ -1848,7 +1870,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} /></div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
         <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>

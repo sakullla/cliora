@@ -123,12 +123,13 @@ where T: Serialize + Clone + Send + Sync + 'static {
         }
     }
     let _subscription = Subscription(flight.clone(), key);
+    let _phase = caller.observe(&flight.context);
     let mut result = flight.result.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         caller.check()?;
         if flight.invalidated.load(Ordering::Acquire) { return Err(caller.failure("identity", "远程读取期间目标或内容已变化，请刷新")); }
         if let Some(result) = result.as_ref() {
-            return result.clone().and_then(|value| value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into())));
+            return result.clone().and_then(|value| value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into()))).map_err(|error| caller.subscriber_error(error));
         }
         result = flight.ready.wait_timeout(result, Duration::from_millis(15)).unwrap_or_else(|e| e.into_inner()).0;
     }
@@ -143,6 +144,55 @@ mod tests {
         RemoteTarget { id: uuid::Uuid::new_v4().to_string(), name: "cache fixture".into(),
             host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(),
             identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 }
+    }
+
+
+    fn subscriber(target: &RemoteTarget, timeout: u64) -> (operations::Lease, String) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let lease = operations::register("cache-test", operations::Request {
+            request_id: id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(),
+            target_id: target.id.clone(), target_revision: Some(target.updated_at), kind: Kind::Read,
+            priority: operations::Priority::Interactive, deadline_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + timeout, refresh: true,
+        }, Kind::Read).unwrap();
+        (lease, id)
+    }
+
+    #[test]
+    fn nested_shared_reads_preserve_each_subscribers_identity_and_actual_phase() {
+        for (phase, reason) in ["queue", "dispatch", "process_wait", "retry_wait"].into_iter()
+            .flat_map(|phase| ["cancelled", "timeout"].into_iter().map(move |reason| (phase, reason))) {
+            let target = target();
+            let (a, a_id) = subscriber(&target, if reason == "timeout" { 300 } else { 3000 });
+            let (b, b_id) = subscriber(&target, 3000);
+            let a_context = a.context.read_child(Duration::from_secs(3)); let b_context = b.context.clone();
+            let first_target = target.clone(); let inner_target = target.clone();
+            let (started, start) = mpsc::channel(); let (finish, release) = mpsc::channel();
+            let first = std::thread::spawn(move || operations::scoped(a_context, || read(&first_target, "outer", true, move || {
+                read(&inner_target, "inner", true, move || {
+                    operations::current().unwrap().set_phase(phase);
+                    started.send(()).unwrap(); release.recv().unwrap();
+                    Err::<Vec<String>, _>(RemoteError::Storage(operations::current().unwrap().failure("permission", "denied").to_string()))
+                })
+            })));
+            start.recv_timeout(Duration::from_secs(2)).unwrap();
+            let second_target = target.clone();
+            let second = std::thread::spawn(move || operations::scoped(b_context, || read(&second_target, "outer", true, || -> Result<Vec<String>, _> { panic!("duplicate flight") })));
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !state().lock().unwrap().flights.values().any(|flight| flight.target == target.id && flight.readers.load(Ordering::Acquire) == 2) {
+                assert!(Instant::now() < deadline); std::thread::yield_now();
+            }
+            if reason == "cancelled" { a.context.cancel(); }
+            let RemoteError::Operation(cancelled) = first.join().unwrap().unwrap_err() else { panic!("expected cancellation") };
+            assert_eq!(cancelled.stage, phase); assert_eq!(cancelled.reason, reason);
+            assert_eq!(cancelled.request_id, Some(a_id.clone())); assert_eq!(cancelled.target_id, Some(target.id.clone())); assert_eq!(cancelled.target_revision, Some(1));
+            let RemoteError::Operation(final_check) = a.context.check().unwrap_err() else { panic!("expected final cancellation") };
+            assert_eq!(final_check.stage, phase); assert_eq!(final_check.request_id, Some(a_id));
+            finish.send(()).unwrap();
+            let RemoteError::Operation(permission) = second.join().unwrap().unwrap_err() else { panic!("expected permission") };
+            assert_eq!(permission.reason, "permission"); assert_eq!(permission.stage, "permission");
+            assert_eq!(permission.request_id, Some(b_id)); assert_eq!(permission.target_id, Some(target.id)); assert_eq!(permission.target_revision, Some(1));
+        }
     }
 
     #[test]
