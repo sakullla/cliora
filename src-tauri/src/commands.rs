@@ -4999,6 +4999,11 @@ pub async fn open_external_url(app: AppHandle, url: String) -> Result<(), ApiErr
 }
 
 #[tauri::command]
+pub async fn open_workbench_path(app: AppHandle, session_id: String, path: String) -> Result<(), ApiError> {
+    blocking(move || crate::terminal_paths::open(&app, &session_id, &home()?, &path).map_err(native_error)).await
+}
+
+#[tauri::command]
 pub fn describe_configuration(
     tool_id: String,
     scope: Scope,

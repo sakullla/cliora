@@ -97,6 +97,7 @@ pub mod resources;
 pub mod session_host;
 pub mod workbench_restore;
 pub mod terminal_replay;
+mod terminal_paths;
 pub mod tray;
 pub mod usage;
 mod windows_registry;
@@ -303,6 +304,7 @@ pub fn run() {
             commands::get_bootstrap,
             commands::list_cli_adapters,
             commands::open_external_url,
+            commands::open_workbench_path,
             commands::list_projects,
             commands::add_project,
             commands::relink_project,

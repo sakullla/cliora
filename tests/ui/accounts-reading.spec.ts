@@ -56,6 +56,32 @@ async function reading(locator: Locator) {
   });
 }
 
+test('account polling waits for a slow response before scheduling another read', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByText('工作账号', { exact: true }).first()).toBeVisible();
+  await page.clock.install();
+  await page.evaluate(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.accountPoll = { calls: 0, hold: true, release: () => {} };
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: unknown) => {
+      if (command === 'list_accounts') {
+        w.accountPoll.calls++;
+        if (w.accountPoll.hold) await new Promise<void>(resolve => { w.accountPoll.release = resolve; });
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.clock.fastForward(3000);
+  await expect.poll(() => page.evaluate(() => (window as any).accountPoll.calls)).toBe(1);
+  await page.clock.fastForward(12000);
+  expect(await page.evaluate(() => (window as any).accountPoll.calls)).toBe(1);
+  await page.evaluate(() => { (window as any).accountPoll.hold = false; (window as any).accountPoll.release(); });
+  await page.waitForTimeout(50);
+  await page.clock.fastForward(3000);
+  await expect.poll(() => page.evaluate(() => (window as any).accountPoll.calls)).toBe(2);
+});
+
 test('account action hint uses the body text color', async ({ page }) => {
   await setup(page);
   await page.getByRole('button', { name: '添加账号', exact: true }).click();

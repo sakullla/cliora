@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -13,19 +13,20 @@ import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { RemoteCliProbe, RemoteToolStore } from '../../types/remote';
 import { preferredLaunchMode } from '../../types/launch';
-import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import type { UsageQuery } from '../../types/usage';
 import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
 import { MaintenanceDialog, type MaintenanceAction, type MaintenanceState } from './MaintenanceDialog';
-import { ConfigurationWorkspaceEditor } from './configuration/ConfigurationWorkspaceEditor';
-import { SkillsWorkspace } from './ResourceWorkspace';
-import { MemoryWorkspace } from '../memory/MemoryWorkspace';
-import { McpWorkspace } from './McpWorkspace';
-import { PluginsWorkspace } from './PluginsWorkspace';
-import { AgentsWorkspace } from './AgentsWorkspace';
+const ConfigurationWorkspaceEditor = lazy(() => import('./configuration/ConfigurationWorkspaceEditor').then(module => ({ default: module.ConfigurationWorkspaceEditor })));
+const SkillsWorkspace = lazy(() => import('./ResourceWorkspace').then(module => ({ default: module.SkillsWorkspace })));
+const MemoryWorkspace = lazy(() => import('../memory/MemoryWorkspace').then(module => ({ default: module.MemoryWorkspace })));
+const McpWorkspace = lazy(() => import('./McpWorkspace').then(module => ({ default: module.McpWorkspace })));
+const PluginsWorkspace = lazy(() => import('./PluginsWorkspace').then(module => ({ default: module.PluginsWorkspace })));
+const AgentsWorkspace = lazy(() => import('./AgentsWorkspace').then(module => ({ default: module.AgentsWorkspace })));
 import { ToolIcon } from '../../components/ToolIcon';
+import { PageSkeleton } from '../../components/Skeleton';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { ToastScope } from '../../components/Toast';
@@ -109,8 +110,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
   const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
   const [launching, setLaunching] = useState(false);
-  const quota = useUsageQuota(active);
-  const accounts = useAccounts(toolId, active, remoteTargetId === 'local' ? null : remoteTargetId);
+  const quota = useUsageQuota(active && remoteTargetId === 'local' && (resource === 'config' || resource === 'accounts'));
+  const accounts = useAccounts(toolId, active && (resource === 'config' || resource === 'accounts' || !!frame), remoteTargetId === 'local' ? null : remoteTargetId);
   const loadSequence = useRef(0);
   const alive = useRef(true);
   const epoch = useRef(0);
@@ -512,9 +513,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
         </div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} />}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} /></Suspense>}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
+    <Suspense fallback={<PageSkeleton />}>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
     {!['config', 'accounts', 'memory'].includes(resource) && !resourcesReady && <div role="status" className={styles.contextState}><p>{resourceContext?.nativeContextError ?? (loading ? t('tools.workspace.contextLoading') : workspace?.nativeContextError ?? t('tools.workspace.contextFailed'))}</p>{!loading && <Button size="sm" onClick={() => void reload(toolId, scope, projectPath, true)}>{t('tools.workspace.contextRetry')}</Button>}</div>}
@@ -525,6 +527,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     {resource === 'memory' && supported.memory && (management?.memory
       ? <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} remoteTargetId={isRemote ? remoteTargetId : null} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />
       : management?.memoryReason && <div className={styles.taskEmpty}><Icon name="alert" size={24} /><div><strong>{t('tools.workspace.memoryUnavailable')}</strong><p>{management.memoryReason}</p></div></div>)}
+    </Suspense>
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
     </div>
   </ToastScope></section>;

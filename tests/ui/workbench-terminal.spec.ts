@@ -1,5 +1,21 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('terminal code loads on demand and an opening request survives the first module load', async ({ page }) => {
+  await installWorkbenchMock(page);
+  let loads = 0;
+  let release = () => {};
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/SessionWorkbench-*.js', async route => { loads++; await ready; await route.continue(); });
+  await page.goto('/');
+  await expect(page.getByRole('navigation', { name: '页面' })).toBeVisible();
+  expect(loads).toBe(0);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: 'codex', targetId: 'local' } })));
+  await expect.poll(() => loads).toBe(1);
+  release();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog')).toContainText('Codex');
+});
+
 /** Synthetic native IPC shared by the workbench terminal tests. */
 async function installWorkbenchMock(page: Page, holdStartup = false) {
   await page.addInitScript((holdStartup) => {
@@ -12,6 +28,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
     const writeBytes: number[][] = [];
     const writeLog: Array<{ sessionId: string; text: string }> = [];
     const opened: string[] = [];
+    const pathOpens: Array<{ sessionId: string; path: string; cwd?: string }> = [];
     const resizes: Array<{ sessionId: string; cols: number; rows: number }> = [];
     Object.assign(window, {
       isTauri: true,
@@ -20,6 +37,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
       __writeBytes: writeBytes,
       __writeLog: writeLog,
       __opened: opened,
+      __pathOpens: pathOpens,
       __releaseStartup: releaseStartup,
       __output: (text: string, sessionId = 's1', offset?: number) => {
         const bytes = new TextEncoder().encode(text);
@@ -37,7 +55,16 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: args.theme }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
-          if (command === 'set_workbench_directory') return args.directory;
+          if (command === 'set_workbench_directory') {
+            const session = sessions.find(item => item.id === args.sessionId);
+            if (session) session.directory = args.directory;
+            return args.directory;
+          }
+          if (command === 'open_workbench_path') {
+            pathOpens.push({ sessionId: args.sessionId, path: args.path, cwd: sessions.find(item => item.id === args.sessionId)?.directory });
+            if ((window as unknown as { __failPathOpen?: boolean }).__failPathOpen) throw new Error('文件或文件夹不存在');
+            return null;
+          }
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'restore_workbench_sessions') {
@@ -846,6 +873,105 @@ test('a wrapped terminal URL opens in full and its hint is cleaned up with the s
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
+});
+
+test('terminal paths use modifier clicks, the owning session and its latest cwd without hover IPC', async ({ page }, testInfo) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1360, height: 898 });
+  await openWorkbench(page);
+  const requests = () => page.evaluate(() => (window as unknown as { __pathOpens: Array<{ sessionId: string; path: string; cwd: string }> }).__pathOpens);
+  const paths = ['src/features/app.tsx:42:3', '../README.md', 'C:\\work\\文档.txt', '/tmp/result.txt'];
+  await page.evaluate(paths => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${paths.map(path => `中文 🐱 (${path}).`).join('\r\n')}\r\n`), paths);
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('/tmp/result.txt');
+  const point = await pointForTerminalText(page, paths[0]);
+  await page.mouse.move(point.x, point.y);
+  await expect(page.getByRole('tooltip')).toContainText(paths[0]);
+  await page.mouse.click(point.x, point.y);
+  expect(await requests()).toEqual([]);
+  await page.keyboard.down('Control');
+  await page.mouse.click(point.x, point.y, { button: 'middle' });
+  await page.keyboard.up('Control');
+  expect(await requests()).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('terminal-file-path-light.png') });
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b]7;file:///C:/changed%20cwd\x07'));
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('C:\\changed cwd');
+  for (const path of paths) {
+    const point = await pointForTerminalText(page, path);
+    await page.keyboard.down('Control');
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up('Control');
+  }
+  await expect.poll(requests).toEqual(paths.map(path => ({ sessionId: 's1', path, cwd: 'C:\\changed cwd' })));
+  expect(await openedUrls(page)).toEqual([]);
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id: string) => void }).__output('\r\n./second.txt\r\n', 's2'));
+  const second = await pointForTerminalText(page, './second.txt');
+  await page.keyboard.down('Control');
+  await page.mouse.click(second.x, second.y);
+  await page.keyboard.up('Control');
+  await expect.poll(async () => (await requests()).at(-1)).toEqual({ sessionId: 's2', path: './second.txt', cwd: 'D:/a-long-project-directory/for-the-second-session' });
+});
+
+test('wrapped paths, quoted spaces and OSC file links open intact and surface missing files', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 640, height: 720 });
+  await openWorkbench(page);
+  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
+  const path = './src/' + 'segment/'.repeat(12) + '中文文件.ts:18';
+  const quoted = 'C:\\work space\\中文 file.txt';
+  const uri = 'file:///C:/work/a%20b.txt';
+  await page.evaluate(({ path, quoted, uri }) => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${path}\r\n"${quoted}"\r\n\x1b]8;;${uri}\x1b\\本地文件\x1b]8;;\x1b\\\r\n`), { path, quoted, uri });
+  const requests = () => page.evaluate(() => (window as unknown as { __pathOpens: Array<{ path: string }> }).__pathOpens.map(item => item.path));
+  for (const [label, expected] of [['中文文件.ts:18', path], [quoted, quoted], ['本地文件', uri]]) {
+    const point = await pointForTerminalText(page, label);
+    await page.mouse.move(point.x, point.y);
+    await expect(page.getByRole('tooltip')).toContainText(expected);
+    await page.keyboard.down('Control');
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up('Control');
+  }
+  await expect.poll(requests).toEqual([path, quoted, uri]);
+  await page.evaluate(() => { Object.assign(window, { __failPathOpen: true }); });
+  const point = await pointForTerminalText(page, quoted);
+  await page.mouse.move(point.x, point.y);
+  await expect(page.getByRole('tooltip')).toContainText(quoted);
+  await page.screenshot({ path: testInfo.outputPath('terminal-file-path-dark-narrow.png') });
+  await page.keyboard.down('Control');
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up('Control');
+  await expect(page.getByRole('alert')).toContainText('文件或文件夹不存在');
+});
+
+test('long output does not probe files and overlong logical lines keep the terminal responsive', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\n' + 'src/file.ts\r\n'.repeat(1000) + './' + 'a'.repeat(20_000) + '/last.txt\r\n'));
+  // The final filename may straddle two physical rows; hover within the same
+  // oversized logical line without depending on where the font wraps its tail.
+  const point = await pointForTerminalText(page, 'aaaaaaaa', true);
+  await page.mouse.move(point.x, point.y);
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __pathOpens: unknown[] }).__pathOpens)).toEqual([]);
+  await resetWrites(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b[6n'));
+  await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+});
+
+test('a redrawn terminal line uses the new path instead of a cached target', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\nsrc/old.ts'));
+  let point = await pointForTerminalText(page, 'src/old.ts');
+  await page.mouse.move(point.x, point.y);
+  await expect(page.getByRole('tooltip')).toContainText('src/old.ts');
+  await page.mouse.move(8, 8);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\x1b[2Ksrc/new.ts'));
+  point = await pointForTerminalText(page, 'src/new.ts');
+  // xterm ignores a mousemove that returns to exactly its previous buffer cell.
+  await page.mouse.move(point.x + 24, point.y);
+  await page.mouse.move(point.x, point.y);
+  await expect(page.getByRole('tooltip')).toContainText('src/new.ts');
+  await page.keyboard.down('Control');
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up('Control');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __pathOpens: Array<{ path: string }> }).__pathOpens.map(item => item.path))).toEqual(['src/new.ts']);
 });
 
 test('OSC 8 links reveal their destination and report browser failures', async ({ page }) => {

@@ -1,91 +1,92 @@
 import type { IBufferCellPosition, IBufferLine, IBufferRange, IDisposable, ILink, Terminal } from '@xterm/xterm';
+import { createTerminalLinkCache, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT, type TerminalLinkMatch } from './terminalLinkDetection';
 import styles from './SessionWorkbench.module.css';
 
-export type TerminalLinkMatch = { url: string; start: number; end: number };
 export type TerminalLinks = IDisposable & { dismiss: () => void };
 
-type PhysicalLine = { row: number; text: string; columns: number[] };
-
-export function validTerminalUrl(value: string): boolean {
-  if (value.length > 8192 || /[\p{Cc}]/u.test(value)) return false;
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'https:' || url.protocol === 'http:')
-      && !!url.hostname && !url.username && !url.password;
-  } catch {
-    return false;
-  }
-}
-
-function trimTerminalUrl(value: string): string {
-  let result = value.replace(/[.,;:!?，。；：！？]+$/u, '');
-  for (const [opening, closing] of [['(', ')'], ['[', ']'], ['{', '}']]) {
-    const openings = result.split(opening).length - 1;
-    let closings = result.split(closing).length - 1;
-    while (closings > openings && result.endsWith(closing)) {
-      result = result.slice(0, -1);
-      closings -= 1;
-    }
-  }
-  return result;
-}
-
-export function findTerminalLinks(text: string): TerminalLinkMatch[] {
-  const matches: TerminalLinkMatch[] = [];
-  for (const match of text.matchAll(/https?:\/\/[^\s\p{Cc}<>"'\\]+/giu)) {
-    if (match.index === undefined) continue;
-    const url = trimTerminalUrl(match[0]);
-    if (validTerminalUrl(url)) matches.push({ url, start: match.index, end: match.index + url.length });
-  }
-  return matches;
-}
+type PhysicalLine = { row: number; text: string; columns: number[]; ends: number[] };
+const LOGICAL_LINE_LIMIT = 128;
 
 function readPhysicalLine(term: Terminal, line: IBufferLine, row: number): PhysicalLine {
   let text = '';
   const columns: number[] = [];
+  const ends: number[] = [];
+  const cell = term.buffer.active.getNullCell();
   for (let column = 0; column < term.cols;) {
-    const cell = line.getCell(column);
-    const chars = cell?.getChars() || ' ';
+    const value = line.getCell(column, cell);
+    const chars = value?.getChars() || ' ';
+    const width = value?.getWidth() || 1;
     for (const char of chars) {
       text += char;
-      for (let index = 0; index < char.length; index += 1) columns.push(column);
+      for (let index = 0; index < char.length; index += 1) {
+        columns.push(column);
+        ends.push(column + width);
+      }
     }
-    column += cell?.getWidth() || 1;
+    column += width;
   }
-  return { row, text, columns };
+  return { row, text, columns, ends };
 }
 
 function readLogicalLines(term: Terminal, bufferLineNumber: number): PhysicalLine[] {
   const buffer = term.buffer.active;
   if (!buffer.getLine(bufferLineNumber - 1)) return [];
   let first = bufferLineNumber - 1;
-  while (first > 0 && buffer.getLine(first)?.isWrapped) first -= 1;
+  let walked = 0;
+  while (first > 0 && buffer.getLine(first)?.isWrapped) {
+    if (++walked >= LOGICAL_LINE_LIMIT) return [];
+    first -= 1;
+  }
   const lines: PhysicalLine[] = [];
+  let length = 0;
   for (let row = first; row < buffer.length; row += 1) {
     const line = buffer.getLine(row);
     if (!line || (row > first && !line.isWrapped)) break;
-    lines.push(readPhysicalLine(term, line, row));
+    if (lines.length >= LOGICAL_LINE_LIMIT || length + term.cols > TERMINAL_LINK_TEXT_LIMIT) return [];
+    const physical = readPhysicalLine(term, line, row);
+    length += physical.text.length;
+    if (length > TERMINAL_LINK_TEXT_LIMIT) return [];
+    lines.push(physical);
   }
   return lines;
 }
 
 function linkRange(lines: PhysicalLine[], starts: number[], start: number, end: number): IBufferRange {
-  const position = (index: number, endOffset: number): IBufferCellPosition => {
+  const position = (index: number, end: boolean): IBufferCellPosition => {
     let row = 0;
     while (row + 1 < lines.length && index >= starts[row] + lines[row].text.length) row += 1;
-    return { x: (lines[row].columns[index - starts[row]] ?? 0) + 1 + endOffset, y: lines[row].row + 1 };
+    const offset = index - starts[row];
+    return { x: end ? lines[row].ends[offset] : lines[row].columns[offset] + 1, y: lines[row].row + 1 };
   };
-  return { start: position(start, 0), end: position(end - 1, 1) };
+  return { start: position(start, false), end: position(end - 1, true) };
 }
 
 export function registerTerminalLinks(term: Terminal, options: {
   mac: boolean;
   hint: () => string;
   open: (url: string) => Promise<void>;
+  openPath?: (path: string) => Promise<void>;
   onError: (error: unknown) => void;
 }): TerminalLinks {
   let disposed = false;
   let current: ILink | null = null;
+  const matchesFor = createTerminalLinkCache();
+  type Target = Pick<TerminalLinkMatch, 'kind' | 'value'>;
+  const targetsForLine = (row: number) => {
+    const lines = readLogicalLines(term, row);
+    const starts: number[] = [];
+    let text = '';
+    for (const line of lines) {
+      starts.push(text.length);
+      text += line.text;
+    }
+    return matchesFor(text)
+      .filter(match => match.kind === 'url' || options.openPath)
+      .map(match => ({ target: match, range: linkRange(lines, starts, match.start, match.end) }));
+  };
+  const currentTarget = (range: IBufferRange) => targetsForLine(range.start.y).find(item =>
+    item.range.start.x === range.start.x && item.range.start.y === range.start.y
+    && item.range.end.x === range.end.x && item.range.end.y === range.end.y)?.target;
   const tooltip = document.createElement('div');
   tooltip.className = `xterm-hover ${styles.terminalLinkHint}`;
   tooltip.setAttribute('role', 'tooltip');
@@ -126,45 +127,57 @@ export function registerTerminalLinks(term: Terminal, options: {
     current = null;
     tooltip.hidden = true;
   };
-  const activate = (event: MouseEvent, url: string) => {
-    if (disposed || event.button !== 0 || !modified(event) || !validTerminalUrl(url)) return;
+  const activate = (event: MouseEvent, target: Target) => {
+    if (disposed || event.button !== 0 || !modified(event)) return;
     event.preventDefault();
     event.stopPropagation();
     tooltip.hidden = true;
     try {
-      void options.open(url).catch((error) => { if (!disposed) options.onError(error); });
+      const request = target.kind === 'url' ? options.open(target.value) : options.openPath?.(target.value);
+      void request?.catch((error) => { if (!disposed) options.onError(error); });
     } catch (error) {
       options.onError(error);
     }
   };
-  const createLink = (url: string, range: IBufferRange): ILink => {
+  const createLink = (target: Target, range: IBufferRange): ILink => {
     const link: ILink = {
       range,
-      text: url,
+      text: target.value,
       decorations: { pointerCursor: false, underline: false },
-      activate: (event) => activate(event, url),
-      hover: (event) => hover(event, url, link),
+      activate: (event) => {
+        if (disposed || event.button !== 0 || !modified(event)) return;
+        // xterm can retain a provider reply after the mouse leaves and a TUI
+        // rewrites that row. Never open its old target without checking the buffer.
+        const latest = currentTarget(range);
+        if (latest) activate(event, latest);
+        else dismiss();
+      },
+      hover: (event) => {
+        const latest = currentTarget(range);
+        if (latest) hover(event, latest.value, link);
+        else dismiss();
+      },
       leave: () => leave(link),
     };
     return link;
   };
 
   term.options.linkHandler = {
-    allowNonHttpProtocols: false,
-    activate: (event, url) => activate(event, url),
-    hover: (event, url) => hover(event, url),
+    allowNonHttpProtocols: true,
+    activate: (event, url) => {
+      const target = oscTerminalLink(url);
+      if (target) activate(event, target);
+    },
+    hover: (event, url) => {
+      const target = oscTerminalLink(url);
+      if (target && (target.kind === 'url' || options.openPath)) hover(event, url);
+      else dismiss();
+    },
     leave: () => leave(),
   };
   const provider = term.registerLinkProvider({
     provideLinks(bufferLineNumber, callback) {
-      const lines = readLogicalLines(term, bufferLineNumber);
-      const starts: number[] = [];
-      let text = '';
-      for (const line of lines) {
-        starts.push(text.length);
-        text += line.text;
-      }
-      const links = findTerminalLinks(text).map((match) => createLink(match.url, linkRange(lines, starts, match.start, match.end)));
+      const links = targetsForLine(bufferLineNumber).map(({ target, range }) => createLink(target, range));
       callback(links.length ? links : undefined);
     },
   });

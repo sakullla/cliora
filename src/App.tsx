@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -16,7 +16,10 @@ import { ShortcutHelp } from './components/ShortcutHelp';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { HostSwitcher } from './components/HostSwitcher';
-import { GeneralSettings, RemoteSshSettings } from './features/settings/GeneralSettings';
+const GeneralSettings = lazy(() => import('./features/settings/GeneralSettings').then(module => ({ default: module.GeneralSettings })));
+const RemoteSshSettings = lazy(() => import('./features/settings/GeneralSettings').then(module => ({ default: module.RemoteSshSettings })));
+const SessionWorkbench = lazy(() => import('./features/sessions/SessionWorkbench').then(module => ({ default: module.SessionWorkbench })));
+import type { RemoteWorkbenchIntent } from './features/sessions/workbenchLaunch';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { OnboardingCard } from './features/home/OnboardingCard';
@@ -27,7 +30,7 @@ const MigrationSettings = lazy(() => import('./features/settings/MigrationSettin
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
 import type { LibraryMcpSpotlight } from './features/library/LibraryPage';
-import { SessionWorkbench, failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from './features/sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from './features/sessions/workbenchLaunch';
 import sessionStyles from './features/sessions/SessionWorkbench.module.css';
 import { applyStoredLanguage, readStoredLanguage } from './i18n';
 import { native, nativeAvailable } from './lib/native';
@@ -119,6 +122,7 @@ export default function App() {
   const [paletteLibrary, setPaletteLibrary] = useState<LibraryItem[]>([]);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
+  const [remoteWorkbenchIntent, setRemoteWorkbenchIntent] = useState<RemoteWorkbenchIntent | null>(null);
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
   const [workbenchFailure, setWorkbenchFailure] = useState<WorkbenchFailure | null>(null);
   const [workbenchToken, setWorkbenchToken] = useState(0);
@@ -194,10 +198,10 @@ export default function App() {
 
   useEffect(() => {
     const onRemoteLaunch = (event: Event) => {
-      const detail = (event as CustomEvent<{ toolId?: string; targetId?: string }>).detail;
+      const detail = (event as CustomEvent<Omit<RemoteWorkbenchIntent, 'token'>>).detail;
       if (detail?.targetId) changeRemoteTarget(detail.targetId);
-      void go('sessions').then(() => {
-        window.setTimeout(() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session', { detail })), 0);
+      void go('sessions').then(allowed => {
+        if (allowed) setRemoteWorkbenchIntent(previous => ({ ...detail, token: (previous?.token ?? 0) + 1 }));
       });
     };
     window.addEventListener('cliora:open-remote-session-request', onRemoteLaunch);
@@ -385,7 +389,7 @@ export default function App() {
 
   const managed: string[] = nativeAvailable ? catalog?.managedIds ?? [] : bootstrap.preferences.managed_tools;
   const visible = (nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).filter((item) => managed.includes(item.id));
-  const visibleDescriptors = (catalog?.registered ?? []).filter((item) => managed.includes(item.id));
+  const visibleDescriptors = useMemo(() => (catalog?.registered ?? []).filter((item) => catalog?.managedIds.includes(item.id)), [catalog]);
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
   const title: [string, string] = [t(`common.pages.${page}.title`), page === 'records' && remoteTargetId !== 'local' ? t('records.page.remoteSubtitle') : t(`common.pages.${page}.subtitle`)];
@@ -631,9 +635,9 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <SessionWorkbench active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} />}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} /></Suspense>}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ...(bootstrap.preferences.remote_ssh_enabled ? [['hosts', t('settings.tabs.hosts')] as [SettingsTab, string]] : []), ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
-        {page === 'settings' && settingsTab === 'general' && <GeneralSettings
+        {page === 'settings' && settingsTab === 'general' && <Suspense fallback={<PageSkeleton />}><GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
           managed={managed}
           preservedUnknown={catalog?.preservedUnknown ?? []}
@@ -650,8 +654,8 @@ export default function App() {
           onOpenHosts={() => setSettingsTab('hosts')}
           remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled}
           onRemoteSshChange={(enabled) => void updateRemoteSsh(enabled)}
-        />}
-        {page === 'settings' && settingsTab === 'hosts' && <RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle={false} />}
+        /></Suspense>}
+        {page === 'settings' && settingsTab === 'hosts' && <Suspense fallback={<PageSkeleton />}><RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle={false} /></Suspense>}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>

@@ -1,0 +1,98 @@
+/** Parsing is bounded and runs on hovered logical lines, never on the output stream. */
+export const TERMINAL_LINK_TEXT_LIMIT = 16_384;
+const LINK_LIMIT = 128;
+const CACHE_LIMIT = 32;
+
+export type TerminalLinkMatch = { kind: 'url' | 'path'; value: string; start: number; end: number };
+
+export function validTerminalUrl(value: string): boolean {
+  if (value.length > 8192 || /[\p{Cc}]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || url.protocol === 'http:')
+      && !!url.hostname && !url.username && !url.password;
+  } catch { return false; }
+}
+
+function fileUrl(value: string): boolean {
+  if (!/^file:\/\//i.test(value) || value.length > 8192 || /[\p{Cc}]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'file:' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+export function oscTerminalLink(value: string): Pick<TerminalLinkMatch, 'kind' | 'value'> | null {
+  if (validTerminalUrl(value)) return { kind: 'url', value };
+  return fileUrl(value) ? { kind: 'path', value } : null;
+}
+
+function trimPunctuation(value: string): string {
+  let result = value.replace(/[.,;:!?，。；：！？]+$/u, '');
+  for (const [opening, closing] of [['(', ')'], ['[', ']'], ['{', '}']]) {
+    const openings = result.split(opening).length - 1;
+    let closings = result.split(closing).length - 1;
+    while (closings > openings && result.endsWith(closing)) {
+      result = result.slice(0, -1);
+      closings -= 1;
+    }
+  }
+  return result;
+}
+
+function pathCandidate(value: string): boolean {
+  if (!value || value.length > 8192 || /[\p{Cc}<>|*?]/u.test(value.replace(/^\\\\\?\\/, ''))) return false;
+  if (fileUrl(value)) return true;
+  const path = value.replace(/(?::\d+(?::\d+)?|\(\d+(?:,\s*\d+)?\))$/, '');
+  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\')) return true;
+  // Other URI schemes, emails and drive-relative paths are not local files.
+  if (path.includes(':')) return false;
+  if (/^(?:\/|~[\\/]|\.{1,2}[\\/])/.test(path)) return true;
+  if (/[\\/]/.test(path)) return true;
+  if (path.includes('@')) return false;
+  return /^\.[\p{L}\p{N}_-][\p{L}\p{N}_.-]*$/u.test(path)
+    || /^[\p{L}\p{N}_-].*\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(path)
+    || /^(?:Dockerfile|Makefile|GNUmakefile|LICENSE|README|AGENTS|SKILL)$/.test(path);
+}
+
+export function findTerminalLinks(text: string): TerminalLinkMatch[] {
+  if (text.length > TERMINAL_LINK_TEXT_LIMIT) return [];
+  const matches: TerminalLinkMatch[] = [];
+  // Preserve URL recognition even in log fields such as `url=https://…`.
+  for (const match of text.matchAll(/https?:\/\/[^\s\p{Cc}<>"'`\\]+/giu)) {
+    const value = trimPunctuation(match[0]);
+    if (validTerminalUrl(value)) matches.push({ kind: 'url', value, start: match.index!, end: match.index! + value.length });
+    if (matches.length === LINK_LIMIT) return matches;
+  }
+  const urls = matches.slice();
+  // Quotes retain spaces in paths. Unquoted paths deliberately end at whitespace;
+  // guessing across prose would require speculative filesystem probes.
+  const tokens = /"([^"\r\n]+)"|'([^'\r\n]+)'|`([^`\r\n]+)`|[^\s\p{Cc}<>"'`]+/gu;
+  for (const token of text.matchAll(tokens)) {
+    const quoted = token[1] ?? token[2] ?? token[3];
+    const raw = quoted ?? token[0];
+    const leading = quoted === undefined ? raw.match(/^[([{]+/)?.[0].length ?? 0 : 0;
+    const value = quoted ?? trimPunctuation(raw.slice(leading));
+    const start = token.index! + (quoted === undefined ? leading : 1);
+    const end = start + value.length;
+    if (!urls.some(url => start < url.end && end > url.start) && pathCandidate(value)) {
+      matches.push({ kind: 'path', value, start, end });
+    }
+    if (matches.length === LINK_LIMIT) break;
+  }
+  return matches.sort((a, b) => a.start - b.start);
+}
+
+/** Content keys remain valid across cursor redraws; no stale row/scroll offsets are cached. */
+export function createTerminalLinkCache() {
+  const cache = new Map<string, TerminalLinkMatch[]>();
+  return (text: string): TerminalLinkMatch[] => {
+    if (text.length > TERMINAL_LINK_TEXT_LIMIT) return [];
+    const previous = cache.get(text);
+    if (previous) return previous;
+    const matches = findTerminalLinks(text);
+    cache.set(text, matches);
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+    return matches;
+  };
+}

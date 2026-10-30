@@ -1,3 +1,4 @@
+import { BoundedCache } from '../../lib/boundedCache';
 import type { ReactNode } from 'react';
 import { ExternalLink } from '../../components/ExternalLink';
 import { Badge, Button } from '../../components/ui';
@@ -30,18 +31,18 @@ function versionParts(value: string) {
   });
 }
 
-const latestVersions = new Map<string, { at: number; request: Promise<string> }>();
+const latestVersions = new BoundedCache<string, { request: Promise<string> }>(32, 300_000);
 function latestVersion(tool: string, version: string, fresh: boolean) {
   // One release query per install line: a 1.x and a 2.x install ask different
   // packages, so the cache key carries the identified version.
   const key = `${tool}:${version}`;
   const cached = latestVersions.get(key);
-  if (!fresh && cached && Date.now() - cached.at < 300_000) return cached.request;
+  if (!fresh && cached) return cached.request;
   const request = native.cliLatestVersion(tool, version || undefined).catch(error => {
     if (latestVersions.get(key)?.request === request) latestVersions.delete(key);
     throw error;
   });
-  latestVersions.set(key, { at: Date.now(), request });
+  latestVersions.set(key, { request });
   return request;
 }
 

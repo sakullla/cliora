@@ -958,3 +958,45 @@ test('CLI-reported units stay quiet when the scope also has tokens', async ({ pa
   await expect(kiroRow.locator('[title*="Context-usage-percent"]')).toHaveCount(1);
   await expect(ranking.getByRole('listitem').filter({ hasText: 'gpt-6' })).toContainText('5K');
 });
+
+test('hidden records release message DOM, ignore late detail reads and restore the selection', async ({ page }) => {
+  await page.addInitScript(() => {
+    const session = { id: 'saved', toolId: 'codex', nativeId: null, title: 'Preserved selection', cwd: null, model: null, projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
+    const probe = { reads: 0, hold: false, release: () => {} };
+    Object.assign(window, { recordMemoryProbe: probe, isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+      if (command === 'list_history_sessions') return [session];
+      if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt: Date.now(), sourceCount: 1, failedCount: 0, incomplete: false, detail: '' }];
+      if (command === 'get_history_session') {
+        probe.reads++;
+        if (probe.hold) await new Promise<void>(resolve => { probe.release = resolve; });
+        return { session, messages: [{ id: 'm', role: 'user', text: 'RELEASE_THIS_TRANSCRIPT', timestamp: 1 }], usage: [], resumeReason: null };
+      }
+      if (command === 'copy_history_resume_command') return 'codex resume saved';
+      if (command === 'list_projects' || command === 'list_history_prices') return [];
+      if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+      if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+      return null;
+    } } });
+  });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '使用记录' }).click();
+  await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toBeVisible();
+  await page.getByText('会话选项', { exact: true }).click();
+  await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
+  await nav.getByRole('button', { name: '快速开始' }).click();
+  await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toHaveCount(0);
+  await page.evaluate(() => { (window as any).recordMemoryProbe.hold = true; });
+  await nav.getByRole('button', { name: '使用记录' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).recordMemoryProbe.reads)).toBe(2);
+  await nav.getByRole('button', { name: '快速开始' }).click();
+  await page.evaluate(() => { (window as any).recordMemoryProbe.release(); (window as any).recordMemoryProbe.hold = false; });
+  await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toHaveCount(0);
+  await nav.getByRole('button', { name: '使用记录' }).click();
+  await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).recordMemoryProbe.reads)).toBe(3);
+  await page.getByText('会话选项', { exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '恢复模式' })).toHaveValue('yolo');
+});

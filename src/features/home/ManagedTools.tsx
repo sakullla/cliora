@@ -1,3 +1,4 @@
+import { BoundedCache } from '../../lib/boundedCache';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -18,7 +19,7 @@ import { ToolIcon } from '../../components/ToolIcon';
 import { Button, StatusBadge } from '../../components/ui';
 import { displayPath } from '../../lib/paths';
 import { launchFailureDetail } from '../../lib/feedback';
-import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import i18n from '../../i18n';
 import styles from './ManagedTools.module.css';
 
@@ -26,12 +27,12 @@ type Notice = { tone: 'ok' | 'error' | 'pending'; text: string; title: string };
 type Activity = 'launch' | 'apply' | null;
 type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity; notice: Notice | null };
 
-const rememberedHome = new Map<string, { workspace: RegisteredToolWorkspace; at: number }>();
+const rememberedHome = new BoundedCache<string, RegisteredToolWorkspace>(24, 60_000);
 function rememberHome(toolId: string, workspace: RegisteredToolWorkspace) {
-  if (workspace.probe.selectedPath) rememberedHome.set(toolId, { workspace, at: Date.now() });
+  if (workspace.probe.selectedPath) rememberedHome.set(toolId, workspace);
   else rememberedHome.delete(toolId);
 }
-const launchDirectories = new Map<string, string>();
+const launchDirectories = new BoundedCache<string, string>(48);
 
 // Home shows the tools in daily use first: recently launched ones and those with saved profiles.
 // The rest fold behind one toggle so a long managed list does not push projects off screen.
@@ -132,7 +133,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   const { t } = useTranslation();
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
-    const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
+    const workspace = cached ?? null;
     return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null, notice: null }]] : [];
   })));
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);

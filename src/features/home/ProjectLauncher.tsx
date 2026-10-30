@@ -19,7 +19,7 @@ import { SkeletonRows } from '../../components/Skeleton';
 import { Badge, Button, Card, IconButton, SplitButton, Toolbar } from '../../components/ui';
 import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
 import { formatFailure } from '../../lib/feedback';
-import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/SessionWorkbench';
+import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import styles from './ProjectLauncher.module.css';
 
 export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {

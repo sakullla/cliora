@@ -1,5 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('plugin views defer unrelated editors and stop account and quota polling', async ({ page }) => {
+  const modules: string[] = [];
+  page.on('request', request => { if (request.url().endsWith('.js')) modules.push(request.url()); });
+  await setup(page);
+  await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
+  expect(modules.some(url => /\/(MemoryWorkspace|AgentsWorkspace|ConfigurationWorkspaceEditor|SessionWorkbench)-/.test(url))).toBe(false);
+  await page.clock.install();
+  const reads = () => page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => ['list_accounts', 'account_capabilities', 'list_usage_queries', 'list_usage_cache', 'list_usage_samples', 'usage_presets'].includes(call.command)).length);
+  const before = await reads();
+  await page.clock.fastForward(12000);
+  expect(await reads()).toBe(before);
+});
+
 test('plugin search and read-only filter expose relevant actions without changing state', async ({ page }) => {
   await setup(page);
   await page.getByLabel('搜索插件').fill('no-match');

@@ -3,6 +3,7 @@ import { usageMetricLabel } from '../../adapters/providers';
 import { Icon } from '../../components/Icon';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
+import { BoundedCache } from '../../lib/boundedCache';
 import type { AuthAccount } from '../../types/accounts';
 import type { CredentialDraft, DraftTestReport, QueryConfig, UsageCache, UsageMetric, UsagePreset, UsageQuery, UsageQueryDraft, UsageResult, UsageSample } from '../../types/usage';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -25,27 +26,65 @@ export function useUsageQuota(active: boolean) {
   const [samples, setSamples] = useState<Record<string, UsageSample[]>>({});
   const [error, setError] = useState('');
   const sequence = useRef(0);
-  const initialQueries = useRef(new Map<string, Promise<void>>());
-  const reload = useCallback(async () => {
-    if (!nativeAvailable || !active) return;
-    const current = ++sequence.current;
-    try {
-      const [q, c, p] = await Promise.all([native.listUsageQueries(), native.listUsageCache(), native.usagePresets()]);
-      // Sampling failures must not break the quota cards; keep the previous readings.
-      const history = await Promise.all((q ?? []).map(async query => {
-        try { return { id: query.id, samples: await native.listUsageSamples(query.id) ?? [] }; }
-        catch { return { id: query.id, samples: null as UsageSample[] | null }; }
-      }));
-      if (current !== sequence.current) return;
-      setQueries(q ?? []); setCache(c ?? []); setPresets(p ?? []); setError('');
-      setSamples(previous => {
-        const next: Record<string, UsageSample[]> = {};
-        for (const entry of history) next[entry.id] = entry.samples ?? previous[entry.id] ?? [];
-        return next;
-      });
-    } catch (e) { if (current === sequence.current) setError(message(e)); }
-  }, [active]);
-  useEffect(() => { void reload(); const timer = setInterval(() => void reload(), 3000); return () => { clearInterval(timer); sequence.current++; }; }, [reload]);
+  const enabled = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
+  const requested = useRef(false);
+  const presetSnapshot = useRef<UsagePreset[] | null>(null);
+  const sampleVersions = useRef(new Map<string, string>());
+  const initialQueries = useRef(new BoundedCache<string, Promise<void>>(128));
+  // A mutation during a read queues a fresh read; timer ticks merely join it.
+  const reload = useCallback((force = true): Promise<void> => {
+    if (!nativeAvailable || !enabled.current) return Promise.resolve();
+    if (force) requested.current = true;
+    if (inFlight.current) return inFlight.current;
+    const task = (async () => {
+      do {
+        const refreshHistory = requested.current;
+        requested.current = false;
+        const current = sequence.current;
+        try {
+          const [q, c, p] = await Promise.all([native.listUsageQueries(), native.listUsageCache(), presetSnapshot.current ?? native.usagePresets()]);
+          if (current !== sequence.current || !enabled.current) continue;
+          const readings = new Map((c ?? []).map(entry => [entry.queryId, entry]));
+          const history = await Promise.all((q ?? []).map(async query => {
+            const reading = readings.get(query.id);
+            const version = JSON.stringify([query.generation, reading?.success?.measuredAt, reading?.success?.attemptedAt]);
+            if (!refreshHistory && sampleVersions.current.get(query.id) === version) return { id: query.id, version, samples: null };
+            try { return { id: query.id, version, samples: await native.listUsageSamples(query.id) ?? [] }; }
+            catch { return { id: query.id, version, samples: null }; }
+          }));
+          if (current !== sequence.current || !enabled.current) continue;
+          presetSnapshot.current = p ?? [];
+          setQueries(q ?? []); setCache(c ?? []); setPresets(p ?? []); setError('');
+          const versions = new Map<string, string>();
+          for (const entry of history) {
+            const version = entry.samples !== null ? entry.version : sampleVersions.current.get(entry.id);
+            if (version !== undefined) versions.set(entry.id, version);
+          }
+          sampleVersions.current = versions;
+          setSamples(previous => {
+            const next: Record<string, UsageSample[]> = {};
+            for (const entry of history) next[entry.id] = entry.samples ?? previous[entry.id] ?? [];
+            return next;
+          });
+        } catch (e) { if (current === sequence.current && enabled.current) setError(message(e)); }
+      } while (requested.current && enabled.current);
+    })().finally(() => { if (inFlight.current === task) inFlight.current = null; });
+    inFlight.current = task;
+    return task;
+  }, []);
+  useEffect(() => {
+    enabled.current = active;
+    if (!active || !nativeAvailable) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async (first = false) => {
+      await reload(first);
+      if (!disposed) timer = setTimeout(() => { void poll(); }, 3000);
+    };
+    void poll(true);
+    return () => { disposed = true; enabled.current = false; requested.current = false; clearTimeout(timer); sequence.current++; };
+  }, [active, reload]);
   const ensureProfile = useCallback((profileId: string, version: number) => {
     const key = `${profileId}:${version}`;
     const previous = initialQueries.current.get(key);
@@ -61,7 +100,10 @@ export function useUsageQuota(active: boolean) {
         await native.refreshUsageQuery(query.id);
         await reload();
       }
-    })();
+    })().catch(error => {
+      initialQueries.current.delete(key);
+      throw error;
+    });
     initialQueries.current.set(key, task);
     return task;
   }, [reload]);
