@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets,
+    NativeCredentialRefs, PendingSecrets, RemoteHistoryLayout, RemoteHistoryOrder, RemoteLaunchEnvironment, RemoteNativeDocument,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -23,6 +23,20 @@ use crate::native::profile::{Connection, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Claude;
+
+const REMOTE_NATIVE_DOCUMENTS: &[RemoteNativeDocument] = &[
+    RemoteNativeDocument { role: "settings", relative: ".claude/settings.json", format: "json", scope: "global" },
+    RemoteNativeDocument { role: "settings", relative: ".claude/settings.json", format: "json", scope: "project" },
+    RemoteNativeDocument { role: "local_settings", relative: ".claude/settings.local.json", format: "json", scope: "project" },
+];
+
+const REMOTE_HISTORY: RemoteHistoryLayout = RemoteHistoryLayout {
+    relative: ".claude/projects",
+    pinned: &[],
+    sessions: &["*.jsonl"],
+    companion: Some("subagents"),
+    order: RemoteHistoryOrder::MtimeDesc,
+};
 
 // Injected by a running Claude Code into its subprocesses; a fresh terminal session
 // must not inherit them (CLAUDE_CODE_CHILD_SESSION disables transcript saving).
@@ -537,6 +551,18 @@ impl CliAdapter for Claude {
         }
         Ok(args)
     }
+    fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
+        REMOTE_NATIVE_DOCUMENTS
+    }
+    fn remote_launch_environment(&self, mode: LaunchMode) -> RemoteLaunchEnvironment {
+        // Claude Code 2.1 exits when root passes --dangerously-skip-permissions
+        // unless IS_SANDBOX=1. That is Claude's own allowance for this mode.
+        if matches!(mode, LaunchMode::Yolo) {
+            RemoteLaunchEnvironment { environment: &[], when_root: &[("IS_SANDBOX", "1")] }
+        } else {
+            RemoteLaunchEnvironment::default()
+        }
+    }
     fn history_sources(
         &self,
         home: &std::path::Path,
@@ -571,6 +597,9 @@ impl CliAdapter for Claude {
     }
     fn history_supported(&self) -> bool {
         true
+    }
+    fn remote_history_layout(&self) -> Option<RemoteHistoryLayout> {
+        Some(REMOTE_HISTORY)
     }
     fn history_association(&self) -> Option<super::Facet> {
         Some(super::Facet {
@@ -822,6 +851,28 @@ fn merge_catalog_rows(native_rows: &[Value], ours: &[Value]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_native_documents_name_the_settings_files() {
+        let documents = Claude.remote_native_documents();
+        assert!(documents.iter().any(|document| document.scope == "global" && document.role == "settings" && document.relative == ".claude/settings.json" && document.format == "json"));
+        assert!(documents.iter().any(|document| document.scope == "project" && document.role == "local_settings" && document.relative == ".claude/settings.local.json"));
+        let history = Claude.remote_history_layout().expect("claude remote history");
+        assert_eq!(history.relative, ".claude/projects");
+        assert_eq!(history.sessions, &["*.jsonl"]);
+        assert_eq!(history.companion, Some("subagents"));
+        assert_eq!(Claude.native_history_relative(), Some(".claude/projects"));
+    }
+
+    #[test]
+    fn remote_yolo_declares_the_root_sandbox_variable_only() {
+        let yolo = Claude.remote_launch_environment(LaunchMode::Yolo);
+        assert_eq!(yolo.when_root, &[("IS_SANDBOX", "1")]);
+        assert!(yolo.environment.is_empty());
+        let normal = Claude.remote_launch_environment(LaunchMode::Normal);
+        assert!(normal.when_root.is_empty());
+        assert!(normal.environment.is_empty());
+    }
 
     fn connection(model: &str) -> Connection {
         Connection {

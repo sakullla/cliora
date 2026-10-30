@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets, SkillObservation,
+    NativeCredentialRefs, PendingSecrets, RemoteNativeDocument, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -23,6 +23,11 @@ use crate::native::profile::{self, Connection, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Grok;
+
+const REMOTE_NATIVE_DOCUMENTS: &[RemoteNativeDocument] = &[
+    RemoteNativeDocument { role: "settings", relative: ".grok/config.toml", format: "toml", scope: "global" },
+    RemoteNativeDocument { role: "settings", relative: ".grok/config.toml", format: "toml", scope: "project" },
+];
 
 impl CliAdapter for Grok {
     fn supports_mcp(&self) -> bool { true }
@@ -56,6 +61,9 @@ impl CliAdapter for Grok {
     }
     fn version_identity(&self, _basename: &str, output: &str) -> bool {
         output.contains("grok")
+    }
+    fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
+        REMOTE_NATIVE_DOCUMENTS
     }
     fn native_files(
         &self,

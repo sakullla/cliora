@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets, SkillObservation,
+    NativeCredentialRefs, PendingSecrets, RemoteHistoryLayout, RemoteHistoryOrder, RemoteNativeDocument, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -25,6 +25,19 @@ use crate::native::profile::{self, Connection, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Codex;
+
+const REMOTE_NATIVE_DOCUMENTS: &[RemoteNativeDocument] = &[
+    RemoteNativeDocument { role: "settings", relative: ".codex/config.toml", format: "toml", scope: "global" },
+    RemoteNativeDocument { role: "settings", relative: ".codex/config.toml", format: "toml", scope: "project" },
+];
+
+const REMOTE_HISTORY: RemoteHistoryLayout = RemoteHistoryLayout {
+    relative: ".codex",
+    pinned: &["session_index.jsonl", "state_*.sqlite"],
+    sessions: &["rollout-*.jsonl"],
+    companion: None,
+    order: RemoteHistoryOrder::PathDesc,
+};
 
 const RESERVED_MODEL_PROVIDERS: &[&str] = &["openai", "ollama", "lmstudio"];
 
@@ -134,6 +147,9 @@ impl CliAdapter for Codex {
     }
     fn version_identity(&self, _basename: &str, output: &str) -> bool {
         output.contains("codex")
+    }
+    fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
+        REMOTE_NATIVE_DOCUMENTS
     }
     fn native_files(
         &self,
@@ -592,8 +608,8 @@ impl CliAdapter for Codex {
     fn history_supported(&self) -> bool {
         true
     }
-    fn native_history_relative(&self) -> Option<&'static str> {
-        Some(".codex")
+    fn remote_history_layout(&self) -> Option<RemoteHistoryLayout> {
+        Some(REMOTE_HISTORY)
     }
     // Checked rollouts have no parent/child evidence. parentId, delegationDepth,
     // agentPreset and source=agent are not links.

@@ -321,6 +321,53 @@ pub enum LaunchMode {
     Yolo,
 }
 
+/// Environment a CLI needs around a remote interactive launch. Shared launch
+/// owns the shell; the adapter only names variables. `when_root` is exported
+/// only when the remote uid is 0.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RemoteLaunchEnvironment {
+    pub environment: &'static [(&'static str, &'static str)],
+    pub when_root: &'static [(&'static str, &'static str)],
+}
+
+/// One native document the shared remote store can read and write.
+/// `relative` is under the login home for `global` and under the project
+/// directory for `project`. The shared service does not infer the path from
+/// the CLI id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteNativeDocument {
+    pub role: &'static str,
+    pub relative: &'static str,
+    pub format: &'static str,
+    pub scope: &'static str,
+}
+
+/// Which copy of a remote history tree is kept when the archive is bounded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoteHistoryOrder {
+    /// Newest path first. Use this when the file name already contains the date.
+    PathDesc,
+    /// Newest modification time first. GNU find supplies the time.
+    MtimeDesc,
+}
+
+/// Files under the remote login home that this CLI's history parser can read.
+/// The shared archiver copies this declaration and does not match on a CLI id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteHistoryLayout {
+    /// Directory under the login home, for example `.claude/projects`.
+    pub relative: &'static str,
+    /// Basename globs copied in full, such as an index or a state database.
+    pub pinned: &'static [&'static str],
+    /// Basename globs of session transcripts. The archive keeps a bounded set.
+    pub sessions: &'static [&'static str],
+    /// Directory next to a selected transcript: `<dir>/<stem>/<companion>/`.
+    /// Files there that match `sessions` are copied with that transcript.
+    pub companion: Option<&'static str>,
+    pub order: RemoteHistoryOrder,
+}
+
 /// How a registered CLI is started: an interactive terminal session or the
 /// installed desktop application. Terminal-only concerns (terminal choice,
 /// session env markers) never apply to the desktop form.
@@ -454,7 +501,7 @@ pub trait CliAdapter: Sync {
         if facet.state != "supported" {
             return Err(format!("远程{}不可用：{}", capability.label(), facet.reason));
         }
-        let command = remote_command(self.command(), args);
+        let command = crate::remote::with_remote_user_path(&remote_command(self.command(), args));
         crate::remote::run_command(target, &command).map_err(|error| error.to_string())
     }
 
@@ -473,7 +520,7 @@ pub trait CliAdapter: Sync {
         if capabilities.probe.state != "supported" {
             return Err(format!("远程探测不可用：{}", capabilities.probe.reason));
         }
-        crate::remote::run_command(target, command).map_err(|error| error.to_string())
+        crate::remote::run_command(target, &crate::remote::with_remote_user_path(command)).map_err(|error| error.to_string())
     }
 
     fn remote_install(&self, target: &RemoteTarget) -> Result<RemoteCommandResult, String> {
@@ -481,7 +528,7 @@ pub trait CliAdapter: Sync {
             .install_command()
             .map(|command| portable_remote_install_command(&command))
             .ok_or_else(|| "此 CLI 未声明远程安装命令".to_owned())?;
-        self.dispatch_remote_owned_command(target, &command)
+        self.dispatch_remote_owned_command(target, &format!("{}; {command}", crate::remote::LINUX_TMUX_INSTALL))
     }
 
     fn remote_upgrade(&self, target: &RemoteTarget, source: &str) -> Result<RemoteCommandResult, String> {
@@ -972,6 +1019,17 @@ pub trait CliAdapter: Sync {
         ""
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    /// Extra environment for a remote interactive session. Local launches
+    /// ignore it. The default adds nothing.
+    fn remote_launch_environment(&self, mode: LaunchMode) -> RemoteLaunchEnvironment {
+        let _ = mode;
+        RemoteLaunchEnvironment::default()
+    }
+    /// Login-home or project-relative native documents a remote host can edit
+    /// in place. Empty means this CLI has not declared a remote native file.
+    fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
+        &[]
+    }
     /// Version-specific launch arguments. The default ignores the version and
     /// keeps `launch_args`. Adapters override this when a verified major needs
     /// a different flag.
@@ -1041,11 +1099,14 @@ pub trait CliAdapter: Sync {
     fn history_supported(&self) -> bool {
         false
     }
-    /// Directory under the remote login home that holds this CLI's native history.
-    /// The records page mirrors that tree and parses it with this adapter.
-    /// Absent means the CLI has no verified remote history layout.
-    fn native_history_relative(&self) -> Option<&'static str> {
+    /// Remote transcript layout. Absent means the records page has no verified
+    /// copy of this CLI's native history.
+    fn remote_history_layout(&self) -> Option<RemoteHistoryLayout> {
         None
+    }
+    /// Directory under the remote login home that holds this CLI's native history.
+    fn native_history_relative(&self) -> Option<&'static str> {
+        self.remote_history_layout().map(|layout| layout.relative)
     }
     /// Verified parent/child association for usage records.
     /// `None` means this adapter has not declared one. The catalog then
@@ -1466,6 +1527,13 @@ pub struct PublishedDescriptor {
     /// Omitted when this CLI does not provide usage records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub association: Option<Facet>,
+    /// Native files this CLI lets a remote host read and write directly.
+    #[serde(default, skip_serializing_if = "remote_native_files_empty")]
+    pub remote_native_files: &'static [RemoteNativeDocument],
+}
+
+fn remote_native_files_empty(files: &&'static [RemoteNativeDocument]) -> bool {
+    files.is_empty()
 }
 
 impl PublishedDescriptor {
@@ -1474,6 +1542,7 @@ impl PublishedDescriptor {
             resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
+            remote_native_files: adapter.remote_native_documents(),
         }
     }
 }

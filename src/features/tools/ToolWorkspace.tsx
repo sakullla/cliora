@@ -139,15 +139,20 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   useEffect(() => { if (toolId) onToolChange?.(toolId); }, [toolId, onToolChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins, supported.memory]);
-  function makeRemoteWorkspace(probe: RemoteCliProbe, store: RemoteToolStore): RegisteredToolWorkspace {
+  function makeRemoteWorkspace(probe: RemoteCliProbe, store: RemoteToolStore, fileScope: Scope = scope): RegisteredToolWorkspace {
     const currentFiles = store.currentFiles ?? {};
+    const declared = (descriptor?.remoteNativeFiles ?? []).filter(file => file.scope === fileScope);
+    const nativeFormat = (format: string): 'toml' | 'json' | 'jsonc' | 'yaml' => format === 'toml' || format === 'json' || format === 'jsonc' || format === 'yaml' ? format : 'json';
+    const nativeFiles = declared.length
+      ? declared.map(file => ({ role: file.role, path: `remote:${file.relative}`, format: nativeFormat(file.format), writable: true, reason: null, sensitive: false }))
+      : Object.keys(currentFiles).map((role) => ({ role, path: `remote:${role}`, format: 'toml' as const, writable: true, reason: null, sensitive: false }));
     const toolProbe: ToolProbe = {
       latestVersionSupported: true,
       tool: toolId as ToolProbe['tool'],
       installations: probe.installed ? [{ path: probe.executable, version: cleanRemoteVersion(probe.version) || null, source: 'native', status: 'available', detail: null }] : [],
       selectedPath: probe.installed ? probe.executable : null,
-      nativeFiles: Object.keys(currentFiles).map((role) => ({ role, path: `remote:${role}`, format: 'toml' as const, writable: true, reason: null, sensitive: false })),
-      nativeWrites: { state: 'unsupported', reason: i18n.t('tools.workspace.remoteWritesReason'), evidence: 'ssh' },
+      nativeFiles,
+      nativeWrites: declared.length ? { state: 'supported' as const, reason: '', evidence: 'adapter' } : { state: 'unsupported' as const, reason: i18n.t('tools.workspace.remoteWritesReason'), evidence: 'ssh' },
       interfaceFormats: descriptor?.interfaceFormats ?? [],
       installUrl: '',
       upgradeHint: '',
@@ -168,9 +173,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       const request = ++loadSequence.current;
       setLoading(true); setError('');
       try {
-        const [probe, store] = await Promise.all([native.probeRemoteCli(remoteTargetId, nextTool), native.getRemoteToolStore(remoteTargetId, nextTool)]);
+        const [probe, store] = await Promise.all([native.probeRemoteCli(remoteTargetId, nextTool), native.getRemoteToolStore(remoteTargetId, nextTool, nextScope, nextScope === 'project' ? nextProject : null)]);
         if (!alive.current || request !== loadSequence.current) return null;
-        const value = makeRemoteWorkspace(probe, store);
+        const value = makeRemoteWorkspace(probe, store, nextScope);
         setWorkspace(value);
         setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
         setCustomPath('');
@@ -311,7 +316,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     if (target && (target.toolId !== toolId || !target.scope || target.scope === 'project' && !target.projectPath)) { setError(t('tools.workspace.scopeChanged')); return; }
     const nextScope = target?.scope ?? scope; const nextPath = target?.projectPath ?? projectPath; const original = currentContext.current; const navigation = epoch.current;
     const value = isRemote
-      ? await native.getRemoteToolStore(remoteTargetId, toolId).then(store => makeRemoteWorkspace({ targetId: remoteTargetId, toolId, executable: '', installed: true, version: null, detail: null }, store)).catch(failure => { setError(errorText(failure)); return null; })
+      ? await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null).then(store => makeRemoteWorkspace({ targetId: remoteTargetId, toolId, executable: '', installed: true, version: null, detail: null }, store, scope)).catch(failure => { setError(errorText(failure)); return null; })
       : await native.getRegisteredToolWorkspace(toolId, nextScope, nextPath, false, true).catch(failure => { setError(errorText(failure)); return null; });
     if (!alive.current || original !== currentContext.current || navigation !== epoch.current || !value) return;
     const profile = value.profiles.find(item => item.id === profileId);
@@ -382,8 +387,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
     try {
       if (isRemote) {
-        const store = await native.getRemoteToolStore(remoteTargetId, toolId);
-        await native.saveRemoteToolStore(remoteTargetId, toolId, { ...store, currentFiles: profile.files, profiles: store.profiles.map(item => item.id === profile.id ? profile : item) });
+        const store = await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null);
+        await native.saveRemoteToolStore(remoteTargetId, toolId, { ...store, currentFiles: profile.files, profiles: store.profiles.map(item => item.id === profile.id ? profile : item) }, scope, scope === 'project' ? projectPath : null);
       } else await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false);
       if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
     catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) { setCompareError(''); setComparison(value); } } catch {} }
@@ -513,7 +518,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
         </div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t('tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} /></Suspense>}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} /></Suspense>}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
     <Suspense fallback={<PageSkeleton />}>

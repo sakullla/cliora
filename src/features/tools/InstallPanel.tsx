@@ -129,13 +129,14 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
       : latest.state === 'loading'
         ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
         : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
+  const remoteInstall = probe.installCommand === 'remote';
   const target = latest.state === 'ready' ? latest.version : undefined;
   const canUpdate = Boolean(selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported'));
   return <details ref={panel} className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
     <summary>
       {heading ?? <strong>{toolName}</strong>}
       {selected && <Badge className={styles.installSourceBadge} tone={behind ? 'warning' : probe.nativeWrites.state === 'supported' ? 'success' : 'neutral'} dot>{sourceLabel(selected.source)}</Badge>}
-      <span className={styles.installSummaryText} data-state={behind ? 'behind' : current ? 'current' : undefined}>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span>
+      <span className={styles.installSummaryText} data-state={behind ? 'behind' : current ? 'current' : undefined}>{selected || probe.nativeWrites.state === 'supported' ? summary : remoteInstall ? t('tools.install.notInstalled') : probe.nativeWrites.reason}</span>
       <span className={styles.diagnosticLabel}>{t('tools.install.label')}</span>
     </summary>
     <div className={styles.installBody}>
@@ -158,7 +159,7 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
         </div>
       </div> : <div className={styles.installMissingBanner}>
         <Icon name="info" size={16} />
-        <span>{probe.nativeWrites.reason || t('tools.install.notInstalled')}</span>
+        <span>{remoteInstall ? t('tools.workspace.remoteInstallHint') : (probe.nativeWrites.reason || t('tools.install.notInstalled'))}</span>
       </div>}
       {alternates.length > 0 && <div className={styles.installAlternates}>
         {alternates.map(item => <div className={styles.installRow} key={item.path}>

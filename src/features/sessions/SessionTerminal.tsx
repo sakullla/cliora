@@ -46,9 +46,16 @@ export type TerminalHandle = {
 };
 
 export function encodeBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-  return btoa(binary);
+  if (!bytes.length) return '';
+  // One character at a time copies the whole string on each step. Chunks stay
+  // under the argument limit and keep a large paste on the UI thread.
+  const chunk = 0x4000;
+  const parts: string[] = [];
+  for (let index = 0; index < bytes.length; index += chunk) {
+    const slice = bytes.subarray(index, Math.min(index + chunk, bytes.length));
+    parts.push(String.fromCharCode.apply(null, slice as unknown as number[]));
+  }
+  return btoa(parts.join(''));
 }
 
 /** PTY input. Mouse reports are raw bytes; text and SGR reports are UTF-8. */
@@ -408,7 +415,7 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, focused = active, running, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
   sessionId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
@@ -416,6 +423,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   active: boolean;
   focused?: boolean;
   running: boolean;
+  /** A remote PTY pays a round trip for every resize, so layout storms are collapsed. */
+  remote?: boolean;
   fontSize: number;
   lineHeight?: number;
   theme: TerminalTheme;
@@ -453,6 +462,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const activeRef = useRef(active);
   const focusedRef = useRef(focused);
   const runningRef = useRef(running);
+  const remoteRef = useRef(remote);
   const fontSizeRef = useRef(fontSize);
   const lineHeightRef = useRef(lineHeight);
   const themeRef = useRef(theme);
@@ -460,6 +470,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   activeRef.current = active;
   focusedRef.current = focused;
   runningRef.current = running;
+  remoteRef.current = remote;
   fontSizeRef.current = fontSize;
   lineHeightRef.current = lineHeight;
   themeRef.current = theme;
@@ -561,7 +572,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         flushFrame = requestAnimationFrame(flushWrites);
         flushTimer = window.setTimeout(flushWrites, 50);
       } else {
-        queueMicrotask(flushWrites);
+        // A hidden session still has to parse output, but a burst can share one
+        // write instead of a microtask per chunk.
+        flushTimer = window.setTimeout(flushWrites, 16);
       }
     };
     const markLiveOutput = () => {
@@ -591,12 +604,26 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
     writers.current.set(sessionId, publish);
 
+    const pendingInput: Uint8Array[] = [];
+    let inputScheduled = false;
+    const flushInput = () => {
+      inputScheduled = false;
+      if (disposed || !pendingInput.length) return;
+      const merged = pendingInput.length === 1 ? pendingInput[0] : concatBytes(pendingInput);
+      pendingInput.length = 0;
+      void native.writeWorkbenchSession(sessionId, encodeBase64(merged)).catch((error) => bridge.current.writeError(error));
+    };
     const sendToPty = (data: string, binary = false) => {
       // xterm also emits device/cursor replies here. Hidden live terminals must
       // answer them; the textarea and key/paste handlers gate user input.
+      // A microtask merges a paste or a burst of reports into one PTY write
+      // without holding a single key or a cursor reply for a frame.
       if (!runningRef.current || !data) return;
       if (!binary && (data.includes('\r') || data.includes('\n'))) markLiveOutput();
-      void native.writeWorkbenchSession(sessionId, encodeBase64(ptyBytes(data, binary))).catch((error) => bridge.current.writeError(error));
+      pendingInput.push(ptyBytes(data, binary));
+      if (inputScheduled) return;
+      inputScheduled = true;
+      queueMicrotask(flushInput);
     };
 
     const copySelection = () => {
@@ -875,6 +902,37 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       const workbench = node.closest<HTMLElement>('[data-term-theme]');
       return node.clientWidth >= 8 && node.clientHeight >= 8 && (!workbench || workbench.clientHeight >= 8);
     };
+    let gridTimer = 0;
+    let gridPending: { cols: number; rows: number } | null = null;
+    const flushGrid = () => {
+      gridTimer = 0;
+      const next = gridPending;
+      gridPending = null;
+      if (!next || disposed || !runningRef.current) return;
+      if (ptyGridRef.current.cols === next.cols && ptyGridRef.current.rows === next.rows) return;
+      ptyGridRef.current = next;
+      void native.resizeWorkbenchSession(sessionId, next.cols, next.rows).catch(() => {});
+    };
+    const scheduleGrid = (cols: number, rows: number) => {
+      if (!runningRef.current) return;
+      if (ptyGridRef.current.cols === cols && ptyGridRef.current.rows === rows) {
+        gridPending = null;
+        window.clearTimeout(gridTimer);
+        gridTimer = 0;
+        return;
+      }
+      if (!remoteRef.current) {
+        ptyGridRef.current = { cols, rows };
+        void native.resizeWorkbenchSession(sessionId, cols, rows).catch(() => {});
+        return;
+      }
+      // The local grid is already the fitted size. The remote CLI only needs the
+      // size that survives the layout pass. Repeating that size must not postpone it.
+      if (gridPending && gridPending.cols === cols && gridPending.rows === rows) return;
+      gridPending = { cols, rows };
+      window.clearTimeout(gridTimer);
+      gridTimer = window.setTimeout(flushGrid, 100);
+    };
     const fitNow = () => {
       if (disposed || !replayReady || !activeRef.current || !layoutAvailable()) return;
       const dims = fit.proposeDimensions();
@@ -902,10 +960,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (changed) ime.schedule();
       if (changed && !awayFromBottom) scrollToLatest();
       reportScroll();
-      const sent = ptyGridRef.current;
-      if (!runningRef.current || (sent.cols === term.cols && sent.rows === term.rows)) return;
-      ptyGridRef.current = { cols: term.cols, rows: term.rows };
-      void native.resizeWorkbenchSession(sessionId, term.cols, term.rows).catch(() => {});
+      scheduleGrid(term.cols, term.rows);
     };
     fitNowRef.current = fitNow;
     let resizeFrame = 0;
@@ -996,6 +1051,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       pending.current.delete(sessionId);
     });
     return () => {
+      flushInput();
+      window.clearTimeout(gridTimer);
       disposed = true;
       ime.dispose();
       if (imeRef.current === ime) imeRef.current = null;

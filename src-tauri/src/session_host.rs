@@ -479,7 +479,7 @@ fn flush_output(id: &str, bytes: &[u8]) {
 }
 
 fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
-    let mut buffer = [0_u8; 8192];
+    let mut buffer = [0_u8; 32 * 1024];
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,

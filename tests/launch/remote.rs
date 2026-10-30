@@ -93,6 +93,9 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     assert!(command.contains("LANG=C.UTF-8"));
     assert!(command.contains("screen -U -dmS"));
     assert!(command.contains("sh -lc"));
+    assert!(command.contains("export PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\""));
+    assert!(command.contains("apt-get install -y tmux"));
+    assert!(command.contains("sudo -n"));
     assert!(command.contains("requires tmux or screen"));
     assert!(plan.remote_session_id.as_deref().is_some_and(|id| id.starts_with("cliora-")));
     assert!(plan.remote_end_args.is_some());
@@ -102,5 +105,38 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     assert!(reattach.contains("COLORTERM=truecolor"));
     assert!(reattach.contains("screen -U -r"));
     assert!(reattach.contains("exit 44"));
+}
+
+#[test]
+fn remote_claude_yolo_marks_root_as_sandbox_and_normal_does_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("remote-claude.db")).unwrap();
+    db.update_preferences(|preferences| preferences.remote_ssh_enabled = true).unwrap();
+    let target = crate::remote::save_target(&db, crate::remote::RemoteTarget {
+        id: String::new(), name: "fixture".into(), host: "example.test".into(), port: 22,
+        user: "root".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true,
+        created_at: 0, updated_at: 0,
+    }).unwrap();
+    let project = crate::remote::save_project(&db, crate::remote::RemoteProject {
+        id: String::new(), target_id: target.id, name: "claude".into(), path: "/src/project".into(),
+        preferred_tool: Some("claude_code".into()), updated_at: 0,
+    }).unwrap();
+    let yolo = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
+        tool_id: "claude_code".into(), project_id: Some(format!("remote:{}", project.id)),
+        session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Yolo,
+        resume_latest: false,
+    }).unwrap();
+    let yolo_command = yolo.cli_args.last().unwrap();
+    assert!(yolo_command.contains("--dangerously-skip-permissions"));
+    assert!(yolo_command.contains("export IS_SANDBOX=1"));
+    assert!(yolo_command.contains("id -u"));
+    let normal = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
+        tool_id: "claude_code".into(), project_id: Some(format!("remote:{}", project.id)),
+        session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
+        resume_latest: false,
+    }).unwrap();
+    let normal_command = normal.cli_args.last().unwrap();
+    assert!(!normal_command.contains("IS_SANDBOX"));
+    assert!(!normal_command.contains("--dangerously-skip-permissions"));
 }
 

@@ -75,6 +75,40 @@ test('a saved remote host stays the workbench target while its list is still loa
   await expect(page.getByRole('dialog', { name: '选择远程目录' }).locator('select').first()).toContainText('测试远程主机 · root@212.60.153.19');
 });
 
+test('a typed remote directory stays in the path field', async ({ page }) => {
+  await installHostDesktop(page, { savedHost: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '选择远程目录' });
+  const path = dialog.getByRole('textbox', { name: '远程路径' });
+  await expect(path).toHaveValue('/srv/project');
+  const layout = await path.evaluate((input) => {
+    const span = input.closest('label')?.querySelector('span');
+    const inputBox = input.getBoundingClientRect();
+    const spanBox = span?.getBoundingClientRect();
+    const style = getComputedStyle(input);
+    return {
+      userSelect: style.userSelect,
+      overlap: !!spanBox && spanBox.bottom > inputBox.top + 1,
+    };
+  });
+  expect(layout.overlap).toBe(false);
+  expect(layout.userSelect).toBe('text');
+  const name = dialog.getByRole('textbox', { name: '项目名称' });
+  await path.fill('/tmp/typed-project');
+  await name.fill('自定义项目');
+  await expect(path).toHaveValue('/tmp/typed-project');
+  await page.evaluate(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+  await page.waitForTimeout(200);
+  await expect(path).toHaveValue('/tmp/typed-project');
+  await expect(name).toHaveValue('自定义项目');
+});
+
 test('choosing a remote host in the sidebar makes the next new session remote', async ({ page }) => {
   await installHostDesktop(page);
   await page.goto('/');
@@ -136,7 +170,7 @@ test('a remote session composer lists that host library, not this computer', asy
   const composer = stage.getByRole('region', { name: '多行输入与提示词投递' });
   await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
   await expect(composer.getByRole('button', { name: 'ui/ux重做' })).toHaveCount(0);
-  // Opening the composer re-reads the library, so every read goes to that host.
+  // The workbench reads that host's library. A later open reuses a recent result, and never the local library.
   const remoteCalls = await page.evaluate(() => (window as unknown as { __libraryCalls: Array<{ command: string; targetId?: string; kind?: string }> }).__libraryCalls.filter((item) => item.command === 'list_remote_library_items'));
   expect(remoteCalls.length).toBeGreaterThan(0);
   expect(remoteCalls.every((item) => item.targetId === host.id && item.kind === 'prompt')).toBe(true);

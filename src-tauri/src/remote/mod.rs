@@ -485,8 +485,8 @@ fn empty_resource_store(kind: &str) -> serde_json::Value {
     }
 }
 
-fn mcp_seed_path(tool_id: &str) -> Option<&'static str> {
-    native_config_path(tool_id).or_else(|| json_mcp_path(tool_id).map(|(path, _, _)| path))
+fn mcp_seed_path(tool_id: &str) -> Option<String> {
+    native_config_path(tool_id).or_else(|| json_mcp_path(tool_id).map(|(path, _, _)| path.to_owned()))
 }
 
 fn mcp_entries_from_toml(document: &toml::Value) -> Vec<serde_json::Value> {
@@ -607,9 +607,9 @@ fn resource_bundle_script(tool_ids: &[String], kind: &str) -> String {
             script.push_str("printf '%s\\n' __CLIORA_CONFIG__; ");
             if let Some(path) = mcp_seed_path(tool_id) {
                 script.push_str("if [ -f ");
-                script.push_str(path);
+                script.push_str(&path);
                 script.push_str(" ]; then base64 < ");
-                script.push_str(path);
+                script.push_str(&path);
                 script.push_str(" | tr -d '\\n'; fi; ");
             }
             script.push_str("printf '\\n'; ");
@@ -915,22 +915,127 @@ fn remote_path_expr(path: &str) -> String {
     }
 }
 
-fn native_config_path(tool_id: &str) -> Option<&'static str> {
-    match tool_id {
-        "codex" => Some("$HOME/.codex/config.toml"),
-        "grok" => Some("$HOME/.grok/config.toml"),
-        _ => None,
-    }
+struct ResolvedNativeDocument {
+    role: &'static str,
+    path: String,
+    format: &'static str,
 }
 
-fn load_native_file(target: &RemoteTarget, tool_id: &str) -> Result<BTreeMap<String, String>, RemoteError> {
-    let Some(path) = native_config_path(tool_id) else { return Ok(BTreeMap::new()); };
-    let result = run_command(target, &format!("if [ -f {path} ]; then base64 -w0 -- {path}; fi"))?;
-    let text = result.stdout.trim();
-    if text.is_empty() { return Ok(BTreeMap::new()); }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(text).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程原生配置编码无效".into() })?;
-    let value = String::from_utf8(bytes).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程原生配置不是 UTF-8".into() })?;
-    Ok(BTreeMap::from([(String::from("settings"), value)]))
+fn relative_allowed(relative: &str) -> bool {
+    !relative.is_empty()
+        && !relative.starts_with('/')
+        && !relative.ends_with('/')
+        && !relative.contains("//")
+        && !relative.contains("..")
+        && relative.split('/').all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')))
+}
+
+fn project_allowed(project: &str) -> bool {
+    valid_text(project, 4096)
+        && project.starts_with('/')
+        && !project.contains("..")
+        && !project.contains('~')
+        && !project.contains('$')
+}
+
+fn resolved_native_documents(tool_id: &str, scope: &str, project: Option<&str>) -> Result<Vec<ResolvedNativeDocument>, RemoteError> {
+    let Some(adapter) = crate::adapters::Registry::builtins().get(tool_id) else { return Ok(Vec::new()); };
+    let mut documents = Vec::new();
+    let mut seen = HashSet::new();
+    for document in adapter.remote_native_documents() {
+        if document.scope != scope { continue; }
+        if !matches!(document.format, "json" | "jsonc" | "toml" | "yaml") || !relative_allowed(document.relative) || !document.role.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+            return Err(RemoteError::InvalidPath);
+        }
+        if !seen.insert(document.role) { return Err(RemoteError::InvalidPath); }
+        let path = if scope == "global" {
+            format!("$HOME/{}", document.relative)
+        } else if scope == "project" {
+            let project = project.unwrap_or("").trim();
+            if !project_allowed(project) { return Err(RemoteError::InvalidPath); }
+            format!("{}/{}", project.trim_end_matches('/'), document.relative)
+        } else {
+            return Err(RemoteError::InvalidPath);
+        };
+        documents.push(ResolvedNativeDocument { role: document.role, path, format: document.format });
+    }
+    Ok(documents)
+}
+
+/// TOML settings documents stay the seed for remote MCP and plugin readers.
+/// A JSON settings file, such as Claude's, is not that document.
+fn native_config_path(tool_id: &str) -> Option<String> {
+    resolved_native_documents(tool_id, "global", None).ok()?.into_iter().find(|document| document.role == "settings" && document.format == "toml").map(|document| document.path)
+}
+
+fn native_read_script(documents: &[ResolvedNativeDocument]) -> Result<String, RemoteError> {
+    let mut script = String::from("set +e; ");
+    for document in documents {
+        script.push_str("printf '%s\\n' ");
+        script.push_str(&shell_quote(&format!("__CLIORA_NATIVE__{}", document.role)));
+        script.push_str("; if [ -f ");
+        script.push_str(&remote_path_expr(&document.path));
+        script.push_str(" ]; then printf '%s\\n' present; base64 -w0 -- ");
+        script.push_str(&remote_path_expr(&document.path));
+        script.push_str("; printf '\\n'; else printf '%s\\n' missing; fi; ");
+    }
+    ensure_remote_command(&script)?;
+    Ok(script)
+}
+
+fn parse_native_read(roles: &[&str], stdout: &str) -> Result<BTreeMap<String, String>, RemoteError> {
+    let mut lines = stdout.lines();
+    let mut files = BTreeMap::new();
+    for role in roles {
+        let marker = lines.next().unwrap_or("");
+        if marker != format!("__CLIORA_NATIVE__{role}") {
+            return Err(RemoteError::Transport { stage: "remote_config", detail: "远程原生配置响应无法解析".into() });
+        }
+        match lines.next().unwrap_or("") {
+            "missing" => {}
+            "present" => {
+                let encoded = lines.next().unwrap_or("");
+                let text = if encoded.is_empty() {
+                    String::new()
+                } else {
+                    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程原生配置编码无效".into() })?;
+                    String::from_utf8(bytes).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程原生配置不是 UTF-8".into() })?
+                };
+                files.insert((*role).to_owned(), text);
+            }
+            _ => return Err(RemoteError::Transport { stage: "remote_config", detail: "远程原生配置响应无法解析".into() }),
+        }
+    }
+    Ok(files)
+}
+
+pub fn read_scope_native(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<BTreeMap<String, String>, RemoteError> {
+    let documents = resolved_native_documents(tool_id, scope, project)?;
+    if documents.is_empty() { return Ok(BTreeMap::new()); }
+    let script = native_read_script(&documents)?;
+    let result = run_command(target, &script)?;
+    let roles: Vec<&str> = documents.iter().map(|document| document.role).collect();
+    let mut files = parse_native_read(&roles, &result.stdout)?;
+    for document in &documents {
+        if let Some(text) = files.get_mut(document.role) {
+            if text.is_empty() && matches!(document.format, "json" | "jsonc") {
+                *text = "{}".into();
+            }
+        }
+    }
+    Ok(files)
+}
+
+pub fn write_scope_native(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>, files: &BTreeMap<String, String>) -> Result<(), RemoteError> {
+    let documents = resolved_native_documents(tool_id, scope, project)?;
+    let mut payload = Vec::new();
+    for document in documents {
+        let Some(text) = files.get(document.role) else { continue; };
+        if text.len() > 1_000_000 { return Err(RemoteError::Storage("远程原生配置过大".into())); }
+        payload.push((document.path, text.as_bytes().to_vec()));
+    }
+    if payload.is_empty() { return Ok(()); }
+    apply_upload(target, &prepare_upload(&[], &payload)?)
 }
 
 fn remote_store_path(tool_id: &str) -> Result<String, RemoteError> {
@@ -948,7 +1053,8 @@ pub fn load_tool_store(target: &RemoteTarget, tool_id: &str) -> Result<RemoteToo
         let bytes = base64::engine::general_purpose::STANDARD.decode(text).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程配置文件编码无效".into() })?;
         serde_json::from_slice(&bytes).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程配置文件格式无效".into() })?
     };
-    if store.current_files.is_empty() { store.current_files = load_native_file(target, tool_id)?; }
+    let native = read_scope_native(target, tool_id, "global", None)?;
+    if !native.is_empty() { store.current_files = native; }
     if store.common.is_none() && !store.current_files.is_empty() {
         store.common = Some(RegisteredCommon { tool: tool_id.to_owned(), version: 0, revision: String::new(), files: store.current_files.clone() });
     }
@@ -964,13 +1070,29 @@ fn write_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolStor
     let bytes = serde_json::to_vec_pretty(store).map_err(|error| RemoteError::Transport { stage: "remote_config", detail: error.to_string() })?;
     apply_upload(target, &prepare_upload(&[], &[(path, bytes)])?)?;
     if write_native {
-        if let Some(path) = native_config_path(tool_id) {
-            if let Some(text) = store.current_files.get("settings") {
-                apply_upload(target, &prepare_upload(&[], &[(path.to_owned(), text.as_bytes().to_vec())])?)?;
-            }
-        }
+        write_scope_native(target, tool_id, "global", None, &store.current_files)?;
     }
     Ok(())
+}
+
+pub fn load_scoped_tool_store(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<RemoteToolStore, RemoteError> {
+    let mut store = load_tool_store(target, tool_id)?;
+    if scope == "project" {
+        store.current_files = read_scope_native(target, tool_id, "project", project)?;
+    }
+    Ok(store)
+}
+
+/// Project application writes the project files and keeps the global file in use.
+pub fn save_scoped_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolStore, scope: &str, project: Option<&str>) -> Result<(), RemoteError> {
+    if scope == "project" {
+        write_scope_native(target, tool_id, "project", project, &store.current_files)?;
+        let mut persisted = load_tool_store(target, tool_id)?;
+        persisted.profiles = store.profiles.clone();
+        persisted.common = store.common.clone();
+        return write_tool_store(target, tool_id, &persisted, false);
+    }
+    save_tool_store(target, tool_id, store)
 }
 
 pub fn delete_tool_profile(target: &RemoteTarget, tool_id: &str, profile_id: &str) -> Result<(), RemoteError> {
@@ -1040,7 +1162,7 @@ pub struct RemoteCliProbe {
 pub fn probe_clis(target: &RemoteTarget, tools: &[(String, String)]) -> Result<Vec<RemoteCliProbe>, RemoteError> {
     validate_target(target)?;
     if tools.is_empty() { return Ok(Vec::new()); }
-    let mut script = String::from("set +e; ");
+    let mut script = format!("set +e; {REMOTE_USER_PATH}; ");
     for (tool_id, executable) in tools {
         if !valid_text(tool_id, 120) || !valid_text(executable, 256) { return Err(RemoteError::InvalidPath); }
         script.push_str("printf '%s\\n' ");
@@ -1158,6 +1280,23 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// Native installers record `~/.local/bin` in bashrc. Remote commands run
+/// through a non-interactive login shell, and Debian dash does not read bashrc.
+pub(crate) const REMOTE_USER_PATH: &str = "export PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\"";
+
+/// One-line Linux package install used before a persistent session or a remote
+/// CLI install. Existing tmux or screen skips it. `sudo -n` never waits for a
+/// password; a failed install leaves the caller to report the missing tool.
+pub(crate) const LINUX_TMUX_INSTALL: &str = "if ! command -v tmux >/dev/null 2>&1 && ! command -v screen >/dev/null 2>&1 && [ \"$(uname -s)\" = Linux ]; then if [ \"$(id -u)\" -eq 0 ]; then CLIORA_PRIV=; elif command -v sudo >/dev/null 2>&1; then CLIORA_PRIV='sudo -n'; else CLIORA_PRIV=:; fi; if command -v apt-get >/dev/null 2>&1; then $CLIORA_PRIV env DEBIAN_FRONTEND=noninteractive apt-get update -qq && $CLIORA_PRIV env DEBIAN_FRONTEND=noninteractive apt-get install -y tmux; elif command -v dnf >/dev/null 2>&1; then $CLIORA_PRIV dnf install -y tmux; elif command -v yum >/dev/null 2>&1; then $CLIORA_PRIV yum install -y tmux; elif command -v pacman >/dev/null 2>&1; then $CLIORA_PRIV pacman -Sy --noconfirm tmux; elif command -v apk >/dev/null 2>&1; then $CLIORA_PRIV apk add --no-cache tmux; elif command -v zypper >/dev/null 2>&1; then $CLIORA_PRIV zypper --non-interactive install tmux; fi; hash -r 2>/dev/null || true; fi";
+
+pub(crate) fn with_remote_user_path(command: &str) -> String {
+    format!("{REMOTE_USER_PATH}; {command}")
+}
+
+pub(crate) fn with_linux_session_prep(command: &str) -> String {
+    format!("{LINUX_TMUX_INSTALL}; {REMOTE_USER_PATH}; {command}")
+}
+
 fn hide_console_window(command: &mut Command) {
     #[cfg(windows)]
     {
@@ -1186,16 +1325,28 @@ pub fn quote_command_arg(value: &str) -> String {
 /// Build the shared OpenSSH connection arguments. Password mode answers from
 /// the system credential store through askpass when a password is saved (see
 /// `password`); otherwise the terminal asks. The secret never enters args.
+///
+/// Callers must not prepend another `ConnectTimeout` or `ServerAlive*` value:
+/// OpenSSH keeps the first `-o` for each option. Key mode also skips GSSAPI and
+/// password negotiation, which otherwise add a round trip — or a multi-second
+/// Kerberos timeout — on every new connection.
 pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
     let mut args = vec![
         "-o".into(),
         "StrictHostKeyChecking=yes".into(),
         "-o".into(),
         "ConnectionAttempts=1".into(),
+        // A dead route should fail the TCP connect. A jittery one should survive
+        // several missed keepalives (15s × 4) before the session is dropped.
+        "-o".into(),
+        "ConnectTimeout=12".into(),
         "-o".into(),
         "ServerAliveInterval=15".into(),
         "-o".into(),
-        "ServerAliveCountMax=2".into(),
+        "ServerAliveCountMax=4".into(),
+        // Some long-haul networks drop the interactive DSCP mark and then stall.
+        "-o".into(),
+        "IPQoS=none".into(),
         "-p".into(),
         target.port.to_string(),
     ];
@@ -1207,13 +1358,30 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
             "PreferredAuthentications=password".into(),
             "-o".into(),
             "PubkeyAuthentication=no".into(),
+            "-o".into(),
+            "GSSAPIAuthentication=no".into(),
         ]);
-    } else if let Some(identity_file) = target
-        .identity_file
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.extend(["-i".into(), identity_file.into()]);
+    } else {
+        args.extend([
+            "-o".into(),
+            "GSSAPIAuthentication=no".into(),
+            "-o".into(),
+            "PreferredAuthentications=publickey".into(),
+        ]);
+        if let Some(identity_file) = target
+            .identity_file
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            // One chosen key. Trying every agent key is another round trip each,
+            // and too many of them make sshd close the handshake.
+            args.extend([
+                "-o".into(),
+                "IdentitiesOnly=yes".into(),
+                "-i".into(),
+                identity_file.into(),
+            ]);
+        }
     }
     if let Some(config) = target.ssh_config.as_deref() {
         args.extend(["-F".into(), config.into()]);
@@ -1734,7 +1902,6 @@ pub fn probe_target(target: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
         if target.auth_method != "password" {
             command.args(["-o", "BatchMode=yes"]);
         }
-        ssh_session_limits(&mut command);
         command.args(connection_args(target));
         password::apply(target, &mut command);
         command.arg(&remote_script);
@@ -1779,21 +1946,9 @@ pub fn probe_target(target: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
     })
 }
 
-fn ssh_session_limits(command: &mut Command) {
-    command.args([
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "ServerAliveInterval=5",
-        "-o",
-        "ServerAliveCountMax=2",
-    ]);
-}
-
 fn ssh_command(target: &RemoteTarget, binary: &str) -> Command {
     let mut command = Command::new(binary);
     hide_console_window(&mut command);
-    ssh_session_limits(&mut command);
     command.args(connection_args(target));
     password::apply(target, &mut command);
     command
@@ -1803,7 +1958,6 @@ fn sftp_command(target: &RemoteTarget, binary: &str) -> Command {
     let mut command = Command::new(binary);
     hide_console_window(&mut command);
     command.args(["-q"]);
-    ssh_session_limits(&mut command);
     password::apply(target, &mut command);
     let mut args = connection_args(target);
     let destination = args
@@ -1859,8 +2013,8 @@ fn command_result(target: &RemoteTarget, output: std::process::Output) -> Result
     Ok(RemoteCommandResult { target_id: target.id.clone(), exit_code, stdout, stderr })
 }
 
-const SSH_COMMAND_DEADLINE: Duration = Duration::from_secs(25);
-const SSH_SLOT_WAIT: Duration = Duration::from_secs(20);
+const SSH_COMMAND_DEADLINE: Duration = Duration::from_secs(40);
+const SSH_SLOT_WAIT: Duration = Duration::from_secs(40);
 
 fn wait_for_output(command: &mut Command, deadline: Duration) -> Result<std::process::Output, RemoteError> {
     wait_for_output_with_stdin(command, deadline, None)
@@ -2282,6 +2436,21 @@ mod tests {
     }
 
     #[test]
+    fn linux_session_prep_is_a_single_remote_command() {
+        let script = with_linux_session_prep("claude --version");
+        assert!(!script.contains('\n'));
+        assert!(script.contains("apt-get install -y tmux"));
+        assert!(script.contains("dnf install -y tmux"));
+        assert!(script.contains("pacman -Sy --noconfirm tmux"));
+        assert!(script.contains("export PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\""));
+        assert!(script.ends_with("claude --version"));
+        assert!(ensure_remote_command(&script).is_ok());
+        let probe = with_remote_user_path("'claude' '--version'");
+        assert!(probe.starts_with("export PATH="));
+        assert!(!probe.contains("apt-get"));
+    }
+
+    #[test]
     fn resource_bundle_script_is_one_short_command() {
         let ids = ["codex", "claude_code", "grok", "cursor", "opencode"].map(str::to_owned).to_vec();
         for kind in ["mcp", "skills"] {
@@ -2355,6 +2524,30 @@ mod tests {
     }
 
     #[test]
+    fn claude_remote_native_settings_are_json_and_codex_stays_toml() {
+        let global = resolved_native_documents("claude_code", "global", None).unwrap();
+        assert_eq!(global.len(), 1);
+        assert_eq!(global[0].role, "settings");
+        assert_eq!(global[0].path, "$HOME/.claude/settings.json");
+        assert_eq!(global[0].format, "json");
+        let project = resolved_native_documents("claude_code", "project", Some("/src/project")).unwrap();
+        assert_eq!(project.iter().map(|document| document.path.as_str()).collect::<Vec<_>>(), vec!["/src/project/.claude/settings.json", "/src/project/.claude/settings.local.json"]);
+        assert!(resolved_native_documents("claude_code", "project", Some("/src/../etc")).is_err());
+        assert!(native_config_path("claude_code").is_none());
+        assert_eq!(native_config_path("codex").as_deref(), Some("$HOME/.codex/config.toml"));
+        assert_eq!(native_config_path("grok").as_deref(), Some("$HOME/.grok/config.toml"));
+        let script = native_read_script(&global).unwrap();
+        assert!(!script.contains('\n'));
+        assert!(script.contains("$HOME/.claude/settings.json"));
+        assert!(ensure_remote_command(&script).is_ok());
+        let body = b64("{\"theme\":\"dark\"}");
+        let parsed = parse_native_read(&["settings"], &format!("__CLIORA_NATIVE__settings\npresent\n{body}\n")).unwrap();
+        assert_eq!(parsed.get("settings").map(String::as_str), Some("{\"theme\":\"dark\"}"));
+        let missing = parse_native_read(&["settings"], "__CLIORA_NATIVE__settings\nmissing\n").unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[test]
     fn rejects_shell_sensitive_target_fields() {
         let target = RemoteTarget {
             id: String::new(),
@@ -2421,8 +2614,12 @@ mod tests {
         assert!(!script.contains("test -d --"));
     }
 
+    fn has_option(args: &[String], option: &str) -> bool {
+        args.windows(2).any(|pair| pair[0] == "-o" && pair[1] == option)
+    }
+
     #[test]
-    fn connection_args_keep_key_mode_simple_and_password_mode_interactive() {
+    fn connection_args_use_one_auth_method_and_tolerate_a_slow_path() {
         let mut target = RemoteTarget {
             id: "fixture".into(),
             name: "fixture".into(),
@@ -2441,6 +2638,14 @@ mod tests {
         assert!(key_args
             .windows(2)
             .any(|pair| pair[0] == "-i" && pair[1] == "C:/keys/id_ed25519"));
+        assert!(has_option(&key_args, "PreferredAuthentications=publickey"));
+        assert!(has_option(&key_args, "GSSAPIAuthentication=no"));
+        assert!(has_option(&key_args, "IdentitiesOnly=yes"));
+        assert!(has_option(&key_args, "ConnectTimeout=12"));
+        assert!(has_option(&key_args, "ServerAliveInterval=15"));
+        assert!(has_option(&key_args, "ServerAliveCountMax=4"));
+        assert!(has_option(&key_args, "IPQoS=none"));
+        assert!(!has_option(&key_args, "PreferredAuthentications=password"));
         // Unix OpenSSH can use a per-target Unix-domain control socket. The
         // Windows port does not support that socket type, so connection_args
         // intentionally omits multiplexing options there.
@@ -2453,10 +2658,20 @@ mod tests {
         {
             assert!(!key_args.iter().any(|arg| arg.starts_with("Control")));
         }
+        target.identity_file = None;
+        let agent_args = connection_args(&target);
+        assert!(has_option(&agent_args, "PreferredAuthentications=publickey"));
+        assert!(!has_option(&agent_args, "IdentitiesOnly=yes"));
+        assert!(!agent_args.windows(2).any(|pair| pair[0] == "-i"));
         target.auth_method = "password".into();
+        target.identity_file = Some("C:/keys/id_ed25519".into());
         let password_args = connection_args(&target);
         assert!(password_args.contains(&"PreferredAuthentications=password".into()));
         assert!(password_args.contains(&"BatchMode=no".into()));
+        assert!(has_option(&password_args, "GSSAPIAuthentication=no"));
+        assert!(!has_option(&password_args, "PreferredAuthentications=publickey"));
+        assert!(!has_option(&password_args, "IdentitiesOnly=yes"));
+        assert!(!password_args.windows(2).any(|pair| pair[0] == "-i"));
     }
 
     fn gate_target(host: &str) -> RemoteTarget {

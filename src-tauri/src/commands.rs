@@ -4627,6 +4627,8 @@ pub async fn get_remote_tool_store(
     app: AppHandle,
     target_id: String,
     tool_id: String,
+    scope: Option<String>,
+    project_path: Option<String>,
 ) -> Result<crate::remote::RemoteToolStore, ApiError> {
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
@@ -4636,7 +4638,8 @@ pub async fn get_remote_tool_store(
                 .into_iter()
                 .find(|item| item.id == target_id && item.enabled)
                 .ok_or_else(|| native_error("远程主机不可用".into()))?;
-            crate::remote::load_tool_store(&target, &tool_id).map_err(|error| native_error(error.to_string()))
+            let scope = scope.unwrap_or_else(|| "global".into());
+            crate::remote::load_scoped_tool_store(&target, &tool_id, &scope, project_path.as_deref()).map_err(|error| native_error(error.to_string()))
         })
     }).await
 }
@@ -4647,6 +4650,8 @@ pub async fn save_remote_tool_store(
     target_id: String,
     tool_id: String,
     store: crate::remote::RemoteToolStore,
+    scope: Option<String>,
+    project_path: Option<String>,
 ) -> Result<(), ApiError> {
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
@@ -4656,7 +4661,8 @@ pub async fn save_remote_tool_store(
                 .into_iter()
                 .find(|item| item.id == target_id && item.enabled)
                 .ok_or_else(|| native_error("远程主机不可用".into()))?;
-            crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))
+            let scope = scope.unwrap_or_else(|| "global".into());
+            crate::remote::save_scoped_tool_store(&target, &tool_id, &store, &scope, project_path.as_deref()).map_err(|error| native_error(error.to_string()))
         })
     }).await
 }
@@ -5126,7 +5132,12 @@ pub async fn begin_configuration_draft(
                     .ok_or_else(|| native_error("远程主机不可用".into()))?;
                 let store = crate::remote::load_tool_store(&target, &request.tool_id)
                     .map_err(|error| native_error(error.to_string()))?;
-                request.remote_files = store.current_files;
+                request.remote_files = if request.subject == crate::adapters::configuration::ConfigurationSubject::Current && request.scope == Scope::Project {
+                    let project = request.project_path.clone().filter(|path| !path.trim().is_empty()).ok_or_else(|| native_error("请选择项目目录".into()))?;
+                    crate::remote::read_scope_native(&target, &request.tool_id, "project", Some(&project)).map_err(|error| native_error(error.to_string()))?
+                } else {
+                    store.current_files
+                };
                 request.remote_common = store.common;
                 return app.state::<AppState>().workspace.begin(
                     &registry,
@@ -5400,8 +5411,13 @@ pub async fn save_configuration_draft(
                                 *text = secrets.apply_text(role, kind, std::mem::take(text)).map_err(native_error)?;
                             }
                         }
-                        store.current_files = files;
-                        crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
+                        if draft.scope == Scope::Project {
+                            let project = draft.project_path.clone().filter(|path| !path.trim().is_empty()).ok_or_else(|| native_error("请选择项目目录".into()))?;
+                            crate::remote::write_scope_native(&target, &tool_id, "project", Some(&project), &files).map_err(|error| native_error(error.to_string()))?;
+                        } else {
+                            store.current_files = files;
+                            crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
+                        }
                         next.revision = next.revision.saturating_add(1);
                         return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: None, application: None });
                     }
@@ -5428,6 +5444,8 @@ pub async fn save_configuration_draft(
                         if profile.id.is_empty() { profile.id = format!("remote-{}", uuid::Uuid::new_v4()); }
                         // The value is in the native file. Never persist the
                         // local draft lease ID in the remote metadata store.
+                        // Saving a named profile keeps the file in use. Choosing
+                        // the profile, or saving the current files, writes it.
                         if let Some(connection) = profile.connection.as_mut() {
                             connection.secret_ref = None;
                         }
@@ -5435,7 +5453,6 @@ pub async fn save_configuration_draft(
                         profile.revision = uuid::Uuid::new_v4().to_string();
                         store.profiles.retain(|item| item.id != profile.id);
                         store.profiles.push(profile.clone());
-                        store.current_files = profile.files.clone();
                         crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
                         next.revision = next.revision.saturating_add(1);
                         return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: Some(profile), common: None, application: None });

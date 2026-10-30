@@ -1,6 +1,8 @@
 .dialog { display: grid; gap: var(--space-3); min-width: min(680px, 72vw); }
 .field { display: grid; gap: var(--space-1_5); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .field input, .field select { width: 100%; min-height: var(--control-h); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
+/* Labels opt out of text selection. WebView2 then refuses keyboard input in a nested field. */
+.field input { -webkit-user-select: text; user-select: text; }
 .fieldHint { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-regular); }
 .targetMeta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-3); margin-top: calc(var(--space-1) * -1); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); }
 .targetMeta span:last-child { color: var(--text-3); }

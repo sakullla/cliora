@@ -340,10 +340,40 @@ fn remote_session_name(project_id: &str, suffix: Option<&str>) -> String {
 /// drops those bytes before they reach the local terminal.
 const REMOTE_TERMINAL_ENV: &str = "export TERM=xterm-256color COLORTERM=truecolor; case \"${LC_ALL:-${LC_CTYPE:-$LANG}}\" in *.UTF-8|*.utf8) ;; *) export LANG=C.UTF-8 LC_ALL=C.UTF-8 ;; esac";
 
-fn remote_persistent_command(path: &str, executable: &str, args: &[String], session: &str) -> String {
+fn remote_env_assignment(key: &str, value: &str) -> Option<String> {
+    let name_ok = key.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+        && key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    let value_ok = !value.is_empty() && value.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    (name_ok && value_ok).then(|| format!("export {key}={value}"))
+}
+
+/// Renders adapter-owned remote environment. Root-only variables stay behind
+/// `id -u` so a normal account does not receive them.
+fn remote_launch_environment_shell(environment: crate::adapters::RemoteLaunchEnvironment) -> String {
+    let mut shell = String::new();
+    for (key, value) in environment.environment {
+        if let Some(assignment) = remote_env_assignment(key, value) {
+            shell.push_str(&assignment);
+            shell.push_str("; ");
+        }
+    }
+    let root: Vec<String> = environment.when_root.iter().filter_map(|(key, value)| remote_env_assignment(key, value)).collect();
+    if !root.is_empty() {
+        shell.push_str("if [ \"$(id -u)\" -eq 0 ]; then ");
+        for assignment in root {
+            shell.push_str(&assignment);
+            shell.push_str("; ");
+        }
+        shell.push_str("fi; ");
+    }
+    shell
+}
+
+fn remote_persistent_command(path: &str, executable: &str, args: &[String], session: &str, environment: crate::adapters::RemoteLaunchEnvironment) -> String {
     let mut cli = format!("exec {}", remote_shell_quote(executable));
     for arg in args { cli.push(' '); cli.push_str(&remote_shell_quote(arg)); }
-    let command = format!("if ! command -v {} >/dev/null 2>&1; then echo {}; exit 127; fi; cd -- {} && {cli}", remote_shell_quote(executable), remote_shell_quote(&format!("Cliora: remote CLI '{}' is not installed or not on PATH", executable)), remote_shell_quote(path));
+    let prefix = remote_launch_environment_shell(environment);
+    let command = format!("{prefix}{}; if ! command -v {} >/dev/null 2>&1; then echo {}; exit 127; fi; cd -- {} && {cli}", crate::remote::REMOTE_USER_PATH, remote_shell_quote(executable), remote_shell_quote(&format!("Cliora: remote CLI '{}' is not installed or not on PATH", executable)), remote_shell_quote(path));
     // OpenSSH on Windows may allocate a `dumb` terminal. tmux then exports
     // its own TERM value, which is not sufficient for full-screen CLIs.
     // Run the payload through a shell that advertises the PTY we provide.
@@ -351,7 +381,8 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     let session_q = remote_shell_quote(session);
     let path_q = remote_shell_quote(path);
     format!(
-        "if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -A -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then screen -U -dmS {session_q} sh -lc {interactive} >/dev/null 2>&1 || true; screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi"
+        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -A -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then screen -U -dmS {session_q} sh -lc {interactive} >/dev/null 2>&1 || true; screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi",
+        crate::remote::LINUX_TMUX_INSTALL
     )
 }
 
@@ -455,7 +486,7 @@ fn remote_launch_plan(
     let remote_command = if requested_session.is_some() {
         remote_reattach_command(&session)
     } else {
-        remote_persistent_command(path, adapter.command(), &launch_args, &session)
+        remote_persistent_command(path, adapter.command(), &launch_args, &session, adapter.remote_launch_environment(request.mode))
     };
     let mut remote_end_args = args.clone();
     remote_end_args.push(format!("tmux kill-session -t {} 2>/dev/null || screen -S {} -X quit 2>/dev/null || true", remote_shell_quote(&session), remote_shell_quote(&session)));

@@ -1,5 +1,5 @@
 //! Remote records use the same native history parsers as the local machine.
-//! Each adapter names the directory under the remote login home. This module
+//! Each adapter names the files under the remote login home. This module
 //! copies a bounded slice of that tree and parses it in a temporary home.
 //! Parsed sessions stay in memory; they are not written into the local index.
 
@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use super::{model_label, present_children, present_usage, HistoryDetail, HistorySession, EMPTY_SESSION};
 use super::report::UsageTotals;
-use crate::adapters::{CliAdapter, Registry};
+use crate::adapters::{CliAdapter, Registry, RemoteHistoryLayout, RemoteHistoryOrder};
 use crate::remote::RemoteTarget;
 
 const FILE_CAP: usize = 12 * 1024 * 1024;
@@ -70,10 +70,10 @@ fn fetch(registry: &Registry, target: &RemoteTarget) -> Result<Vec<HistoryDetail
         if !adapter.history_supported() {
             continue;
         }
-        let Some(relative) = adapter.native_history_relative() else { continue };
-        let command = archive_command(relative)?;
+        let Some(layout) = adapter.remote_history_layout() else { continue };
+        let command = archive_command(layout)?;
         let bytes = crate::remote::run_command_bytes(target, &command).map_err(|error| error.to_string())?;
-        let files = decode_archive(&bytes, relative)?;
+        let files = decode_archive(&bytes, layout.relative)?;
         write_tree(&home, &files)?;
         details.extend(sessions_from_home(adapter, &home, &target.id)?);
     }
@@ -88,21 +88,78 @@ impl Drop for TempHome {
     }
 }
 
-pub(crate) fn archive_command(relative: &str) -> Result<String, String> {
-    if !valid_relative(relative) {
+pub(crate) fn archive_command(layout: RemoteHistoryLayout) -> Result<String, String> {
+    if !valid_relative(layout.relative) || layout.sessions.is_empty() || layout.sessions.len() > 8 || layout.pinned.len() > 8 {
         return Err("远程历史目录无效".into());
     }
-    let quoted = crate::remote::shell_quote(relative);
-    let awk = format!("/\\/session_index\\.jsonl$/ {{ print; next }} /\\/state_[^\\/]*\\.sqlite$/ {{ print; next }} /\\/rollout-.*\\.jsonl$/ {{ if (roll < {ROLLOUT_CAP}) {{ print; roll++ }} }}");
+    let session_names = name_clause(layout.sessions)?;
+    let quoted = crate::remote::shell_quote(layout.relative);
+    let size_limit = FILE_CAP + 1;
+    let exclude = match layout.companion {
+        Some(name) => {
+            if !valid_segment(name) {
+                return Err("远程历史目录无效".into());
+            }
+            format!(" ! -path {}", crate::remote::shell_quote(&format!("*/{name}/*")))
+        }
+        None => String::new(),
+    };
+    let session_find = match layout.order {
+        RemoteHistoryOrder::PathDesc => format!(
+            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -print | sort -r"
+        ),
+        RemoteHistoryOrder::MtimeDesc => format!(
+            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -printf '%T@ %p\\n' | sort -nr | cut -d ' ' -f2-"
+        ),
+    };
+    let prepare_pick = if layout.pinned.is_empty() {
+        ": > \"$pick\"; ".to_owned()
+    } else {
+        let pinned_names = name_clause(layout.pinned)?;
+        format!("find {quoted} -type f \\( {pinned_names} \\) -size -{size_limit}c -print > \"$pick\"; ")
+    };
+    let companion = match layout.companion {
+        Some(name) => format!(
+            "stem=$(basename -- \"$path\"); stem=${{stem%.*}}; dir=$(dirname -- \"$path\"); comp=\"$dir/$stem/{name}\"; if [ -d \"$comp\" ]; then find \"$comp\" -type f \\( {session_names} \\) -size -{size_limit}c -print; fi; "
+        ),
+        None => String::new(),
+    };
+    let relative = layout.relative;
     let command = format!(
-        "cd -- \"$HOME\" && if [ ! -d {quoted} ]; then exit 0; fi; list=$(mktemp) && trap 'rm -f \"$list\" \"$list.sorted\"' EXIT && find {quoted} -type f \\( -name 'rollout-*.jsonl' -o -name 'session_index.jsonl' -o -name 'state_*.sqlite' \\) -size -{file_cap}c -print | sort -r > \"$list.sorted\" && awk '{awk}' \"$list.sorted\" > \"$list\" && budget={archive_cap}; while IFS= read -r path; do case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; size=$(wc -c < \"$path\" | tr -d ' '); [ -n \"$size\" ] || continue; [ \"$size\" -le \"$budget\" ] || continue; budget=$((budget - size)); printf 'F\\n%s\\n%s\\n' \"$path\" \"$size\"; cat \"$path\" || exit 1; done < \"$list\"; printf 'Z\\n'",
-        file_cap = FILE_CAP + 1,
-        archive_cap = ARCHIVE_CAP,
+        "cd -- \"$HOME\" && if [ ! -d {quoted} ]; then exit 0; fi; pick=$(mktemp) && trap 'rm -f \"$pick\"' EXIT && {prepare_pick}count=0; {session_find} | while IFS= read -r path; do [ \"$count\" -ge {cap} ] && break; case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; printf '%s\\n' \"$path\"; {companion}count=$((count + 1)); done >> \"$pick\"; budget={archive}; while IFS= read -r path; do case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; size=$(wc -c < \"$path\" | tr -d ' '); [ -n \"$size\" ] || continue; [ \"$size\" -le \"$budget\" ] || continue; budget=$((budget - size)); printf 'F\\n%s\\n%s\\n' \"$path\" \"$size\"; cat \"$path\" || exit 1; done < \"$pick\"; printf 'Z\\n'",
+        cap = ROLLOUT_CAP,
+        archive = ARCHIVE_CAP,
     );
     if command.chars().any(|ch| ch.is_control()) || command.len() > 32_000 {
         return Err("远程历史读取命令无效".into());
     }
     Ok(command)
+}
+
+fn name_clause(globs: &[&str]) -> Result<String, String> {
+    if globs.is_empty() {
+        return Err("远程历史文件名无效".into());
+    }
+    let mut parts = Vec::with_capacity(globs.len());
+    for glob in globs {
+        if !valid_history_glob(glob) {
+            return Err("远程历史文件名无效".into());
+        }
+        parts.push(format!("-name {}", crate::remote::shell_quote(glob)));
+    }
+    Ok(parts.join(" -o "))
+}
+
+fn valid_history_glob(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '*' | '?'))
+}
+
+fn valid_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
 fn valid_relative(value: &str) -> bool {
@@ -262,16 +319,29 @@ mod tests {
 
     #[test]
     fn archive_command_stays_a_single_quoted_shell_line() {
-        let command = archive_command(".codex").unwrap();
+        let command = archive_command(crate::adapters::CODEX.remote_history_layout().unwrap()).unwrap();
         assert!(command.contains("'.codex'"));
         assert!(command.contains("rollout-*.jsonl"));
         assert!(command.contains("session_index.jsonl"));
+        assert!(command.contains("state_*.sqlite"));
         assert!(command.contains("printf 'F\\n%s\\n%s\\n'"));
+        assert!(command.contains("sort -r"));
+        assert!(!command.contains("%T@"));
         assert!(!command.chars().any(|ch| ch.is_control()));
         assert!(command.len() < 32_000);
-        assert!(archive_command("../.codex").is_err());
-        assert!(archive_command("/root/.codex").is_err());
-        assert!(archive_command(".codex/../../etc").is_err());
+        let claude = archive_command(crate::adapters::CLAUDE.remote_history_layout().unwrap()).unwrap();
+        assert!(claude.contains("'.claude/projects'"));
+        assert!(claude.contains("'*.jsonl'"));
+        assert!(claude.contains("subagents"));
+        assert!(claude.contains("%T@"));
+        assert!(!claude.contains("rollout-"));
+        assert!(!claude.chars().any(|ch| ch.is_control()));
+        let layout = crate::adapters::CODEX.remote_history_layout().unwrap();
+        for relative in ["../.codex", "/root/.codex", ".codex/../../etc"] {
+            assert!(archive_command(RemoteHistoryLayout { relative, ..layout }).is_err());
+        }
+        assert!(archive_command(RemoteHistoryLayout { companion: Some("sub;agents"), ..layout }).is_err());
+        assert!(archive_command(RemoteHistoryLayout { sessions: &["*.jsonl;rm"], ..layout }).is_err());
     }
 
     #[test]
@@ -319,5 +389,31 @@ mod tests {
         assert!(details[0].messages.iter().any(|message| message.text.contains("parsed transcript")));
         assert!(details[0].session.id.starts_with("remote-native:target-1:codex:"));
         assert!(details[0].resume_reason.is_none());
+    }
+
+    #[test]
+    fn mirrored_claude_tree_keeps_the_transcript_and_child_log() {
+        let home = tempfile::tempdir().unwrap();
+        let id = "22222222-2222-4222-8222-222222222222";
+        let child_id = "33333333-3333-4333-8333-333333333333";
+        let project = home.path().join(".claude/projects/-src-project");
+        let wires = project.join(id).join("subagents");
+        fs::create_dir_all(&wires).unwrap();
+        fs::write(project.join(format!("{id}.jsonl")), format!(
+            "{{\"type\":\"custom-title\",\"customTitle\":\"远端 Claude 会话\"}}\n{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{id}\",\"cwd\":\"/src/project\",\"timestamp\":\"2026-10-31T08:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"远端会话正文\"}}}}\n{{\"type\":\"assistant\",\"uuid\":\"a1\",\"requestId\":\"req-main\",\"sessionId\":\"{id}\",\"timestamp\":\"2026-10-31T08:00:01Z\",\"message\":{{\"id\":\"msg-main\",\"model\":\"claude-opus\",\"content\":\"远端回复\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":4,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}}}\n"
+        )).unwrap();
+        fs::write(wires.join("agent.jsonl"), format!(
+            "{{\"type\":\"user\",\"uuid\":\"c-user\",\"sessionId\":\"{child_id}\",\"timestamp\":\"2026-10-31T08:00:02Z\",\"message\":{{\"role\":\"user\",\"content\":\"子日志正文\"}}}}\n"
+        )).unwrap();
+        let details = sessions_from_home(&crate::adapters::CLAUDE, home.path(), "target-1").unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].session.title, "远端 Claude 会话");
+        assert_eq!(details[0].session.cwd.as_deref(), Some("/src/project"));
+        assert_eq!(details[0].session.tool_id, "claude_code");
+        assert!(details[0].messages.iter().any(|message| message.text.contains("远端会话正文")));
+        assert!(details[0].messages.iter().any(|message| message.text.contains("远端回复")));
+        assert!(details[0].messages.iter().all(|message| !message.text.contains("子日志正文")));
+        assert!(details[0].children.iter().any(|child| child.messages.iter().any(|message| message.text.contains("子日志正文"))));
+        assert!(details[0].session.id.starts_with("remote-native:target-1:claude_code:"));
     }
 }

@@ -415,7 +415,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
   // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
   // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
-  const MOUNTED_ENDED_LIMIT = 6;
+  const MOUNTED_ENDED_LIMIT = 3;
   const [recentSessionIds, setRecentSessionIds] = useState<string[]>([]);
   useEffect(() => {
     if (!selectedId) return;
@@ -526,12 +526,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const dialogHostId = newDialogOpen ? libraryHostId(workspaceValue.startsWith('remote:') ? workspaceValue : null, remoteProjects) : null;
   const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
   const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
+  // A remote library read is its own SSH handshake. Reuse a recent result when
+  // the workbench or composer opens again; a failed read is retried next time.
+  const remotePromptFetchedAt = useRef(new Map<string, number>());
+  const REMOTE_PROMPT_REFRESH_MS = 45_000;
   // Library prompts can change on the 资料库 page at any time, so re-read them whenever the workbench
   // becomes visible or the composer / new-session dialog opens. Cached items stay on screen meanwhile.
   useEffect(() => {
     if (!active || !nativeAvailable) return;
     const hosts = new Set([composerHostId, dialogHostId].filter((host): host is string => !!host));
     for (const hostId of hosts) {
+      if (hostId !== 'local') {
+        const fetchedAt = remotePromptFetchedAt.current.get(hostId) ?? 0;
+        if (Date.now() - fetchedAt < REMOTE_PROMPT_REFRESH_MS) continue;
+        remotePromptFetchedAt.current.set(hostId, Date.now());
+      }
       const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
       promptRequestSeq.current.set(hostId, seq);
       const current = () => promptRequestSeq.current.get(hostId) === seq;
@@ -541,6 +550,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       void request.then((items) => {
         if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
       }).catch(() => {
+        if (hostId !== 'local') remotePromptFetchedAt.current.delete(hostId);
         if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: prev[hostId] ?? [] }));
       });
     }
@@ -1687,7 +1697,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const focused = session.id === selectedId;
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
-                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!session.projectId?.startsWith('remote:')} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />

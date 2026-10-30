@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
@@ -8,6 +8,23 @@ import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { Button } from '../../components/ui';
 import styles from './RemoteProjectDialog.module.css';
+
+const DIRECTORY_CACHE_MS = 20_000;
+const directoryCache = new Map<string, { at: number; items: string[] }>();
+
+function directoryCacheKey(targetId: string, parent: string) {
+  return `${targetId}\n${parent}`;
+}
+
+function readDirectoryCache(targetId: string, parent: string): string[] | null {
+  const hit = directoryCache.get(directoryCacheKey(targetId, parent));
+  if (!hit || Date.now() - hit.at > DIRECTORY_CACHE_MS) return null;
+  return hit.items;
+}
+
+function writeDirectoryCache(targetId: string, parent: string, items: string[]) {
+  directoryCache.set(directoryCacheKey(targetId, parent), { at: Date.now(), items });
+}
 
 export function RemoteProjectDialog({
   open,
@@ -41,24 +58,45 @@ export function RemoteProjectDialog({
   const target = targets.find((item) => item.id === targetId) ?? null;
   const targetProjects = useMemo(() => projects.filter((item) => item.targetId === targetId), [projects, targetId]);
   const toolOptionsList = useMemo(() => toolOptions(tools), [tools]);
+  // Host lists are rebuilt on every workbench render. Re-applying that array
+  // used to put the default path back while the user was still typing.
+  const openedFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      openedFor.current = null;
+      return;
+    }
+    const token = `${initialTargetId ?? ''}|${initialPath ?? ''}`;
     const nextTarget = targets.find((item) => item.id === (initialTargetId || targetId)) ?? targets[0];
+    if (openedFor.current === token) {
+      if (!targetId && nextTarget) {
+        setTargetId(nextTarget.id);
+        setPath(initialPath || nextTarget.defaultPath || '');
+        setParent(nextTarget.defaultPath || '/');
+      }
+      return;
+    }
+    openedFor.current = token;
     setTargetId(nextTarget?.id ?? '');
     setName('');
     setPath(initialPath || nextTarget?.defaultPath || '');
     setParent(nextTarget?.defaultPath || '/');
     setToolId('');
     setMessage('');
-  }, [open, initialPath, initialTargetId, targets]);
+  }, [open, initialPath, initialTargetId, targets, targetId]);
 
   useEffect(() => {
     if (!open || !targetId || !parent.trim() || target?.authMethod === 'password') return;
     let active = true;
-    setBusy('list');
-    void native.listRemoteDirectories(targetId, parent.trim()).then((items) => {
-      if (active) setDirectories(Array.isArray(items) ? items : []);
+    const parentPath = parent.trim();
+    const cached = readDirectoryCache(targetId, parentPath);
+    if (cached) setDirectories(cached);
+    else setBusy('list');
+    void native.listRemoteDirectories(targetId, parentPath).then((items) => {
+      const next = Array.isArray(items) ? items : [];
+      writeDirectoryCache(targetId, parentPath, next);
+      if (active) setDirectories(next);
     }).catch((error) => {
       if (active) setMessage(error instanceof Error ? error.message : String(error));
     }).finally(() => { if (active) setBusy(''); });
@@ -84,7 +122,13 @@ export function RemoteProjectDialog({
     if (!targetId || !parent.trim()) return;
     if (target?.authMethod === 'password') { setMessage(t('home.remote.passwordDirectoryHint')); return; }
     setBusy('list'); setMessage('');
-    try { setDirectories(await native.listRemoteDirectories(targetId, parent.trim())); }
+    try {
+      const parentPath = parent.trim();
+      const items = await native.listRemoteDirectories(targetId, parentPath);
+      const next = Array.isArray(items) ? items : [];
+      writeDirectoryCache(targetId, parentPath, next);
+      setDirectories(next);
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(''); }
   }
@@ -132,7 +176,7 @@ export function RemoteProjectDialog({
           <div className={styles.cardHeader}><div><strong>{t('home.remote.directoryTitle')}</strong><small>{t('home.remote.directoryHint')}</small></div><Button size="sm" variant="ghost" icon={<Icon name="refresh" size={14} />} disabled={!targetId || busy !== ''} onClick={() => void refreshDirectories()}>{t('home.remote.refreshDirectories')}</Button></div>
           <div className={styles.directoryRow}>
             <label className={styles.field}><span>{t('home.remote.savedDirectory')}</span><select value="" onChange={(event) => chooseExisting(event.target.value)} disabled={!targetId || busy !== ''}><option value="">{directories.length || targetProjects.length ? t('home.remote.chooseDirectory') : t('home.remote.noDirectories')}</option>{directories.map((item) => <option key={item} value={item}>{item}</option>)}{targetProjects.map((item) => <option key={`saved:${item.id}`} value={item.path}>{item.path} · {t('home.remote.saved')}</option>)}</select></label>
-            <label className={styles.field}><span>{t('home.remote.path')}</span><input value={path} onChange={(event) => setPath(event.target.value)} placeholder={t('home.remote.pathPlaceholder')} /></label>
+            <label className={styles.field}><span>{t('home.remote.path')}</span><input value={path} spellCheck={false} autoComplete="off" onChange={(event) => setPath(event.target.value)} placeholder={t('home.remote.pathPlaceholder')} /></label>
           </div>
           {target?.authMethod === 'password' && <small className={styles.fieldHint}>{t('home.remote.passwordDirectoryHint')}</small>}
           <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== '' || target?.authMethod === 'password'} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
