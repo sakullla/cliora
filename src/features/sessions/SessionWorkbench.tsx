@@ -1,3 +1,4 @@
+import { useRemoteIdentity } from '../../lib/remoteReads';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
@@ -525,33 +526,31 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
   // A remote library read is its own SSH handshake. Reuse a recent result when
   // the workbench or composer opens again; a failed read is retried next time.
-  const remotePromptFetchedAt = useRef(new Map<string, number>());
-  const REMOTE_PROMPT_REFRESH_MS = 45_000;
-  // Library prompts can change on the 资料库 page at any time, so re-read them whenever the workbench
-  // becomes visible or the composer / new-session dialog opens. Cached items stay on screen meanwhile.
+  const composerIdentity = useRemoteIdentity(composerHostId);
+  const dialogIdentity = useRemoteIdentity(dialogHostId);
+  const promptHostIdentities = useRef(new Map<string, string>());
   useEffect(() => {
     if (!active || !nativeAvailable) return;
+    const controller = new AbortController();
     const hosts = new Set([composerHostId, dialogHostId].filter((host): host is string => !!host));
     for (const hostId of hosts) {
-      if (hostId !== 'local') {
-        const fetchedAt = remotePromptFetchedAt.current.get(hostId) ?? 0;
-        if (Date.now() - fetchedAt < REMOTE_PROMPT_REFRESH_MS) continue;
-        remotePromptFetchedAt.current.set(hostId, Date.now());
+      const identity = hostId === composerHostId ? composerIdentity : dialogIdentity;
+      if (promptHostIdentities.current.get(hostId) !== identity) {
+        setPromptsByHost(prev => ({ ...prev, [hostId]: [] }));
+        promptHostIdentities.current.set(hostId, identity);
       }
       const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
       promptRequestSeq.current.set(hostId, seq);
-      const current = () => promptRequestSeq.current.get(hostId) === seq;
+      const current = () => !controller.signal.aborted && promptRequestSeq.current.get(hostId) === seq;
       const request = hostId === 'local'
         ? native.listLibraryItems('prompt', null, '')
-        : native.listRemoteLibraryItems(hostId, 'prompt', '');
-      void request.then((items) => {
-        if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
-      }).catch(() => {
-        if (hostId !== 'local') remotePromptFetchedAt.current.delete(hostId);
-        if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: prev[hostId] ?? [] }));
-      });
+        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal });
+      void request.then(items => {
+        if (current()) setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
+      }).catch(() => { /* Preserve this identity's prior successful prompts. */ });
     }
-  }, [active, composerHostId, dialogHostId, composerOpen]);
+    return () => controller.abort();
+  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity]);
   const showEmpty = !loading && !scopedSessions.length;
   const runningCount = scopedSessions.filter((item) => item.running).length;
   const endedCount = scopedSessions.filter(sessionConfirmedEnded).length;

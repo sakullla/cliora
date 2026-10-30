@@ -1,4 +1,5 @@
 export default {
+  remoteRead: { stale: 'Refresh failed. Showing the last successful data, which may be out of date.' },
   language: {
     zh: '中文',
     en: 'English',

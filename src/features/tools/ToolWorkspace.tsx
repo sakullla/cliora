@@ -1,8 +1,9 @@
+import { useRemoteReads, RemoteReadStatus, RemoteReadVisibility } from '../../lib/remoteReads';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable } from '../../lib/native';
+import { nativeAvailable } from '../../lib/native';
 import { configurationApplicationState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
@@ -75,6 +76,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const toolId = descriptor?.id ?? '';
   const [scope, setScope] = useState<Scope>(repair?.scope ?? readStoredContexts()[tool]?.scope ?? 'global');
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? readStoredContexts()[tool]?.projectPath ?? '');
+  const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), active);
+  const native = remoteReads.native;
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
@@ -167,13 +170,19 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     };
     return { probe: toolProbe, customPath: null, profiles: store.profiles ?? [], profileModelSummaries: {}, common: store.common ?? null, binding: null, effectiveContextId: null, nativeContextError: null, snapshots: Object.keys(currentFiles).map((role) => ({ role, text: currentFiles[role], fingerprint: 'remote', error: null })), recoveryNeeded: [] };
   }
+  const remoteLoad = useRef<AbortController | null>(null);
+  useEffect(() => () => remoteLoad.current?.abort(), []);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
     if (remoteTargetId !== 'local') {
       if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
+      const previous = remoteLoad.current;
+      const controller = new AbortController(); remoteLoad.current = controller;
       const request = ++loadSequence.current;
       setLoading(true); setError('');
       try {
-        const [probe, store] = await Promise.all([native.probeRemoteCli(remoteTargetId, nextTool), native.getRemoteToolStore(remoteTargetId, nextTool, nextScope, nextScope === 'project' ? nextProject : null)]);
+        const pending = Promise.all([native.probeRemoteCli(remoteTargetId, nextTool, { fresh, signal: controller.signal }), native.getRemoteToolStore(remoteTargetId, nextTool, nextScope, nextScope === 'project' ? nextProject : null, { fresh, signal: controller.signal })]);
+        previous?.abort();
+        const [probe, store] = await pending;
         if (!alive.current || request !== loadSequence.current) return null;
         const value = makeRemoteWorkspace(probe, store, nextScope);
         setWorkspace(value);
@@ -181,7 +190,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         setCustomPath('');
         return value;
       } catch (failure) {
-        if (alive.current && request === loadSequence.current) { setWorkspace(null); setError(errorText(failure)); }
+        if (alive.current && request === loadSequence.current) { setError(errorText(failure)); }
         return null;
       } finally { if (alive.current && request === loadSequence.current) setLoading(false); }
     }
@@ -217,8 +226,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       setWorkspace(value); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
-  }, [remoteTargetId, descriptor, toolId]);
-  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, reload]);
+  }, [remoteTargetId, descriptor, toolId, native]);
+  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
   useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -316,7 +325,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     if (target && (target.toolId !== toolId || !target.scope || target.scope === 'project' && !target.projectPath)) { setError(t('tools.workspace.scopeChanged')); return; }
     const nextScope = target?.scope ?? scope; const nextPath = target?.projectPath ?? projectPath; const original = currentContext.current; const navigation = epoch.current;
     const value = isRemote
-      ? await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null).then(store => makeRemoteWorkspace({ targetId: remoteTargetId, toolId, executable: '', installed: true, version: null, detail: null }, store, scope)).catch(failure => { setError(errorText(failure)); return null; })
+      ? await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null, { fresh: true }).then(store => makeRemoteWorkspace({ targetId: remoteTargetId, toolId, executable: '', installed: true, version: null, detail: null }, store, scope)).catch(failure => { setError(errorText(failure)); return null; })
       : await native.getRegisteredToolWorkspace(toolId, nextScope, nextPath, false, true).catch(failure => { setError(errorText(failure)); return null; });
     if (!alive.current || original !== currentContext.current || navigation !== epoch.current || !value) return;
     const profile = value.profiles.find(item => item.id === profileId);
@@ -387,7 +396,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
     try {
       if (isRemote) {
-        const store = await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null);
+        const store = await native.getRemoteToolStore(remoteTargetId, toolId, scope, scope === 'project' ? projectPath : null, { fresh: true });
         await native.saveRemoteToolStore(remoteTargetId, toolId, { ...store, currentFiles: profile.files, profiles: store.profiles.map(item => item.id === profile.id ? profile : item) }, scope, scope === 'project' ? projectPath : null);
       } else await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false);
       if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
@@ -493,8 +502,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const toolHeading = <h2 className={styles.chromeTitle}>{managedTools.length > 1 && onPickTool
     ? <FilterSelect className={styles.toolPicker} variant="title" label={t('tools.workspace.switchTool', { name: descriptor.name })} searchLabel={t('tools.workspace.searchTool')} value={toolId} options={managedTools.map(item => ({ value: item.id, label: item.name, icon: <ToolIcon toolId={item.id} size={item.id === toolId ? 22 : 18} /> }))} onChange={id => { if (id !== toolId) onPickTool(id); }} />
     : <><ToolIcon toolId={toolId} size={22} /><strong>{descriptor.name}</strong></>}</h2>;
-  return <section className={styles.workspace} aria-label={t('common.nav.connections')} data-host-target={remoteTargetId}><ToastScope toasts={toasts}>
-    <div className={styles.main}>
+  return <RemoteReadVisibility.Provider value={active}><section className={styles.workspace} aria-label={t('common.nav.connections')} data-host-target={remoteTargetId}><ToastScope toasts={toasts}>
+    <div className={styles.main}><RemoteReadStatus state={remoteReads} />
     <div className={styles.chrome} data-workspace-chrome>
     <div className={styles.chromeHead}>
       {toolHeading}
@@ -535,5 +544,5 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     </Suspense>
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
     </div>
-  </ToastScope></section>;
+  </ToastScope></section></RemoteReadVisibility.Provider>;
 }

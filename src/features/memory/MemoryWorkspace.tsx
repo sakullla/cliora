@@ -1,3 +1,4 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { BoundedCache } from '../../lib/boundedCache';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -90,6 +91,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const remoteReads = useRemoteReads(remoteTargetId, toolId, active);
+  const native = remoteReads.native;
   const feedback = useFeedback();
   const tool = toolName || toolId;
   const mounted = useRef(true);
@@ -120,9 +123,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const can = (operation: MemoryOperation) => memory.operations.includes(operation);
   const limitation = (memory.limitation || '').trim();
 
-  async function readRemoteMemoryStore() {
+  async function readRemoteMemoryStore(fresh = false) {
     if (!remoteTargetId) return { aggregate: null as MemoryAggregate | null, documents: {} as Record<string, MemoryDocument> };
-    const value = await native.getRemoteResourceStore(remoteTargetId, toolId, 'memory') as { aggregate?: MemoryAggregate; documents?: Record<string, MemoryDocument> };
+    const value = await native.getRemoteResourceStore(remoteTargetId, toolId, 'memory', { fresh }) as { aggregate?: MemoryAggregate; documents?: Record<string, MemoryDocument> };
     return { aggregate: value.aggregate ?? null, documents: value.documents ?? {} };
   }
   async function writeRemoteMemoryStore(aggregate: MemoryAggregate, documents: Record<string, MemoryDocument>) {
@@ -210,20 +213,20 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       }
     };
     await Promise.all([refreshFocused(), worker(), worker()]);
-  }, [publishDocs, t, remoteTargetId]);
+  }, [publishDocs, t, remoteTargetId, native]);
 
-  const reload = useCallback(async (): Promise<MemoryAggregate | null> => {
+  const reload = useCallback(async (fresh = true): Promise<MemoryAggregate | null> => {
     const epoch = ++loadEpoch.current;
     ++readEpoch.current;
     setReading(false);
     setRefreshing(true);
     try {
-      const remote = remoteTargetId ? await readRemoteMemoryStore() : null;
-      if (remoteTargetId && remote) remoteDocuments.current = remote.documents;
+      const remote = remoteTargetId ? await readRemoteMemoryStore(fresh) : null;
       const value = remoteTargetId
         ? (remote?.aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false })
         : await native.listAllMemories(toolId);
       if (!mounted.current || epoch !== loadEpoch.current) return null;
+      if (remoteTargetId && remote) remoteDocuments.current = remote.documents;
       // An externally deleted entry must not make an unsaved editor disappear.
       setMissingDraft(false);
       const editingKey = dirtyRef.current ? openedRef.current?.key : null;
@@ -232,7 +235,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         if (retained) { value.entries.push(retained); setMissingDraft(true); }
       }
       setAggregate(value);
-      aggregateCache.set(`${remoteTargetId ?? 'local'}:${toolId}`, value);
+      if (!remoteTargetId) aggregateCache.set(`${remoteTargetId ?? 'local'}:${toolId}`, value);
       setListFailure(null);
       void loadDocs(value, epoch);
       return value;
@@ -241,7 +244,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       setListFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: async () => { await reload(); } });
       return null;
     } finally { if (mounted.current && epoch === loadEpoch.current) setRefreshing(false); }
-  }, [toolId, t, loadDocs, remoteTargetId]);
+  }, [toolId, t, loadDocs, remoteTargetId, native]);
 
   useEffect(() => {
     ++loadEpoch.current; ++readEpoch.current; docRevision.current = {};
@@ -250,7 +253,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [toolId, publishDocs]);
   useEffect(() => {
     if (!active) return;
-    const cached = aggregateCache.get(`${remoteTargetId ?? 'local'}:${toolId}`);
+    const cached = !remoteTargetId ? aggregateCache.get(`${remoteTargetId ?? 'local'}:${toolId}`) : undefined;
     if (cached) {
       const epoch = ++loadEpoch.current;
       setAggregate(cached);
@@ -258,7 +261,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       void loadDocs(cached, epoch);
       return;
     }
-    void reload();
+    void reload(false);
   }, [active, toolId, loadDocs, reload]);
 
   const report = useCallback((error: unknown, summary: string, retry: (() => Promise<void>) | null) => {
@@ -425,7 +428,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setBusy(true);
     try {
       if (remoteTargetId) {
-        const remote = await readRemoteMemoryStore();
+        const remote = await readRemoteMemoryStore(true);
         const saved: MemoryDocument = { id: target.id, path: target.target.storeDirectory ? `${target.target.storeDirectory}/${target.id}` : target.id, text, fingerprint: `remote:${Date.now()}`, enabled: aggregate?.entries.find(item => storeKey(item.target) === storeKey(target.target) && item.id === target.id)?.enabled ?? true, inUse: true, detail: '远程主机资源' };
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const nextEntries = nextAggregate.entries.map(entry => entry.id === target.id && storeKey(entry.target) === storeKey(target.target) ? { ...entry, path: saved.path, fingerprint: saved.fingerprint, previewText: text, readError: undefined } : entry);
@@ -513,7 +516,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setBusy(true);
     try {
       if (remoteTargetId) {
-        const remote = await readRemoteMemoryStore();
+        const remote = await readRemoteMemoryStore(true);
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const target = destination.target;
         const path = target.storeDirectory ? `${target.storeDirectory}/${id}` : `$HOME/.cliora/memory/${id}`;
@@ -566,7 +569,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setBusy(true);
     try {
       if (remoteTargetId) {
-        const remote = await readRemoteMemoryStore();
+        const remote = await readRemoteMemoryStore(true);
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const next = { ...nextAggregate, entries: nextAggregate.entries.filter(entry => !(entry.id === row.entry.id && storeKey(entry.target) === storeKey(row.entry.target))) };
         const documents = { ...remote.documents }; delete documents[row.key];
@@ -627,7 +630,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setBusy(true);
     try {
       if (remoteTargetId) {
-        const remote = await readRemoteMemoryStore();
+        const remote = await readRemoteMemoryStore(true);
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const next = { ...nextAggregate, entries: nextAggregate.entries.map(entry => !id || (entry.id === id && storeKey(entry.target) === storeKey(target)) ? { ...entry, enabled } : entry) };
         const documents = { ...remote.documents }; Object.values(documents).forEach(document => { if (!id || document.id === id) document.enabled = enabled; });
@@ -650,7 +653,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setBusy(true);
     try {
       if (remoteTargetId) {
-        const remote = await readRemoteMemoryStore();
+        const remote = await readRemoteMemoryStore(true);
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const next = { ...nextAggregate, switchGroups: (nextAggregate.switchGroups ?? []).map(group => group.id === groupId ? { ...group, enabled } : group) };
         await writeRemoteMemoryStore(next, remote.documents); if (!mounted.current) return; setFailure(null); await reload(); return;
@@ -801,7 +804,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </> : undefined}
     listFooter={footer}
     listFooterLabel={t('common.memory.switches')}
-    notices={<>
+    notices={<><RemoteReadStatus state={remoteReads} />
       {missingDraft && <StatusBanner tone="warning">{t('common.memory.missingDraft')}</StatusBanner>}
       {Object.keys(docErrors).length > 0 && <StatusBanner tone="warning" action={<Button disabled={busy || refreshing} onClick={() => void reload()}>{t('common.memory.retryBodies')}</Button>}>{t('common.memory.partialBodies', { count: Object.keys(docErrors).length })} {Object.values(docErrors)[0]}</StatusBanner>}
       {listFailure && <StatusBanner tone="error" action={listFailure.retry ? <Button onClick={() => { const retry = listFailure.retry; setListFailure(null); void retry?.(); }}>{t('common.memory.retry')}</Button> : undefined}>{listFailure.message}</StatusBanner>}

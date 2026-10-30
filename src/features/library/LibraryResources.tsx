@@ -1,3 +1,4 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -36,8 +37,8 @@ function remoteSkillPackages(toolIds: string[], stores: unknown[]): SkillPackage
   }));
 }
 
-async function readRemoteSkillStores(targetId: string, toolIds: string[]) {
-  const bundle = await native.listRemoteResourceStores(targetId, toolIds, 'skills');
+async function readRemoteSkillStores(targetId: string, toolIds: string[], reader = native, fresh = false) {
+  const bundle = await reader.listRemoteResourceStores(targetId, toolIds, 'skills', { fresh });
   return toolIds.map(toolId => bundle.stores?.[toolId] ?? { entries: [] });
 }
 
@@ -48,6 +49,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const remoteToolId = tools[0]?.id ?? 'codex';
   const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
   const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
+  const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
+  const native = remoteReads.native;
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [busy, setBusy] = useState(false);
@@ -67,8 +70,9 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (!active) return;
     if (remoteTargetId) {
       let live = true;
-      void readRemoteSkillStores(remoteTargetId, remoteToolIds).then(values => {
-        if (!live) return;
+      const sequence = ++reloadSequence.current;
+      void readRemoteSkillStores(remoteTargetId, remoteToolIds, native).then(values => {
+        if (!live || sequence !== reloadSequence.current) return;
         setPackages(remoteSkillPackages(remoteToolIds, values));
         setInstallations([]);
       }).catch(value => { if (live) setError(failure(value)); });
@@ -96,9 +100,14 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (!busy) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
 
+  const reloadSequence = useRef(0);
+  useEffect(() => () => { reloadSequence.current++; }, [remoteTargetId, active]);
   async function reloadSkills() {
+    const sequence = ++reloadSequence.current;
     if (remoteTargetId) {
-      setPackages(remoteSkillPackages(remoteToolIds, await readRemoteSkillStores(remoteTargetId, remoteToolIds)));
+      const values = await readRemoteSkillStores(remoteTargetId, remoteToolIds, native, true);
+      if (sequence !== reloadSequence.current) return;
+      setPackages(remoteSkillPackages(remoteToolIds, values));
       setInstallations([]);
       return;
     }
@@ -224,7 +233,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { fresh: true }) as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
         const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
         const entries = (store.entries ?? []).filter(value => value !== entry);
         const documents = { ...(store.documents ?? {}) };
@@ -245,7 +254,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     setBusy(true); setError(''); setNotice('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { fresh: true }) as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
         const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
         if (entry) {
           const next = (store.entries ?? []).filter(value => value !== entry);
@@ -274,7 +283,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const libraryPackages = packages.filter((item) => item.inLibrary !== false)
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
-  return <div className={styles.layout}>
+  return <div className={styles.layout}><RemoteReadStatus state={remoteReads} />
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {

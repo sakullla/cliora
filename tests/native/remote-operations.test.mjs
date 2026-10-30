@@ -99,3 +99,82 @@ test('writes never share or replay and cancellation waits for the native unknown
   await assert.rejects(a.promise, error => error === unknown);
   await assert.rejects(b.promise, error => error === unknown);
 });
+
+test('nonempty cold/hot reads avoid transport, clone editable values, and merge refreshes', async () => {
+  let calls = 0;
+  let finish;
+  const operations = new RemoteOperations(async () => {
+    calls++;
+    return calls === 1 ? { entries: [{ name: 'real-row' }] } : new Promise(resolve => { finish = resolve; });
+  });
+  const read = options => operations.start('resource', { toolId: 'fixture', scope: 'project', projectPath: '/one' }, 'host', 'read', { shareKey: 'resource', targetRevision: 7, ...options }).promise;
+  const first = await read();
+  first.entries[0].name = 'unsaved draft';
+  assert.equal((await read()).entries[0].name, 'real-row');
+  assert.equal(calls, 1, 'hot load must do zero additional remote work');
+  const a = read({ fresh: true });
+  const b = read({ fresh: true });
+  assert.equal(calls, 2, 'concurrent refreshes must add exactly one transport request');
+  finish({ entries: [{ name: 'external edit' }] });
+  assert.deepEqual(await a, await b);
+  assert.equal((await read()).entries[0].name, 'external edit');
+  assert.equal(calls, 2);
+});
+
+test('invalidation rejects a late old result and cannot refill a replacement identity', async () => {
+  let finishOld;
+  let calls = 0;
+  const operations = new RemoteOperations(async () => ++calls === 1 ? new Promise(resolve => { finishOld = resolve; }) : ['new-host-history']);
+  const read = revision => operations.start('history', {}, 'same-id', 'read', { shareKey: 'history', targetRevision: revision }).promise;
+  const old = read(1);
+  const rejected = assert.rejects(old, { reason: 'identity' });
+  operations.invalidate('same-id');
+  assert.deepEqual(await read(2), ['new-host-history']);
+  finishOld(['old-host-history']);
+  await rejected;
+  assert.deepEqual(await read(2), ['new-host-history']);
+  assert.equal(calls, 2);
+});
+
+test('a failed refresh preserves no successful replacement and another host remains independently warm', async () => {
+  const calls = [];
+  const operations = new RemoteOperations(async (name, args) => {
+    calls.push(args.operation.targetId);
+    if (args.operation.targetId === 'slow') throw new Error('offline');
+    return [{ name }];
+  });
+  const read = host => operations.start('read', {}, host, 'read', { shareKey: 'rows' }).promise;
+  await read('fast');
+  await assert.rejects(read('slow'), /offline/);
+  operations.invalidate('slow');
+  assert.equal((await read('fast')).length, 1);
+  await assert.rejects(read('slow'), /offline/);
+  assert.deepEqual(calls, ['fast', 'slow', 'slow']);
+});
+
+test('settled cache is bounded and isolates tools, scopes, projects, and revisions', async () => {
+  let calls = 0;
+  const operations = new RemoteOperations(async (_name, args) => { calls++; return [args]; });
+  const read = (project, revision = 1, scope = 'project', toolId = 'one') => operations.start('store', { project, scope, toolId }, 'host', 'read', { shareKey: 'store', targetRevision: revision }).promise;
+  await read('/first');
+  await read('/first', 2);
+  await read('/first', 1, 'global');
+  await read('/first', 1, 'project', 'two');
+  assert.equal(calls, 4);
+  for (let i = 0; i < 100; i++) await read(`/project-${i}`);
+  await read('/first');
+  assert.equal(calls, 105, 'oldest entries must be evicted instead of growing without bound');
+});
+
+test('expired reads revalidate and a cancelled final subscriber never populates the settled cache', async () => {
+  const f = fixture();
+  const first = f.operations.start('read', {}, 'host', 'read', { shareKey: 'rows', cacheTtlMs: 1 });
+  first.cancel();
+  await assert.rejects(first.promise, { reason: 'cancelled' });
+  f.finish(['late']);
+  await new Promise(resolve => setTimeout(resolve, 3));
+  await f.operations.start('read', {}, 'host', 'read', { shareKey: 'rows', cacheTtlMs: 1 }).promise;
+  await new Promise(resolve => setTimeout(resolve, 3));
+  await f.operations.start('read', {}, 'host', 'read', { shareKey: 'rows', cacheTtlMs: 1 }).promise;
+  assert.equal(f.calls.filter(call => call.name === 'read').length, 3);
+});

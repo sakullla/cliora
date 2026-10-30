@@ -1,3 +1,4 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +13,6 @@ import { confirmAction } from '../../lib/confirm';
 import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
-import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
@@ -42,6 +42,8 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const remoteToolId = tools[0]?.id ?? 'codex';
   const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
   const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
+  const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
+  const native = remoteReads.native;
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [placements, setPlacements] = useState<McpPlacement[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -68,14 +70,14 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [removalConflict, setRemovalConflict] = useState<{ draft: McpDraft; target: McpDraftTargetRequest; result: McpTargetResult } | null>(null);
   const [writeConflict, setWriteConflict] = useState<{ definitionId: string; name: string; target: McpTargetRequest; result: McpTargetResult } | null>(null);
 
-  async function reload() {
+  async function reload(fresh = true) {
     const request = ++loadRequest.current;
     setLoading(true);
     setError('');
     setLoadError('');
     try {
       if (remoteTargetId) {
-        const bundle = await native.listRemoteResourceStores(remoteTargetId, remoteToolIds, 'mcp');
+        const bundle = await native.listRemoteResourceStores(remoteTargetId, remoteToolIds, 'mcp', { fresh });
         const stores = remoteToolIds.map(toolId => (bundle.stores?.[toolId] ?? { entries: [] }) as { entries?: NativeMcpEntry[] });
         const items: McpDefinition[] = stores.flatMap((store, toolIndex) => (store.entries ?? []).map((entry, index) => ({ id: `remote:${remoteToolIds[toolIndex]}:${entry.name}`, name: entry.name, transport: entry.transport, command: entry.command, args: entry.args ?? [], url: entry.url ?? '', env: entry.env ?? {}, headers: entry.headers ?? {}, inLibrary: entry.inLibrary !== false, version: index + 1 })));
         if (request !== loadRequest.current) return;
@@ -101,7 +103,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
 
   useEffect(() => {
     if (!active) return;
-    void reload();
+    void reload(false);
     return () => { loadRequest.current++; };
   }, [active, remoteTargetId, remoteToolIds.join('|')]);
 
@@ -185,7 +187,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: (store.entries ?? []).filter(entry => entry.name !== item.name), definitions: (store.definitions ?? []).filter(entry => entry.name !== item.name) });
       } else await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(current => current.filter(entry => entry.id !== item.id));
@@ -201,7 +203,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       const name = mcpCopyName(item.name, definitions.map((entry) => entry.name));
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         const source = (store.entries ?? []).find(entry => entry.name === item.name);
         if (!source) throw new Error(t('library.resources.loadFailedDetail'));
         const copied = { ...source, name };
@@ -231,7 +233,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       const alreadyPlaced = !!draft.id && placements.some((item) => item.definitionId === draft.id);
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(normalized.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const targetToolId = remoteToolFor(normalized.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         const entries = (store.entries ?? []).filter(entry => entry.name !== normalized.name);
         const remoteEntry = { ...normalized, enabled: true, protectedValues: false };
         await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: [...entries, remoteEntry], definitions: [...(store.definitions ?? []).filter(entry => entry.name !== normalized.name), remoteEntry] });
@@ -317,7 +319,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError(''); setNotice('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         const entries = (store.entries ?? []).map(entry => entry.name === item.name ? { ...entry, enabled: !place } : entry);
         await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries, definitions: store.definitions ?? [] });
         await reload();
@@ -379,7 +381,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           ? <EmptyState title={t('library.resources.emptyMcpTitle')} detail={t('library.resources.emptyMcpDetail')} action={<div className={styles.emptyActions}><Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => editMcp()}>{t('library.resources.emptyMcpCreate')}</Button><Button icon={<Icon name="clipboard" size={14} />} onClick={() => editMcp(undefined, true)}>{t('library.resources.pasteCreate')}</Button></div>} icon="connections" />
           : undefined;
 
-  return <>
+  return <><RemoteReadStatus state={remoteReads} />
     <section className={styles.layout} aria-label={t('library.resources.mcpWorkspaceAria')}>
       <div className={styles.toolbar}>
         <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />

@@ -119,7 +119,7 @@ test('remote claude can open and apply the native file in use', async ({ page })
 });
 
 
-test('confirmed missing remote CLI retains installation and configuration after a refresh', async ({ page }) => {
+test('confirmed missing remote CLI stays warm on focus and retains installation and configuration', async ({ page }) => {
   await install(page, { probe: missingProbe });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
@@ -129,7 +129,7 @@ test('confirmed missing remote CLI retains installation and configuration after 
   await expect(page.getByText('配置读取失败', { exact: true })).toHaveCount(0);
   const before = await page.evaluate(() => (window as unknown as { __remoteProbeState: { calls: number } }).__remoteProbeState.calls);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __remoteProbeState: { calls: number } }).__remoteProbeState.calls)).toBeGreaterThan(before);
+  expect(await page.evaluate(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); return (window as unknown as { __remoteProbeState: { calls: number } }).__remoteProbeState.calls; })).toBe(before);
   await expect(page.getByRole('button', { name: '安装', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: '网关', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '正在使用的文件' }).click();

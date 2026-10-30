@@ -11,7 +11,7 @@ import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, Commo
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, WorkbenchGitContext, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
-import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
@@ -46,13 +46,35 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 }
 
 const remoteOperations = new RemoteOperations(command);
+const remoteIdentityListeners = new Set<() => void>();
+export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentityListeners.add(listener); return () => { remoteIdentityListeners.delete(listener); }; };
+const remoteViewIdentities = new Map<string, number>();
+const remoteConnectionKeys = new Map<string, string>();
+export const getRemoteIdentity = (targetId: string | null | undefined) => `${targetId ?? 'local'}:${remoteViewIdentities.get(targetId ?? '') ?? ''}`;
+function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged = true) {
+  if (remoteRevisions.get(target.id) === target.updatedAt) return;
+  const connectionKey = JSON.stringify([target.host, target.port, target.user, target.authMethod, target.identityFile, target.sshConfig, target.enabled]);
+  if (remoteConnectionKeys.get(target.id) !== connectionKey || authenticationMayHaveChanged) remoteViewIdentities.set(target.id, target.updatedAt);
+  remoteConnectionKeys.set(target.id, connectionKey);
+  remoteRevisions.set(target.id, target.updatedAt);
+  remoteOperations.invalidate(target.id);
+  for (const listener of remoteIdentityListeners) listener();
+}
+const cachedRemoteReads = new Set(['list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
 const remoteRevisions = new Map<string, number>();
 function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
   const target = args.target as RemoteTarget | undefined;
   const targetId = typeof args.targetId === 'string' ? args.targetId : target?.id ?? options?.targetId ?? '';
-  return remoteOperations.start<T>(name, args, targetId, kind, {
-    targetRevision: target?.updatedAt ?? remoteRevisions.get(targetId), ...options,
+  const cacheable = kind === 'read' && cachedRemoteReads.has(name);
+  // Refresh is request policy, never part of the resource identity.
+  const identityArgs = (name === 'list_remote_native_history' || name === 'list_remote_native_history_snapshot') ? { ...args, refresh: false } : args;
+  if (kind === 'write') remoteOperations.invalidate(targetId);
+  const result = remoteOperations.start<T>(name, identityArgs, targetId, kind, {
+    targetRevision: target?.updatedAt ?? remoteRevisions.get(targetId),
+    ...(cacheable ? { shareKey: name, cacheTtlMs: 30_000 } : {}),
+    ...options, fresh: options?.fresh || args.refresh === true,
   }).promise;
+  return kind === 'write' ? result.finally(() => remoteOperations.invalidate(targetId)) : result;
 }
 
 // Share only overlapping reads. Settled workspace data is always read again so
@@ -225,17 +247,17 @@ export const native = {
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
   listRemoteTargets: async () => {
     const targets = await command<RemoteTarget[]>('list_remote_targets');
-    for (const target of targets) remoteRevisions.set(target.id, target.updatedAt);
+    for (const target of targets) rememberRemoteTarget(target);
     return targets;
   },
   /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
   saveRemoteTarget: async (target: RemoteTarget, password?: string | null) => {
     const saved = await command<RemoteTarget>('save_remote_target', { target, password: password || null });
-    remoteRevisions.set(saved.id, saved.updatedAt);
+    rememberRemoteTarget(saved, !!password);
     return saved;
   },
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
-  deleteRemoteTarget: (id: string) => command<void>('delete_remote_target', { id }),
+  deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); for (const listener of remoteIdentityListeners) listener(); },
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
   listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<string[]>('list_remote_directories', { targetId, parent }, 'read', options),
   createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),
@@ -280,6 +302,7 @@ export const native = {
   listRemoteSessions: () => command<RemoteSessionIndexEntry[]>('list_remote_sessions'),
   listRemoteHistory: () => command<RemoteSessionIndexEntry[]>('list_remote_history'),
   listRemoteNativeHistory: (targetId: string, refresh = false, options?: RemoteOperationOptions) => remoteCommand<HistorySession[]>('list_remote_native_history', { targetId, refresh }, 'read', options),
+  listRemoteNativeHistorySnapshot: (targetId: string, refresh = false, options?: RemoteOperationOptions) => remoteCommand<RemoteHistorySnapshot>('list_remote_native_history_snapshot', { targetId, refresh }, 'read', options),
   getRemoteNativeHistory: (targetId: string, id: string, options?: RemoteOperationOptions) => remoteCommand<HistoryDetail>('get_remote_native_history', { targetId, id }, 'read', options),
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
@@ -373,7 +396,7 @@ export const replaceConfigurationText = (draft: ConfigurationDraft, files: Recor
 
 // Workspace drafts retain their source/baseline in Rust. Profile/common saves are DB only.
 export const beginConfigurationDraft = (request: import('../types/configuration').ConfigurationBeginRequest, options?: RemoteOperationOptions) => request.remoteTargetId
-  ? remoteCommand<ConfigurationDraft>('begin_configuration_draft', { request, targetId: request.remoteTargetId }, 'read', options)
+  ? remoteCommand<ConfigurationDraft>('begin_configuration_draft', { request, targetId: request.remoteTargetId }, 'read', { ...options, fresh: true }).catch(error => { void command('cancel_configuration_draft', { sessionId: request.sessionId }).catch(() => {}); throw error; })
   : command<ConfigurationDraft>('begin_configuration_draft', { request });
 export const updateConfigurationDraft = (draft: ConfigurationDraft, profile: RegisteredProfile) => command<ConfigurationDraft>('update_configuration_draft', { draft, profile });
 export const selectConfigurationCredential = (draft: ConfigurationDraft, credential: import('../types/configuration').ConfigurationCredential) => command<ConfigurationDraft>('select_configuration_credential', { draft, credential });

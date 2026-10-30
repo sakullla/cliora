@@ -1,4 +1,5 @@
 export default {
+  remoteRead: { stale: '刷新失败，当前显示的是上次成功读取的内容，可能已过期。' },
   language: {
     zh: '中文',
     en: 'English',

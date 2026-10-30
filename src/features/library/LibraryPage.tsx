@@ -1,8 +1,9 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { CodeEditor } from '../../components/CodeEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
-import { native, nativeAvailable } from '../../lib/native';
+import { nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
@@ -92,6 +93,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [createSignal, setCreateSignal] = useState(0);
   const [projectFilter, setProjectFilter] = useState('*');
   const [categoryFilter, setCategoryFilter] = useState('*');
+  const remoteReads = useRemoteReads(remoteTargetId, '', active);
+  const native = remoteReads.native;
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [counts, setCounts] = useState<Partial<Record<LibrarySection, number>>>({});
   const [countStamp, setCountStamp] = useState(0);
@@ -167,9 +170,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     if (!nativeAvailable) return;
     if (remoteTargetId !== 'local') {
       let live = true;
+      const controller = new AbortController();
       setListLoading(true);
-      const timer = window.setTimeout(() => { void native.listRemoteLibraryItems(remoteTargetId, kind, search).then((result) => { if (live) { setItems(result); setListLoading(false); } }).catch((value) => { if (live) { setItems([]); setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } }); }, search ? 180 : 0);
-      return () => { live = false; window.clearTimeout(timer); };
+      const timer = window.setTimeout(() => { void native.listRemoteLibraryItems(remoteTargetId, kind, search, { signal: controller.signal }).then((result) => { if (live) { setItems(result); setListLoading(false); } }).catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } }); }, search ? 180 : 0);
+      return () => { live = false; controller.abort(); window.clearTimeout(timer); };
     }
     let live = true;
     setListLoading(true);
@@ -225,7 +229,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     setSection(next); setDraft(null); setSavedText(''); toasts.setNotice(null); toasts.setError(null); clearDialogResult();
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
-  async function refresh(nextKind = kind) { setItems(await (remoteTargetId === 'local' ? native.listLibraryItems(nextKind, null, search) : native.listRemoteLibraryItems(remoteTargetId, nextKind, search))); }
+  const refreshSequence = useRef(0);
+  useEffect(() => () => { refreshSequence.current++; }, [remoteTargetId, kind, search, active]);
+  async function refresh(nextKind = kind) {
+    const sequence = ++refreshSequence.current;
+    const items = await (remoteTargetId === 'local' ? native.listLibraryItems(nextKind, null, search) : native.listRemoteLibraryItems(remoteTargetId, nextKind, search, { fresh: true }));
+    if (sequence === refreshSequence.current && mounted.current) setItems(items);
+  }
   function keepSaved(saved: LibraryItem) {
     setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
   }
@@ -402,7 +412,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['mcp', 'connections', 'MCP'],
     ['skill', 'package', 'Skill'],
   ];
-  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><ToastScope toasts={toasts}>
+  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><RemoteReadStatus state={remoteReads} /><ToastScope toasts={toasts}>
     <Toolbar className={styles.libraryBar} role="group" primary={<Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>

@@ -120,9 +120,10 @@ export function ConfigurationWorkspaceEditor(props: Props) {
 
   useEffect(() => {
     alive.current = true;
+    const controller = new AbortController();
     const generation = ++opening.current;
     const id = `configuration-${crypto.randomUUID()}`;
-    void beginConfigurationDraft({ toolId, scope, projectPath: projectPath || null, sessionId: id, subject, profile: props.profile, remoteTargetId }).then(value => {
+    void beginConfigurationDraft({ toolId, scope, projectPath: projectPath || null, sessionId: id, subject, profile: props.profile, remoteTargetId }, { signal: controller.signal }).then(value => {
       if (!alive.current || opening.current !== generation) { void cancelConfigurationDraft(id).catch(() => {}); return; }
       if (!value) throw new Error(t('tools.config.noCapability'));
       if (Editor && !value.descriptor) throw new Error(value.issues.find(issue => issue.message)?.message || t('tools.config.noCapability'));
@@ -135,7 +136,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       }
     }).catch(failure => { if (alive.current && opening.current === generation) { setError(messageOf(failure)); setLoading(false); } });
     if (subject === 'common' && !remoteTargetId) void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => { if (alive.current) setError(messageOf(failure)); });
-    return () => { alive.current = false; opening.current++; sequence.current++; session.current?.close(); session.current = null; void cancelConfigurationDraft(id).catch(() => {}); latest.current.onDirtyChange(false); };
+    return () => { controller.abort(); alive.current = false; opening.current++; sequence.current++; session.current?.close(); session.current = null; void cancelConfigurationDraft(id).catch(() => {}); latest.current.onDirtyChange(false); };
   }, []);
   useEffect(() => {
     if (subject !== 'profile' || connectionChainAbsent || remoteTargetId) return;

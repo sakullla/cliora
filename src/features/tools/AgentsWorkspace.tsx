@@ -1,6 +1,6 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { CodeEditor } from '../../components/CodeEditor';
 import type { Scope } from '../../types/native';
@@ -30,6 +30,8 @@ function pluginOwner(owner: string) { const match = /^插件[:：]\s*(.+)$/.exec
 
 export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, focusPath = null, onOpenPlugin }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; remoteTargetId?: string | null; onDirtyChange: (value: boolean) => void; focusPath?: { path: string; token: number } | null; onOpenPlugin?: (pluginId: string) => void }) {
   const { t } = useTranslation();
+  const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), true);
+  const native = remoteReads.native;
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
   const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
   const [selected, setSelected] = useState<AgentEntry | null>(null);
@@ -62,6 +64,21 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     return () => { generation.current += 1; };
   }, [target, remoteTargetId]);
 
+  const wasVisible = useRef(remoteReads.active);
+  useEffect(() => {
+    const reopened = remoteReads.active && !wasVisible.current; wasVisible.current = remoteReads.active;
+    if (!reopened || !remoteTargetId) return;
+    const id = generation.current; let live = true;
+    setBusy(true);
+    // Inventory updates never replace the independently edited document.
+    void native.getRemoteResourceStore(remoteTargetId, toolId, 'agents').then(value => {
+      const next = (value as { snapshot?: AgentSnapshot }).snapshot;
+      if (live && id === generation.current && next) { setSnapshot(next); setError(''); }
+    }).catch(error => { if (live && id === generation.current) setError(message(error)); })
+      .finally(() => { if (live && id === generation.current) setBusy(false); });
+    return () => { live = false; };
+  }, [remoteReads.active]);
+
   function applyEntry(entry: AgentEntry | null) {
     setSelected(entry);
     if (!entry) return;
@@ -80,7 +97,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setBusy(true); setError('');
     try {
       const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents') as { snapshot?: AgentSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', supported: true, format: 'text' as const, detail: '远程主机资源', template: '' }, entries: [], baseline: 'remote', detail: '' })
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents', { fresh: true }) as { snapshot?: AgentSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', supported: true, format: 'text' as const, detail: '远程主机资源', template: '' }, entries: [], baseline: 'remote', detail: '' })
         : await native.scanNativeAgents(target);
       if (id !== generation.current) return;
       setSnapshot(value);
@@ -143,7 +160,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents') as { snapshot?: AgentSnapshot };
+        const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents', { fresh: true }) as { snapshot?: AgentSnapshot };
         const current = store.snapshot ?? snapshot;
         if (!current) throw new Error(t('tools.config.loadFailed'));
         const selectedId = action === 'restore' ? null : entry?.id ?? selected?.id ?? null;
@@ -250,7 +267,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       {account && <span className={styles.account} title={account}><Icon name="user" size={12} />{account}</span>}
       {snapshot && <details className={styles.compat}><summary>{t('tools.agents.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p>{supported && entries.length > 0 && <p>{t('tools.agents.listNote')}</p>}</details>}
     </>}
-    notices={notices}
+    notices={<><RemoteReadStatus state={remoteReads} />{notices}</>}
     list={!snapshot && busy
       ? <div className={styles.listWrap} role="status" aria-label={t('tools.agents.loading')}><SkeletonRows count={3} /></div>
       : !snapshot

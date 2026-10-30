@@ -1,7 +1,7 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { CodeEditor } from '../../components/CodeEditor';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import type { Scope } from '../../types/native';
 import type { McpCommitResult, McpDefinition, McpDraft, McpDraftPreview, McpTargetRequest, NativeMcpEntry } from '../../types/resources';
@@ -37,6 +37,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   onOpenLibrary?: (definitionId: string) => void;
 }) {
   const { t } = useTranslation();
+  const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), true);
+  const native = remoteReads.native;
   const id = useId();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
@@ -86,13 +88,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const refreshNative = useCallback(async () => {
+  const refreshNative = useCallback(async (fresh = true) => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setListLoading(false); return; }
     const request = ++loadSequence.current;
     setListLoading(true);
     try {
       const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[] }).entries ?? [])
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh }) as { entries?: NativeMcpEntry[] }).entries ?? [])
         : await native.listNativeMcp(readTarget);
       if (!mounted.current || request !== loadSequence.current) return;
       setNativeEntries(value); setLoadError(''); setStale(false);
@@ -102,8 +104,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     } finally {
       if (mounted.current && request === loadSequence.current) setListLoading(false);
     }
-  }, [toolId, scope, project, readTarget, nativeEntries.length, remoteTargetId]);
-  useEffect(() => { void refreshNative(); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative]);
+  }, [toolId, scope, project, readTarget, nativeEntries.length, remoteTargetId, native]);
+  useEffect(() => { if (remoteReads.active) void refreshNative(false); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative]);
   useEffect(() => {
     if (remoteTargetId) {
       void native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp').then(value => {
@@ -166,7 +168,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     try {
       const next = normalizedDraft();
       if (remoteTargetId) {
-        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: false };
         const entries = [...(current.entries ?? []).filter(item => item.name !== entry.name), entry];
         const definition: McpDefinition = { id: next.id ?? crypto.randomUUID(), name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, version: (current.definitions ?? []).find(item => item.id === next.id)?.version ?? 1 };
@@ -228,7 +230,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp') as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { entries: (current.entries ?? []).filter(entry => entry.name !== item.name), definitions: (current.definitions ?? []).filter(entry => entry.name !== item.name) });
       } else {
         await native.removeNativeMcp({ ...readTarget, enabled: item.enabled }, item.name);
@@ -280,7 +282,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
         <IconButton variant="primary" size="sm" aria-label={t('tools.mcp.add')} title={t('tools.mcp.add')} disabled={!canAdd} onClick={() => void startNew()} icon={<Icon name="plus" size={16} />} />
       </>}
       search={(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) ? <SearchField type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
-      notices={<>{stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}{loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><button type="button" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</button></div>}</>}
+      notices={<><RemoteReadStatus state={remoteReads} />{stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}{loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><button type="button" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</button></div>}</>}
       list={listBody}
       placeholder={!composing && nativeEntries.length > 0 ? <div className={doc.placeholder}><span className={doc.placeholderIcon} aria-hidden="true"><Icon name="connections" size={22} /></span><strong>{t('tools.mcp.selectHint')}</strong><p>{t('tools.mcp.selectDetail')}</p></div> : null}
       document={composing ? <article className={doc.doc} aria-label={articleLabel}>

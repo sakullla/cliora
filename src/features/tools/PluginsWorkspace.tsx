@@ -1,3 +1,4 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { uiAdapterFor } from '../../adapters';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -98,8 +99,10 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   openTabs?: Array<'agents' | 'skills'>;
 }) {
   const { t } = useTranslation();
+  const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), true);
+  const native = remoteReads.native;
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
-  const cacheKey = JSON.stringify([remoteTargetId, target]);
+  const cacheKey = JSON.stringify([remoteReads.identity, target]);
   const [snapshot, setSnapshot] = useState<PluginSnapshot | null>(null);
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
@@ -137,7 +140,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   useEffect(() => {
     const id = ++generation.current;
     setSnapshot(null); setError(''); setNotice(''); setBusy(true); setStale(false); setSelectedKey(null); setOperations([]); setTrusted(false); setContents({}); setPreview(null); setInstallOpen(false);
-    const cached = remembered.get(cacheKey);
+    const cached = !remoteTargetId ? remembered.get(cacheKey) : undefined;
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     // Retain a previous inventory while revalidating; operations still scan
     // again before applying a mutation.
@@ -201,14 +204,20 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     })();
   }, [operations, target]);
 
-  async function refresh() {
+  const wasVisible = useRef(remoteReads.active);
+  useEffect(() => {
+    const reopened = remoteReads.active && !wasVisible.current; wasVisible.current = remoteReads.active;
+    if (reopened && remoteTargetId) void refresh(false);
+  }, [remoteReads.active]);
+
+  async function refresh(fresh = true) {
     if (refreshing.current || busy || working) return;
     const id = generation.current;
     refreshing.current = true;
     setBusy(true); setError('');
     try {
       const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'plugins') as { snapshot?: PluginSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' })
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'plugins', { fresh }) as { snapshot?: PluginSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' })
         : await native.scanNativePlugins(target);
       if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); setContents({}); }
     } catch (value) {
@@ -377,7 +386,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     </>}
     search={snapshot ? <SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
     filters={snapshot ? <select className={panel.filter} aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select> : undefined}
-    notices={<>
+    notices={<><RemoteReadStatus state={remoteReads} />
       {busy && snapshot && <p className={panel.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p>}
       {stale && snapshot?.baseline && <div className={panel.staleNotice} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><Button size="sm" disabled={busy || working} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</Button></div>}
       {operations.length > 0 && <div className={panel.queue} aria-label={t('tools.plugins.queueLabel')}><div className={panel.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(item => <div className={panel.queueRow} key={item.id} data-state={item.status}><span><strong>{actionLabel(item.action)} · {item.name}</strong>{item.detail && <small>{item.detail}</small>}</span><span className={panel.queueState}>{t(`tools.plugins.operationState.${item.status}`)}</span>{item.status === 'queued' && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.cancelQueued')}</button>}{item.status === 'failed' && <button type="button" disabled={item.action === 'install' && (!source.trim() || !trusted || !!sourceIssue || !canInstall)} onClick={() => { if (item.action === 'install') { void operate('install'); return; } setError(''); setOperations(current => current.map(entry => entry.id === item.id ? { ...entry, status: 'queued', detail: undefined } : entry)); }}>{t('tools.plugins.retry')}</button>}{item.status === 'succeeded' && item.entryId === null && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.dismiss')}</button>}</div>)}</div>}

@@ -327,6 +327,7 @@ pub fn run() {
             commands::list_remote_sessions,
             commands::list_remote_history,
             commands::list_remote_native_history,
+            commands::list_remote_native_history_snapshot,
             commands::get_remote_native_history,
             commands::replay_workbench_session,
             commands::workbench_git_context,

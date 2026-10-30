@@ -895,6 +895,9 @@ async fn remote_blocking<T: Send + 'static>(
         operations::scoped(context.clone(), || {
             context.check().map_err(|error| native_error(error.to_string()))?;
             let result = operation();
+            if context.kind == crate::remote::operations::Kind::Write {
+                if let Some(target_id) = context.bound_target_id() { crate::remote::read_cache::invalidate(&target_id); }
+            }
             // A persistent launch has crossed its acceptance boundary and has
             // a durable remote identity. Return that identity on late cancel;
             // it is not an ordinary cancellable SSH read or an undone launch.
@@ -3685,6 +3688,24 @@ pub async fn list_remote_native_history(
 }
 
 #[tauri::command]
+pub async fn list_remote_native_history_snapshot(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: String,
+    refresh: bool,
+) -> Result<history::remote_native::HistorySnapshot, ApiError> {
+    remote_blocking(window, operation, crate::remote::operations::Kind::Read, move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            let target = enabled_target(db, &target_id)?;
+        bind_remote_target(&target)?;
+            history::remote_native::list_snapshot(&adapters::Registry::builtins(), &target, refresh).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn get_remote_native_history(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
@@ -4534,6 +4555,7 @@ pub fn save_remote_target(
         crate::remote::save_target(database, target)
             .map_err(|error| native_error(error.to_string()))
     })?;
+    crate::remote::read_cache::invalidate(&saved.id);
     // The secret goes straight to the system credential store; SQLite keeps
     // only the target record.
     crate::remote::password::apply_save_request(&crate::credentials::SystemCredentialStore, &saved, password.as_deref())
@@ -4566,6 +4588,7 @@ pub fn delete_remote_target(
     state.with_database(&app, |database| {
         crate::remote::delete_target(database, &id).map_err(|error| native_error(error.to_string()))
     })?;
+    crate::remote::read_cache::invalidate(&id);
     let _ = crate::remote::password::forget(&crate::credentials::SystemCredentialStore, &id);
     Ok(())
 }
@@ -4735,7 +4758,11 @@ pub async fn probe_remote_cli(
             .get(&tool_id)
             .ok_or_else(|| native_error("未注册的 CLI 不能探测".into()))?;
         let executable = adapter.command().to_owned();
-        remote_cli_probe_result(&target.id, &tool_id, &executable, adapter.remote_probe(&target))
+        let cache_target = target.clone();
+        crate::remote::read_cache::read(&cache_target, &format!("probe_cli:{tool_id}"), false, move || {
+            remote_cli_probe_result(&target.id, &tool_id, &executable, adapter.remote_probe(&target))
+                .map_err(|error| error.remote.map(crate::remote::RemoteError::Operation).unwrap_or(crate::remote::RemoteError::Storage(error.message)))
+        }).map_err(|error| native_error(error.to_string()))
     }).await
 }
 

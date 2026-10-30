@@ -3,11 +3,8 @@
 //! copies a bounded slice of that tree and parses it in a temporary home.
 //! Parsed sessions stay in memory; they are not written into the local index.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -19,69 +16,92 @@ use crate::remote::RemoteTarget;
 const FILE_CAP: usize = 12 * 1024 * 1024;
 const ARCHIVE_CAP: usize = 48 * 1024 * 1024;
 const ROLLOUT_CAP: usize = 60;
-const CACHE_TTL: Duration = Duration::from_secs(45);
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFailure { pub tool_id: String, pub message: String, pub remote: Option<crate::remote::operations::Failure> }
 
-struct Snapshot {
-    at: Instant,
-    details: Vec<HistoryDetail>,
-}
-
-fn cache() -> &'static Mutex<HashMap<String, Snapshot>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Snapshot>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySnapshot { pub sessions: Vec<HistorySession>, pub source_failures: Vec<SourceFailure> }
 
 pub fn list(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<Vec<HistorySession>, String> {
-    Ok(snapshot(registry, target, refresh)?
-        .into_iter()
-        .map(|detail| detail.session)
-        .collect())
+    let snapshot = list_snapshot(registry, target, refresh)?;
+    if snapshot.sessions.is_empty() && !snapshot.source_failures.is_empty() {
+        return Err(snapshot.source_failures.into_iter().map(|failure| format!("{}: {}", failure.tool_id, failure.message)).collect::<Vec<_>>().join("；"));
+    }
+    Ok(snapshot.sessions)
+}
+
+pub fn list_snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<HistorySnapshot, String> {
+    let (details, source_failures) = snapshot(registry, target, refresh)?;
+    Ok(HistorySnapshot { sessions: details.into_iter().map(|detail| detail.session).collect(), source_failures })
 }
 
 pub fn detail(registry: &Registry, target: &RemoteTarget, id: &str) -> Result<HistoryDetail, String> {
-    snapshot(registry, target, false)?
-        .into_iter()
-        .find(|item| item.session.id == id)
-        .ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
+    let tool = id.strip_prefix(&format!("remote-native:{}:", target.id)).and_then(|suffix| suffix.split(':').next()).ok_or("会话不属于当前主机")?;
+    let adapter = registry.get(tool).filter(|adapter| adapter.history_supported() && adapter.remote_history_layout().is_some()).ok_or("当前历史来源不可用")?;
+    let owned = target.clone();
+    let details = crate::remote::read_cache::read(target, &format!("history:{}", adapter.id()), false, move || {
+        fetch_source(adapter, &owned).map_err(crate::remote::RemoteError::Storage)
+    }).map_err(|error| error.to_string())?;
+    details.into_iter().find(|item| item.session.id == id).ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
 }
 
-fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<Vec<HistoryDetail>, String> {
-    if let Some(context) = crate::remote::operations::current() {
-        context.bind(target).map_err(|error| error.to_string())?;
-    }
-    if !refresh {
-        if let Some(hit) = cache().lock().unwrap_or_else(|error| error.into_inner()).get(&target.id) {
-            if hit.at.elapsed() < CACHE_TTL {
-                return Ok(hit.details.clone());
-            }
+fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<(Vec<HistoryDetail>, Vec<SourceFailure>), String> {
+    snapshot_with_loader(registry, target, refresh, std::sync::Arc::new(fetch_source))
+}
+
+type SourceLoader = std::sync::Arc<dyn Fn(&dyn CliAdapter, &RemoteTarget) -> Result<Vec<HistoryDetail>, String> + Send + Sync>;
+fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: bool, loader: SourceLoader) -> Result<(Vec<HistoryDetail>, Vec<SourceFailure>), String> {
+    let context = crate::remote::operations::current().unwrap_or_else(|| crate::remote::operations::Context::local(crate::remote::operations::Kind::Read, std::time::Duration::from_secs(40)));
+    context.bind(target).map_err(|error| error.to_string())?;
+    let adapters: Vec<_> = registry.iter().filter(|adapter| adapter.history_supported() && adapter.remote_history_layout().is_some()).collect();
+    let mut details = Vec::new();
+    let mut failures = Vec::new();
+    // Two independent sources at a time; the shared SSH scheduler still enforces
+    // destination/global fairness. A failed source never discards another one.
+    for batch in adapters.chunks(2) {
+        let results = std::thread::scope(|scope| {
+            let jobs: Vec<_> = batch.iter().map(|adapter| {
+                let context = context.read_child(std::time::Duration::from_secs(15).min(context.remaining() / 2));
+                let loader = loader.clone();
+                let adapter = *adapter;
+                scope.spawn(move || crate::remote::operations::scoped(context, || {
+                    let target_owned = target.clone();
+                    crate::remote::read_cache::read(target, &format!("history:{}", adapter.id()), refresh, move || {
+                        loader(adapter, &target_owned).map_err(crate::remote::RemoteError::Storage)
+                    }).map_err(|error| error.to_string())
+                }))
+            }).collect();
+            jobs.into_iter().map(|job| job.join().unwrap_or_else(|_| Err("历史来源读取意外中断".into()))).collect::<Vec<_>>()
+        });
+        for (adapter, result) in batch.iter().zip(results) {
+            match result { Ok(mut rows) => details.append(&mut rows), Err(message) => {
+                let remote = message.strip_prefix("cliora:remote:").and_then(|encoded| serde_json::from_str::<crate::remote::operations::Failure>(encoded).ok());
+                let message = remote.as_ref().map(|failure| format!("{} {}", failure.message, failure.action)).unwrap_or(message);
+                if let Some(mut previous) = crate::remote::read_cache::previous::<Vec<HistoryDetail>>(target, &format!("history:{}", adapter.id())) {
+                    for detail in &mut previous { detail.session.stale = true; }
+                    details.append(&mut previous);
+                }
+                failures.push(SourceFailure { tool_id: adapter.id().into(), message, remote });
+            } }
         }
+        context.check().map_err(|error| error.to_string())?;
     }
-    let details = fetch(registry, target)?;
-    cache()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(target.id.clone(), Snapshot { at: Instant::now(), details: details.clone() });
-    Ok(details)
+    details.sort_by(|left, right| right.session.updated_at.cmp(&left.session.updated_at).then_with(|| left.session.id.cmp(&right.session.id)));
+    Ok((details, failures))
 }
 
-fn fetch(registry: &Registry, target: &RemoteTarget) -> Result<Vec<HistoryDetail>, String> {
+fn fetch_source(adapter: &dyn CliAdapter, target: &RemoteTarget) -> Result<Vec<HistoryDetail>, String> {
     let home = std::env::temp_dir().join(format!("cliora-remote-history-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&home).map_err(|error| format!("无法准备远程历史临时目录：{error}"))?;
     let _cleanup = TempHome(home.clone());
-    let mut details = Vec::new();
-    for adapter in registry.iter() {
-        if !adapter.history_supported() {
-            continue;
-        }
-        let Some(layout) = adapter.remote_history_layout() else { continue };
-        let command = archive_command(layout)?;
-        let bytes = crate::remote::run_command_bytes(target, &command).map_err(|error| error.to_string())?;
-        let files = decode_archive(&bytes, layout.relative)?;
-        write_tree(&home, &files)?;
-        details.extend(sessions_from_home(adapter, &home, &target.id)?);
-    }
-    details.sort_by(|left, right| right.session.updated_at.cmp(&left.session.updated_at).then_with(|| left.session.id.cmp(&right.session.id)));
-    Ok(details)
+    let layout = adapter.remote_history_layout().ok_or("未声明远程历史来源")?;
+    let command = archive_command(layout)?;
+    let bytes = crate::remote::run_command_bytes(target, &command).map_err(|error| error.to_string())?;
+    let files = decode_archive(&bytes, layout.relative)?;
+    write_tree(&home, &files)?;
+    sessions_from_home(adapter, &home, &target.id)
 }
 
 struct TempHome(PathBuf);
@@ -109,27 +129,36 @@ pub(crate) fn archive_command(layout: RemoteHistoryLayout) -> Result<String, Str
     };
     let session_find = match layout.order {
         RemoteHistoryOrder::PathDesc => format!(
-            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -print | sort -r"
+            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -print > \"$scan\" || exit 1; sort -r \"$scan\" > \"$ordered\" || exit 1"
         ),
         RemoteHistoryOrder::MtimeDesc => format!(
-            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -printf '%T@ %p\\n' | sort -nr | cut -d ' ' -f2-"
+            "find {quoted} -type f \\( {session_names} \\) -size -{size_limit}c{exclude} -printf '%T@ %p\\n' > \"$scan\" || exit 1; sort -nr \"$scan\" | cut -d ' ' -f2- > \"$ordered\" || exit 1"
         ),
     };
     let prepare_pick = if layout.pinned.is_empty() {
         ": > \"$pick\"; ".to_owned()
     } else {
         let pinned_names = name_clause(layout.pinned)?;
-        format!("find {quoted} -type f \\( {pinned_names} \\) -size -{size_limit}c -print > \"$pick\"; ")
+        format!("find {quoted} -type f \\( {pinned_names} \\) -size -{size_limit}c -print > \"$pick\" || exit 1; ")
     };
     let companion = match layout.companion {
         Some(name) => format!(
-            "stem=$(basename -- \"$path\"); stem=${{stem%.*}}; dir=$(dirname -- \"$path\"); comp=\"$dir/$stem/{name}\"; if [ -d \"$comp\" ]; then find \"$comp\" -type f \\( {session_names} \\) -size -{size_limit}c -print; fi; "
+            "stem=$(basename -- \"$path\"); stem=${{stem%.*}}; dir=$(dirname -- \"$path\"); comp=\"$dir/$stem/{name}\"; if [ -d \"$comp\" ]; then find \"$comp\" -type f \\( {session_names} \\) -size -{size_limit}c -print || exit 1; fi; "
         ),
         None => String::new(),
     };
     let relative = layout.relative;
+    let mut ancestor = String::new();
+    let ancestors: Vec<_> = relative.split('/').collect();
+    let mut ancestor_checks = String::new();
+    for segment in ancestors.iter().take(ancestors.len().saturating_sub(1)) {
+        if !ancestor.is_empty() { ancestor.push('/'); }
+        ancestor.push_str(segment);
+        let quoted = crate::remote::shell_quote(&ancestor);
+        ancestor_checks.push_str(&format!("if [ -e {quoted} ] && {{ [ ! -d {quoted} ] || [ ! -x {quoted} ]; }}; then printf 'remote history ancestor: Permission denied or not a directory\\n' >&2; exit 73; fi; "));
+    }
     let command = format!(
-        "cd -- \"$HOME\" && if [ ! -d {quoted} ]; then exit 0; fi; pick=$(mktemp) && trap 'rm -f \"$pick\"' EXIT && {prepare_pick}count=0; {session_find} | while IFS= read -r path; do [ \"$count\" -ge {cap} ] && break; case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; printf '%s\\n' \"$path\"; {companion}count=$((count + 1)); done >> \"$pick\"; budget={archive}; while IFS= read -r path; do case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; size=$(wc -c < \"$path\" | tr -d ' '); [ -n \"$size\" ] || continue; [ \"$size\" -le \"$budget\" ] || continue; budget=$((budget - size)); printf 'F\\n%s\\n%s\\n' \"$path\" \"$size\"; cat \"$path\" || exit 1; done < \"$pick\"; printf 'Z\\n'",
+        "cd -- \"$HOME\" || exit 1; {ancestor_checks}if [ ! -e {quoted} ] && [ ! -L {quoted} ]; then exit 0; fi; [ -d {quoted} ] && [ -r {quoted} ] && [ -x {quoted} ] || {{ printf 'remote history source: Permission denied or not a directory\\n' >&2; exit 73; }}; pick=; scan=; ordered=; trap 'rm -f \"$pick\" \"$scan\" \"$ordered\"' EXIT; pick=$(mktemp) && scan=$(mktemp) && ordered=$(mktemp) || exit 1; {prepare_pick}{session_find}; count=0; while IFS= read -r path; do [ \"$count\" -ge {cap} ] && break; case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; printf '%s\\n' \"$path\"; {companion}count=$((count + 1)); done < \"$ordered\" >> \"$pick\"; budget={archive}; while IFS= read -r path; do case \"$path\" in {relative}/*|{relative}) ;; *) continue ;; esac; case \"$path\" in *..*) continue ;; esac; size=$(wc -c < \"$path\") || exit 1; size=$(printf '%s' \"$size\" | tr -d '[:space:]'); [ -n \"$size\" ] || exit 1; [ \"$size\" -le \"$budget\" ] || continue; budget=$((budget - size)); printf 'F\\n%s\\n%s\\n' \"$path\" \"$size\"; cat \"$path\" || exit 1; done < \"$pick\"; printf 'Z\\n'",
         cap = ROLLOUT_CAP,
         archive = ARCHIVE_CAP,
     );
@@ -319,6 +348,42 @@ fn totals_of(usage: &[super::UsageEvent]) -> UsageTotals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_sources_keep_success_report_failure_reuse_detail_and_reject_replaced_host() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join(".codex/sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(sessions.join("rollout-cache.jsonl"), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"cache-session\",\"cwd\":\"/fixture\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"nonempty source\"}]}}\n").unwrap();
+        let target = RemoteTarget { id: uuid::Uuid::new_v4().to_string(), name: "history fixture".into(),
+            host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(),
+            identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 };
+        let codex = Arc::new(AtomicUsize::new(0));
+        let claude = Arc::new(AtomicUsize::new(0));
+        let codex_calls = codex.clone(); let claude_calls = claude.clone();
+        let path = home.path().to_owned();
+        let loader: SourceLoader = Arc::new(move |adapter, target| {
+            if adapter.id() == "codex" { codex_calls.fetch_add(1, Ordering::SeqCst); sessions_from_home(adapter, &path, &target.id) }
+            else { claude_calls.fetch_add(1, Ordering::SeqCst); Err("fixture permission failure".into()) }
+        });
+        let registry = Registry::builtins();
+        let (cold, failures) = snapshot_with_loader(&registry, &target, false, loader.clone()).unwrap();
+        assert_eq!(cold.len(), 1); assert!(cold[0].messages.iter().any(|row| row.text.contains("nonempty source")));
+        assert_eq!(failures.len(), 1); assert_eq!(failures[0].tool_id, "claude_code");
+        assert!(failures[0].message.contains("permission failure"));
+        assert_eq!(detail(&registry, &target, &cold[0].session.id).unwrap().messages.len(), cold[0].messages.len());
+        let (hot, _) = snapshot_with_loader(&registry, &target, false, loader.clone()).unwrap();
+        assert_eq!(hot.len(), 1); assert_eq!(codex.load(Ordering::SeqCst), 1); assert_eq!(claude.load(Ordering::SeqCst), 2);
+        let failing: SourceLoader = Arc::new(|_, _| Err("refresh failed".into()));
+        let (stale, failed) = snapshot_with_loader(&registry, &target, true, failing).unwrap();
+        assert_eq!(stale.len(), 1); assert!(stale[0].session.stale); assert_eq!(failed.len(), 2);
+        let mut changed = target.clone(); changed.host = "replacement.invalid".into(); changed.updated_at += 1;
+        let (replaced, _) = snapshot_with_loader(&registry, &changed, false, Arc::new(|_, _| Err("offline replacement".into()))).unwrap();
+        assert!(replaced.is_empty(), "same ID cannot expose the old host's cached history");
+        crate::remote::read_cache::invalidate(&target.id);
+        assert!(crate::remote::read_cache::previous::<Vec<HistoryDetail>>(&target, "history:codex").is_none());
+    }
 
     #[test]
     fn archive_command_stays_a_single_quoted_shell_line() {

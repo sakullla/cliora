@@ -23,6 +23,7 @@ use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod password;
 pub mod operations;
+pub mod read_cache;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +39,14 @@ pub struct RemoteToolStore {
 /// opaque here: each adapter/resource UI owns its schema, while the SSH layer
 /// only provides atomic JSON read/write and never falls back to the local DB.
 pub fn load_resource_store(target: &RemoteTarget, tool_id: &str, kind: &str) -> Result<serde_json::Value, RemoteError> {
+    let key = format!("load_resource_store:{:?}", (tool_id, kind,));
+    let owned = target.clone();
+    let tool_id = tool_id.to_owned();
+    let kind = kind.to_owned();
+    read_cache::read(target, &key, false, move || load_resource_store_uncached(&owned, &tool_id, &kind))
+}
+
+fn load_resource_store_uncached(target: &RemoteTarget, tool_id: &str, kind: &str) -> Result<serde_json::Value, RemoteError> {
     if !valid_text(tool_id, 120) || !valid_text(kind, 80) || !tool_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) || !kind.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
         return Err(RemoteError::InvalidPath);
     }
@@ -76,6 +85,14 @@ pub fn load_resource_store(target: &RemoteTarget, tool_id: &str, kind: &str) -> 
 /// that same command. Skills still keep a saved store, and an empty `{}`
 /// is seeded from SKILL.md files.
 pub fn load_resource_stores(target: &RemoteTarget, tool_ids: &[String], kind: &str) -> Result<serde_json::Value, RemoteError> {
+    let key = format!("load_resource_stores:{:?}", (tool_ids, kind,));
+    let owned = target.clone();
+    let tool_ids = tool_ids.to_vec();
+    let kind = kind.to_owned();
+    read_cache::read(target, &key, false, move || load_resource_stores_uncached(&owned, &tool_ids, &kind))
+}
+
+fn load_resource_stores_uncached(target: &RemoteTarget, tool_ids: &[String], kind: &str) -> Result<serde_json::Value, RemoteError> {
     if !valid_resource_token(kind, 80) || !matches!(kind, "mcp" | "skills") {
         return Err(RemoteError::InvalidPath);
     }
@@ -1010,6 +1027,15 @@ fn parse_native_read(roles: &[&str], stdout: &str) -> Result<BTreeMap<String, St
 }
 
 pub fn read_scope_native(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<BTreeMap<String, String>, RemoteError> {
+    let key = format!("read_scope_native:{:?}", (tool_id, scope, project,));
+    let owned = target.clone();
+    let tool_id = tool_id.to_owned();
+    let scope = scope.to_owned();
+    let project = project.map(str::to_owned);
+    read_cache::read(target, &key, false, move || read_scope_native_uncached(&owned, &tool_id, &scope, project.as_deref()))
+}
+
+fn read_scope_native_uncached(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<BTreeMap<String, String>, RemoteError> {
     let documents = resolved_native_documents(tool_id, scope, project)?;
     if documents.is_empty() { return Ok(BTreeMap::new()); }
     let script = native_read_script(&documents)?;
@@ -1046,6 +1072,13 @@ fn remote_store_path(tool_id: &str) -> Result<String, RemoteError> {
 }
 
 pub fn load_tool_store(target: &RemoteTarget, tool_id: &str) -> Result<RemoteToolStore, RemoteError> {
+    let key = format!("load_tool_store:{:?}", (tool_id,));
+    let owned = target.clone();
+    let tool_id = tool_id.to_owned();
+    read_cache::read(target, &key, false, move || load_tool_store_uncached(&owned, &tool_id))
+}
+
+fn load_tool_store_uncached(target: &RemoteTarget, tool_id: &str) -> Result<RemoteToolStore, RemoteError> {
     let path = remote_store_path(tool_id)?;
     let result = run_command(target, &format!("if [ -f {path} ]; then base64 -w0 -- {path}; fi"))?;
     let text = result.stdout.trim();
@@ -1076,6 +1109,15 @@ fn write_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolStor
 }
 
 pub fn load_scoped_tool_store(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<RemoteToolStore, RemoteError> {
+    let key = format!("load_scoped_tool_store:{:?}", (tool_id, scope, project,));
+    let owned = target.clone();
+    let tool_id = tool_id.to_owned();
+    let scope = scope.to_owned();
+    let project = project.map(str::to_owned);
+    read_cache::read(target, &key, false, move || load_scoped_tool_store_uncached(&owned, &tool_id, &scope, project.as_deref()))
+}
+
+fn load_scoped_tool_store_uncached(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<RemoteToolStore, RemoteError> {
     let mut store = load_tool_store(target, tool_id)?;
     if scope == "project" {
         store.current_files = read_scope_native(target, tool_id, "project", project)?;
@@ -1160,6 +1202,13 @@ pub struct RemoteCliProbe {
 /// Probe a set of executables through one SSH invocation. Remote UI pages can
 /// refresh a whole tool list without opening one TCP handshake per CLI.
 pub fn probe_clis(target: &RemoteTarget, tools: &[(String, String)]) -> Result<Vec<RemoteCliProbe>, RemoteError> {
+    let key = format!("probe_clis:{:?}", (tools,));
+    let owned = target.clone();
+    let tools = tools.to_vec();
+    read_cache::read(target, &key, false, move || probe_clis_uncached(&owned, &tools))
+}
+
+fn probe_clis_uncached(target: &RemoteTarget, tools: &[(String, String)]) -> Result<Vec<RemoteCliProbe>, RemoteError> {
     validate_target(target)?;
     if tools.is_empty() { return Ok(Vec::new()); }
     let mut script = format!("set +e; {REMOTE_USER_PATH}; ");
@@ -1243,7 +1292,7 @@ pub struct RemoteCommandResult {
     pub stderr: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum RemoteError {
     Operation(operations::Failure),
     InvalidName,
@@ -1535,6 +1584,13 @@ pub fn target(db: &Database, id: &str) -> Result<RemoteTarget, RemoteError> {
 }
 
 fn library_json(target: &RemoteTarget) -> Result<Vec<crate::library::LibraryItem>, RemoteError> {
+    let key = "library_json".to_owned();
+    let owned = target.clone();
+
+    read_cache::read(target, &key, false, move || library_json_uncached(&owned))
+}
+
+fn library_json_uncached(target: &RemoteTarget) -> Result<Vec<crate::library::LibraryItem>, RemoteError> {
     let result = run_command(target, "if [ -f \"$HOME/.cliora/library.json\" ]; then cat \"$HOME/.cliora/library.json\"; else printf '%s' '[]'; fi")?;
     serde_json::from_str(&result.stdout).map_err(|error| RemoteError::Storage(format!("远程资料库格式无效：{error}")))
 }
@@ -1590,6 +1646,13 @@ pub fn delete_library(target: &RemoteTarget, id: &str, expected_version: u64) ->
 }
 
 pub fn list_rule_placements(target: &RemoteTarget) -> Result<Vec<crate::resources::rules::RulePlacement>, RemoteError> {
+    let key = "list_rule_placements".to_owned();
+    let owned = target.clone();
+
+    read_cache::read(target, &key, false, move || list_rule_placements_uncached(&owned))
+}
+
+fn list_rule_placements_uncached(target: &RemoteTarget) -> Result<Vec<crate::resources::rules::RulePlacement>, RemoteError> {
     let snapshot = read_rule_snapshot(target, &[])?;
     let pairs = snapshot.state.placements.iter().map(|item| (item.tool_id.clone(), item.scope_key.clone())).collect::<Vec<_>>();
     let mut seen = HashSet::new();
@@ -2303,6 +2366,13 @@ fn run_command_bytes_inner(target: &RemoteTarget, command_line: &str) -> Result<
 /// loop avoids depending on a particular `find` implementation while keeping
 /// the caller's path quoted as data.
 pub fn list_directories(target: &RemoteTarget, parent: &str) -> Result<Vec<String>, RemoteError> {
+    let key = format!("list_directories:{:?}", (parent,));
+    let owned = target.clone();
+    let parent = parent.to_owned();
+    read_cache::read(target, &key, false, move || list_directories_uncached(&owned, &parent))
+}
+
+fn list_directories_uncached(target: &RemoteTarget, parent: &str) -> Result<Vec<String>, RemoteError> {
     if !valid_text(parent, 4096) || parent.starts_with('~') {
         return Err(RemoteError::InvalidPath);
     }
@@ -2471,6 +2541,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let counter = directory.path().join("pids");
         let request = operations::Request {
+            refresh: false,
             request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(),
             target_id: "cancel-tree.invalid".into(), target_revision: None, kind: operations::Kind::Read,
             priority: operations::Priority::Interactive,

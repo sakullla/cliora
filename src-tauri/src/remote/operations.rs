@@ -30,6 +30,8 @@ pub struct Request {
     #[serde(default)]
     pub priority: Priority,
     pub deadline_unix_ms: u64,
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -60,11 +62,14 @@ pub struct Context {
     request: Option<Request>,
     pub kind: Kind,
     priority: Priority,
+    refresh_reads: bool,
+    parent: Option<Arc<Context>>,
     deadline: Instant,
     cancelled: AtomicBool,
     dispatched: AtomicBool,
     accepted: AtomicBool,
     identity: Mutex<Option<String>>,
+    target_id: Mutex<Option<String>>,
     destination: Mutex<Option<String>>,
     phase: Mutex<&'static str>,
 }
@@ -82,12 +87,13 @@ pub fn scoped<T>(context: Arc<Context>, operation: impl FnOnce() -> T) -> T {
 
 impl Context {
     pub fn local(kind: Kind, timeout: Duration) -> Arc<Self> {
-        Arc::new(Self { request: None, kind, priority: Priority::Interactive,
+        Arc::new(Self { request: None, kind, priority: Priority::Interactive, refresh_reads: false, parent: None,
             deadline: Instant::now() + timeout, cancelled: AtomicBool::new(false),
-            dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue") })
+            dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue") })
     }
 
     pub fn check(&self) -> Result<(), RemoteError> {
+        if let Some(parent) = &self.parent { parent.check()?; }
         if self.cancelled.load(Ordering::Acquire) { return Err(self.failure("cancelled", "远程操作已取消")); }
         if Instant::now() >= self.deadline { return Err(self.failure("timeout", "远程连接超时（包含排队和重试）")); }
         Ok(())
@@ -95,6 +101,23 @@ impl Context {
 
     pub fn accept_persistent_launch(&self) { self.accepted.store(true, Ordering::Release); }
     pub fn accepted_persistent_launch(&self) -> bool { self.accepted.load(Ordering::Acquire) }
+
+    pub fn refresh(&self) -> bool { self.refresh_reads }
+    pub fn cancel(&self) { self.cancelled.store(true, Ordering::Release); }
+    pub fn bound_target_id(&self) -> Option<String> { self.target_id.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+    pub fn read_child(self: &Arc<Self>, budget: Duration) -> Arc<Self> {
+        let mut child = Self::local(Kind::Read, budget.min(self.remaining()));
+        if let Some(context) = Arc::get_mut(&mut child) {
+            context.priority = self.priority; context.refresh_reads = self.refresh(); context.parent = Some(self.clone());
+        }
+        child
+    }
+
+    pub fn shared_read(&self) -> Arc<Self> {
+        let mut context = Self::local(Kind::Read, Duration::from_secs(120));
+        if let Some(shared) = Arc::get_mut(&mut context) { shared.priority = self.priority; shared.refresh_reads = self.refresh(); }
+        context
+    }
 
     pub fn remaining(&self) -> Duration { self.deadline.saturating_duration_since(Instant::now()) }
     pub fn dispatched(&self) { self.dispatched.store(true, Ordering::Release); self.set_phase("process_wait"); }
@@ -111,7 +134,9 @@ impl Context {
         if bound.as_ref().is_some_and(|previous| previous != &identity) {
             return Err(self.failure("identity", "远程请求不能跨主机身份执行"));
         }
+        if bound.is_none() && self.kind == Kind::Write { super::read_cache::invalidate(&target.id); }
         *bound = Some(identity);
+        *self.target_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(target.id.clone());
         *self.destination.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{}@{}:{}", target.user, target.host, target.port));
         self.check()
     }
@@ -187,8 +212,8 @@ pub fn register(owner: &str, request: Request, kind: Kind) -> Result<Lease, Remo
     registry.cancelled.retain(|_, at| at.elapsed() < Duration::from_secs(120));
     if registry.active.contains_key(&request.request_id) || registry.active.len() >= 1024 { return Err(invalid()); }
     let cancelled = registry.cancelled.remove(&(owner.into(), request.request_id.clone(), request.cancel_token.clone())).is_some();
-    let context = Arc::new(Context { priority: request.priority, kind, deadline: Instant::now() + Duration::from_millis(remaining),
-        cancelled: AtomicBool::new(cancelled), dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), request: Some(request.clone()) });
+    let context = Arc::new(Context { priority: request.priority, refresh_reads: request.refresh, parent: None, kind, deadline: Instant::now() + Duration::from_millis(remaining),
+        cancelled: AtomicBool::new(cancelled), dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), request: Some(request.clone()) });
     registry.active.insert(request.request_id.clone(), Registration { owner: owner.into(), token: request.cancel_token, context: context.clone() });
     Ok(Lease { id: request.request_id, context })
 }
@@ -297,7 +322,7 @@ mod tests {
     fn request(kind: Kind, timeout: u64) -> Request {
         Request {
             request_id: uuid::Uuid::new_v4().to_string(), cancel_token: uuid::Uuid::new_v4().to_string(),
-            target_id: "fixture".into(), target_revision: Some(7), kind, priority: Priority::Interactive,
+            target_id: "fixture".into(), target_revision: Some(7), kind, priority: Priority::Interactive, refresh: false,
             deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + timeout,
         }
     }

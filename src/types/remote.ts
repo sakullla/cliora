@@ -59,6 +59,7 @@ export type RemoteOperationRequest = {
   kind: RemoteOperationKind;
   priority: RemotePriority;
   deadlineUnixMs: number;
+  refresh?: boolean;
 };
 export type RemoteFailure = {
   code: string;
