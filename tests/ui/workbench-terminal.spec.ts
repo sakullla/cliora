@@ -171,19 +171,21 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await page.setViewportSize({ width: 1280, height: 800 });
   await openWorkbench(page);
   const root = page.locator('[data-term-theme]');
+  // Wide windows dock the session list in the app sidebar, outside the workbench root.
+  const workbench = page.locator('.shell');
   const stage = page.getByRole('region', { name: '当前会话' });
   const statusIcon = root.locator('[data-activity-slot="status"]');
   const idleBox = await statusIcon.boundingBox();
 
-  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(4);
+  await expect(workbench.locator('[data-activity-icon="idle"]')).toHaveCount(4);
   await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'idle');
   await expect(statusIcon.locator('circle')).toBeVisible();
   await expect(stage.locator('header [data-state]').first()).toContainText('等待输入', { useInnerText: true });
 
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('current output\r\n'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
-  await expect(root.locator('[data-activity-icon="live"]')).toHaveCount(3);
-  await expect(root.locator('[data-activity-icon="idle"]')).toHaveCount(1);
+  await expect(workbench.locator('[data-activity-icon="live"]')).toHaveCount(3);
+  await expect(workbench.locator('[data-activity-icon="idle"]')).toHaveCount(1);
   await expect(statusIcon.locator('svg')).toHaveAttribute('data-shape', 'live');
   await expect(stage.locator('header [data-state]').first()).toContainText('正在输出', { useInnerText: true });
   expect(await statusIcon.boundingBox()).toEqual(idleBox);
@@ -196,17 +198,17 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await expect(stage.getByRole('img', { name: '等待输入', exact: true })).toBeVisible();
 
   const rail = page.getByRole('complementary', { name: '会话列表' });
-  await rail.getByRole('button', { name: '收起会话栏', exact: true }).click();
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   await expect(rail).toHaveAttribute('data-slim', 'true');
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('compact output\r\n'));
-  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toBeVisible();
-  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toBeVisible();
-  await rail.getByRole('button', { name: '展开会话栏', exact: true }).click();
+  await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toBeVisible();
+  await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toBeVisible();
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
   await page.setViewportSize({ width: 640, height: 760 });
   await expect(root).toHaveAttribute('data-narrow', 'true');
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('narrow output\r\n'));
-  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toHaveCount(1);
-  await expect(root.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toHaveCount(1);
+  await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toHaveCount(1);
+  await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toHaveCount(1);
   // Split view uses the tight header: the chip keeps its dot and names the state on hover.
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
   await expect(stage.locator('header [data-state]').first()).toHaveAttribute('title', '正在输出');
@@ -1209,13 +1211,15 @@ test('find can match case, line spacing persists, shortcuts are listed, and the 
   await expect(shortcuts).toHaveCount(0);
 
   const rail = page.getByRole('complementary', { name: '会话列表' });
-  await rail.getByRole('button', { name: '收起会话栏', exact: true }).click();
+  // The session list is docked in the app sidebar; folding the sidebar leaves one icon rail.
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   await expect(rail).toHaveAttribute('data-slim', 'true');
-  await expect.poll(async () => (await rail.boundingBox())!.width).toBeLessThan(80);
+  await expect.poll(async () => (await page.getByLabel('主导航').boundingBox())!.width).toBeLessThan(80);
   await expect(page.getByRole('tab', { name: /Codex/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('true');
-  await rail.getByRole('button', { name: '展开会话栏', exact: true }).click();
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
   await expect(rail).not.toHaveAttribute('data-slim', 'true');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('false');
   expect(await writes(page)).toEqual([]);
 });
 
@@ -1260,4 +1264,73 @@ test('double-clicks and Mod+Shift+B toggle the rail and focus mode; middle-click
   await claude.click({ button: 'middle' });
   await expect(claude).toHaveCount(0);
   await expect(codex).toBeVisible();
+});
+
+test('the workbench shares one sidebar: page icons on top, sessions below, and no card around the terminal', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1360, height: 860 });
+  await openWorkbench(page);
+  const sidebar = page.getByLabel('主导航');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const stage = page.getByRole('region', { name: '当前会话' });
+
+  // One column: the session list is docked inside the app sidebar, under the page icons.
+  await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toBeVisible();
+  await expect(page.locator('[data-term-theme]').getByRole('tablist', { name: '会话列表' })).toHaveCount(0);
+  const navBox = (await nav.boundingBox())!;
+  const railBox = (await rail.boundingBox())!;
+  expect(navBox.height).toBeLessThan(48);
+  expect(railBox.y).toBeGreaterThan(navBox.y + navBox.height - 1);
+  await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeHidden();
+  // The terminal fills the canvas: no second frame, and no reserved scrollbar lane beside it.
+  const frame = await stage.locator('header').evaluate((header) => {
+    const window = header.parentElement!;
+    const style = getComputedStyle(window);
+    const canvas = document.querySelector<HTMLElement>('main')!;
+    return { border: style.borderTopWidth, radius: style.borderTopLeftRadius, gap: canvas.getBoundingClientRect().right - window.getBoundingClientRect().right };
+  });
+  expect(frame).toEqual({ border: '0px', radius: '0px', gap: 0 });
+
+  // The rail edge resizes the whole sidebar and keeps the stored width.
+  const handle = page.getByRole('separator', { name: '拖动调整会话栏宽度，双击还原' });
+  const handleBox = (await handle.boundingBox())!;
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + 60, handleBox.y + 200, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBeGreaterThan(300);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-width'))).not.toBeNull();
+
+  // Ctrl+\ folds the shared sidebar to one icon rail and remembers it as the rail preference.
+  await stage.locator('header h2').click();
+  await page.keyboard.press('Control+Backslash');
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeLessThan(80);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('true');
+  await page.keyboard.press('Control+Backslash');
+  await expect(rail).not.toHaveAttribute('data-slim', 'true');
+
+  // Focus mode folds the sidebar to page icons only; leaving it brings the sessions back.
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(rail).toHaveCount(0);
+  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeLessThan(80);
+  await expect(nav.getByRole('button', { name: '使用记录', exact: true })).toBeVisible();
+  await stage.getByRole('button', { name: '展开会话列表' }).click();
+  await expect(rail).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('false');
+
+  // Any page is one click away; other pages get the labelled list back without the sessions.
+  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
+  await expect(rail).toHaveCount(0);
+  await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeVisible();
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toBeVisible();
+
+  // Narrow windows keep the stacked top bar and show the sessions as a strip above the terminal.
+  await page.setViewportSize({ width: 640, height: 760 });
+  await expect(page.locator('[data-term-theme]').getByRole('tablist', { name: '会话列表' })).toBeVisible();
+  await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
@@ -21,6 +21,7 @@ import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
+import { SessionTitle, stableTitle } from './SessionTitle';
 import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
@@ -98,11 +99,6 @@ function readStoredEndedCollapsed(): boolean {
   catch { return false; }
 }
 
-function readStoredRailSlim(): boolean {
-  try { return localStorage.getItem('cliora:workbench-rail-slim') === 'true'; }
-  catch { return false; }
-}
-
 function toggleInSet(current: Set<string>, id: string, present: boolean): Set<string> {
   if (current.has(id) === present) return current;
   const next = new Set(current);
@@ -175,8 +171,19 @@ type MenuState =
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome, remoteIntent }: {
+/** What the shell needs to know about the session list it hosts in the app sidebar. */
+export type WorkbenchRailLayout = { docked: boolean; focus: boolean };
+
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
+  /** The app sidebar slot that shows the session list. Null keeps the list as a strip above the terminal. */
+  railHost?: HTMLElement | null;
+  /** The shared sidebar collapse state: a collapsed sidebar shows session icons only. */
+  railSlim?: boolean;
+  onToggleRailSlim?: () => void;
+  onRailLayout?: (layout: WorkbenchRailLayout) => void;
+  /** The shell's sidebar toggle calls this so focus mode is left before the sidebar folds. */
+  railToggleRef?: MutableRefObject<(() => void) | null>;
   active: boolean;
   tools: AdapterDescriptor[];
   remoteSshEnabled?: boolean;
@@ -221,7 +228,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [appTheme, setAppTheme] = useState<TerminalTheme>(currentAppTheme);
   const [cursorBlink, setCursorBlink] = useState<boolean>(readStoredCursorBlink);
   const [density, setDensity] = useState<TerminalDensity>(readStoredDensity);
-  const [railSlim, setRailSlim] = useState<boolean>(readStoredRailSlim);
   const [split, setSplit] = useState<[string, string] | null>(null);
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
   const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
@@ -455,8 +461,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   useEffect(() => {
     const node = rootRef.current;
     if (!node) return;
+    // The breakpoints were tuned with a 60px icon rail beside the workbench. A docked session
+    // list widens the sidebar instead, so its extra room still counts as part of the frame.
+    const sidebar = railHost?.closest('aside') ?? null;
     const update = () => {
-      const width = node.clientWidth;
+      const width = node.clientWidth + (sidebar ? Math.max(0, sidebar.getBoundingClientRect().width - 60) : 0);
       const stageWidth = stageRef.current?.clientWidth ?? width;
       setNarrowFrame((current) => current === width <= 720 ? current : width <= 720);
       setCompactFrame((current) => current === width <= 620 ? current : width <= 620);
@@ -468,8 +477,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const observer = new ResizeObserver(update);
     observer.observe(node);
     if (stageRef.current) observer.observe(stageRef.current);
+    if (sidebar) observer.observe(sidebar);
     return () => observer.disconnect();
-  }, []);
+  }, [railHost]);
 
   const terminalTools = useMemo(
     // The host switch changes where a CLI runs. It does not change which CLI
@@ -843,14 +853,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     try { localStorage.setItem('cliora:workbench-density', next); } catch { /* Storage is optional. */ }
   }, []);
 
-  const toggleRailSlim = useCallback(() => {
-    setRailSlim((current) => {
-      const next = !current;
-      try { localStorage.setItem('cliora:workbench-rail-slim', String(next)); } catch { /* Storage is optional. */ }
-      return next;
-    });
-  }, []);
-
   const toggleEndedCollapsed = useCallback(() => {
     setEndedCollapsed((current) => {
       const next = !current;
@@ -861,10 +863,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   /** Double-clicking a session icon, or Mod+Shift+B, flips the rail; focus mode returns to the rail first. */
   function toggleRail() {
-    if (narrowFrame) return;
     if (focusMode) { setFocusMode(false); return; }
-    toggleRailSlim();
+    // Narrow windows show the list as a strip, which has nothing to fold.
+    if (railHost) onToggleRailSlim?.();
   }
+  if (railToggleRef) railToggleRef.current = active ? toggleRail : null;
 
   const toggleSound = useCallback(() => {
     setSoundEnabled((current) => {
@@ -1533,22 +1536,33 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const mountedSessions = scopedSessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
 
-  return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-slim={(railSlim && !narrowFrame) || undefined}>
+  const railDocked = !!railHost;
+  const showRail = !focusMode && !(showEmpty && !listError);
+  const railShown = railDocked && showRail;
+  useEffect(() => {
+    onRailLayout?.({ docked: railShown, focus: railDocked && focusMode });
+  }, [onRailLayout, railShown, railDocked, focusMode]);
+  // The sidebar is the rail's column now: its width follows the stored rail width.
+  useEffect(() => {
+    const shell = railHost?.closest<HTMLElement>('.shell');
+    if (!shell) return;
+    shell.style.setProperty('--rail-w', railWidth + 'px');
+    return () => { shell.style.removeProperty('--rail-w'); };
+  }, [railHost, railWidth]);
+  const rail = <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} search={railSearch} selectedId={selectedId} narrow={!railDocked} slim={railDocked && railSlim} docked={railDocked} busy={!!busy} canLaunch={terminalTools.length > 0}
+    endedCollapsed={endedCollapsed} onToggleEnded={toggleEndedCollapsed} onSearch={setRailSearch} onSelect={(id, focusTerminal = true) => {
+      setSelectedId(id);
+      if (focusTerminal) requestAnimationFrame(() => {
+        if (selectedIdRef.current === id) handles.current.get(id)?.focus();
+      });
+    }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} />;
+
+  return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-docked={railDocked || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
     {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><Button size="sm" onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</Button></div>}
 
-    <div className={styles.layout} style={{ '--rail-w': railWidth + 'px' } as CSSProperties}>
-      <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} search={railSearch} selectedId={selectedId} narrow={narrowFrame} slim={railSlim} busy={!!busy} canLaunch={terminalTools.length > 0}
-        endedCollapsed={endedCollapsed} onToggleEnded={toggleEndedCollapsed} onSearch={setRailSearch} onSelect={(id, focusTerminal = true) => {
-          setSelectedId(id);
-          if (focusTerminal) requestAnimationFrame(() => {
-            if (selectedIdRef.current === id) handles.current.get(id)?.focus();
-          });
-        }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} />
-      <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
-        if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
-        if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }
-      }} />
+    <div className={styles.layout} data-strip={(!railDocked && showRail) || undefined}>
+      {!railDocked && showRail && rail}
 
       <section ref={stageRef} className={styles.stage} aria-label={t('sessions.stageLabel')}>
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void retry()} disabled={retrying}>{retrying ? t('sessions.loading') : t('sessions.retry')}</Button><Button size="sm" onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</Button></div></div>}
@@ -1591,7 +1605,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               <div className={styles.stageLead}>
                 <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + title : toolName(selected)}>{title || toolName(selected)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + stableTitle(title) : toolName(selected)}>{title ? <SessionTitle title={title} /> : toolName(selected)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
                     <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
@@ -1653,7 +1667,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
-                      <strong>{paneTitle || toolName(session)}</strong>
+                      <strong>{paneTitle ? <SessionTitle title={paneTitle} /> : toolName(session)}</strong>
                       <span className={styles.panePlace}>{paneTitle ? toolName(session) + ' · ' + placeOf(session) : placeOf(session)}</span>
                       {focused && <span className={styles.paneFocus}>{t('sessions.paneFocused')}</span>}
                       <button type="button" className={styles.paneClose} aria-label={t('sessions.closePane', { name: toolName(session) })} title={t('sessions.closePane', { name: toolName(session) })} onClick={(event) => { event.stopPropagation(); closePane(session.id); }}><Icon name="close" size={12} /></button>
@@ -1689,6 +1703,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
+
+    {/* Wide windows show the session list in the app sidebar, where it replaces the page list. */}
+    {railHost && showRail && createPortal(<>
+      {rail}
+      {!railSlim && <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('sessions.resizeRail')} title={t('sessions.resizeRail')} tabIndex={0} onPointerDown={startRailResize} onDoubleClick={() => updateRailWidth(DEFAULT_RAIL_WIDTH)} onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'ArrowLeft') { event.preventDefault(); updateRailWidth(railWidth - 16); }
+        if (event.key === 'ArrowRight') { event.preventDefault(); updateRailWidth(railWidth + 16); }
+      }} />}
+    </>, railHost)}
 
     {menu && (() => {
       const session = sessions.find((item) => item.id === menu.sessionId);

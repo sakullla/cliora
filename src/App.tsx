@@ -20,6 +20,7 @@ const GeneralSettings = lazy(() => import('./features/settings/GeneralSettings')
 const RemoteSshSettings = lazy(() => import('./features/settings/GeneralSettings').then(module => ({ default: module.RemoteSshSettings })));
 const SessionWorkbench = lazy(() => import('./features/sessions/SessionWorkbench').then(module => ({ default: module.SessionWorkbench })));
 import type { RemoteWorkbenchIntent } from './features/sessions/workbenchLaunch';
+import type { WorkbenchRailLayout } from './features/sessions/SessionWorkbench';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { OnboardingCard } from './features/home/OnboardingCard';
@@ -83,25 +84,44 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [page, setPage] = useState<Page>('home');
-  // The workbench already has its own session rail, so the app navigation keeps a separate
-  // collapsed state there (icon rail by default) and the full sidebar elsewhere.
+  // On the workbench the sidebar carries the session list, so it keeps its own collapsed state:
+  // collapsed there means session icons only. It reuses the session rail's stored preference.
   const [navCollapsed, setNavCollapsed] = useState(() => {
     const read = (key: string, fallback: boolean) => {
       try { const value = localStorage.getItem(key); return value === null ? fallback : value === 'true'; } catch { return fallback; }
     };
-    return { pages: read('cliora:sidebar-collapsed', false), workbench: read('cliora:sidebar-collapsed-workbench', true) };
+    return { pages: read('cliora:sidebar-collapsed', false), workbench: read('cliora:workbench-rail-slim', false) };
   });
   const navContext: 'workbench' | 'pages' = page === 'sessions' ? 'workbench' : 'pages';
-  const sidebarCollapsed = navCollapsed[navContext];
   const navContextRef = useRef(navContext);
   navContextRef.current = navContext;
-  function toggleSidebar() {
+  // Wide windows dock the session list in the sidebar; narrow ones keep the stacked top bar.
+  const [wideShell, setWideShell] = useState(() => matchMedia('(min-width: 761px)').matches);
+  useEffect(() => {
+    const media = matchMedia('(min-width: 761px)');
+    const update = () => setWideShell(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  const [railHost, setRailHost] = useState<HTMLDivElement | null>(null);
+  const [workbenchRail, setWorkbenchRail] = useState<WorkbenchRailLayout>({ docked: false, focus: false });
+  const onRailLayout = useCallback((next: WorkbenchRailLayout) => setWorkbenchRail((old) => old.docked === next.docked && old.focus === next.focus ? old : next), []);
+  const workbenchRailToggle = useRef<(() => void) | null>(null);
+  const railDocked = page === 'sessions' && workbenchRail.docked;
+  // Focus mode folds the sidebar to its icon rail; the page icons stay reachable.
+  const sidebarCollapsed = navCollapsed[navContext] || (page === 'sessions' && workbenchRail.focus);
+  const toggleNavCollapsed = useCallback(() => {
     const context = navContextRef.current;
     setNavCollapsed((old) => {
       const next = !old[context];
-      try { localStorage.setItem(context === 'workbench' ? 'cliora:sidebar-collapsed-workbench' : 'cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
+      try { localStorage.setItem(context === 'workbench' ? 'cliora:workbench-rail-slim' : 'cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
       return { ...old, [context]: next };
     });
+  }, []);
+  function toggleSidebar() {
+    // The workbench leaves focus mode first, then folds the shared sidebar.
+    if (navContextRef.current === 'workbench' && workbenchRailToggle.current) { workbenchRailToggle.current(); return; }
+    toggleNavCollapsed();
   }
   // First-run checklist (R5): visibility is decided once per launch from the truly-empty
   // state; step completion then follows live data until the card is closed or finished.
@@ -590,7 +610,7 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page}>
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand">
@@ -599,10 +619,14 @@ export default function App() {
         <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={`${sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} (${modLabel}+\\)`} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><img className="sidebar-toggle-brand" src={brandIcon} alt="" /><span className="sidebar-toggle-icon"><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={18} /></span></button>
       </div>
       {bootstrap.preferences.remote_ssh_enabled && <div className="sidebar-host"><HostSwitcher targets={remoteTargets} value={remoteTargetId} onChange={changeRemoteTarget} onManage={openHostManagement} collapsed={sidebarCollapsed} /></div>}
+      <div className="sidebar-primary">
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
         {navGroups.map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
       </nav>
+      </div>
+      {/* The workbench fills this slot with its session list; other pages leave it empty. */}
+      <div className="sidebar-context" ref={setRailHost} hidden={!railDocked} />
       <div className="sidebar-foot">
         {updateOffer && <button type="button" className="sidebar-update" title={t('common.shell.updateTitle', { version: updateOffer.version })} aria-label={t('common.shell.updateTitle', { version: updateOffer.version })} onClick={openAppUpdate}><span className="sidebar-update-glyph" aria-hidden="true"><Icon name="download" size={14} /></span><span className="sidebar-update-text">{t('common.shell.updateAvailable', { version: updateOffer.version })}</span><span className="sidebar-update-action" aria-hidden="true">{t('common.shell.updateAction')}</span></button>}
         {!bootstrap.preferences.remote_ssh_enabled && <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>}
@@ -635,7 +659,7 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} /></Suspense>}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ...(bootstrap.preferences.remote_ssh_enabled ? [['hosts', t('settings.tabs.hosts')] as [SettingsTab, string]] : []), ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <Suspense fallback={<PageSkeleton />}><GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}

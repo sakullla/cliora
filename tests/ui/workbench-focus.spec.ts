@@ -105,4 +105,12 @@ test('the CLI spinner stays in front of the terminal title', async ({ page }) =>
   await expect(tab.locator('[class*="sessionPlace"]')).toHaveText('home');
   await emit('\u001b]0;\u25d1 \u2736 修复登录\u0007');
   await expect(tab.locator('strong')).toHaveText('◑ ✶ 修复登录');
+  // Hover text must not follow the spinner, or the native tooltip restarts on every frame and flickers.
+  const heading = page.getByRole('region', { name: '当前会话' }).locator('h2');
+  await expect(tab).toHaveAttribute('title', /^修复登录\n/);
+  await expect(heading).toHaveAttribute('title', 'Claude Code · 修复登录');
+  await emit('\u001b]0;\u25d2 \u273b 修复登录\u0007');
+  await expect(tab.locator('strong')).toHaveText('◒ ✻ 修复登录');
+  await expect(tab).toHaveAttribute('title', /^修复登录\n/);
+  await expect(heading).toHaveAttribute('title', 'Claude Code · 修复登录');
 });

@@ -5,6 +5,7 @@ import { IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
 import { modLabel } from '../../lib/shortcut';
 import { SessionActivityIcon } from './SessionActivityIcon';
+import { SessionTitle, stableTitle } from './SessionTitle';
 import type { WorkbenchSession } from '../../types/launch';
 import styles from './SessionWorkbench.module.css';
 
@@ -33,15 +34,18 @@ function onIcon(event: MouseEvent<HTMLElement>): boolean {
   return event.target instanceof Element && !!event.target.closest('[data-rail-icon]');
 }
 
-export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, busy, canLaunch, endedCollapsed, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded }: {
+export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, docked = false, busy, canLaunch, endedCollapsed, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded }: {
   sessions: RailSession[];
   total: number;
   running: number;
   ended: number;
   search: string;
   selectedId: string | null;
+  /** A strip above the terminal (narrow windows) instead of a vertical list. */
   narrow: boolean;
   slim: boolean;
+  /** Shown inside the app sidebar, whose own toggle folds it. */
+  docked?: boolean;
   busy: boolean;
   canLaunch: boolean;
   endedCollapsed: boolean;
@@ -98,7 +102,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const selected = session.id === selectedId;
     const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
-    const tooltip = [item.title, item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
+    const tooltip = [stableTitle(item.title), item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
         onClick={() => onSelect(session.id)}
@@ -123,7 +127,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <span className={styles.sessionBody}>
           <span className={styles.sessionTop}>
             {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={12} /></span>}
-            <strong>{item.title || item.place}</strong>
+            <strong>{item.title ? <SessionTitle title={item.title} /> : item.place}</strong>
             {item.unread && <span className={styles.unreadDot} title={t('sessions.unread')} aria-label={t('sessions.unread')} />}
           </span>
           <span className={styles.sessionSub}>
@@ -147,7 +151,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     </div>;
   };
 
-  return <aside className={styles.rail} aria-label={t('sessions.listLabel')} data-slim={compact || undefined}>
+  return <aside className={styles.rail} aria-label={t('sessions.listLabel')} data-slim={compact || undefined} data-strip={narrow || undefined} data-docked={docked || undefined}>
     <div className={styles.railHead} onDoubleClick={(event) => { if (!narrow && event.target === event.currentTarget) onToggleSlim(); }}>
       <div className={styles.railTitleRow}>
         <h1 className={narrow || compact ? styles.srOnly : styles.railTitle} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>
@@ -175,7 +179,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.railNoMatchClear} onClick={() => onSearch('')}>{t('sessions.clearFilter')}</button></div>}
     </div>
 
-    {!narrow && <div className={styles.railFoot}>
+    {!narrow && !docked && <div className={styles.railFoot}>
       <IconButton size="sm" className={styles.railIconBtn} aria-label={toggleLabel} title={toggleTitle} onClick={onToggleSlim} icon={<Icon name={compact ? 'sidebarOpen' : 'sidebarClose'} size={16} />} />
       {!compact && <span className={styles.railSummary}>{ended > 0 ? t('sessions.summary', { running, ended }) : t('sessions.totalCount', { count: total })}</span>}
     </div>}

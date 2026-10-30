@@ -125,6 +125,12 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .host-switcher-check { flex: none; color: var(--accent); }
 .host-switcher-separator { height: 1px; margin: var(--space-1) var(--space-1_5); background: var(--line); }
 
+/* Command + page list. It adds no box of its own except on the workbench, where it becomes one row. */
+.sidebar-primary { display: contents; }
+/* The workbench docks its session list here; every other page leaves the slot hidden. */
+.sidebar-context { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; animation: sidebar-context-in 180ms var(--ease); }
+.sidebar-context[hidden] { display: none; }
+@keyframes sidebar-context-in { from { opacity: 0; transform: translateY(4px); } }
 .nav { display: flex; flex-direction: column; gap: var(--space-3); flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; margin: 0 calc(var(--space-1) * -1); padding: 0 var(--space-1); }
 .nav-group { display: flex; flex-direction: column; gap: var(--space-0_5); }
 .nav-group[data-group="settingsGroup"] { margin-top: auto; padding-top: var(--space-2_5); }
@@ -242,6 +248,8 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .content-locked > .content-inner { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: var(--space-4); max-width: none; }
 /* The workbench never scrolls: an IME caret near the edge must not slide the page sideways. */
 .content-workbench, .content-workbench > .content-inner { overflow: clip; min-width: 0; min-height: 0; }
+/* The terminal reaches the canvas edge; a reserved scrollbar lane would leave a blank strip. */
+.content-workbench { scrollbar-gutter: auto; }
 .content-workbench > .content-inner { padding: 0; }
 html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; }
 .content-workbench > .content-inner > .environment-banner { margin: var(--space-2_5) var(--space-3) 0; }
@@ -308,6 +316,45 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .shell[data-sidebar-collapsed="true"] .sidebar-update-text,
 .shell[data-sidebar-collapsed="true"] .sidebar-update-action,
 .shell[data-sidebar-collapsed="true"] .status-text { display: none; }
+/* ---------- Workbench sidebar ----------------------------------------- */
+/* One sidebar, two contents. Elsewhere it lists the pages; on the workbench the pages fold into
+   an icon row at the top (like VS Code's top activity bar) and the sessions take the rest. */
+@media (min-width: 761px) {
+  .shell[data-context="workbench"] { grid-template-columns: minmax(232px, var(--rail-w, 272px)) minmax(0, 1fr); }
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] { grid-template-columns: 60px minmax(0, 1fr); }
+  html[data-native="macos"] .shell[data-context="workbench"][data-sidebar-collapsed="true"] { grid-template-columns: 88px minmax(0, 1fr); }
+  .shell[data-context="workbench"] .sidebar { padding-bottom: var(--space-2_5); }
+  .shell[data-context="workbench"] .nav { flex: none; }
+  .shell[data-context="workbench"] .nav-group[data-group="settingsGroup"] { margin-top: 0; padding-top: 0; }
+  .shell[data-context="workbench"] .sidebar-context { border-top: 1px solid var(--line); }
+  .shell[data-context="workbench"] .sidebar-foot { margin-top: 0; }
+
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .brand { margin-bottom: var(--space-2); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-primary { display: flex; align-items: center; gap: var(--space-0_5); min-width: 0; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav { flex: 1 1 auto; flex-direction: row; justify-content: space-between; gap: var(--space-0_5); min-width: 0; margin: 0; padding: 0; overflow: visible; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-group { display: contents; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 26px; min-height: 32px; padding: 0; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-text { display: none; }
+  /* The current page keeps its leaf-green mark, turned to sit under the icon. */
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button.active::before { top: auto; right: 10px; bottom: -4px; left: 10px; width: auto; height: 2px; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command { order: 2; flex: none; justify-content: center; width: 32px; min-height: 32px; margin: 0 0 0 var(--space-1); padding: 0; border-color: transparent; background: transparent; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command:hover:not(:disabled) { border-color: transparent; background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command > span,
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command > kbd { display: none; }
+  /* The list runs to the sidebar edges so its rows and scrollbar line up with the canvas gap. */
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-context { margin: var(--space-2_5) calc(var(--space-2_5) * -1) 0 calc(var(--space-3) * -1); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-foot { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-foot > .sidebar-update { grid-column: 1 / -1; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .theme-switch { grid-column: 2; width: 96px; }
+
+  /* Collapsed: one icon rail. Page icons, a divider, then the session icons. */
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav { gap: var(--space-1); }
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav-group { gap: 1px; }
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav button { min-height: 36px; }
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] .sidebar-command { margin-bottom: var(--space-1); }
+  .shell[data-context="workbench"][data-sidebar-collapsed="true"] .sidebar-context { align-self: stretch; margin: var(--space-2) calc(var(--space-2_5) * -1) 0; }
+}
+
 /* Minimum window is 720×560; stack the shell through that width so main pages do not scroll sideways. */
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
