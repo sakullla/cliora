@@ -456,6 +456,10 @@ fn remote_launch_plan(
         .into_iter()
         .find(|item| item.id == project.target_id && item.enabled)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程目标不可用".into()))?;
+    if let Some(context) = crate::remote::operations::current() {
+        context.bind(&target).map_err(|error| LaunchPlanError::new(LaunchStage::ProjectDirectory, error.to_string()))?;
+        context.check().map_err(|error| LaunchPlanError::new(LaunchStage::ProjectDirectory, error.to_string()))?;
+    }
     if request.resume_latest {
         return Err(LaunchPlanError::new(LaunchStage::Tool, "远程终端新建与 CLI 历史恢复必须分开执行".into()));
     }

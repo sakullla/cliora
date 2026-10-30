@@ -46,6 +46,9 @@ pub fn detail(registry: &Registry, target: &RemoteTarget, id: &str) -> Result<Hi
 }
 
 fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<Vec<HistoryDetail>, String> {
+    if let Some(context) = crate::remote::operations::current() {
+        context.bind(target).map_err(|error| error.to_string())?;
+    }
     if !refresh {
         if let Some(hit) = cache().lock().unwrap_or_else(|error| error.into_inner()).get(&target.id) {
             if hit.at.elapsed() < CACHE_TTL {

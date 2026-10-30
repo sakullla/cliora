@@ -7,8 +7,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 
@@ -23,6 +22,7 @@ use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod password;
+pub mod operations;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1243,24 +1243,37 @@ pub struct RemoteCommandResult {
     pub stderr: String,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum RemoteError {
-    #[error("远程目标名称不能为空")]
+    Operation(operations::Failure),
     InvalidName,
-    #[error("远程主机地址无效")]
     InvalidHost,
-    #[error("远程用户无效")]
     InvalidUser,
-    #[error("远程路径无效")]
     InvalidPath,
-    #[error("远程目标不存在")]
     NotFound,
-    #[error("远程 SSH 功能尚未启用，请在设置中开启")]
     Disabled,
-    #[error("远程连接阶段 {stage} 失败：{detail}")]
     Transport { stage: &'static str, detail: String },
-    #[error("{0}")]
     Storage(String),
+}
+
+impl std::error::Error for RemoteError {}
+impl std::fmt::Display for RemoteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation(failure) => failure.fmt(formatter),
+            Self::Transport { stage, detail } => {
+                let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, Duration::from_secs(40)));
+                context.failure(stage, detail).fmt(formatter)
+            }
+            Self::InvalidName => write!(formatter, "远程目标名称不能为空"),
+            Self::InvalidHost => write!(formatter, "远程主机地址无效"),
+            Self::InvalidUser => write!(formatter, "远程用户无效"),
+            Self::InvalidPath => write!(formatter, "远程路径无效"),
+            Self::NotFound => write!(formatter, "远程目标不存在"),
+            Self::Disabled => write!(formatter, "远程 SSH 功能尚未启用，请在设置中开启"),
+            Self::Storage(detail) => write!(formatter, "{detail}"),
+        }
+    }
 }
 
 fn now() -> i64 {
@@ -1433,11 +1446,17 @@ fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
         || detail.contains("no matching host key")
     {
         "host_key"
-    } else if detail.contains("permission denied")
+    } else if exit_code == Some(255) && !detail.contains("__cliora_remote_started__") && (detail.contains("permission denied")
         || detail.contains("could not authenticate")
-        || detail.contains("too many authentication failures")
+        || detail.contains("too many authentication failures"))
     {
         "authentication"
+    } else if detail.contains("cliora:remote-path-failed") {
+        "remote_path"
+    } else if detail.contains("permission denied") || detail.contains("operation not permitted") {
+        "permission"
+    } else if exit_code == Some(127) || detail.contains("cliora:missing-") {
+        "dependency"
     } else if exit_code.is_some() && exit_code != Some(255) {
         "remote_command"
     } else {
@@ -1790,11 +1809,11 @@ pub fn save_target(db: &Database, mut target: RemoteTarget) -> Result<RemoteTarg
     let timestamp = now();
     db.with_connection(|conn| {
         let existing: Option<i64> = conn
-            .query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0))
+            .query_row("SELECT MAX(created_at,updated_at) FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0))
             .optional()
             .map_err(|error| error.to_string())?;
-        target.created_at = existing.unwrap_or(timestamp);
-        target.updated_at = timestamp;
+        target.created_at = if let Some(_) = existing { conn.query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0)).map_err(|error| error.to_string())? } else { timestamp };
+        target.updated_at = existing.map(|previous| timestamp.max(previous.saturating_add(1))).unwrap_or(timestamp);
         conn.execute(
             "INSERT INTO remote_targets (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
@@ -1891,6 +1910,16 @@ pub fn delete_project(db: &Database, id: &str) -> Result<(), RemoteError> {
 /// Perform a read-only, PTY-free OpenSSH probe. Host key checking stays strict;
 /// callers must explicitly maintain `known_hosts` when a host key changes.
 pub fn probe_target(target: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Read, SSH_COMMAND_DEADLINE));
+    operations::scoped(context, || probe_target_inner(target, target))
+}
+
+pub fn probe_target_using_credentials(target: &RemoteTarget, credentials: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Read, SSH_COMMAND_DEADLINE));
+    operations::scoped(context, || probe_target_inner(target, credentials))
+}
+
+fn probe_target_inner(target: &RemoteTarget, credentials: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
     validate_target(target)?;
     let remote_script = probe_script(target.default_path.as_deref());
     let output = run_ssh(target, || {
@@ -1903,7 +1932,7 @@ pub fn probe_target(target: &RemoteTarget) -> Result<RemoteProbe, RemoteError> {
             command.args(["-o", "BatchMode=yes"]);
         }
         command.args(connection_args(target));
-        password::apply(target, &mut command);
+        password::apply(credentials, &mut command);
         command.arg(&remote_script);
         wait_for_output(&mut command, SSH_COMMAND_DEADLINE)
     })?;
@@ -1988,7 +2017,7 @@ fn run_command_with_stdin(target: &RemoteTarget, command_line: &str, stdin_paylo
 fn command_output_with_stdin(target: &RemoteTarget, command_line: &str, stdin_payload: Option<&[u8]>) -> Result<std::process::Output, RemoteError> {
     validate_target(target)?;
     ensure_remote_command(command_line)?;
-    let command_line = command_line.to_owned();
+    let command_line = format!("printf '%s\\n' '__CLIORA_REMOTE_STARTED__' >&2; {command_line}");
     run_ssh(target, || {
         let mut command = ssh_command(
             target,
@@ -2014,7 +2043,6 @@ fn command_result(target: &RemoteTarget, output: std::process::Output) -> Result
 }
 
 const SSH_COMMAND_DEADLINE: Duration = Duration::from_secs(40);
-const SSH_SLOT_WAIT: Duration = Duration::from_secs(40);
 
 fn wait_for_output(command: &mut Command, deadline: Duration) -> Result<std::process::Output, RemoteError> {
     wait_for_output_with_stdin(command, deadline, None)
@@ -2023,6 +2051,8 @@ fn wait_for_output(command: &mut Command, deadline: Duration) -> Result<std::pro
 /// One bounded control attempt: a destructive session operation is never retried
 /// automatically after a transport error, because it may already have executed.
 pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &[(String, String)]) -> Result<std::process::Output, RemoteError> {
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, SSH_COMMAND_DEADLINE));
+    let _slot = operations::acquire_bound(&context)?;
     let mut command = Command::new(binary);
     command.args(args).envs(environment.iter().map(|(key, value)| (key, value)));
     #[cfg(windows)]
@@ -2030,20 +2060,47 @@ pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    wait_for_output(&mut command, SSH_COMMAND_DEADLINE)
+    operations::scoped(context.clone(), || {
+        let output = wait_for_output(&mut command, SSH_COMMAND_DEADLINE)?;
+        if output.status.code() == Some(255) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(context.failure_with_exit(classify_ssh_failure(&stderr, output.status.code()), &format!("远程结束连接失败（退出码 255）：{}", stderr.trim()), output.status.code()));
+        }
+        Ok(output)
+    })
 }
 
 fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_payload: Option<Vec<u8>>) -> Result<std::process::Output, RemoteError> {
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, deadline));
+    context.check()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     if stdin_payload.is_some() {
         command.stdin(Stdio::piped());
     } else {
         command.stdin(Stdio::null());
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| RemoteError::Transport {
-        stage: "launch",
-        detail: error.to_string(),
-    })?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0004); // CREATE_NO_WINDOW | CREATE_SUSPENDED
+    }
+    let mut child = command.spawn().map_err(|_| context.failure("launch", "无法启动远程连接进程"))?;
+    #[cfg(windows)]
+    let mut process_job = {
+        match crate::session_host::process_tree::Job::resume_child(&mut child) {
+            Ok(job) => Some(job),
+            Err(detail) => {
+                let _ = child.kill(); let _ = child.wait();
+                return Err(context.failure("launch", detail));
+            }
+        }
+    };
+    context.dispatched();
     let stdin_pipe = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -2075,120 +2132,64 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
             None
         }
     };
-    let started = Instant::now();
     let status = loop {
+        let failure = context.check().err();
+        if let Some(error) = failure {
+            #[cfg(windows)]
+            let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
+            #[cfg(unix)]
+            { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+            let _ = child.kill(); let _ = child.wait();
+            if let Some(task) = stdin_task.take() { let _ = task.join(); }
+            let _ = stdout_task.join(); let _ = stderr_task.join();
+            #[cfg(windows)]
+            if !cleaned { return Err(context.failure("cleanup", "远程等待已停止，但无法确认本地子进程已全部回收")); }
+            return Err(error);
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+            Ok(None) => std::thread::sleep(Duration::from_millis(10).min(context.remaining())),
+            Err(_) => {
+                #[cfg(windows)]
+                let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
+                #[cfg(unix)]
+                { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+                let _ = child.kill(); let _ = child.wait();
                 if let Some(task) = stdin_task.take() { let _ = task.join(); }
-                let _ = stdout_task.join();
-                let _ = stderr_task.join();
-                return Err(RemoteError::Transport {
-                    stage: "timeout",
-                    detail: "远程连接超时，请稍后再试".into(),
-                });
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(30)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(task) = stdin_task.take() { let _ = task.join(); }
-                let _ = stdout_task.join();
-                let _ = stderr_task.join();
-                return Err(RemoteError::Transport {
-                    stage: "launch",
-                    detail: error.to_string(),
-                });
+                let _ = stdout_task.join(); let _ = stderr_task.join();
+                #[cfg(windows)]
+                if !cleaned { return Err(context.failure("cleanup", "进程等待失败，无法确认本地子进程已全部回收")); }
+                return Err(context.failure("launch", "无法等待远程进程退出"));
             }
         }
     };
+    // Close descendant handles before joining pipe readers. A child inherited
+    // stdout must not keep an abandoned request alive after ssh itself exits.
+    #[cfg(windows)]
+    let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
+    #[cfg(unix)]
+    { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
     if let Some(task) = stdin_task.take() { let _ = task.join(); }
-    Ok(std::process::Output {
+    let output = std::process::Output {
         status,
         stdout: stdout_task.join().unwrap_or_default(),
         stderr: stderr_task.join().unwrap_or_default(),
-    })
+    };
+    #[cfg(windows)]
+    if !cleaned { return Err(context.failure("cleanup", "远程命令已返回，但无法确认本地子进程已全部回收；请核查结果")); }
+    Ok(output)
 }
 
-/// sshd closes extra unauthenticated handshakes (`MaxStartups`, default
-/// 10:30:60) with "Connection closed by <host> port 22". Windows OpenSSH
-/// cannot share a ControlMaster socket, and one library page opens a command
-/// per CLI, so those handshakes used to arrive together. Two at a time stays
-/// under that limit; a closed handshake is tried again after the slot is free.
-const SSH_PARALLEL: usize = 2;
 const SSH_ATTEMPTS: u32 = 3;
 
-struct SshGate {
-    inflight: Mutex<BTreeMap<String, usize>>,
-    ready: Condvar,
+#[cfg(test)]
+fn acquire_ssh_slot(target: &RemoteTarget) -> Result<operations::Slot<'static>, RemoteError> {
+    acquire_ssh_slot_within(target, SSH_COMMAND_DEADLINE)
 }
 
-fn ssh_gate() -> &'static SshGate {
-    static GATE: OnceLock<SshGate> = OnceLock::new();
-    GATE.get_or_init(|| SshGate {
-        inflight: Mutex::new(BTreeMap::new()),
-        ready: Condvar::new(),
-    })
-}
-
-fn ssh_destination(target: &RemoteTarget) -> String {
-    format!("{}@{}:{}", target.user, target.host, target.port)
-}
-
-struct SshSlot {
-    key: String,
-}
-
-impl Drop for SshSlot {
-    fn drop(&mut self) {
-        let gate = ssh_gate();
-        let mut inflight = gate.inflight.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(count) = inflight.get_mut(&self.key) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                inflight.remove(&self.key);
-            }
-        }
-        gate.ready.notify_all();
-    }
-}
-
-fn acquire_ssh_slot(target: &RemoteTarget) -> Result<SshSlot, RemoteError> {
-    acquire_ssh_slot_within(target, SSH_SLOT_WAIT)
-}
-
-fn acquire_ssh_slot_within(target: &RemoteTarget, wait: Duration) -> Result<SshSlot, RemoteError> {
-    let key = ssh_destination(target);
-    let gate = ssh_gate();
-    let mut inflight = gate.inflight.lock().unwrap_or_else(|error| error.into_inner());
-    let deadline = Instant::now() + wait;
-    loop {
-        let count = inflight.get(&key).copied().unwrap_or(0);
-        if count < SSH_PARALLEL {
-            inflight.insert(key.clone(), count + 1);
-            return Ok(SshSlot { key });
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(RemoteError::Transport {
-                stage: "connect",
-                detail: "远程连接正忙，请稍后再试".into(),
-            });
-        }
-        let (guard, timeout) = gate
-            .ready
-            .wait_timeout(inflight, remaining)
-            .unwrap_or_else(|error| error.into_inner());
-        inflight = guard;
-        if timeout.timed_out() && inflight.get(&key).copied().unwrap_or(0) >= SSH_PARALLEL {
-            return Err(RemoteError::Transport {
-                stage: "connect",
-                detail: "远程连接正忙，请稍后再试".into(),
-            });
-        }
-    }
+#[cfg(test)]
+fn acquire_ssh_slot_within(target: &RemoteTarget, wait: Duration) -> Result<operations::Slot<'static>, RemoteError> {
+    operations::acquire(target, &operations::Context::local(operations::Kind::Read, wait))
 }
 
 fn retryable_ssh_failure(stderr: &str, exit_code: Option<i32>) -> bool {
@@ -2227,20 +2228,29 @@ fn run_ssh(
     target: &RemoteTarget,
     mut spawn: impl FnMut() -> Result<std::process::Output, RemoteError>,
 ) -> Result<std::process::Output, RemoteError> {
-    for attempt in 0..SSH_ATTEMPTS {
-        let slot = acquire_ssh_slot(target)?;
-        let output = spawn()?;
-        if output.status.success() {
-            return Ok(output);
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, SSH_COMMAND_DEADLINE));
+    context.bind(target)?;
+    operations::scoped(context.clone(), || {
+        for attempt in 0..SSH_ATTEMPTS {
+            let slot = operations::acquire(target, &context)?;
+            context.check()?;
+            let mut output = spawn()?;
+            context.check()?;
+            if output.status.success() {
+                output.stderr = String::from_utf8_lossy(&output.stderr).replace("__CLIORA_REMOTE_STARTED__\n", "").into_bytes();
+                return Ok(output);
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stage = classify_ssh_failure(&stderr, output.status.code());
+            if context.kind != operations::Kind::Read || attempt + 1 == SSH_ATTEMPTS
+                || !retryable_ssh_failure(&stderr, output.status.code()) {
+                return Err(context.failure_with_exit(stage, stderr.replace("__CLIORA_REMOTE_STARTED__\n", "").trim(), output.status.code()));
+            }
+            drop(slot);
+            context.pause(ssh_retry_delay(attempt))?;
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if attempt + 1 == SSH_ATTEMPTS || !retryable_ssh_failure(&stderr, output.status.code()) {
-            return Ok(output);
-        }
-        drop(slot);
-        std::thread::sleep(ssh_retry_delay(attempt));
-    }
-    unreachable!("ssh attempts always return")
+        unreachable!("ssh attempts always return")
+    })
 }
 
 pub fn run_command(
@@ -2267,6 +2277,11 @@ pub fn run_command(
 
 /// Binary stdout from one remote command. History archives are not UTF-8 text.
 pub fn run_command_bytes(target: &RemoteTarget, command_line: &str) -> Result<Vec<u8>, RemoteError> {
+    let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Read, SSH_COMMAND_DEADLINE));
+    operations::scoped(context, || run_command_bytes_inner(target, command_line))
+}
+
+fn run_command_bytes_inner(target: &RemoteTarget, command_line: &str) -> Result<Vec<u8>, RemoteError> {
     let output = command_output(target, command_line)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2325,27 +2340,8 @@ pub fn read_file(target: &RemoteTarget, remote_path: &str) -> Result<Vec<u8>, Re
     let binary = std::env::var("CLIORA_SFTP_BINARY").unwrap_or_else(|_| "sftp".into());
     let output = run_ssh(target, || {
         let mut command = sftp_command(target, &binary);
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| RemoteError::Transport {
-                stage: "launch",
-                detail: error.to_string(),
-            })?;
-        if let Some(mut stdin) = child.stdin.take() {
-            writeln!(stdin, "get {} -", remote_path.replace('\n', " ")).map_err(|error| {
-                RemoteError::Transport {
-                    stage: "sftp",
-                    detail: error.to_string(),
-                }
-            })?;
-        }
-        child.wait_with_output().map_err(|error| RemoteError::Transport {
-            stage: "sftp",
-            detail: error.to_string(),
-        })
+        let batch = format!("get {} -\n", remote_path.replace('\n', " "));
+        wait_for_output_with_stdin(&mut command, SSH_COMMAND_DEADLINE, Some(batch.into_bytes()))
     })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2374,6 +2370,142 @@ pub fn ensure_enabled(db: &Database) -> Result<(), RemoteError> {
 mod tests {
     use super::*;
     use base64::Engine;
+
+    #[test]
+    fn controlled_operation_child() {
+        let Ok(mode) = std::env::var("CLIORA_OPERATION_CHILD_MODE") else { return };
+        let counter = std::env::var("CLIORA_OPERATION_COUNTER").unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).create(true).open(&counter).unwrap();
+        writeln!(file, "{}", std::process::id()).unwrap();
+        drop(file);
+        match mode.as_str() {
+            "closed" | "write_drop" => { eprintln!("Connection closed by fixture"); std::process::exit(255); }
+            "permission" => { eprintln!("cat: fixture: Permission denied"); std::process::exit(1); }
+            "authentication" => { eprintln!("Permission denied (publickey)."); std::process::exit(255); }
+            "tree" => {
+                let mut command = operation_child("hang", Path::new(&counter));
+                let _child = command.spawn().unwrap();
+                std::thread::sleep(Duration::from_secs(30));
+            }
+            _ => std::thread::sleep(Duration::from_secs(30)),
+        }
+    }
+
+    fn operation_child(mode: &str, counter: &Path) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "remote::tests::controlled_operation_child", "--nocapture"])
+            .env("CLIORA_OPERATION_CHILD_MODE", mode).env("CLIORA_OPERATION_COUNTER", counter);
+        hide_console_window(&mut command);
+        command
+    }
+
+    fn child_count(counter: &Path) -> usize {
+        std::fs::read_to_string(counter).unwrap_or_default().lines().count()
+    }
+
+    #[test]
+    fn process_faults_keep_permission_and_authentication_distinct_and_never_replay_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        for (mode, expected, outcome) in [("write_drop", "connect", "unknown"), ("permission", "permission", "failed"), ("authentication", "authentication", "failed")] {
+            let counter = directory.path().join(mode);
+            let context = operations::Context::local(operations::Kind::Write, Duration::from_secs(3));
+            let target = gate_target(&format!("{mode}.invalid"));
+            let error = operations::scoped(context, || run_ssh(&target, || {
+                wait_for_output(&mut operation_child(mode, &counter), SSH_COMMAND_DEADLINE)
+            })).unwrap_err();
+            let RemoteError::Operation(failure) = error else { panic!("missing typed failure") };
+            assert_eq!(failure.stage, expected);
+            assert_eq!(failure.outcome, outcome);
+            assert_eq!(child_count(&counter), 1, "a mutation must never replay");
+        }
+    }
+
+    #[test]
+    fn read_retries_share_one_deadline_including_backoff() {
+        let directory = tempfile::tempdir().unwrap();
+        let counter = directory.path().join("attempts");
+        let context = operations::Context::local(operations::Kind::Read, Duration::from_millis(350));
+        let target = gate_target("read-deadline.invalid");
+        let started = std::time::Instant::now();
+        let error = operations::scoped(context, || run_ssh(&target, || {
+            wait_for_output(&mut operation_child("closed", &counter), SSH_COMMAND_DEADLINE)
+        })).unwrap_err();
+        let RemoteError::Operation(failure) = error else { panic!("missing typed failure") };
+        assert_eq!(failure.reason, "timeout");
+        assert!(matches!(failure.stage.as_str(), "retry_wait" | "process_wait"));
+        assert!((1..=2).contains(&child_count(&counter)));
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        eprintln!("REMOTE_OPERATION_METRIC read_retry_deadline attempts={} elapsed_ms={}", child_count(&counter), started.elapsed().as_millis());
+    }
+
+    #[cfg(windows)]
+    type ProcessObservation = std::os::windows::io::OwnedHandle;
+    #[cfg(unix)]
+    type ProcessObservation = u32;
+
+    #[cfg(windows)]
+    fn observe_process(pid: u32) -> ProcessObservation {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(!handle.is_null(), "fixture process must still be running before cancellation");
+        unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle) }
+    }
+    #[cfg(unix)]
+    fn observe_process(pid: u32) -> ProcessObservation { pid }
+
+    #[cfg(windows)]
+    fn process_alive(process: &ProcessObservation) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::{Foundation::WAIT_TIMEOUT, System::Threading::WaitForSingleObject};
+        unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT }
+    }
+
+    #[cfg(unix)]
+    fn process_alive(process: &ProcessObservation) -> bool {
+        Command::new("kill").args(["-0", &process.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
+    }
+
+    #[test]
+    fn inflight_cancel_reclaims_the_child_tree_and_pipe_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        let counter = directory.path().join("pids");
+        let request = operations::Request {
+            request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(),
+            target_id: "cancel-tree.invalid".into(), target_revision: None, kind: operations::Kind::Read,
+            priority: operations::Priority::Interactive,
+            deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + 5000,
+        };
+        let lease = operations::register("process-test", request.clone(), operations::Kind::Read).unwrap();
+        let cancellation_counter = counter.clone();
+        let cancelling = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while child_count(&cancellation_counter) < 2 && start.elapsed() < Duration::from_secs(3) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(child_count(&cancellation_counter), 2, "fixture child and grandchild started");
+            // Hold handles before termination. Reopening a PID afterwards can
+            // observe an unrelated fixture that reused the released PID.
+            let processes: Vec<_> = std::fs::read_to_string(&cancellation_counter).unwrap().lines()
+                .map(|line| observe_process(line.parse().unwrap())).collect();
+            let start = std::time::Instant::now();
+            assert!(operations::cancel("process-test", &request.request_id, &request.cancel_token));
+            (start, processes)
+        });
+        let context = lease.context.clone();
+        let error = operations::scoped(context, || run_ssh(&gate_target("cancel-tree.invalid"), || {
+            wait_for_output(&mut operation_child("tree", &counter), SSH_COMMAND_DEADLINE)
+        })).unwrap_err();
+        let (cancellation_at, processes) = cancelling.join().unwrap();
+        let RemoteError::Operation(failure) = error else { panic!("missing typed failure") };
+        assert_eq!(failure.reason, "cancelled");
+        assert_eq!(failure.stage, "process_wait");
+        assert!(cancellation_at.elapsed() < Duration::from_millis(1000));
+        for process in &processes {
+            assert!(!process_alive(process), "abandoned fixture process survived cancellation");
+        }
+        eprintln!("REMOTE_OPERATION_METRIC inflight_cancel descendants=2 elapsed_ms={}", cancellation_at.elapsed().as_millis());
+    }
 
     fn b64(text: &str) -> String {
         base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
@@ -2618,6 +2750,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(list_projects(&db, Some(&target.id)).unwrap(), vec![project]);
+        let saved_again = save_target(&db, target.clone()).unwrap();
+        assert_eq!(saved_again.created_at, target.created_at);
+        assert!(saved_again.updated_at > target.updated_at, "authentication/configuration saves must advance identity even within one second");
     }
 
     #[test]
@@ -2725,17 +2860,18 @@ mod tests {
         assert!(!retryable_ssh_failure("Permission denied (publickey).", Some(255)));
         assert!(!retryable_ssh_failure("REMOTE HOST IDENTIFICATION HAS CHANGED!", Some(255)));
         assert!(!retryable_ssh_failure("bash: no such file", Some(1)));
+        assert_eq!(classify_ssh_failure("__CLIORA_REMOTE_STARTED__\ncat: fixture: Permission denied", Some(255)), "permission");
 
         let target = gate_target("retry-closed.invalid");
         let hits = std::sync::atomic::AtomicUsize::new(0);
-        let output = run_ssh(&target, || {
+        let output = operations::scoped(operations::Context::local(operations::Kind::Read, SSH_COMMAND_DEADLINE), || run_ssh(&target, || {
             let attempt = hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(std::process::Output {
                 status: exit_status(if attempt == 0 { 255 } else { 0 }),
                 stdout: b"ok".to_vec(),
                 stderr: if attempt == 0 { b"Connection closed by 203.0.113.10 port 22\n".to_vec() } else { Vec::new() },
             })
-        })
+        }))
         .unwrap();
         assert!(output.status.success());
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -2750,8 +2886,8 @@ mod tests {
                 stderr: b"Permission denied (publickey).\n".to_vec(),
             })
         })
-        .unwrap();
-        assert!(!output.status.success());
+        .unwrap_err();
+        assert!(matches!(output, RemoteError::Operation(failure) if failure.stage == "authentication"));
         assert_eq!(denied_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
@@ -2786,7 +2922,7 @@ mod tests {
             Ok(_) => panic!("a full gate returned a slot"),
         };
         let message = error.to_string();
-        assert!(message.contains("远程连接正忙"), "{message}");
+        assert!(message.contains("timeout"), "{message}");
         drop(first);
         drop(second);
     }
@@ -2805,7 +2941,7 @@ mod tests {
             .args(["--exact", "remote::tests::a_command_that_does_not_exit_is_stopped"])
             .env(CHILD_MARKER, "1");
         let error = wait_for_output(&mut command, Duration::from_millis(200)).unwrap_err();
-        assert!(matches!(&error, RemoteError::Transport { stage: "timeout", .. }), "{error}");
+        assert!(matches!(&error, RemoteError::Operation(failure) if failure.reason == "timeout"), "{error}");
         let message = error.to_string();
         assert!(message.contains("远程连接超时"), "{message}");
     }

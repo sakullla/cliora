@@ -48,3 +48,28 @@ export type RemoteToolStore = {
   common: RegisteredCommon | null;
   currentFiles: Record<string, string>;
 };
+
+export type RemoteOperationKind = 'read' | 'write';
+export type RemotePriority = 'interactive' | 'background';
+export type RemoteOperationRequest = {
+  requestId: string;
+  cancelToken: string;
+  targetId: string;
+  targetRevision: number | null;
+  kind: RemoteOperationKind;
+  priority: RemotePriority;
+  deadlineUnixMs: number;
+};
+export type RemoteFailure = {
+  code: string;
+  stage: string;
+  reason: string;
+  message: string;
+  action: string;
+  requestId: string | null;
+  targetId: string | null;
+  targetRevision: number | null;
+  outcome: 'failed' | 'unknown';
+  retryable: boolean;
+  exitCode: number | null;
+};

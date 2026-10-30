@@ -1,10 +1,12 @@
+import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
+import type { RemoteApiError } from '../types/native';
 import type { MaintenanceResult } from '../types/native';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
-import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
+import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, WorkbenchGitContext, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
@@ -18,17 +20,18 @@ import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
 
-function readError(error: unknown): ApiError {
+function readError(error: unknown): RemoteApiError {
   if (typeof error === 'string') {
     return { code: 'native_error', message: error, action: i18n.t('common.nativeError.checkAndRetry') };
   }
   if (typeof error === 'object' && error !== null && 'message' in error) {
-    const value = error as Partial<ApiError>;
+    const value = error as Partial<RemoteApiError>;
     return {
       code: typeof value.code === 'string' ? value.code : 'native_error',
       message: typeof value.message === 'string' ? value.message : i18n.t('common.nativeError.operationFailed'),
       action: typeof value.action === 'string' ? value.action : i18n.t('common.nativeError.retry'),
       data_directory: typeof value.data_directory === 'string' ? value.data_directory : null,
+      ...(value.remote ? { remote: value.remote, action: value.remote.action } : {}),
     };
   }
   return { code: 'native_error', message: i18n.t('common.nativeError.unavailable'), action: i18n.t('common.nativeError.reopen') };
@@ -40,6 +43,16 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
   } catch (error) {
     throw readError(error);
   }
+}
+
+const remoteOperations = new RemoteOperations(command);
+const remoteRevisions = new Map<string, number>();
+function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
+  const target = args.target as RemoteTarget | undefined;
+  const targetId = typeof args.targetId === 'string' ? args.targetId : target?.id ?? options?.targetId ?? '';
+  return remoteOperations.start<T>(name, args, targetId, kind, {
+    targetRevision: target?.updatedAt ?? remoteRevisions.get(targetId), ...options,
+  }).promise;
 }
 
 // Share only overlapping reads. Settled workspace data is always read again so
@@ -175,8 +188,8 @@ export const native = {
   applyRuleTargets: (ruleId: string, expectedVersion: number, targets: RuleTarget[]) => command<RuleApplyResult[]>('apply_rule_targets', { ruleId, expectedVersion, targets }),
   listRulePlacements: () => command<RulePlacement[]>('list_rule_placements'),
   syncRuleClients: (ruleId: string, expectedVersion: number, selection: RuleClientSelection) => command<RuleSyncResult[]>('sync_rule_clients', { ruleId, expectedVersion, selection }),
-  listRemoteRulePlacements: (targetId: string) => command<RulePlacement[]>('list_remote_rule_placements', { targetId }),
-  syncRemoteRuleClients: (targetId: string, ruleId: string, expectedVersion: number, selection: RuleClientSelection) => command<RuleSyncResult[]>('sync_remote_rule_clients', { targetId, ruleId, expectedVersion, selection }),
+  listRemoteRulePlacements: (targetId: string, options?: RemoteOperationOptions) => remoteCommand<RulePlacement[]>('list_remote_rule_placements', { targetId }, 'read', options),
+  syncRemoteRuleClients: (targetId: string, ruleId: string, expectedVersion: number, selection: RuleClientSelection, options?: RemoteOperationOptions) => remoteCommand<RuleSyncResult[]>('sync_remote_rule_clients', { targetId, ruleId, expectedVersion, selection }, 'write', options),
   listSkillPackages: () => command<SkillPackage[]>('list_skill_packages'),
   setSkillInLibrary: (id: string, inLibrary: boolean) => command<void>('set_skill_in_library', { id, inLibrary }),
   previewSkillLocal: (source: string) => command<SkillImportPreview>('preview_skill_local', { source }),
@@ -205,31 +218,39 @@ export const native = {
   listLibraryItems: (kind: LibraryKind, projectId: string | null, search: string) => command<LibraryItem[]>('list_library_items', { kind, projectId, search }),
   saveLibraryItem: (draft: LibraryDraft) => command<LibraryItem>('save_library_item', { draft }),
   deleteLibraryItem: (id: string, expectedVersion: number) => command<void>('delete_library_item', { id, expectedVersion }),
-  listRemoteLibraryItems: (targetId: string, kind: LibraryKind, search: string) => command<LibraryItem[]>('list_remote_library_items', { targetId, kind, search }),
-  saveRemoteLibraryItem: (targetId: string, draft: LibraryDraft) => command<LibraryItem>('save_remote_library_item', { targetId, draft }),
-  deleteRemoteLibraryItem: (targetId: string, id: string, expectedVersion: number) => command<void>('delete_remote_library_item', { targetId, id, expectedVersion }),
+  listRemoteLibraryItems: (targetId: string, kind: LibraryKind, search: string, options?: RemoteOperationOptions) => remoteCommand<LibraryItem[]>('list_remote_library_items', { targetId, kind, search }, 'read', options),
+  saveRemoteLibraryItem: (targetId: string, draft: LibraryDraft, options?: RemoteOperationOptions) => remoteCommand<LibraryItem>('save_remote_library_item', { targetId, draft }, 'write', options),
+  deleteRemoteLibraryItem: (targetId: string, id: string, expectedVersion: number, options?: RemoteOperationOptions) => remoteCommand<void>('delete_remote_library_item', { targetId, id, expectedVersion }, 'write', options),
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
-  listRemoteTargets: () => command<RemoteTarget[]>('list_remote_targets'),
+  listRemoteTargets: async () => {
+    const targets = await command<RemoteTarget[]>('list_remote_targets');
+    for (const target of targets) remoteRevisions.set(target.id, target.updatedAt);
+    return targets;
+  },
   /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
-  saveRemoteTarget: (target: RemoteTarget, password?: string | null) => command<RemoteTarget>('save_remote_target', { target, password: password || null }),
+  saveRemoteTarget: async (target: RemoteTarget, password?: string | null) => {
+    const saved = await command<RemoteTarget>('save_remote_target', { target, password: password || null });
+    remoteRevisions.set(saved.id, saved.updatedAt);
+    return saved;
+  },
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
   deleteRemoteTarget: (id: string) => command<void>('delete_remote_target', { id }),
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
-  listRemoteDirectories: (targetId: string, parent: string) => command<string[]>('list_remote_directories', { targetId, parent }),
-  createRemoteDirectory: (targetId: string, path: string) => command<void>('create_remote_directory', { targetId, path }),
+  listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<string[]>('list_remote_directories', { targetId, parent }, 'read', options),
+  createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),
   saveRemoteProject: (project: RemoteProject) => command<RemoteProject>('save_remote_project', { project }),
   deleteRemoteProject: (id: string) => command<void>('delete_remote_project', { id }),
-  testRemoteTarget: (target: RemoteTarget, password?: string | null) => command<RemoteProbe>('test_remote_target', { target, password: password || null }),
-  probeRemoteCli: (targetId: string, toolId: string) => command<RemoteCliProbe>('probe_remote_cli', { targetId, toolId }),
-  probeRemoteClis: (targetId: string, toolIds: string[]) => command<RemoteCliProbe[]>('probe_remote_clis', { targetId, toolIds }),
-  getRemoteToolStore: (targetId: string, toolId: string, scope?: string | null, projectPath?: string | null) => command<RemoteToolStore>('get_remote_tool_store', { targetId, toolId, scope: scope ?? null, projectPath: projectPath ?? null }),
-  saveRemoteToolStore: (targetId: string, toolId: string, store: RemoteToolStore, scope?: string | null, projectPath?: string | null) => command<void>('save_remote_tool_store', { targetId, toolId, store, scope: scope ?? null, projectPath: projectPath ?? null }),
-  deleteRemoteToolProfile: (targetId: string, toolId: string, profileId: string) => command<void>('delete_remote_tool_profile', { targetId, toolId, profileId }),
-  getRemoteResourceStore: (targetId: string, toolId: string, kind: string) => command<unknown>('get_remote_resource_store', { targetId, toolId, kind }),
-  listRemoteResourceStores: (targetId: string, toolIds: string[], kind: string) => command<{ stores?: Record<string, unknown> }>('list_remote_resource_stores', { targetId, toolIds, kind }),
-  saveRemoteResourceStore: (targetId: string, toolId: string, kind: string, value: unknown) => command<void>('save_remote_resource_store', { targetId, toolId, kind, value }),
-  importRemoteSkillDirectory: (targetId: string, toolId: string, source: string) => command<void>('import_remote_skill_directory', { targetId, toolId, source }),
+  testRemoteTarget: (target: RemoteTarget, password?: string | null, options?: RemoteOperationOptions) => remoteCommand<RemoteProbe>('test_remote_target', { target, password: password || null }, 'read', options),
+  probeRemoteCli: (targetId: string, toolId: string, options?: RemoteOperationOptions) => remoteCommand<RemoteCliProbe>('probe_remote_cli', { targetId, toolId }, 'read', options),
+  probeRemoteClis: (targetId: string, toolIds: string[], options?: RemoteOperationOptions) => remoteCommand<RemoteCliProbe[]>('probe_remote_clis', { targetId, toolIds }, 'read', options),
+  getRemoteToolStore: (targetId: string, toolId: string, scope?: string | null, projectPath?: string | null, options?: RemoteOperationOptions) => remoteCommand<RemoteToolStore>('get_remote_tool_store', { targetId, toolId, scope: scope ?? null, projectPath: projectPath ?? null }, 'read', options),
+  saveRemoteToolStore: (targetId: string, toolId: string, store: RemoteToolStore, scope?: string | null, projectPath?: string | null, options?: RemoteOperationOptions) => remoteCommand<void>('save_remote_tool_store', { targetId, toolId, store, scope: scope ?? null, projectPath: projectPath ?? null }, 'write', options),
+  deleteRemoteToolProfile: (targetId: string, toolId: string, profileId: string, options?: RemoteOperationOptions) => remoteCommand<void>('delete_remote_tool_profile', { targetId, toolId, profileId }, 'write', options),
+  getRemoteResourceStore: (targetId: string, toolId: string, kind: string, options?: RemoteOperationOptions) => remoteCommand<unknown>('get_remote_resource_store', { targetId, toolId, kind }, 'read', options),
+  listRemoteResourceStores: (targetId: string, toolIds: string[], kind: string, options?: RemoteOperationOptions) => remoteCommand<{ stores?: Record<string, unknown> }>('list_remote_resource_stores', { targetId, toolIds, kind }, 'read', options),
+  saveRemoteResourceStore: (targetId: string, toolId: string, kind: string, value: unknown, options?: RemoteOperationOptions) => remoteCommand<void>('save_remote_resource_store', { targetId, toolId, kind, value }, 'write', options),
+  importRemoteSkillDirectory: (targetId: string, toolId: string, source: string, options?: RemoteOperationOptions) => remoteCommand<void>('import_remote_skill_directory', { targetId, toolId, source }, 'write', options),
   listProjects: () => command<Project[]>('list_projects'),
   addProject: (projectPath: string, name?: string, preferredTool?: string) => command<Project>('add_project', { projectPath, name: name || null, preferredTool: preferredTool || null }),
   renameProject: (projectId: string, name: string) => command<Project>('rename_project', { projectId, name }),
@@ -242,8 +263,13 @@ export const native = {
   setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
   setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }),
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
-  launchCli: async (request: LaunchRequest) => {
-    const result = await command<LaunchResult>('launch_cli', { request });
+  launchCli: async (request: LaunchRequest, options?: RemoteOperationOptions) => {
+    let result: LaunchResult;
+    if (request.projectId?.startsWith('remote:')) {
+      const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
+      const targetId = projects.find(item => `remote:${item.id}` === request.projectId)?.targetId ?? '';
+      result = await remoteCommand<LaunchResult>('launch_cli', { request, targetId }, 'write', options);
+    } else result = await command<LaunchResult>('launch_cli', { request });
     markOnboardingLaunched();
     return result;
   },
@@ -253,19 +279,26 @@ export const native = {
   forgetWorkbenchRestore: (sessionId: string) => command<void>('forget_workbench_restore', { sessionId }),
   listRemoteSessions: () => command<RemoteSessionIndexEntry[]>('list_remote_sessions'),
   listRemoteHistory: () => command<RemoteSessionIndexEntry[]>('list_remote_history'),
-  listRemoteNativeHistory: (targetId: string, refresh = false) => command<HistorySession[]>('list_remote_native_history', { targetId, refresh }),
-  getRemoteNativeHistory: (targetId: string, id: string) => command<HistoryDetail>('get_remote_native_history', { targetId, id }),
+  listRemoteNativeHistory: (targetId: string, refresh = false, options?: RemoteOperationOptions) => remoteCommand<HistorySession[]>('list_remote_native_history', { targetId, refresh }, 'read', options),
+  getRemoteNativeHistory: (targetId: string, id: string, options?: RemoteOperationOptions) => remoteCommand<HistoryDetail>('get_remote_native_history', { targetId, id }, 'read', options),
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
   setWorkbenchDirectory: (sessionId: string, directory: string) => command<string>('set_workbench_directory', { sessionId, directory }),
   writeWorkbenchSession: (sessionId: string, dataBase64: string) => command<void>('write_workbench_session', { sessionId, dataBase64 }),
   resizeWorkbenchSession: (sessionId: string, cols: number, rows: number) => command<void>('resize_workbench_session', { sessionId, cols, rows }),
-  closeWorkbenchSession: (sessionId: string) => command<void>('close_workbench_session', { sessionId }),
+  closeWorkbenchSession: async (sessionId: string, options?: RemoteOperationOptions) => {
+    const sessions = await command<WorkbenchSession[]>('list_workbench_sessions');
+    const projectId = sessions.find(item => item.id === sessionId)?.projectId;
+    if (!projectId?.startsWith('remote:')) return command<void>('close_workbench_session', { sessionId });
+    const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
+    const targetId = projects.find(item => `remote:${item.id}` === projectId)?.targetId ?? '';
+    return remoteCommand<void>('close_workbench_session', { sessionId, targetId }, 'write', options);
+  },
   reattachWorkbenchSession: (sessionId: string, size?: WorkbenchTerminalSize) => command<void>('reattach_workbench_session', { sessionId, ...size }),
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
   cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),
   maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null, version: version || null }),
-  maintainRemoteCli: (targetId: string, toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_remote_cli', { targetId, toolId, action, source: source ?? null, version: version || null }),
+  maintainRemoteCli: (targetId: string, toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string, options?: RemoteOperationOptions) => remoteCommand<MaintenanceResult>('maintain_remote_cli', { targetId, toolId, action, source: source ?? null, version: version || null }, 'write', options),
   getTrayStatus: () => command<TrayStatus>('get_tray_status'),
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
@@ -339,7 +372,9 @@ export const editConfigurationDraft = (draft: ConfigurationDraft, action: Config
 export const replaceConfigurationText = (draft: ConfigurationDraft, files: Record<string, string>) => command<ConfigurationDraft>('replace_configuration_text', { draft, files });
 
 // Workspace drafts retain their source/baseline in Rust. Profile/common saves are DB only.
-export const beginConfigurationDraft = (request: import('../types/configuration').ConfigurationBeginRequest) => command<ConfigurationDraft>('begin_configuration_draft', { request });
+export const beginConfigurationDraft = (request: import('../types/configuration').ConfigurationBeginRequest, options?: RemoteOperationOptions) => request.remoteTargetId
+  ? remoteCommand<ConfigurationDraft>('begin_configuration_draft', { request, targetId: request.remoteTargetId }, 'read', options)
+  : command<ConfigurationDraft>('begin_configuration_draft', { request });
 export const updateConfigurationDraft = (draft: ConfigurationDraft, profile: RegisteredProfile) => command<ConfigurationDraft>('update_configuration_draft', { draft, profile });
 export const selectConfigurationCredential = (draft: ConfigurationDraft, credential: import('../types/configuration').ConfigurationCredential) => command<ConfigurationDraft>('select_configuration_credential', { draft, credential });
 export const setConfigurationDraftSecret = (draft: ConfigurationDraft, secret: string) => command<ConfigurationDraft>('set_configuration_draft_secret', { draft, secret });
@@ -347,8 +382,12 @@ export const cancelConfigurationDraft = (sessionId: string) => command<void>('ca
 export const cancelConfigurationRequests = (draft: ConfigurationDraft) => command<ConfigurationDraft>('cancel_configuration_requests', { draft });
 export const addConfigurationModels = (draft: ConfigurationDraft, ids: string[]) => command<ConfigurationDraft>('add_configuration_models', { draft, ids });
 export const listConfigurationModels = (draft: ConfigurationDraft, force = false, query = '') => command<import('../types/configuration').ConfigurationDirectoryResult>('list_configuration_models', { draft, force, query });
-export const checkConfigurationConnection = (draft: ConfigurationDraft, allowModelRequest = false) => command<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest });
-export const saveConfigurationDraft = (draft: ConfigurationDraft) => command<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft });
+export const checkConfigurationConnection = (draft: ConfigurationDraft, allowModelRequest = false, options?: RemoteOperationOptions) => draft.remoteTargetId
+  ? remoteCommand<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest, targetId: draft.remoteTargetId }, 'read', options)
+  : command<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest });
+export const saveConfigurationDraft = (draft: ConfigurationDraft, options?: RemoteOperationOptions) => draft.remoteTargetId
+  ? remoteCommand<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft, targetId: draft.remoteTargetId }, 'write', options)
+  : command<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft });
 export const commonInfluence = (toolId: string) => command<import('../types/configuration').CommonInfluence>('common_influence', { toolId });
 export const applyCommonConfiguration = (common: RegisteredCommon, targets: import('../types/configuration').CommonInfluenceTarget[]) => command<import('../types/configuration').CommonApplicationResult[]>('apply_common_configuration', { common, targets });
 export const removeConfigurationDraftSecret = (draft: ConfigurationDraft) => command<ConfigurationDraft>('remove_configuration_draft_secret', { draft });

@@ -162,3 +162,5 @@ export type AppliedSummary = { authentication: ProfileAuthentication; providerId
 
 export type MaintenanceResult = { output: string; version: string | null };
 export type MaintenanceProgress = { toolId: string; output: string };
+
+export type RemoteApiError = import('./domain').ApiError & { remote?: import('./remote').RemoteFailure };

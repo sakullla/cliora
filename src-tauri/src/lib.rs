@@ -388,6 +388,7 @@ pub fn run() {
             commands::set_language,
             commands::set_remote_ssh_enabled,
             commands::list_remote_targets,
+            commands::cancel_remote_operation,
             commands::save_remote_target,
             commands::list_remote_saved_passwords,
             commands::delete_remote_target,

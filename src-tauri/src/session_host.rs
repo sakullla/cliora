@@ -38,13 +38,13 @@ static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// `node.exe` and CLIs spawn MCP servers of their own. Ending a session must tear
 /// down the whole tree, so the child is assigned to a kill-on-close job object.
 #[cfg(windows)]
-mod process_tree {
+pub(crate) mod process_tree {
     use std::os::raw::c_void;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        SetInformationJobObject,
+        SetInformationJobObject, TerminateJobObject, QueryInformationJobObject, JobObjectBasicAccountingInformation, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     };
 
     pub struct Job(HANDLE);
@@ -53,6 +53,110 @@ mod process_tree {
     unsafe impl Send for Job {}
 
     impl Job {
+        /// Job termination is asynchronous. Drain its active process count
+        /// before remote pipe readers are joined and the operation completes.
+        pub fn terminate_and_wait(&self) -> bool {
+            use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+            use windows_sys::Win32::{
+                Foundation::WAIT_OBJECT_0,
+                System::{JobObjects::{JobObjectBasicProcessIdList, JOBOBJECT_BASIC_PROCESS_ID_LIST},
+                    Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE}},
+            };
+            unsafe {
+                // ActiveProcesses may reach zero before a process handle is
+                // signalled. Capture actual member handles before termination;
+                // accounting alone did not close that final teardown window.
+                let mut buffer = vec![0usize; 1026];
+                let listed = QueryInformationJobObject(self.0, JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr() as *mut c_void, (buffer.len() * std::mem::size_of::<usize>()) as u32,
+                    std::ptr::null_mut()) != 0;
+                let mut processes: Vec<OwnedHandle> = Vec::new();
+                if listed {
+                    let list = &*(buffer.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST);
+                    let ids = std::slice::from_raw_parts(list.ProcessIdList.as_ptr(), (list.NumberOfProcessIdsInList as usize).min(1024));
+                    for pid in ids {
+                        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, *pid as u32);
+                        if !handle.is_null() { processes.push(OwnedHandle::from_raw_handle(handle)); }
+                    }
+                }
+                if TerminateJobObject(self.0, 1) == 0 { return false; }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                for process in &processes {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now()).as_millis() as u32;
+                    if WaitForSingleObject(process.as_raw_handle(), remaining) != WAIT_OBJECT_0 { return false; }
+                }
+                loop {
+                    let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                    if QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation,
+                        &mut accounting as *mut _ as *mut c_void,
+                        std::mem::size_of_val(&accounting) as u32, std::ptr::null_mut()) == 0 { return false; }
+                    if accounting.ActiveProcesses == 0 { return listed; }
+                    if std::time::Instant::now() >= deadline { return false; }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+
+        /// Command creates this process suspended, so no askpass/helper child
+        /// can escape between process creation and job assignment.
+        pub fn resume_child(child: &mut std::process::Child) -> Result<Job, &'static str> {
+            Self::resume_child_with(child, None, Self::assign, |thread| unsafe {
+                windows_sys::Win32::System::Threading::ResumeThread(thread)
+            })
+        }
+
+        fn resume_child_with(child: &mut std::process::Child, expected_pid: Option<u32>, assign: impl FnOnce(HANDLE) -> Option<Job>, resume: impl FnOnce(HANDLE) -> u32) -> Result<Job, &'static str> {
+            use std::os::windows::io::AsRawHandle;
+            let result = Self::assign_suspended_with(child.as_raw_handle(), expected_pid.unwrap_or_else(|| child.id()), assign, resume);
+            if result.is_err() { let _ = child.kill(); let _ = child.wait(); }
+            result
+        }
+
+        fn assign_suspended_with(child: HANDLE, pid: u32, assign: impl FnOnce(HANDLE) -> Option<Job>, resume: impl FnOnce(HANDLE) -> u32) -> Result<Job, &'static str> {
+            use windows_sys::Win32::{
+                Foundation::INVALID_HANDLE_VALUE,
+                System::{Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD},
+                    Threading::{OpenThread, GetProcessIdOfThread, THREAD_SUSPEND_RESUME, THREAD_QUERY_LIMITED_INFORMATION}},
+            };
+            let job = assign(child).ok_or("无法建立远程进程清理边界")?;
+            let result = unsafe {
+                let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+                if snapshot == INVALID_HANDLE_VALUE {
+                    Err("无法核查远程进程的挂起主线程")
+                } else {
+                    let mut entry: THREADENTRY32 = std::mem::zeroed();
+                    entry.dwSize = std::mem::size_of_val(&entry) as u32;
+                    let mut found = Vec::new();
+                    let mut present = Thread32First(snapshot, &mut entry);
+                    while present != 0 {
+                        if entry.th32OwnerProcessID == pid { found.push(entry.th32ThreadID); }
+                        present = Thread32Next(snapshot, &mut entry);
+                    }
+                    CloseHandle(snapshot);
+                    if found.len() != 1 {
+                        Err("远程挂起进程的主线程身份不唯一")
+                    } else {
+                        let thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION, 0, found[0]);
+                        if thread.is_null() {
+                            Err("无法访问远程进程的挂起主线程")
+                        } else {
+                            let valid = GetProcessIdOfThread(thread) == pid;
+                            let resumed = if valid { resume(thread) } else { u32::MAX };
+                            CloseHandle(thread);
+                            if !valid { Err("远程挂起主线程不属于本次请求") }
+                            else if resumed != 1 { Err("无法安全恢复远程进程的挂起主线程") }
+                            else { Ok(()) }
+                        }
+                    }
+                }
+            };
+            if let Err(error) = result {
+                if !job.terminate_and_wait() { return Err("挂起进程启动失败，无法确认清理完成"); }
+                return Err(error);
+            }
+            Ok(job)
+        }
+
         pub fn assign(child: HANDLE) -> Option<Job> {
             unsafe {
                 let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -82,6 +186,39 @@ mod process_tree {
             unsafe { CloseHandle(self.0) };
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::windows::process::CommandExt;
+
+        #[test]
+        fn suspended_fixture_child() {
+            if let Some(marker) = std::env::var_os("CLIORA_SUSPENDED_CHILD_MARKER") {
+                std::fs::write(marker, b"executed").unwrap();
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        }
+
+        #[test]
+        fn failed_assignment_thread_lookup_and_resume_reclaim_suspended_children() {
+            let directory = tempfile::tempdir().unwrap();
+            for failure in ["assignment", "lookup", "resume", "suspend_count"] {
+                let marker = directory.path().join(failure);
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "session_host::process_tree::tests::suspended_fixture_child"])
+                    .env("CLIORA_SUSPENDED_CHILD_MARKER", &marker)
+                    .creation_flags(0x0800_0004).spawn().unwrap();
+                let expected = if failure == "lookup" { Some(u32::MAX) } else { None };
+                let result = Job::resume_child_with(&mut child, expected,
+                    |handle| if failure == "assignment" { None } else { Job::assign(handle) },
+                    |_| if failure == "suspend_count" { 2 } else { u32::MAX });
+                assert!(result.is_err(), "{failure}");
+                assert!(child.try_wait().unwrap().is_some(), "{failure} left a suspended process");
+                assert!(!marker.exists(), "{failure} executed before the containment boundary");
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -107,7 +244,7 @@ pub struct SessionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteEndResult {
     pub outcome: &'static str,
-    pub stage: &'static str,
+    pub stage: String,
     pub exit_code: Option<i32>,
 }
 
@@ -201,7 +338,14 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         command.env("TERM", "xterm-256color");
     }
     apply_environment(&mut command, &plan, credential);
+    let context = if remote { crate::remote::operations::current() } else { None };
+    let slot = context.as_ref().map(|context| crate::remote::operations::acquire_bound(context)).transpose().map_err(|error| error.to_string())?;
+    if let Some(context) = &context { context.check().map_err(|error| error.to_string())?; }
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
+    if let Some(context) = &context { context.dispatched(); }
+    // A persistent PTY is not a short remote read; only admission/spawn uses
+    // the ordinary scheduler slot, never its long-lived connection.
+    drop(slot);
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(error) => {
@@ -447,15 +591,40 @@ fn remote_end_outcome(result: Result<std::process::Output, crate::remote::Remote
             let confirmed = output.status.success() && String::from_utf8_lossy(&output.stdout).lines()
                 .any(|line| line == format!("CLIORA_REMOTE_ABSENT:{remote_id}"));
             if confirmed {
-                (RemoteEndResult { outcome: "confirmed_absent", stage: "verify_absence", exit_code: code }, None)
+                (RemoteEndResult { outcome: "confirmed_absent", stage: "verify_absence".into(), exit_code: code }, None)
             } else {
                 let outcome = if matches!(code, Some(47)) { "failed" } else { "unknown" };
-                (RemoteEndResult { outcome, stage: "verify_absence", exit_code: code }, Some(format!("未确认远程会话已结束（退出码 {}），记录已保留；请检查连接并重试结束", code.map_or_else(|| "未知".into(), |code| code.to_string()))))
+                let message = format!("未确认远程会话已结束（退出码 {}），记录已保留；请核查目标状态", code.map_or_else(|| "未知".into(), |code| code.to_string()));
+                let context = crate::remote::operations::current().unwrap_or_else(|| crate::remote::operations::Context::local(crate::remote::operations::Kind::Write, Duration::from_secs(1)));
+                let crate::remote::RemoteError::Operation(mut failure) = context.failure_with_exit("verify_absence", &message, code) else { unreachable!() };
+                failure.outcome = outcome.into();
+                if outcome == "unknown" {
+                    failure.code = "remote_unknown".into();
+                    failure.action = "远端可能已执行；请核查目标状态，不要直接重复提交。".into();
+                }
+                (RemoteEndResult { outcome, stage: "verify_absence".into(), exit_code: code }, Some(failure.to_string()))
             }
         }
         Err(error) => {
-            let stage = match &error { crate::remote::RemoteError::Transport { stage, .. } => *stage, _ => "remote_control" };
-            (RemoteEndResult { outcome: "unknown", stage, exit_code: None }, Some(format!("{error}；远程结束结果未知，记录已保留，请重试结束以核查")))
+            use crate::remote::{operations::{Context, Kind}, RemoteError};
+            let mut failure = match error {
+                RemoteError::Operation(failure) => failure,
+                RemoteError::Transport { stage, detail } => {
+                    let context = Context::local(Kind::Write, Duration::from_secs(1));
+                    context.dispatched();
+                    let RemoteError::Operation(mut failure) = context.failure(stage, &detail) else { unreachable!() };
+                    failure.stage = stage.into();
+                    failure
+                }
+                other => {
+                    let context = Context::local(Kind::Write, Duration::from_secs(1));
+                    let RemoteError::Operation(failure) = context.failure("remote_control", &other.to_string()) else { unreachable!() };
+                    failure
+                }
+            };
+            failure.message.push_str("；结束未获确认，记录已保留，请核查目标状态");
+            let outcome = if failure.outcome == "unknown" { "unknown" } else { "failed" };
+            (RemoteEndResult { outcome, stage: failure.stage.clone(), exit_code: failure.exit_code }, Some(failure.to_string()))
         }
     }
 }
