@@ -177,19 +177,24 @@ test('a remote session composer lists that host library, not this computer', asy
 });
 
 /** Product entry-point checks; the SSH/process identity is verified separately in Rust/native runs. */
-async function installIndependentSessions(page: Page, options: { indexed?: boolean; empty?: boolean; fail?: boolean; hold?: boolean } = {}) {
+async function installIndependentSessions(page: Page, options: { indexed?: boolean; empty?: boolean; fail?: boolean; hold?: boolean; initial?: 'local' | 'saved-a'; holdIndex?: boolean } = {}) {
   await page.addInitScript(({ host, options }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const project = { id: 'same-project', targetId: host.id, name: 'shared-project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
     const make = (id: string) => ({ id, toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null, startedAt: 1, remoteSessionId: `cliora-${id}` });
     const sessions = options.empty ? [] : [make('original-a')];
+    if (options.initial === 'local') Object.assign(sessions[0], { projectId: null, directory: 'C:\\local-project', remoteSessionId: null });
+    if (options.initial === 'saved-a') sessions[0].remoteSessionId = 'saved-a';
     const requests: Array<Record<string, unknown>> = [];
     let release = () => {};
     const ready = new Promise<void>(resolve => { release = resolve; });
+    let releaseIndex = () => {};
+    const indexReady = new Promise<void>(resolve => { releaseIndex = resolve; });
     const handlers: Array<(event: { payload: unknown }) => void> = [];
     const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } };
     Object.assign(window, {
       isTauri: true, __independentRequests: requests, __independentSessions: sessions, __releaseIndependentLaunch: () => release(),
+      __releaseIndependentIndex: () => releaseIndex(), __independentIndexPending: false,
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { handlers.push(callback); return handlers.length - 1; },
@@ -202,7 +207,11 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
           if (command === 'list_remote_directories') return [project.path];
           if (command === 'save_remote_project') return { ...project, ...(args.project as object), id: project.id };
           if (command === 'list_workbench_sessions') return sessions.map(item => ({ ...item }));
-          if (command === 'list_remote_sessions') return options.indexed ? ['a', 'b', 'c'].map(id => ({ remoteSessionId: `saved-${id}`, targetId: host.id, projectId: project.id, toolId: 'codex', directory: project.path, mode: 'normal', startedAt: 1, lastSeenAt: 1 })) : [];
+          if (command === 'list_remote_sessions') {
+            Object.assign(window, { __independentIndexPending: true });
+            if (options.holdIndex) await indexReady;
+            return options.indexed ? ['a', 'b', 'c'].map(id => ({ remoteSessionId: `saved-${id}`, targetId: host.id, projectId: project.id, toolId: 'codex', directory: project.path, mode: 'normal', startedAt: 1, lastSeenAt: 1 })) : [];
+          }
           if (command === 'launch_cli') {
             const request = args.request as Record<string, unknown>;
             requests.push(request);
@@ -282,6 +291,40 @@ test('remote startup restores every indexed identity and never falls back to an 
   const requests = await independentRequests(page);
   expect(requests.map(item => item.remoteIntent)).toEqual(['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
   expect(requests.every(item => item.sessionId === null)).toBe(true);
+});
+
+test('remote startup restores indexed sessions alongside an existing local session', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, initial: 'local' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(3);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual(['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
+  await expect(page.locator('[role="tab"][data-session-id="new-3"]')).toBeVisible();
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：测试远程主机' }).click();
+  await page.getByRole('menuitemradio', { name: /本机/ }).click();
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+});
+
+test('remote startup restores only missing identities when one indexed session is already attached', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, initial: 'saved-a' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(2);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual(['b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
+  for (const id of ['original-a', 'new-1', 'new-2']) await expect(page.locator(`[role="tab"][data-session-id="${id}"]`)).toBeVisible();
+});
+
+test('late remote index discovery preserves a newly launched session and still restores saved identities', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, empty: true, holdIndex: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __independentIndexPending: boolean }).__independentIndexPending)).toBe(true);
+  await quickRemoteLaunch(page);
+  await expect(page.locator('[role="tab"][data-session-id="new-1"]')).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __releaseIndependentIndex: () => void }).__releaseIndependentIndex());
+  await expect.poll(() => independentRequests(page)).toHaveLength(4);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual([{ kind: 'new' }, ...['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` }))]);
+  for (const id of ['new-1', 'new-2', 'new-3', 'new-4']) await expect(page.locator(`[role="tab"][data-session-id="${id}"]`)).toBeVisible();
 });
 
 test('remote startup without an index does not create a session implicitly', async ({ page }) => {

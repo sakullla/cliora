@@ -58,6 +58,55 @@ const awaitOutput = async (id, text) => {
   }
   throw new Error('Expected test output was not observed in its session.');
 };
+const awaitUi = async (expression, message) => {
+  const deadline = performance.now() + 10000;
+  while (performance.now() < deadline) {
+    if (await evaluate(expression)) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Failed: ${message}`);
+};
+const navigate = async pageNumber => {
+  const selector = `#main-navigation button[aria-keyshortcuts$="+${pageNumber}"]`;
+  await awaitUi(`!!document.querySelector(${JSON.stringify(selector)})`, 'native page navigation available');
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  await awaitUi(`!!document.querySelector('.shell[data-page="${pageNumber === 1 ? 'home' : 'sessions'}"]')`, 'native page navigation completed');
+};
+const prepareWorkbench = async () => {
+  // Refresh bootstrap/host data after native configuration changes. Select the
+  // host through the real UI so remote terminals receive usable layout space.
+  await send('Page.enable');
+  let finishLoad;
+  const loaded = new Promise(resolve => { finishLoad = resolve; });
+  const loadTimer = setTimeout(() => finishLoad(false), 10000);
+  const onLoad = event => { if (JSON.parse(event.data).method === 'Page.loadEventFired') finishLoad(true); };
+  socket.addEventListener('message', onLoad);
+  try {
+    await send('Page.reload', { ignoreCache: true });
+    requireThat(await loaded, 'Native frontend reload timed out.');
+  } finally {
+    clearTimeout(loadTimer);
+    socket.removeEventListener('message', onLoad);
+  }
+  await awaitUi(`!!document.querySelector('.sidebar-host .host-switcher-trigger')`, 'native host switcher available');
+  await evaluate(`document.querySelector('.sidebar-host .host-switcher-trigger').click()`);
+  const target = `[...document.querySelectorAll('[role="menuitemradio"]')].find(item => item.querySelector('strong')?.textContent === 'Isolated SSH acceptance')`;
+  await awaitUi(`!!(${target})`, 'isolated SSH host available in native UI');
+  await evaluate(`(${target}).click()`);
+  await awaitUi(`document.querySelector('.sidebar-host .host-switcher-trigger strong')?.textContent === 'Isolated SSH acceptance'`, 'isolated SSH host selected in native UI');
+  await navigate(1);
+};
+const showWorkbench = async id => {
+  // Visiting the page refreshes its product session list; no IPC or terminal
+  // protocol response is mocked or synthesized by this runner.
+  await navigate(2);
+  if (!id) return;
+  const tab = `[role="tab"][data-session-id=${JSON.stringify(id)}]`;
+  await awaitUi(`!!document.querySelector(${JSON.stringify(tab)})`, 'launched session listed in native workbench');
+  await evaluate(`document.querySelector(${JSON.stringify(tab)}).click()`);
+  const terminal = `[data-pane-session=${JSON.stringify(id)}] .xterm`;
+  await awaitUi(`(() => { const terminal = document.querySelector(${JSON.stringify(terminal)}); return !!terminal && terminal.clientWidth > 0 && terminal.clientHeight > 0; })()`, 'real terminal mounted with layout space');
+};
 
 try {
   requireThat(['preflight', 'create', 'resume', 'measure', 'cleanup'].includes(phase), 'Unknown phase.');
@@ -104,17 +153,23 @@ try {
     report.limitations.push('Preflight verifies connectivity only, not independent sessions or application restart.');
   } else if (phase === 'create') {
     requireThat(config.inputProbe?.input && config.inputProbe?.expected, 'Provide a harmless explicit inputProbe for the CLI fixture; no inference prompt is generated automatically.');
+    requireThat(typeof config.readyOutput === 'string' && config.readyOutput.length > 0, 'Supply readyOutput from the actual CLI startup screen.');
     await invoke('set_remote_ssh_enabled', { enabled: true });
     const target = await invoke('save_remote_target', { target: { ...config.target, id: targetId, name: 'Isolated SSH acceptance', enabled: true, createdAt: 0, updatedAt: 0, defaultPath: config.testDirectory }, password: null });
     const project = await invoke('save_remote_project', { project: { id: `remote-acceptance-project-${config.testRunId}`, targetId: target.id, name: 'Independent sessions acceptance', path: config.testDirectory, preferredTool: config.toolId, updatedAt: 0 } });
     await invoke('set_preferred_terminal', { terminal: 'workbench' });
+    await prepareWorkbench();
     const sessions = [];
     for (let index = 0; index < 3; index++) {
+      await navigate(1);
       const opened = await invoke('launch_cli', { request: { toolId: config.toolId, projectId: `remote:${project.id}`, sessionId: null, remoteIntent: { kind: 'new' }, mode: 'normal', resumeLatest: false } });
       requireThat(opened.sessionId && opened.remoteSessionId, 'Native launch returned no session identity.');
       sessions.push({ localId: opened.sessionId, remoteId: opened.remoteSessionId });
+      await writeFile(checkpointPath, JSON.stringify({ schemaVersion: 1, appIdentifier: identifier, testRunId: config.testRunId, projectId: project.id, targetId, sessions, createdAt: new Date().toISOString() }, null, 2));
+      await showWorkbench(opened.sessionId);
+      await awaitOutput(opened.sessionId, config.readyOutput);
+      report.checks.push(`actual CLI ready output observed for launch ${index + 1}`);
     }
-    await writeFile(checkpointPath, JSON.stringify({ schemaVersion: 1, appIdentifier: identifier, testRunId: config.testRunId, projectId: project.id, targetId, sessions, createdAt: new Date().toISOString() }, null, 2));
     report.observations = { requestedSessions: sessions.length, distinctRemoteIdentities: new Set(sessions.map(item => item.remoteId)).size };
     check('three actual remote identities differ', report.observations.distinctRemoteIdentities === 3);
     const index = await invoke('list_remote_sessions');
@@ -125,18 +180,28 @@ try {
     report.status = 'restart_pending';
     report.limitations.push('Exit and restart the isolated desktop, then run --phase resume. This phase is not complete acceptance.');
   } else if (phase === 'resume') {
+    requireThat(typeof config.readyOutput === 'string' && config.readyOutput.length > 0, 'Supply readyOutput from the actual CLI startup screen.');
     const checkpoint = await readCheckpoint();
     const index = await invoke('list_remote_sessions');
     check('restart retained all indexed identities', checkpoint.sessions.every(item => index.some(entry => entry.remoteSessionId === item.remoteId && entry.projectId === checkpoint.projectId)));
     let listed = await invoke('list_workbench_sessions');
     check('desktop local attachments changed after restart', !listed.some(item => checkpoint.sessions.some(saved => saved.localId === item.id)));
+    await prepareWorkbench();
+    await showWorkbench();
+    // Exercise the product's automatic restoration. Manually launching missing
+    // rows here would hide a broken workbench restore and race its requests.
+    const restoreDeadline = performance.now() + 30000;
+    do {
+      listed = await invoke('list_workbench_sessions');
+      if (checkpoint.sessions.every(item => listed.some(entry => entry.remoteSessionId === item.remoteId && entry.projectId === `remote:${checkpoint.projectId}`))) break;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    } while (performance.now() < restoreDeadline);
     const resumed = [];
     for (const item of checkpoint.sessions) {
-      let session = listed.find(entry => entry.remoteSessionId === item.remoteId);
-      if (!session) {
-        const result = await invoke('launch_cli', { request: { toolId: config.toolId, projectId: `remote:${checkpoint.projectId}`, sessionId: null, remoteIntent: { kind: 'reattach', remoteSessionId: item.remoteId }, mode: 'normal', resumeLatest: false } });
-        session = { id: result.sessionId, remoteSessionId: result.remoteSessionId };
-      }
+      const session = listed.find(entry => entry.remoteSessionId === item.remoteId && entry.projectId === `remote:${checkpoint.projectId}`);
+      check('saved identity automatically restored in native workbench', !!session);
+      await showWorkbench(session.id);
+      await awaitOutput(session.id, config.readyOutput);
       resumed.push(session);
     }
     check('restored exact identities', resumed.every((item, index) => item.remoteSessionId === checkpoint.sessions[index].remoteId));

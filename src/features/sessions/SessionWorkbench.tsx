@@ -199,6 +199,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 }) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
+  const allSessionsRef = useRef(sessions);
+  allSessionsRef.current = sessions;
   const [projects, setProjects] = useState<Project[]>([]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
@@ -761,15 +763,29 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       listedRemoteProjects,
       listedRemoteTargets,
       remoteSshEnabled ? native.listRemoteSessions().catch(() => []) : Promise.resolve([]),
-    ]).then(([listed, remoteProjects, remoteTargets, remoteSessions]) => {
-      if (!alive) return;
-      const next = Array.isArray(listed) ? listed : [];
-      if (!next.length && !sessionsRef.current.length && !autoRemoteReattachAttempted.current) {
+    ]).then(async ([, remoteProjects, remoteTargets, remoteSessions]) => {
+      if (!alive || !remoteSshEnabled || autoRemoteReattachAttempted.current) return;
+      // Discovery can finish after local restoration or a user launch. Compare
+      // the index with a fresh, unscoped list instead of the startup snapshot.
+      const latest = await native.listWorkbenchSessions();
+      if (!alive || autoRemoteReattachAttempted.current) return;
+      if (Array.isArray(latest)) {
         autoRemoteReattachAttempted.current = true;
-        const validProjectIds = new Set((Array.isArray(remoteProjects) ? remoteProjects : []).map((item) => item.id));
+        const projectTargets = new Map((Array.isArray(remoteProjects) ? remoteProjects : []).map((item) => [`remote:${item.id}`, item.targetId]));
         const validTargetIds = new Set((Array.isArray(remoteTargets) ? remoteTargets : []).filter((item) => item.enabled).map((item) => item.id));
+        const identity = (targetId: string, remoteSessionId: string) => JSON.stringify([targetId, remoteSessionId]);
+        const attached = new Set([...latest, ...allSessionsRef.current].flatMap((session) => {
+          const targetId = session.projectId ? projectTargets.get(session.projectId) : undefined;
+          return targetId && session.remoteSessionId ? [identity(targetId, session.remoteSessionId)] : [];
+        }));
         const indexed = Array.isArray(remoteSessions)
-          ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
+          ? remoteSessions.filter((item) => {
+            if (!item?.remoteSessionId || !item.projectId || !item.toolId || projectTargets.get(`remote:${item.projectId}`) !== item.targetId || !validTargetIds.has(item.targetId)) return false;
+            const key = identity(item.targetId, item.remoteSessionId);
+            if (attached.has(key)) return false;
+            attached.add(key);
+            return true;
+          })
           : [];
         const requests = indexed.map((item) => native.launchCli({
           toolId: item.toolId,
