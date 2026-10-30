@@ -21,7 +21,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
   await page.addInitScript((holdStartup) => {
     let releaseStartup = () => {};
     const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
-    const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }];
+    const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: (window as unknown as { __oldSessions?: boolean }).__oldSessions ? 1 : Date.now() }];
     if ((window as unknown as { __twoSessions?: boolean }).__twoSessions) sessions.push({ id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/a-long-project-directory/for-the-second-session', mode: 'yolo', running: true, exitCode: null, startedAt: Date.now() });
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const writes: string[] = [];
@@ -1179,6 +1179,19 @@ test('replay uses the native grid before interpreting cursor-addressed output', 
   });
   await openWorkbench(page);
   await expect.poll(() => writes(page)).toContain('\x1b[1;101R');
+});
+
+test('replayed history of an older session does not answer its old device queries', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __oldSessions: true, __replayOverride: { dataBase64: btoa('codex-ready\x1b[c\x1b[6n\x1b]11;?\x07\r\n> '), endOffset: 30, cols: 120, rows: 30 } });
+  });
+  await openWorkbench(page);
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.waitForTimeout(150);
+  expect(await writes(page)).toEqual([]);
+  // Live queries after the replay are still answered.
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b[6n'));
+  await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
 });
 
 test('find can match case, line spacing persists, shortcuts are listed, and the rail collapses to icons', async ({ page }) => {

@@ -202,6 +202,189 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
 
 const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
 
+/** A replay of a session younger than this still answers its device queries: the CLI may be waiting. */
+const FRESH_SESSION_MS = 10_000;
+
+/**
+ * Swallow the device queries inside replayed history while `replaying` is set. xterm answers
+ * DA, DSR, DECRQM, XTVERSION, DECRQSS and OSC colour queries through onData, which the
+ * workbench forwards to the PTY; for history those answers arrive as typed text.
+ */
+export function guardReplayReplies(term: Terminal): { replaying: boolean; dispose: () => void } {
+  const state = { replaying: false, dispose: () => {} };
+  const swallow = () => state.replaying;
+  const query = (data: string) => state.replaying && data.split(';').some((part) => part.trim() === '?');
+  const reportOps = new Set([11, 13, 14, 15, 16, 18, 19, 20, 21]);
+  const parser = term.parser;
+  const handlers = [
+    parser.registerCsiHandler({ final: 'c' }, swallow),
+    parser.registerCsiHandler({ prefix: '>', final: 'c' }, swallow),
+    parser.registerCsiHandler({ prefix: '=', final: 'c' }, swallow),
+    parser.registerCsiHandler({ final: 'n' }, swallow),
+    parser.registerCsiHandler({ prefix: '?', final: 'n' }, swallow),
+    parser.registerCsiHandler({ intermediates: '$', final: 'p' }, swallow),
+    parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, swallow),
+    parser.registerCsiHandler({ prefix: '>', final: 'q' }, swallow),
+    parser.registerCsiHandler({ prefix: '?', final: 'u' }, swallow),
+    parser.registerCsiHandler({ final: 't' }, (params) => state.replaying && reportOps.has(Number(params[0]))),
+    parser.registerDcsHandler({ intermediates: '$', final: 'q' }, swallow),
+    parser.registerOscHandler(4, query),
+    parser.registerOscHandler(10, query),
+    parser.registerOscHandler(11, query),
+    parser.registerOscHandler(12, query),
+  ];
+  state.dispose = () => handlers.forEach((handler) => handler.dispose());
+  return state;
+}
+
+type XtermCore = {
+  _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
+  _syncTextArea?: () => void;
+  _compositionHelper?: { updateCompositionElements?: (dontRecurse?: boolean) => void };
+  coreService?: { isCursorHidden?: boolean };
+};
+
+export type ImeAnchor = {
+  /** Re-place now, re-reading where input lands (also scans for a TUI-drawn cursor). */
+  refresh: () => void;
+  /** Re-place on the next frame; cheap enough for every render or scroll. */
+  schedule: () => void;
+  /** Re-place for the current composition text without moving its anchor. */
+  place: () => void;
+  compositionStart: () => void;
+  compositionEnd: () => void;
+  dispose: () => void;
+};
+
+const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
+
+/**
+ * Owns xterm's helper textarea and composition view placement. Both sit inside `.xterm-screen`,
+ * so cell coordinates map directly to CSS pixels.
+ */
+export function createImeAnchor(term: Terminal, available: () => boolean): ImeAnchor {
+  const core = (term as unknown as { _core?: XtermCore })._core;
+  let composing = false;
+  let anchor: { col: number; row: number } | null = null;
+  let applied = '';
+  let frame = 0;
+  let disposed = false;
+
+  const cellSize = () => {
+    const cell = core?._renderService?.dimensions?.css?.cell;
+    if (cell?.width && cell.height && cell.width > 0 && cell.height > 0) return { width: cell.width, height: cell.height };
+    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
+    if (!screen || !term.cols || !term.rows || screen.clientWidth < 8) return null;
+    return { width: screen.clientWidth / term.cols, height: screen.clientHeight / term.rows };
+  };
+
+  // Agents built on Ink hide the real cursor and draw their own as one inverse cell. When the
+  // real cursor is hidden and exactly one such cell is on screen, input lands there.
+  const drawnCursor = (): { col: number; row: number } | null => {
+    const buffer = term.buffer.active;
+    const cell = buffer.getNullCell();
+    let found: { col: number; row: number } | null = null;
+    for (let row = term.rows - 1; row >= 0; row -= 1) {
+      const line = buffer.getLine(buffer.viewportY + row);
+      if (!line) continue;
+      for (let col = 0; col < term.cols; col += 1) {
+        if (!line.getCell(col, cell)?.isInverse()) continue;
+        const next = line.getCell(col + 1, cell);
+        if (found || (next && next.isInverse() && col + 1 < term.cols)) return null;
+        found = { col, row };
+      }
+    }
+    return found;
+  };
+
+  const inputCell = (scan: boolean) => {
+    const buffer = term.buffer.active;
+    if (scan && core?.coreService?.isCursorHidden) {
+      const drawn = drawnCursor();
+      if (drawn) return drawn;
+    }
+    return {
+      col: clampInt(buffer.cursorX, 0, Math.max(0, term.cols - 1)),
+      row: clampInt(buffer.baseY + buffer.cursorY - buffer.viewportY, 0, Math.max(0, term.rows - 1)),
+    };
+  };
+
+  const apply = (scan: boolean) => {
+    if (disposed || !available()) return;
+    const textarea = term.textarea;
+    const cell = cellSize();
+    if (!textarea || !cell) return;
+    if (composing && !anchor) anchor = inputCell(true);
+    const at = composing && anchor ? anchor : inputCell(scan);
+    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
+    const screenWidth = screen?.clientWidth || term.cols * cell.width;
+    let left = at.col * cell.width;
+    const top = at.row * cell.height;
+    let width = cell.width;
+    if (composing) {
+      const view = term.element?.querySelector<HTMLElement>('.composition-view');
+      if (view) {
+        view.style.height = `${cell.height}px`;
+        view.style.lineHeight = `${cell.height}px`;
+        view.style.fontFamily = String(term.options.fontFamily ?? '');
+        view.style.fontSize = `${term.options.fontSize ?? 14}px`;
+        // Long composition text near the right edge would run past the clip and vanish.
+        const viewWidth = view.offsetWidth;
+        left = Math.max(0, Math.min(left, screenWidth - viewWidth));
+        view.style.left = `${left}px`;
+        view.style.top = `${top}px`;
+        width = Math.max(1, viewWidth);
+      }
+    }
+    const key = `${Math.round(left)}:${Math.round(top)}:${Math.round(width)}:${Math.round(cell.height)}`;
+    // Rewriting the textarea on every frame restarts the Windows IME and drops the key
+    // that would commit or insert punctuation, so only real moves are written.
+    if (key === applied) return;
+    applied = key;
+    textarea.style.left = `${left}px`;
+    textarea.style.top = `${top}px`;
+    textarea.style.width = `${width}px`;
+    textarea.style.height = `${cell.height}px`;
+    textarea.style.lineHeight = `${cell.height}px`;
+    textarea.style.fontSize = `${term.options.fontSize ?? 14}px`;
+    textarea.style.zIndex = '-5';
+  };
+
+  const schedule = () => {
+    if (disposed || frame) return;
+    frame = requestAnimationFrame(() => { frame = 0; apply(true); });
+  };
+
+  // xterm calls these on cursor moves and on every render; route both through one placement.
+  if (core && typeof core._syncTextArea === 'function') core._syncTextArea = () => { if (!composing) schedule(); };
+  const helper = core?._compositionHelper;
+  if (helper && typeof helper.updateCompositionElements === 'function') helper.updateCompositionElements = () => { if (composing) apply(false); };
+
+  return {
+    refresh: () => { if (!composing) applied = ''; apply(true); },
+    schedule,
+    place: () => apply(false),
+    compositionStart: () => {
+      // Typing reads the prompt, not the history: bring the input row back into view first.
+      const buffer = term.buffer.active;
+      if (buffer.viewportY < buffer.baseY) term.scrollToBottom();
+      composing = true;
+      anchor = null;
+      applied = '';
+      apply(true);
+    },
+    compositionEnd: () => {
+      composing = false;
+      anchor = null;
+      schedule();
+    },
+    dispose: () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+    },
+  };
+}
+
 // Keep the browser-side terminal buffer bounded. The native replay remains the
 // source of truth when an ended session is mounted again.
 const TERMINAL_SCROLLBACK = 6000;
@@ -225,8 +408,10 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, focused = active, running, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, label, active, focused = active, running, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
   sessionId: string;
+  /** Start time (ms). A replay of a session this young still answers its device queries. */
+  startedAt?: number;
   label: string;
   active: boolean;
   focused?: boolean;
@@ -262,6 +447,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
+  const imeRef = useRef<ImeAnchor | null>(null);
+  const startedAtRef = useRef(startedAt);
+  startedAtRef.current = startedAt;
   const activeRef = useRef(active);
   const focusedRef = useRef(focused);
   const runningRef = useRef(running);
@@ -309,57 +497,25 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
-    let imeComposing = false;
-    let imeFrame = 0;
-    let imeAnchor = '';
 
-    // WebView2 can keep the native IME candidate window at the last textarea
-    // position when the terminal is inside a clipped, scrollable workbench.
-    // xterm updates this anchor during composition, but a layout/scroll between
-    // composition events can leave it stale. Re-anchor the helper to the
-    // rendered cursor after xterm has laid out the current frame.
-    const syncImeAnchor = () => {
-      if (disposed || !imeComposing || !activeRef.current) return;
-      cancelAnimationFrame(imeFrame);
-      imeFrame = requestAnimationFrame(() => {
-        if (disposed || !imeComposing || !activeRef.current) return;
-        const textarea = term.textarea;
-        const element = term.element;
-        const rows = element?.querySelector<HTMLElement>('.xterm-rows');
-        const firstRow = rows?.firstElementChild as HTMLElement | null;
-        if (!textarea || !element || !firstRow || !term.cols || !term.rows) return;
-        const elementBox = element.getBoundingClientRect();
-        const rowBox = firstRow.getBoundingClientRect();
-        const cellWidth = rowBox.width / term.cols;
-        const cellHeight = rowBox.height;
-        if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) return;
-        const cursor = term.buffer.active;
-        const left = Math.max(0, rowBox.left - elementBox.left + Math.min(cursor.cursorX, term.cols - 1) * cellWidth);
-        const top = Math.max(0, rowBox.top - elementBox.top + Math.min(cursor.cursorY, term.rows - 1) * cellHeight);
-        const next = `${Math.round(left)}:${Math.round(top)}:${Math.round(cellWidth)}:${Math.round(cellHeight)}`;
-        // Rewriting the textarea on every frame restarts the Windows IME and drops
-        // the key that would commit or insert punctuation.
-        if (next === imeAnchor) return;
-        imeAnchor = next;
-        textarea.style.left = `${left}px`;
-        textarea.style.top = `${top}px`;
-        textarea.style.width = `${Math.max(1, cellWidth)}px`;
-        textarea.style.height = `${Math.max(1, cellHeight)}px`;
-        textarea.style.lineHeight = `${Math.max(1, cellHeight)}px`;
-      });
-    };
+    // The IME candidate window follows xterm's hidden textarea. xterm only moves it
+    // when the cursor moves, so a terminal that was hidden, replayed, or scrolled
+    // keeps a stale spot (or its initial -9999em), and a TUI redraw that parks the
+    // cursor elsewhere drags the candidate window along mid-composition. One owner
+    // places the textarea: it follows the input cell, stays inside the screen, and
+    // holds still for the whole composition.
+    const ime = createImeAnchor(term, () => !disposed && activeRef.current);
     const textarea = term.textarea;
-    const onCompositionStart = () => { imeComposing = true; syncImeAnchor(); };
-    const onCompositionUpdate = () => syncImeAnchor();
-    const onCompositionEnd = () => {
-      imeComposing = false;
-      imeAnchor = '';
-      cancelAnimationFrame(imeFrame);
-    };
+    const onCompositionStart = () => ime.compositionStart();
+    const onCompositionUpdate = () => ime.place();
+    const onCompositionEnd = () => ime.compositionEnd();
+    const onTextareaFocus = () => ime.refresh();
     textarea?.addEventListener('compositionstart', onCompositionStart);
     textarea?.addEventListener('compositionupdate', onCompositionUpdate);
     textarea?.addEventListener('compositionend', onCompositionEnd);
-    const cursorSub = term.onCursorMove(syncImeAnchor);
+    textarea?.addEventListener('focus', onTextareaFocus);
+    imeRef.current = ime;
+    const cursorSub = term.onCursorMove(() => ime.schedule());
     let acceptLive = false;
     let replayReady = false;
     let liveStreaming = false;
@@ -507,7 +663,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (!(target instanceof Element) || target === node || !target.contains(node)) return;
       if (target.scrollLeft) target.scrollLeft = 0;
       if (target.scrollTop) target.scrollTop = 0;
-      syncImeAnchor();
+      ime.schedule();
     };
     document.addEventListener('scroll', resetAncestorScroll, true);
 
@@ -563,6 +719,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     });
     const reportScroll = () => {
       if (disposed) return;
+      ime.schedule();
       if (!scrollUiFrame && activeRef.current) {
         scrollUiFrame = requestAnimationFrame(() => {
           scrollUiFrame = 0;
@@ -711,6 +868,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       bridge.current.directory(sessionId, directory);
       return true;
     };
+    const replies = guardReplayReplies(term);
     const osc7 = term.parser.registerOscHandler(7, reportDirectory);
     const osc1337 = term.parser.registerOscHandler(1337, reportDirectory);
     const layoutAvailable = () => {
@@ -741,6 +899,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         fitLockRef.current = { cols: term.cols, rows: term.rows, height };
       }
       if (term.cols < 2 || term.rows < 1) return;
+      if (changed) ime.schedule();
       if (changed && !awayFromBottom) scrollToLatest();
       reportScroll();
       const sent = ptyGridRef.current;
@@ -806,16 +965,26 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       }
       acceptLive = true;
       const finishReplay = () => {
+        replies.replaying = false;
         if (disposed) return;
         replayReady = true;
         fitNow();
         scrollToLatest();
+        ime.refresh();
         bridge.current.grid(sessionId, term.cols, term.rows);
       };
       try {
-        const bytes = suffix.length ? concatBytes([snapshot, suffix]) : snapshot;
-        if (bytes.length) term.write(bytes, finishReplay);
-        else finishReplay();
+        // The snapshot is history. Its device queries were asked long ago, and
+        // answering them now types `[?1;2c]10;rgb:…` into the CLI's prompt. A
+        // session that only just started may still be waiting, so it is answered.
+        const started = startedAtRef.current ?? 0;
+        replies.replaying = snapshot.length > 0 && !(started > 0 && Date.now() - started < FRESH_SESSION_MS);
+        if (snapshot.length && suffix.length) {
+          term.write(snapshot, () => { replies.replaying = false; });
+          term.write(suffix, finishReplay);
+        } else if (snapshot.length || suffix.length) {
+          term.write(snapshot.length ? snapshot : suffix, finishReplay);
+        } else finishReplay();
       } catch { finishReplay(); }
     }).catch(() => {
       if (disposed) return;
@@ -828,8 +997,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     });
     return () => {
       disposed = true;
-      imeComposing = false;
-      cancelAnimationFrame(imeFrame);
+      ime.dispose();
+      if (imeRef.current === ime) imeRef.current = null;
+      replies.dispose();
       window.clearTimeout(repaintTimer);
       window.clearTimeout(liveTimer);
       flushWrites();
@@ -857,6 +1027,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       textarea?.removeEventListener('compositionstart', onCompositionStart);
       textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
       textarea?.removeEventListener('compositionend', onCompositionEnd);
+      textarea?.removeEventListener('focus', onTextareaFocus);
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
@@ -923,6 +1094,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         } catch { /* No WebGL here: the DOM renderer stays. */ }
       }
       if (becameActive) handles.current.get(sessionId)?.scrollToBottom();
+      // A terminal that was hidden kept its IME anchor from before; place it on the input cell now.
+      imeRef.current?.refresh();
       // Keyboard navigation in the session rail deliberately keeps focus on
       // the selected tab while React swaps the active terminal. Do not steal
       // it during that render; direct terminal activation still focuses here.

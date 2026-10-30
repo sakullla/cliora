@@ -44,3 +44,12 @@ test('hover parsing is bounded and caches content without retaining stale row co
   for (let index = 0; index < 32; index++) cached(`src/${index}.ts`);
   assert.notEqual(cached('src/old.ts'), original);
 });
+
+test('prose with slashes, slash commands and tech names stays plain text', () => {
+  for (const text of ['的压缩输出能力：DTS/DTS-HD', 'and/or', 'TCP/IP', '1/2', '2024/10/30', '/compact', '用 /model 切换', 'Node.js 与 Vue.js', 'e.g. this', 'v0.4.52', 'github.com', '当前方案更有针对性。']) {
+    assert.deepEqual(findTerminalLinks(text), [], text);
+  }
+  const cjk = '说明（/C:/Users/me/project/README.md:204）、音频策略（src/audio/CoreAudioOutput.kt:83）';
+  assert.deepEqual(findTerminalLinks(cjk).map(({ value }) => value), ['/C:/Users/me/project/README.md:204', 'src/audio/CoreAudioOutput.kt:83']);
+  assert.deepEqual(findTerminalLinks('see packages/player/android').map(({ value }) => value), ['packages/player/android']);
+});

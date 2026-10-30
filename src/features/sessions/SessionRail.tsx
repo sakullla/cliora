@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent, MouseEvent } from 'react';
 import { Icon } from '../../components/Icon';
-import { IconButton } from '../../components/ui';
+import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
 import { modLabel } from '../../lib/shortcut';
 import { SessionActivityIcon } from './SessionActivityIcon';
@@ -86,6 +86,8 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     target.focus();
   }
 
+  // Sessions that rang the bell and are not on screen: one click brings the next one up.
+  const waiting = sessions.filter((item) => item.attention && item.session.id !== selectedId);
   const pinnedSessions = sessions.filter((item) => item.pinned);
   const runningSessions = sessions.filter((item) => !item.pinned && item.session.running);
   const endedSessions = sessions.filter((item) => !item.pinned && !item.session.running);
@@ -157,8 +159,14 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <h1 className={narrow || compact ? styles.srOnly : styles.railTitle} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>
         {!compact && !narrow && total > 0 && <span className={styles.railCount} title={t('sessions.summary', { running, ended })}><span className={styles.liveDot} data-live={running > 0 || undefined} aria-hidden="true" />{running > 0 ? t('sessions.runningCount', { count: running }) : t('sessions.railQuiet')}</span>}
         <span className={styles.railCompactLabel} aria-hidden="true"><Icon name="terminal" size={16} /></span>
-        {canLaunch && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
+        {canLaunch && (compact || narrow) && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
       </div>
+      {canLaunch && !compact && !narrow && <Button variant="primary" className={styles.railNewBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={15} />}><span>{t('sessions.newSession')}</span><kbd className={styles.railNewKbd} aria-hidden="true">Alt N</kbd></Button>}
+      {!compact && !narrow && waiting.length > 0 && <button type="button" className={styles.railAttention} title={waiting.map((item) => item.title || item.name).join('\n')} onClick={() => onSelect(waiting[0].session.id)}>
+        <SessionActivityIcon tone="bell" slot="rail" className={styles.railAttentionIcon} />
+        <span>{t('sessions.attentionJump', { count: waiting.length })}</span>
+        <Icon name="arrowRight" size={13} />
+      </button>}
       {showSearch && <div className={styles.railSearchField} data-field-frame="">
         <Icon name="search" size={14} />
         <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); onSearch(''); } }} />

@@ -158,6 +158,7 @@ export default {
   termThemeLight: '浅色终端',
   workspaceEyebrow: 'CLI 工作区',
   railQuiet: '暂无运行中会话',
+  attentionJump: '{{count}} 个会话等你处理',
   stateStreaming: '正在输出',
   displaySettings: '终端显示',
   displayShort: '显示',

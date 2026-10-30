@@ -25,6 +25,13 @@ fn without_location(value: &str) -> &str {
     value
 }
 
+/// Some CLIs print Windows paths in URL form, `/C:/work/a.ts`. On Windows that is the drive path.
+fn url_style_drive_path(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    let url_form = cfg!(windows) && bytes.len() > 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' && matches!(bytes[3], b'/' | b'\\');
+    if url_form { &value[1..] } else { value }
+}
+
 fn expand(value: &str, directory: &Path, home: &Path) -> Result<PathBuf, String> {
     let path = if value.to_ascii_lowercase().starts_with("file://") {
         let url = url::Url::parse(value).map_err(|_| "文件链接格式无效")?;
@@ -36,7 +43,7 @@ fn expand(value: &str, directory: &Path, home: &Path) -> Result<PathBuf, String>
         home.join(relative)
     } else {
         if value.contains("://") { return Err("仅支持本机文件路径".into()); }
-        PathBuf::from(value)
+        PathBuf::from(url_style_drive_path(value))
     };
     if path.to_string_lossy().chars().any(char::is_control) {
         return Err("文件路径包含无效字符".into());
@@ -158,6 +165,17 @@ mod tests {
         assert!(reveal_only(Path::new("run.cmd")));
         assert!(reveal_only(Path::new("run.exe")));
         assert!(!reveal_only(&temp.path().join("file.txt")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn url_style_drive_paths_open_the_drive_path() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.txt"), "test").unwrap();
+        let expected = temp.path().join("a.txt").canonicalize().unwrap();
+        let url_form = format!("/{}:204", temp.path().join("a.txt").display().to_string().replace('\\', "/"));
+        assert_eq!(resolve(Some(temp.path()), temp.path(), &url_form).unwrap(), expected);
+        assert_eq!(url_style_drive_path("/tmp/a.txt"), "/tmp/a.txt");
     }
 
     #[cfg(unix)]

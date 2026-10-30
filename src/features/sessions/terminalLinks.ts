@@ -1,11 +1,39 @@
 import type { IBufferCellPosition, IBufferLine, IBufferRange, IDisposable, ILink, Terminal } from '@xterm/xterm';
-import { createTerminalLinkCache, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT, type TerminalLinkMatch } from './terminalLinkDetection';
+import { createTerminalLinkCache, mayContainTerminalLink, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT, type TerminalLinkMatch } from './terminalLinkDetection';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalLinks = IDisposable & { dismiss: () => void };
 
 type PhysicalLine = { row: number; text: string; columns: number[]; ends: number[] };
 const LOGICAL_LINE_LIMIT = 128;
+/** Resting the pointer this long on a link shows its hint; passing over output shows nothing. */
+const HINT_DELAY_MS = 280;
+/** A TUI redraw re-creates the link under a still pointer; a leave this short is not a real leave. */
+const HINT_GRACE_MS = 160;
+
+/** The logical line's rows (start, end) when its plain text could hold a link, else null. */
+function logicalRows(term: Terminal, bufferLineNumber: number): { first: number; last: number } | null {
+  const buffer = term.buffer.active;
+  if (!buffer.getLine(bufferLineNumber - 1)) return null;
+  let first = bufferLineNumber - 1;
+  let walked = 0;
+  while (first > 0 && buffer.getLine(first)?.isWrapped) {
+    if (++walked >= LOGICAL_LINE_LIMIT) return null;
+    first -= 1;
+  }
+  let last = first;
+  let text = buffer.getLine(first)?.translateToString(true) ?? '';
+  for (let row = first + 1; row < buffer.length && row - first < LOGICAL_LINE_LIMIT; row += 1) {
+    const line = buffer.getLine(row);
+    if (!line?.isWrapped) break;
+    last = row;
+    text += line.translateToString(true);
+    if (text.length > TERMINAL_LINK_TEXT_LIMIT) return null;
+  }
+  // OSC 8 links come through xterm's own handler; plain text without a separator,
+  // an extension dot or a known filename needs no per-cell read or matching at all.
+  return mayContainTerminalLink(text) ? { first, last } : null;
+}
 
 function readPhysicalLine(term: Terminal, line: IBufferLine, row: number): PhysicalLine {
   let text = '';
@@ -30,18 +58,13 @@ function readPhysicalLine(term: Terminal, line: IBufferLine, row: number): Physi
 
 function readLogicalLines(term: Terminal, bufferLineNumber: number): PhysicalLine[] {
   const buffer = term.buffer.active;
-  if (!buffer.getLine(bufferLineNumber - 1)) return [];
-  let first = bufferLineNumber - 1;
-  let walked = 0;
-  while (first > 0 && buffer.getLine(first)?.isWrapped) {
-    if (++walked >= LOGICAL_LINE_LIMIT) return [];
-    first -= 1;
-  }
+  const rows = logicalRows(term, bufferLineNumber);
+  if (!rows) return [];
   const lines: PhysicalLine[] = [];
   let length = 0;
-  for (let row = first; row < buffer.length; row += 1) {
+  for (let row = rows.first; row <= rows.last; row += 1) {
     const line = buffer.getLine(row);
-    if (!line || (row > first && !line.isWrapped)) break;
+    if (!line) break;
     if (lines.length >= LOGICAL_LINE_LIMIT || length + term.cols > TERMINAL_LINK_TEXT_LIMIT) return [];
     const physical = readPhysicalLine(term, line, row);
     length += physical.text.length;
@@ -102,36 +125,80 @@ export function registerTerminalLinks(term: Terminal, options: {
     current.decorations.pointerCursor = active;
     current.decorations.underline = active;
   };
-  const dismiss = () => {
-    decorate(false);
+  // The hint shows once the pointer rests on a link, stays put while the same target is
+  // re-created by redraws, and hides only after a real leave. Showing and hiding on every
+  // xterm hover/leave pair made it flicker under a streaming CLI.
+  let shown = '';
+  let pending = '';
+  let showTimer = 0;
+  let hideTimer = 0;
+  const pointer = { x: 0, y: 0 };
+  const hideNow = () => {
+    window.clearTimeout(showTimer);
+    window.clearTimeout(hideTimer);
+    showTimer = 0;
+    hideTimer = 0;
+    shown = '';
+    pending = '';
     tooltip.hidden = true;
   };
-  const showHint = (event: MouseEvent, url: string) => {
+  const dismiss = () => {
+    decorate(false);
+    hideNow();
+  };
+  const place = () => {
+    const left = Math.min(Math.max(8, pointer.x + 14), Math.max(8, window.innerWidth - tooltip.offsetWidth - 8));
+    const above = pointer.y - tooltip.offsetHeight - 12;
+    const top = above >= 8 ? above : Math.min(pointer.y + 20, Math.max(8, window.innerHeight - tooltip.offsetHeight - 8));
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+  };
+  const showHint = (url: string) => {
+    showTimer = 0;
+    pending = '';
+    if (disposed) return;
     action.textContent = options.hint();
     target.textContent = url;
     tooltip.hidden = false;
-    const left = Math.min(Math.max(8, event.clientX + 14), Math.max(8, window.innerWidth - tooltip.offsetWidth - 8));
-    const above = event.clientY - tooltip.offsetHeight - 12;
-    const top = above >= 8 ? above : Math.min(event.clientY + 20, Math.max(8, window.innerHeight - tooltip.offsetHeight - 8));
-    tooltip.style.left = `${Math.round(left)}px`;
-    tooltip.style.top = `${Math.round(top)}px`;
+    shown = url;
+    place();
   };
   const hover = (event: MouseEvent, url: string, link?: ILink) => {
     if (disposed) return;
     current = link ?? null;
     decorate(modified(event));
-    showHint(event, url);
+    window.clearTimeout(hideTimer);
+    hideTimer = 0;
+    if (shown === url && !tooltip.hidden) return;
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    // Moving straight from one link to another keeps the hint up and swaps its text.
+    if (!tooltip.hidden) { showHint(url); return; }
+    if (pending === url && showTimer) return;
+    window.clearTimeout(showTimer);
+    pending = url;
+    showTimer = window.setTimeout(() => showHint(url), HINT_DELAY_MS);
   };
   const leave = (link?: ILink) => {
     if (link && current !== link) return;
     current = null;
-    tooltip.hidden = true;
+    window.clearTimeout(showTimer);
+    showTimer = 0;
+    pending = '';
+    if (tooltip.hidden || hideTimer) return;
+    hideTimer = window.setTimeout(hideNow, HINT_GRACE_MS);
   };
+  const trackPointer = (event: MouseEvent) => {
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+  };
+  term.element?.addEventListener('mousemove', trackPointer, { passive: true });
+  term.element?.addEventListener('mouseleave', dismiss);
   const activate = (event: MouseEvent, target: Target) => {
     if (disposed || event.button !== 0 || !modified(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    tooltip.hidden = true;
+    hideNow();
     try {
       const request = target.kind === 'url' ? options.open(target.value) : options.openPath?.(target.value);
       void request?.catch((error) => { if (!disposed) options.onError(error); });
@@ -197,6 +264,9 @@ export function registerTerminalLinks(term: Terminal, options: {
       if (disposed) return;
       disposed = true;
       current = null;
+      hideNow();
+      term.element?.removeEventListener('mousemove', trackPointer);
+      term.element?.removeEventListener('mouseleave', dismiss);
       provider.dispose();
       tooltip.remove();
       window.removeEventListener('keydown', onModifier, true);

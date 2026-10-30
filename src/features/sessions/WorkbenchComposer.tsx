@@ -55,6 +55,12 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, inp
         }} />
         <Button variant="primary" className={styles.sendBtn} aria-label={t('sessions.sendInput')} title={t('sessions.composerHint')} onClick={onSubmit} icon={<Icon name="arrowUp" size={16} />}><span className={styles.sendLabel}>{t('sessions.sendInput')}</span></Button>
       </div>
+      <div className={styles.composerFoot} aria-hidden="true">
+        <span><kbd>Enter</kbd>{t('sessions.composerSend')}</span>
+        <span><kbd>Shift</kbd><kbd>Enter</kbd>{t('sessions.composerNewline')}</span>
+        <span><kbd>Esc</kbd>{t('sessions.composerCollapse')}</span>
+        <span className={styles.composerFootDraft}>{t('sessions.composerDraftHint')}</span>
+      </div>
     </div>
   </section>;
 }

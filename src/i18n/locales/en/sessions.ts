@@ -158,6 +158,7 @@ export default {
   termThemeLight: 'Light terminal',
   workspaceEyebrow: 'CLI WORKSPACE',
   railQuiet: 'No active sessions',
+  attentionJump: '{{count}} waiting for you',
   stateStreaming: 'Output active',
   displaySettings: 'Terminal appearance',
   displayShort: 'Display',

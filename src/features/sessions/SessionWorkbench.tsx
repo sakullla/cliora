@@ -368,6 +368,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const [copiedState, setCopiedState] = useState<'path' | 'output' | 'selection' | 'empty' | null>(null);
   const copyTimerRef = useRef<number>(0);
+  const linkErrorTimer = useRef<number>(0);
 
   const firstSeenAt = useRef(new Map<string, number>());
   const autoRemoteReattachAttempted = useRef(false);
@@ -581,7 +582,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
   bridge.current = {
     writeError: (error) => setActionError(formatFailure(error, t('sessions.writeFailed'), t('sessions.retry'))),
-    linkError: (error) => setActionError(formatFailure(error, t('sessions.openLinkFailed'), t('sessions.retry'))),
+    linkError: (error) => {
+      // A link that does not resolve is a passing note, not a standing error: it clears itself.
+      const message = formatFailure(error, t('sessions.openLinkFailed'), t('sessions.retry'));
+      setActionError(message);
+      window.clearTimeout(linkErrorTimer.current);
+      linkErrorTimer.current = window.setTimeout(() => setActionError((value) => value === message ? '' : value), 6000);
+    },
     bell: (id) => {
       if (soundEnabledRef.current) playWorkbenchChime('bell');
       if (id === selectedIdRef.current && document.hasFocus()) return;
@@ -668,6 +675,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   useEffect(() => () => {
     window.clearTimeout(copyTimerRef.current);
+    window.clearTimeout(linkErrorTimer.current);
     window.clearTimeout(findRefreshTimer.current);
   }, []);
 
@@ -1534,7 +1542,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
   }
 
-  const mountedSessions = scopedSessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
+  // Every live terminal stays mounted, including other hosts' sessions: a remount replays history
+  // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
+  const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
+  // While a just-launched session is not listed yet, the stage keeps showing the previous one.
+  const lastStageIdRef = useRef<string | null>(null);
+  if (selected) lastStageIdRef.current = selected.id;
+  const stageSession = selected ?? (selectedId ? scopedSessions.find((item) => item.id === lastStageIdRef.current) ?? null : null);
 
   const railDocked = !!railHost;
   const showRail = !focusMode && !(showEmpty && !listError);
@@ -1575,11 +1589,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </div>)}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setNotice('')} aria-label={t('common.dismissError')} /></div>}
 
-        {selected && (() => {
-          const elapsed = formatDuration(selected.startedAt ?? firstSeenAt.current.get(selected.id), clock);
-          const title = taskTitle(selected);
-          const tone = sessionTone(selected);
-          const currentStateLabel = stateLabel(selected, tone);
+        {mountedSessions.length > 0 && (() => {
+          // Terminals stay mounted while the selection briefly points at a session the list has not
+          // returned yet (a launch, a restore). Unmounting them would replay history into a fresh
+          // xterm, and the replay's device queries would be answered into the running CLI.
+          const current = stageSession;
+          const tone = current ? sessionTone(current) : 'ended';
+          const title = current ? taskTitle(current) : '';
+          const elapsed = current ? formatDuration(current.startedAt ?? firstSeenAt.current.get(current.id), clock) : '';
+          const currentStateLabel = current ? stateLabel(current, tone) : '';
           const stateReserves = [
             t('sessions.stateIdle'),
             t('sessions.stateStreaming'),
@@ -1587,59 +1605,64 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             t('sessions.stateError'),
             t('sessions.ended'),
           ].filter((label) => label !== currentStateLabel);
-          const endLabel = busy === selected.id ? t('sessions.ending') : selected.running ? t('sessions.endShort') : t('sessions.closeTabShort');
+          const endLabel = current && busy === current.id ? t('sessions.ending') : current?.running ? t('sessions.endShort') : t('sessions.closeTabShort');
           const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
             .filter((label) => label !== endLabel);
-          const git = gitContexts.get(selected.id) ?? null;
+          const git = current ? gitContexts.get(current.id) ?? null : null;
           const gitLabel = git ? git.branch ?? git.commit ?? '' : '';
           const worktreeLabel = git?.worktree ? compactText(git.worktree, 18) : '';
           const gitTitle = git ? [git.branch ? t('sessions.gitBranch', { name: git.branch }) : t('sessions.gitDetached', { commit: git.commit }), git.worktree ? t('sessions.gitWorktree', { name: git.worktree }) : '', git.repository ? t('sessions.gitRepository', { name: git.repository }) : ''].filter(Boolean).join(' · ') : '';
           const canSplit = splitRoom && scopedSessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
-          return <div className={styles.window} data-split={split ? 'true' : undefined}>
-            <header className={styles.stageBar} onDoubleClick={(event) => {
+          const remote = !!current?.projectId?.startsWith('remote:');
+          const remoteProject = remote ? remoteProjects.find((project) => `remote:${project.id}` === current?.projectId) : undefined;
+          const remoteHost = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined;
+          const hostLabel = remote ? remoteHost?.name ?? 'SSH' : t('common.host.local');
+          return <div className={styles.window} hidden={!current} data-split={split ? 'true' : undefined} data-tone={tone}>
+            {current && <header className={styles.stageBar} onDoubleClick={(event) => {
               // Double-clicking the bare title bar toggles focus mode, like maximizing a window.
               if (!(event.target instanceof Element) || event.target.closest('button, a, input, [role="toolbar"], [data-stage-icon]')) return;
-              setFocusMode((current) => !current);
+              setFocusMode((value) => !value);
             }}>
               <div className={styles.stageLead}>
-                <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={selected.toolId} size={18} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
+                <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(selected) + ' · ' + stableTitle(title) : toolName(selected)}>{title ? <SessionTitle title={title} /> : toolName(selected)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
+                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   <div className={styles.identitySub}>
-                    {title && <span className={styles.identityTool}>{toolName(selected)}</span>}
-                    <button type="button" className={styles.pathChip} title={selected.directory ? displayPath(selected.directory) + ' · ' + t('sessions.copyPath') : placeOf(selected)} onClick={() => void copySessionPath(selected)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(selected)}</span></button>
-                    {selected.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}><Icon name="sparkle" size={12} />{modeLabel(selected.mode)}</span>}
+                    {title && <span className={styles.identityTool}>{toolName(current)}</span>}
+                    <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(current)}</span></button>
+                    {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}><Icon name="sparkle" size={11} />{modeLabel(current.mode)}</span>}
                     {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={12} />{elapsed}</span>}
-                    {!selected.running && selected.exitCode != null && <span className={styles.exitCode} data-failed={selected.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: selected.exitCode })}</span>}
+                    {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>
                 </div>
               </div>
               <div className={styles.stageTail}>
                 <div className={styles.terminalActions} role="toolbar" aria-label={t('sessions.terminalMenu')}>
-                  <span className={styles.runningActions} data-running={selected.running || undefined} aria-hidden={selected.running ? undefined : true}>
-                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!selected.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={15} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
-                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!selected.running} onClick={() => void sendToSession(selected, '\x03')} icon={<Icon name="ban" size={15} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
+                  <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
+                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
+                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
                   </span>
-                  {selected.reattachable && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(selected)} icon={<Icon name="refresh" size={16} />}><span className={styles.toolLabel}>{busy === 'reattach:' + selected.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button>}
-                  <span className={styles.toolDivider} aria-hidden="true" />
-                  <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={16} />} />
-                  {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={16} />} />}
-                  <IconButton size="sm" className={`${styles.toolButton} ${styles.focusBtn}`} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={(focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')) + ' · ' + t('sessions.focusHint')} onClick={() => setFocusMode((current) => !current)} icon={<Icon name={focusMode ? 'minimize' : 'maximize'} size={16} />} />
-                  <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(selected, rect.right, rect.bottom + 5); }} icon={<Icon name="more" size={16} />} />
+                  {current.reattachable && <span className={styles.actionGroup}><Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button></span>}
+                  <span className={styles.actionGroup}>
+                    <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
+                    {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
+                    <IconButton size="sm" className={`${styles.toolButton} ${styles.focusBtn}`} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={(focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')) + ' · ' + t('sessions.focusHint')} onClick={() => setFocusMode((value) => !value)} icon={<Icon name={focusMode ? 'minimize' : 'maximize'} size={15} />} />
+                    <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6); }} icon={<Icon name="more" size={15} />} />
+                  </span>
                 </div>
-                <Button size="sm" className={styles.endBtn} data-running={selected.running || undefined} onClick={() => void endSession(selected)} disabled={!!busy} aria-label={selected.running ? t('sessions.end') : t('sessions.closeTab')} title={selected.running ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={selected.running ? 'square' : 'close'} size={selected.running ? 12 : 14} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
+                <Button size="sm" className={styles.endBtn} data-running={current.running || undefined} onClick={() => void endSession(current)} disabled={!!busy} aria-label={current.running ? t('sessions.end') : t('sessions.closeTab')} title={current.running ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={current.running ? 'square' : 'close'} size={current.running ? 11 : 13} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
               </div>
-            </header>
+            </header>}
 
             <div className={styles.screen}>
-              {findOpen && <div className={styles.findLayer} data-split={split ? 'true' : undefined} data-pane={split ? split.indexOf(selected.id) : undefined}>
+              {current && findOpen && <div className={styles.findLayer} data-split={split ? 'true' : undefined} data-pane={split ? split.indexOf(current.id) : undefined}>
                 <div className={styles.findPanel} role="search">
                   <div className={styles.findField} data-field-frame=""><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
                     if (event.key === 'Enter') { event.preventDefault(); stepFindMatch(event.shiftKey ? -1 : 1); }
                     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind(); }
                   }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div>
-                  <Button variant="ghost" size="sm" className={styles.findToggle} aria-pressed={findCase} aria-label={t('sessions.findCase')} title={t('sessions.findCase')} onClick={() => { setFindCase((current) => !current); findInputRef.current?.focus(); }}>Aa</Button>
+                  <Button variant="ghost" size="sm" className={styles.findToggle} aria-pressed={findCase} aria-label={t('sessions.findCase')} title={t('sessions.findCase')} onClick={() => { setFindCase((value) => !value); findInputRef.current?.focus(); }}>Aa</Button>
                   <span className={styles.findDivider} aria-hidden="true" />
                   <IconButton size="sm" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findPrev')} title={t('sessions.findPrev') + ' (Shift+Enter)'} onClick={() => stepFindMatch(-1)} icon={<Icon name="arrowUp" size={14} />} />
                   <IconButton size="sm" className={styles.iconBtn} disabled={!findMatches.length} aria-label={t('sessions.findNext')} title={t('sessions.findNext') + ' (Enter)'} onClick={() => stepFindMatch(1)} icon={<Icon name="arrowDown" size={14} />} />
@@ -1655,7 +1678,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 onContextMenu={(event) => {
                   event.preventDefault();
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
-                  openTerminalMenu(scopedSessions.find((item) => item.id === id) ?? selected, event.clientX, event.clientY);
+                  const target = scopedSessions.find((item) => item.id === id) ?? current;
+                  if (target) openTerminalMenu(target, event.clientX, event.clientY);
                 }}>
                 {mountedSessions.map((session) => {
                   const pane = visibleIds.indexOf(session.id);
@@ -1663,7 +1687,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const focused = session.id === selectedId;
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
-                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -1674,27 +1698,29 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     </div> : null}
                     overlay={visible ? <>
                       {scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
-                      {dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><Icon name="upload" size={22} /><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
+                      {dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
                     </> : null}
                     footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
-                      <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={14} /></span>
+                      <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
                       <span className={styles.endedText}><strong>{t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{t('sessions.endedHintShort')}</span></span>
-                      <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('sessions.restartHint')} onClick={() => void restartOrCloneSession(session, true)} icon={<Icon name="refresh" size={12} />}><span className={styles.endedRestartLabel}>{busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
+                      <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('sessions.restartHint')} onClick={() => void restartOrCloneSession(session, true)} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
                     </div> : null} />;
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
               </div>
-              {selected.running && composerOpen && <WorkbenchComposer toolId={selected.toolId} toolName={toolName(selected)} place={placeOf(selected)} draft={composerDrafts[selected.id] ?? ''} prompts={composerPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
-              <footer className={styles.statusBar}>
+              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current && <footer className={styles.statusBar}>
+                <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
-            {selected.projectId?.startsWith('remote:') && <Badge className={styles.statusBadge} tone={selected.connectionState === 'disconnected' ? 'danger' : selected.running ? 'success' : 'neutral'} title={selected.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {selected.connectionState === 'disconnected' ? (selected.reattachable ? t('sessions.sshDisconnectedReattachable') : t('sessions.sshConnectionLost')) : selected.running ? t('sessions.sshConnected') : t('sessions.sshEnded')}{selected.remoteSessionId ? ` · ${selected.remoteSessionId}` : ''}</Badge>}
+                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'disconnected' ? 'danger' : current.running ? 'success' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {current.connectionState === 'disconnected' ? (current.reattachable ? t('sessions.sshDisconnectedReattachable') : t('sessions.sshConnectionLost')) : current.running ? t('sessions.sshConnected') : t('sessions.sshEnded')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}</Badge>}
                 <span className={styles.statusSpacer} />
-                {scrolledIds.has(selected.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
-                {split && <span className={styles.statusItem}><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
-                {(() => { const remoteProject = selected.projectId?.startsWith('remote:') ? remoteProjects.find((project) => `remote:${project.id}` === selected.projectId) : undefined; const host = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined; const label = selected.projectId?.startsWith('remote:') ? host?.name ?? 'SSH' : t('common.host.local'); return <span className={styles.statusItem} title={`${t('common.host.label')}：${label}${host ? ` · ${host.user}@${host.host}` : ''}`}><Icon name={selected.projectId?.startsWith('remote:') ? 'server' : 'monitor'} size={12} />{label}</span>; })()}
-                <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((current) => !current); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
-                <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((current) => !current); }} onClose={closeShortcuts} />
-              </footer>
+                {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
+                {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
+                <span className={styles.statusTools}>
+                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((value) => !value); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
+                  <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((value) => !value); }} onClose={closeShortcuts} />
+                </span>
+              </footer>}
             </div>
           </div>;
         })()}
