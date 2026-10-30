@@ -4690,6 +4690,30 @@ pub async fn test_remote_target(
 /// Probe one registered CLI on the selected remote target. A missing remote
 /// executable is a per-CLI result so the UI can keep rendering the rest of
 /// the target instead of treating one missing tool as a connection failure.
+fn remote_cli_probe_result(
+    target_id: &str,
+    tool_id: &str,
+    executable: &str,
+    result: Result<crate::remote::RemoteCommandResult, String>,
+) -> Result<crate::remote::RemoteCliProbe, ApiError> {
+    let (installed, version, detail) = match result {
+        Ok(result) => (true, result.stdout.lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_owned), None),
+        Err(detail) => {
+            let error = native_error(detail);
+            let missing = error.remote.as_ref().is_some_and(|failure| {
+                failure.stage == "dependency" && failure.reason == "dependency"
+                    && failure.exit_code == Some(127) && failure.outcome == "failed"
+            });
+            if !missing { return Err(error); }
+            (false, None, Some(error.message))
+        }
+    };
+    Ok(crate::remote::RemoteCliProbe {
+        target_id: target_id.into(), tool_id: tool_id.into(), executable: executable.into(),
+        installed, version, detail,
+    })
+}
+
 #[tauri::command]
 pub async fn probe_remote_cli(
     window: tauri::WebviewWindow,
@@ -4711,25 +4735,7 @@ pub async fn probe_remote_cli(
             .get(&tool_id)
             .ok_or_else(|| native_error("未注册的 CLI 不能探测".into()))?;
         let executable = adapter.command().to_owned();
-        match adapter.remote_probe(&target) {
-            Ok(result) => Ok(crate::remote::RemoteCliProbe {
-                target_id: target.id,
-                tool_id,
-                executable,
-                installed: true,
-                version: result.stdout.lines().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned),
-                detail: None,
-            }),
-            Err(detail) if detail.starts_with("cliora:remote:") => Err(native_error(detail)),
-            Err(detail) => Ok(crate::remote::RemoteCliProbe {
-                target_id: target.id,
-                tool_id,
-                executable,
-                installed: false,
-                version: None,
-                detail: Some(detail),
-            }),
-        }
+        remote_cli_probe_result(&target.id, &tool_id, &executable, adapter.remote_probe(&target))
     }).await
 }
 
@@ -4961,6 +4967,47 @@ pub fn set_tool_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_cli_probe_missing_envelope_preserves_the_tool_page_contract_fixture() {
+        use crate::remote::operations::{Context, Kind};
+        let error = Context::local(Kind::Read, std::time::Duration::from_secs(1))
+            .failure_with_exit("dependency", "sh: claude: command not found", Some(127));
+        // Exercise the real adapter string envelope and IPC error decoder,
+        // rather than manufacturing an installed:false response in the UI.
+        let encoded = error.to_string();
+        assert!(encoded.starts_with("cliora:remote:"));
+        let result = remote_cli_probe_result("host-native", "claude_code", "claude", Err(encoded)).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../tests/fixtures/remote-probe-missing.json")).unwrap();
+        assert_eq!(serde_json::to_value(result).unwrap(), fixture);
+    }
+
+    #[test]
+    fn remote_cli_probe_failures_keep_structured_recovery_instead_of_becoming_missing() {
+        use crate::remote::{operations::{Context, Kind}, RemoteError};
+        for (reason, exit_code) in [
+            ("authentication", Some(255)), ("host_key", Some(255)), ("connect", Some(255)),
+            ("permission", Some(1)), ("permission", Some(127)), ("dependency", Some(1)),
+            ("remote_command", Some(1)), ("cancelled", None), ("timeout", None),
+        ] {
+            let context = Context::local(Kind::Read, std::time::Duration::from_secs(1));
+            let RemoteError::Operation(failure) = context.failure_with_exit(reason, "fixture probe failure", exit_code) else { unreachable!() };
+            let encoded = RemoteError::Operation(failure.clone()).to_string();
+            let result = remote_cli_probe_result("host-native", "claude_code", "claude", Err(encoded)).unwrap_err();
+            assert_eq!(serde_json::to_value(result.remote.unwrap()).unwrap(), serde_json::to_value(failure).unwrap(), "{reason}");
+        }
+        assert!(remote_cli_probe_result("host-native", "claude_code", "claude", Err("unsupported probe capability".into())).is_err());
+    }
+
+    #[test]
+    fn remote_cli_probe_success_retains_the_reported_installation_and_version() {
+        let result = remote_cli_probe_result("host-native", "claude_code", "claude", Ok(crate::remote::RemoteCommandResult {
+            target_id: "host-native".into(), exit_code: 0, stdout: "\n2.1.314\n".into(), stderr: String::new(),
+        })).unwrap();
+        assert!(result.installed);
+        assert_eq!(result.version.as_deref(), Some("2.1.314"));
+        assert!(result.detail.is_none());
+    }
 
     #[test]
     fn configuration_snapshot_checks_presence_without_decoding_content() {
