@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isShellWindowTitle, railPlace, railTaskTitle, stripPlaceSuffix } from '../../src/features/sessions/railTitle.ts';
+import { isShellWindowTitle, railPlace, railTaskTitle, splitActivityGlyph, stripPlaceSuffix } from '../../src/features/sessions/railTitle.ts';
 
 test('shell window titles and paths are not task titles', () => {
   for (const title of ['Windows PowerShell', '管理员: Windows PowerShell', 'pwsh', 'PowerShell 7.5', 'cmd.exe', '命令提示符', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', '~/project', '/usr/bin/bash']) {
@@ -35,4 +35,19 @@ test('a title that only names the session folder falls back to the tool name', (
   assert.equal(railTaskTitle('fixture-user', 'Codex', ['', 'C:\\Users\\fixture-user']), '');
   assert.equal(railTaskTitle('cliora', 'Codex', ['栖点', '/home/me/cliora/']), '');
   assert.equal(railTaskTitle('Fix cliora build', 'Codex', ['', '/home/me/cliora']), 'Fix cliora build');
+});
+
+test('the animated status glyph is split from the stable task text', () => {
+  // Claude Code cycles half circles and stars; Codex prefixes braille spinner frames; Gemini uses diamonds.
+  for (const frame of ['◐', '◓', '◑', '◒', '✳', '✶', '✻', '✽', '✢', '·', '*', '⠋']) {
+    assert.deepEqual(splitActivityGlyph(`${frame} Claude Code`), { glyph: frame, text: 'Claude Code' }, frame);
+  }
+  assert.deepEqual(splitActivityGlyph('◑ ✶ 修复登录'), { glyph: '◑ ✶', text: '修复登录' });
+  assert.deepEqual(splitActivityGlyph('◇  Ready (cliora)'), { glyph: '◇', text: 'Ready (cliora)' });
+  assert.deepEqual(splitActivityGlyph('✋️ Action Required'), { glyph: '✋️', text: 'Action Required' });
+  assert.deepEqual(splitActivityGlyph('✨ 远端修复'), { glyph: '✨', text: '远端修复' });
+  // Ordinary titles have no glyph.
+  for (const title of ['#123 fix login', 'Fix the login flow', '优化启动速度', '(draft) notes', '⠀⠁']) {
+    assert.deepEqual(splitActivityGlyph(title), { glyph: '', text: title }, title);
+  }
 });

@@ -4,6 +4,24 @@
  * many CLIs append the folder name that the rail already shows on the second line.
  */
 
+// Leading activity glyphs CLIs animate in their window title: Codex braille spinners (⠋),
+// Claude Code stars and half circles (✳ ✶ ✻ ◐ ◓), Gemini diamonds (◇ ✦), bullets and emoji.
+const ACTIVITY_PREFIX = /^(?:[\u2800-\u28ff\u2190-\u21ff\u2300-\u23ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\u00b7\u2022\u2219\u22c5*\ufe0e\ufe0f\u200d\s]|\p{Extended_Pictographic})+/u;
+
+/**
+ * Split the animated status glyph a CLI prepends to its title from the task text. The glyph
+ * advances many times a second, so only `text` may feed hover tooltips: a changing `title`
+ * attribute makes the native tooltip restart on every frame, which shows as flicker.
+ */
+export function splitActivityGlyph(title: string): { glyph: string; text: string } {
+  const value = title.trim();
+  const match = ACTIVITY_PREFIX.exec(value);
+  if (!match) return { glyph: '', text: value };
+  const text = value.slice(match[0].length).trim();
+  // A title made only of glyphs keeps them as its text.
+  return text ? { glyph: match[0].replace(/\s+/g, ' ').trim(), text } : { glyph: '', text: value };
+}
+
 const SHELL_TITLES = /^(?:(?:administrator|管理员)\s*[:：]\s*)?(?:windows\s+powershell|powershell(?:\s+\d+(?:\.\d+)*)?|pwsh|command\s+prompt|命令提示符|cmd(?:\.exe)?|bash|zsh|fish|sh|wsl|ubuntu|git\s+bash|mingw64)$/i;
 const PATH_LIKE = /^(?:[a-z]:[\\/]|\\\\|~[\\/]|\/)[^\s]*$|\.exe$/i;
 

@@ -280,7 +280,8 @@ for (const width of widths) {
     await page.locator('[data-activity-slot="pane"][data-activity-icon="idle"]').waitFor();
   });
   if (width >= 1360) await shot('workbench-slim-' + theme + '-' + width, theme, width, async (page) => {
-    await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('收起会话栏', 'Collapse session list') }).click();
+    // The session list lives in the app sidebar; folding the sidebar leaves one icon rail.
+    await page.getByRole('button', { name: copy('折叠侧栏', 'Collapse sidebar'), exact: true }).click();
     await page.evaluate(() => window.__output('s1', 'live compact output\r\n'));
     await page.locator('[data-activity-slot="rail"][data-activity-icon="live"]').waitFor();
     await page.evaluate(() => window.__bell());

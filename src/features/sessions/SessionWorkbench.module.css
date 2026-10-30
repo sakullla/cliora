@@ -1,6 +1,7 @@
 /* ==========================================================================
    Workbench
-   Rail (app theme) · stage chrome + terminal cards (terminal theme)
+   Rail (app theme, docked in the app sidebar on wide windows) · stage chrome +
+   terminal (terminal theme). The terminal fills the page canvas without a card of its own.
    Type follows the app scale: whole pixels, 11px minimum.
    ========================================================================== */
 
@@ -15,12 +16,17 @@
 }
 .shell[hidden] { display: none; }
 
-.root {
+/* The rail is portaled into the app sidebar, outside .root, so it carries its own inks. */
+.root,
+.rail {
   --wb-rail-bg: color-mix(in srgb, var(--sidebar) 58%, var(--surface));
-  --wb-rail-top: color-mix(in srgb, var(--surface) 72%, var(--sidebar));
   --wb-row-hover: color-mix(in srgb, var(--surface-3) 46%, transparent);
   --wb-row-selected: var(--surface);
   --wb-divider: color-mix(in srgb, var(--line) 86%, transparent);
+}
+.rail[data-docked] { --wb-rail-bg: var(--sidebar); --wb-row-hover: color-mix(in srgb, var(--text) 6%, transparent); }
+
+.root {
   /* Fixed artwork inks: the theme swatches mirror the terminal palettes below, and the
      empty-state glyph is a small dark terminal in every app theme. */
   --wb-preview-dark-bg: #0c1110;
@@ -50,13 +56,14 @@
   background: var(--surface);
 }
 
-:global([data-theme='dark']) .root {
+:global([data-theme='dark']) .root,
+:global([data-theme='dark']) .rail {
   --wb-rail-bg: color-mix(in srgb, var(--sidebar) 70%, var(--bg));
-  --wb-rail-top: color-mix(in srgb, var(--bg) 82%, var(--sidebar));
   --wb-row-hover: color-mix(in srgb, var(--surface-2) 70%, transparent);
   --wb-row-selected: var(--surface-2);
   --wb-divider: color-mix(in srgb, var(--line) 90%, transparent);
 }
+:global([data-theme='dark']) .rail[data-docked] { --wb-rail-bg: var(--sidebar); }
 
 .root[data-term-theme='dark'] {
   --term-bg: #0c1110;
@@ -81,7 +88,6 @@
   --term-danger: #f0a69d;
   --term-shadow: rgb(0 0 0 / 55%);
   --term-card-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 40px -28px rgb(0 0 0 / 90%);
-  --term-window-shadow: 0 1px 2px rgb(0 0 0 / 22%), 0 24px 48px -28px rgb(0 0 0 / 65%);
 }
 
 .root[data-term-theme='light'] {
@@ -107,7 +113,6 @@
   --term-danger: #a62f2a;
   --term-shadow: rgb(26 50 35 / 20%);
   --term-card-shadow: 0 1px 2px rgb(20 44 30 / 5%), 0 14px 32px -24px rgb(20 44 30 / 35%);
-  --term-window-shadow: 0 1px 2px rgb(20 44 30 / 6%), 0 22px 44px -30px rgb(20 44 30 / 40%);
 }
 
 .srOnly {
@@ -140,36 +145,33 @@
 .activity[data-tone='live'] > svg { animation: wbActivity 1.8s var(--ease) infinite; }
 .activity[data-tone='bell'] > svg { animation: wbPulse 1.8s var(--ease) infinite; }
 
+/* Only the stage lives here on wide windows; narrow windows add the session strip on top. */
 .layout {
-  --rail-w: 272px;
   display: grid;
-  grid-template-columns: minmax(232px, var(--rail-w)) 1px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: clip;
-  background: linear-gradient(180deg, var(--wb-rail-top), var(--wb-rail-bg) 220px);
+  background: var(--term-bg);
 }
-.root[data-rail-slim] .layout { grid-template-columns: 64px 1px minmax(0, 1fr); }
-.root[data-focus-mode] .layout,
-.root[data-empty] .layout { grid-template-columns: minmax(0, 1fr); }
-.root[data-focus-mode] .rail,
-.root[data-focus-mode] .resizer,
-.root[data-empty] .rail,
-.root[data-empty] .resizer { display: none; }
+.layout[data-strip] { grid-template-rows: auto minmax(0, 1fr); }
+.root[data-empty] .layout { background: transparent; }
 
+/* Sits on the app sidebar's right edge, beside the docked session list. */
 .resizer {
-  position: relative;
+  position: absolute;
   z-index: 3;
-  width: 1px;
-  min-height: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
   background: transparent;
   cursor: col-resize;
   touch-action: none;
 }
-.root[data-rail-slim] .resizer { pointer-events: none; }
-.resizer::before { content: ''; position: absolute; inset: 0 -4px; }
+.resizer::before { content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 1px; transition: background-color var(--fast) var(--ease); }
 .resizer::after {
   content: '';
   position: absolute;
@@ -183,8 +185,9 @@
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
-.resizer:hover,
-.resizer:focus-visible { background: var(--accent-line); outline: none; }
+.resizer:focus-visible { outline: none; }
+.resizer:hover::before,
+.resizer:focus-visible::before { background: var(--accent-line); }
 .resizer:hover::after,
 .resizer:focus-visible::after { opacity: .7; }
 :global(body[data-resizing='col']) { cursor: col-resize; user-select: none; }
@@ -442,6 +445,13 @@
 .railFoot { display: flex; flex: none; align-items: center; gap: var(--space-1_5); min-height: 40px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2); border-top: 1px solid var(--wb-divider); color: var(--text-3); font-size: var(--fs-micro); }
 .railSummary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* Docked in the app sidebar: the sidebar draws the column; the list keeps its rhythm. */
+.rail[data-docked] { flex: 1 1 auto; }
+.rail[data-docked] .railHead { padding: var(--space-2_5) var(--space-2_5) var(--space-1_5) var(--space-3); }
+.rail[data-docked] .list { padding-right: var(--space-2); padding-left: var(--space-2_5); }
+.rail[data-docked][data-slim] .railHead { padding: var(--space-2_5) var(--space-2) var(--space-1_5); }
+.rail[data-docked][data-slim] .list { padding-inline: var(--space-2); }
+
 /* Slim rail: icons, status and attention only. */
 .rail[data-slim] .railHead { justify-items: center; padding: var(--space-3) var(--space-2) var(--space-1_5); }
 .rail[data-slim] .railTitleRow { justify-content: center; }
@@ -507,7 +517,8 @@
   background: transparent;
   color: var(--text);
 }
-/* One terminal window: title bar, panes, composer and status bar share a single framed card. */
+/* One terminal window: title bar, panes, composer and status bar fill the page canvas.
+   The canvas is the only frame; inside it, single lines separate the bars. */
 .window {
   position: relative;
   display: flex;
@@ -515,15 +526,10 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  margin: var(--space-2_5) var(--space-2_5) var(--space-2_5) var(--space-1_5);
   overflow: clip;
-  border: 1px solid var(--term-frame);
-  border-radius: var(--radius-xl);
   background: var(--term-bg);
   color: var(--term-fg);
-  box-shadow: var(--term-window-shadow);
 }
-.root[data-focus-mode] .window { margin-left: var(--space-2_5); }
 .root[data-empty] .stage {
   background:
     radial-gradient(900px 520px at 50% -10%, color-mix(in srgb, var(--accent-soft) 85%, transparent), transparent 70%),
@@ -568,6 +574,8 @@
 .stageIconDot[data-tone='bell'] { color: var(--term-warning); }
 .stageIconDot[data-tone='error'] { color: var(--term-danger); }
 .identityText { display: grid; flex: 1 1 auto; gap: var(--space-0_5); min-width: 0; }
+/* CLI spinner frames differ in width; a fixed slot keeps the task text from jittering. */
+.titleGlyph { display: inline-block; min-width: 1.15em; text-align: center; font-variant-emoji: text; }
 .identityTitleRow { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .identityTitleRow > h2 {
   flex: 0 1 auto;
@@ -1243,27 +1251,25 @@
   .switchTrack i { transition: none; }
 }
 
-/* Narrow: the rail turns into a tab strip above the terminal. */
-.root[data-narrow] .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-.root[data-narrow] .resizer { display: none; }
-.root[data-narrow] .rail { flex-direction: row; align-items: center; border-bottom: 1px solid var(--wb-divider); }
-.root[data-narrow] .railHead { display: flex; flex: none; align-items: center; padding: var(--space-1_5) var(--space-1) var(--space-1_5) var(--space-2_5); }
-.root[data-narrow] .railTitleRow { min-height: 0; }
-.root[data-narrow] .railSearchField,
-.root[data-narrow] .railFoot { display: none; }
-.root[data-narrow] .railCompactLabel { display: grid; place-items: center; width: 26px; color: var(--text-3); }
-.root[data-narrow] .newSessionBtn[data-size] { order: 9; width: var(--control-h-sm); height: var(--control-h-sm); min-height: var(--control-h-sm); margin-left: var(--space-1); }
-.root[data-narrow] .list { flex: 1 1 auto; flex-direction: row; align-items: center; gap: var(--space-1); padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-0_5); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.root[data-narrow] .sessionGroup { display: flex; flex: none; gap: var(--space-1); }
-.root[data-narrow] .groupLabel { display: none; }
-.root[data-narrow] .row { flex: 0 0 196px; max-width: 196px; }
-.root[data-narrow] .session { gap: var(--space-2); padding: var(--space-1_5) var(--space-2) !important; }
-.root[data-narrow] .sessionIconWrap { width: 28px; height: 28px; border-radius: var(--radius-sm); }
-.root[data-narrow] .sessionTop strong { font-size: var(--fs-caption); }
-.root[data-narrow] .sessionSub { min-height: 17px; }
-.root[data-narrow] .sessionTime { display: none; }
-.root[data-narrow] .session[aria-selected='true']::before { top: auto; right: 12px; bottom: -1px; left: 12px; width: auto; height: 2px; border-radius: var(--radius-pill); }
-.root[data-narrow] .rowActions { display: none; }
+/* Narrow windows: the rail turns into a tab strip above the terminal. */
+.rail[data-strip] { flex-direction: row; align-items: center; border-bottom: 1px solid var(--wb-divider); background: var(--wb-rail-bg); }
+.rail[data-strip] .railHead { display: flex; flex: none; align-items: center; padding: var(--space-1_5) var(--space-1) var(--space-1_5) var(--space-2_5); }
+.rail[data-strip] .railTitleRow { min-height: 0; }
+.rail[data-strip] .railSearchField,
+.rail[data-strip] .railFoot { display: none; }
+.rail[data-strip] .railCompactLabel { display: grid; place-items: center; width: 26px; color: var(--text-3); }
+.rail[data-strip] .newSessionBtn[data-size] { order: 9; width: var(--control-h-sm); height: var(--control-h-sm); min-height: var(--control-h-sm); margin-left: var(--space-1); }
+.rail[data-strip] .list { flex: 1 1 auto; flex-direction: row; align-items: center; gap: var(--space-1); padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-0_5); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.rail[data-strip] .sessionGroup { display: flex; flex: none; gap: var(--space-1); }
+.rail[data-strip] .groupLabel { display: none; }
+.rail[data-strip] .row { flex: 0 0 196px; max-width: 196px; }
+.rail[data-strip] .session { gap: var(--space-2); padding: var(--space-1_5) var(--space-2) !important; }
+.rail[data-strip] .sessionIconWrap { width: 28px; height: 28px; border-radius: var(--radius-sm); }
+.rail[data-strip] .sessionTop strong { font-size: var(--fs-caption); }
+.rail[data-strip] .sessionSub { min-height: 17px; }
+.rail[data-strip] .sessionTime { display: none; }
+.rail[data-strip] .session[aria-selected='true']::before { top: auto; right: 12px; bottom: -1px; left: 12px; width: auto; height: 2px; border-radius: var(--radius-pill); }
+.rail[data-strip] .rowActions { display: none; }
 .root[data-narrow] .toolButton[data-tool='split'] { display: none; }
 .root[data-narrow] .composerTrigger[data-size] { width: var(--control-h-sm); padding: 0; }
 .root[data-narrow] .composerTrigger .toolLabel { display: none; }
@@ -1313,7 +1319,6 @@
 .root[data-compact] .toolDivider { margin: 0 var(--space-0_5); }
 .root[data-compact] .endBtn[data-size] { width: var(--control-h-sm); padding: 0; }
 .root[data-compact] .endBtn > .statusLabel { display: none; }
-.root[data-compact] .window { margin: var(--space-1_5); border-radius: var(--radius-lg); }
 .root[data-compact] .terminalBody { padding: var(--space-2_5) var(--space-1_5) var(--space-1) var(--space-2_5); }
 .root[data-compact] .findLayer { top: 8px; right: 14px; left: 14px; }
 .root[data-compact] .endedBar { margin: 0 var(--space-2) var(--space-2); }
