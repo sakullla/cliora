@@ -192,6 +192,10 @@ export const native = {
   readNativeSkill: (toolId: string, scope: Scope, projectPath: string | null, directory: string) => command<NativeSkillDocument>('read_native_skill', { toolId, scope, projectPath, directory }),
   listNativeSkillFiles: (toolId: string, scope: Scope, projectPath: string | null, directory: string) => command<SkillFileListing>('list_native_skill_files', { toolId, scope, projectPath, directory }),
   readNativeSkillFile: (toolId: string, scope: Scope, projectPath: string | null, directory: string, path: string) => command<SkillFilePreview>('read_native_skill_file', { toolId, scope, projectPath, directory, path }),
+  /** Paths relative to the skill directory, aligned with `targets`; null when a target is not a readable file. */
+  resolveNativeSkillReferences: (toolId: string, scope: Scope, projectPath: string | null, directory: string, from: string, targets: string[]) => command<Array<string | null>>('resolve_native_skill_references', { toolId, scope, projectPath, directory, from, targets }),
+  /** A file the skill references, by a path from `resolveNativeSkillReferences` or the attachment list. */
+  readNativeSkillReference: (toolId: string, scope: Scope, projectPath: string | null, directory: string, path: string) => command<SkillFilePreview>('read_native_skill_reference', { toolId, scope, projectPath, directory, path }),
   analyzeSkillDocument: (directoryName: string, content: string) => command<SkillManifest>('analyze_skill_document', { directoryName, content }),
   saveNativeSkill: (toolId: string, scope: Scope, projectPath: string | null, directory: string, baseline: string, content: string) => command<void>('save_native_skill', { toolId, scope, projectPath, directory, baseline, content }),
   previewSkillTarget: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<SkillTargetPreview>('preview_skill_target', { packageId, toolId, scope, projectPath }),

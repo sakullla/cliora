@@ -1121,6 +1121,117 @@ fn attachment_limits_and_links_mark_entries_without_failing_the_listing() {
     assert_eq!(read_attachment(&root, "kept.txt").unwrap().text.as_deref(), Some("kept"));
 }
 
+#[test]
+fn references_resolve_shared_and_plugin_files_and_stay_inside_the_reference_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let plugin = cursor_plugin(&home, true, "flow-plugin", "Flow");
+    let skill = plugin.join("skills/execute");
+    write_skill(&skill, "---\nname: execute\ndescription: d\n---\n");
+    fs::create_dir_all(skill.join("references")).unwrap();
+    fs::write(skill.join("references/execution.md"), "# Execution\n").unwrap();
+    fs::write(skill.join("references/direct worker.md"), "# Direct\n").unwrap();
+    write_skill(&plugin.join("skills/_shared"), "# shared\n");
+    fs::write(plugin.join("skills/_shared/workflow-core.md"), "# Core\n").unwrap();
+    write_skill(&plugin.join("skills/plan"), "---\nname: plan\ndescription: d\n---\n");
+    fs::create_dir_all(plugin.join("skills/plan/references")).unwrap();
+    fs::write(plugin.join("skills/plan/references/planning.md"), "# Planning\n").unwrap();
+    fs::write(plugin.join("skills/plan/references/execution.md"), "# Other execution\n").unwrap();
+    fs::create_dir_all(plugin.join("agents")).unwrap();
+    fs::write(plugin.join("agents/reviewer.md"), "# Reviewer\n").unwrap();
+    fs::write(home.join("secret.txt"), "secret").unwrap();
+    let dir = skill.display().to_string();
+    let resolve = |from: &str, targets: &[&str]| {
+        let targets: Vec<String> = targets.iter().map(|item| item.to_string()).collect();
+        resolve_references(&db, &registry, &home, "cursor", Scope::Global, None, &dir, from, &targets).unwrap()
+    };
+    let some = |path: &str| Some(path.to_owned());
+
+    assert_eq!(resolve("SKILL.md", &[
+        "../_shared/workflow-core.md",
+        "references/execution.md",
+        "execution.md",
+        "workflow-core.md",
+        "planning.md",
+        "<plugin_root>/agents/reviewer.md",
+        "agents/reviewer.md",
+        "references/direct%20worker.md",
+        "../_shared/workflow-core.md#dispatch",
+        "SKILL.md",
+    ]), [
+        some("../_shared/workflow-core.md"),
+        some("references/execution.md"),
+        some("references/execution.md"),
+        some("../_shared/workflow-core.md"),
+        some("../plan/references/planning.md"),
+        some("../../agents/reviewer.md"),
+        some("../../agents/reviewer.md"),
+        some("references/direct worker.md"),
+        some("../_shared/workflow-core.md"),
+        some("SKILL.md"),
+    ]);
+    // Links inside a referenced file resolve from that file's own folder.
+    assert_eq!(resolve("references/execution.md", &["../../_shared/workflow-core.md", "execution.md"]), [
+        some("../_shared/workflow-core.md"),
+        some("references/execution.md"),
+    ]);
+    assert_eq!(resolve("../_shared/workflow-core.md", &["../execute/references/execution.md"]), [some("references/execution.md")]);
+    // Outside the plugin, missing, ambiguous only outside the skill, URLs and absolute paths stay unresolved.
+    let escape = format!("{}/secret.txt", "../".repeat(8));
+    assert!(resolve("SKILL.md", &[
+        escape.as_str(),
+        "../../../../secret.txt",
+        "missing.md",
+        "https://example.com/a.md",
+        "/etc/passwd",
+        "C:/Windows/win.ini",
+        "references/",
+        "",
+    ]).iter().all(Option::is_none));
+
+    let core = read_reference(&db, &registry, &home, "cursor", Scope::Global, None, &dir, "../_shared/workflow-core.md").unwrap();
+    assert_eq!(core.text.as_deref(), Some("# Core\n"));
+    assert_eq!(core.path, "../_shared/workflow-core.md");
+    assert_eq!(read_reference(&db, &registry, &home, "cursor", Scope::Global, None, &dir, "references/execution.md").unwrap().text.as_deref(), Some("# Execution\n"));
+    for bad in ["../../../../secret.txt", "../../..", "", "/etc/passwd", "C:/Windows/win.ini", "references\\execution.md", "./SKILL.md"] {
+        assert!(read_reference(&db, &registry, &home, "cursor", Scope::Global, None, &dir, bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn references_of_a_plain_skill_reach_its_skills_directory_but_never_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let skill = home.join(".claude/skills/review");
+    write_skill(&skill, "# review\n");
+    write_skill(&home.join(".claude/skills/_shared"), "# shared\n");
+    fs::write(home.join(".claude/skills/_shared/core.md"), "# Core\n").unwrap();
+    fs::write(home.join(".claude/settings.json"), "{}").unwrap();
+    let dir = skill.display().to_string();
+    let targets = ["../_shared/core.md".to_owned(), "core.md".to_owned(), "../../settings.json".to_owned()];
+    assert_eq!(
+        resolve_references(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, "SKILL.md", &targets).unwrap(),
+        [Some("../_shared/core.md".to_owned()), Some("../_shared/core.md".to_owned()), None],
+    );
+    assert!(read_reference(&db, &registry, &home, "claude_code", Scope::Global, None, &dir, "../../settings.json").is_err());
+
+    // A container that holds home falls back to the skill directory itself.
+    let root = temp.path().join("top");
+    let lone = root.join("lone");
+    write_skill(&lone, "# lone\n");
+    fs::write(root.join("beside.md"), "beside").unwrap();
+    let lone = lone.canonicalize().unwrap();
+    let fake_home = root.join("me");
+    fs::create_dir_all(&fake_home).unwrap();
+    let located = SkillFile { name: "lone".into(), file: lone.join("SKILL.md"), writable: true, plugin: false, plugin_root: None };
+    assert_eq!(reference_root(&located, &lone, &fake_home), lone);
+    assert!(read_reference_in(&lone, &reference_root(&located, &lone, &fake_home), "../beside.md").is_err());
+}
+
 fn write_skill(dir: &Path, body: &str) {
     fs::create_dir_all(dir).unwrap();
     fs::write(dir.join("SKILL.md"), body).unwrap();

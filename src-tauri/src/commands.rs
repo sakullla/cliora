@@ -1843,6 +1843,45 @@ pub async fn read_native_skill_file(
     .await
 }
 
+/// Resolves file references of one skill document; `None` for each target that is not a readable file.
+#[tauri::command]
+pub async fn resolve_native_skill_references(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+    from: String,
+    targets: Vec<String>,
+) -> Result<Vec<Option<String>>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::resolve_references(&db, &adapters::Registry::builtins(), &home, &tool_id, scope, project_path.as_deref(), &directory, &from, &targets)
+            .map_err(native_error)
+    })
+    .await
+}
+
+/// Reads a file a skill references, by path relative to the skill directory.
+#[tauri::command]
+pub async fn read_native_skill_reference(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+    path: String,
+) -> Result<resources::skills::SkillFilePreview, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::read_reference(&db, &adapters::Registry::builtins(), &home, &tool_id, scope, project_path.as_deref(), &directory, &path)
+            .map_err(native_error)
+    })
+    .await
+}
+
 /// Reads SKILL.md text the frontend already holds. Pure: no file access.
 #[tauri::command]
 pub fn analyze_skill_document(

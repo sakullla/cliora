@@ -29,6 +29,11 @@ function failure(error: unknown) {
 }
 
 type EditorState = { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] };
+// Same order as the native list: by name, case-insensitive. Saves, writes and removals never move a row.
+const byName = (left: McpDefinition, right: McpDefinition) => {
+  const a = left.name.toLowerCase(), b = right.name.toLowerCase();
+  return a < b ? -1 : a > b ? 1 : left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+};
 const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, state.draft.transport, state.draft.command, keptMcpArgs(state.draft.args), state.draft.url, recordOfRows(state.envRows), recordOfRows(state.headerRows)]);
 
 export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void; remoteTargetId?: string | null }) {
@@ -351,7 +356,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }
 
   const needle = search.trim().toLowerCase();
-  const library = definitions.filter((item) => item.inLibrary !== false);
+  const library = definitions.filter((item) => item.inLibrary !== false).sort(byName);
   const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
 
   const handledSpotlight = useRef<number | null>(null);

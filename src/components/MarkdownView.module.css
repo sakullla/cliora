@@ -27,3 +27,12 @@
 .tableScroll th, .tableScroll td { padding: var(--space-1_5) var(--space-2_5); border: 1px solid var(--line); text-align: left; vertical-align: top; cursor: text; -webkit-user-select: text; user-select: text; }
 .tableScroll th { background: var(--surface-2); font-weight: var(--fw-semibold); }
 .imageNote { display: inline-block; padding: var(--space-0_5) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-xs); color: var(--text-3); }
+
+/* Local file references: links and path-like inline code that open in the reader. */
+.fileLink { display: inline; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font: inherit; line-height: inherit; white-space: normal; text-decoration: underline; text-decoration-color: var(--accent-line); text-underline-offset: 3px; cursor: pointer; -webkit-user-select: text; user-select: text; }
+.fileLink:hover:not([data-missing]) { color: var(--accent-hover); text-decoration-color: currentColor; }
+.fileLink[data-missing] { color: var(--text-2); text-decoration-style: dotted; text-decoration-color: var(--text-3); cursor: help; }
+.codeLink { text-decoration: none; cursor: pointer; -webkit-user-select: text; user-select: text; }
+.prose .codeLink > code { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); text-decoration: underline; text-decoration-color: var(--accent-line); text-underline-offset: 3px; }
+.prose .codeLink:hover > code { background: var(--accent-soft); text-decoration-color: currentColor; }
+.prose [data-anchor] { scroll-margin-top: var(--space-4); }

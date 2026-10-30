@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CodeFormat } from '../../components/CodeEditor';
+import type { MarkdownFileLinks } from '../../components/MarkdownView';
 import { parseMemory } from '../memory/memoryDocument';
 import styles from './DocumentWorkspace.module.css';
 
@@ -117,7 +118,7 @@ export function readModel(text: string, format: CodeFormat): ReadModel | null {
  * has no reading view, so callers can show the source instead.
  * Reading stays selectable; editing is the explicit control in the header.
  */
-export function DocumentReader({ text, format, label }: { text: string; format: CodeFormat; label: string }) {
+export function DocumentReader({ text, format, label, files }: { text: string; format: CodeFormat; label: string; files?: MarkdownFileLinks }) {
   const { t } = useTranslation();
   const model = useMemo(() => readModel(text, format), [text, format]);
   if (!model) return null;
@@ -126,8 +127,8 @@ export function DocumentReader({ text, format, label }: { text: string; format: 
     <div className={styles.readColumn}>
       {model.description && <p className={styles.lead}>{model.description}</p>}
       {model.fields.length > 0 && <dl className={styles.fieldCard} aria-label={t('common.document.properties')}>{model.fields.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}
-      {model.sections.map(item => <section key={item.key} className={styles.section} aria-label={item.key}><span className={styles.sectionLabel}>{item.key}</span><Suspense fallback={<pre className={styles.lead}>{item.value}</pre>}><MarkdownView text={item.value} /></Suspense></section>)}
-      {model.body.trim() && <Suspense fallback={<pre className={styles.lead}>{model.body}</pre>}><MarkdownView text={model.body} /></Suspense>}
+      {model.sections.map(item => <section key={item.key} className={styles.section} aria-label={item.key}><span className={styles.sectionLabel}>{item.key}</span><Suspense fallback={<pre className={styles.lead}>{item.value}</pre>}><MarkdownView text={item.value} files={files} /></Suspense></section>)}
+      {model.body.trim() && <Suspense fallback={<pre className={styles.lead}>{model.body}</pre>}><MarkdownView text={model.body} files={files} /></Suspense>}
       {empty && <p className={styles.empty}>{t('common.document.empty')}</p>}
     </div>
   </div>;

@@ -44,7 +44,8 @@ export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath
     const projectPath = sample?.projectPath ?? null;
     const contextId = accountContexts ? sample?.contextId ?? null : null;
     return { key, scope, projectPath, contextId, name: `${scopeLabel(scope, projectPath, projects)}${contextId ? ` · ${contextLabel(contextId)}` : ''}`, items: places.filter((item) => placeKey(item) === key) };
-  });
+  // Placements arrive tool-first; a fixed line order keeps writes and removals from swapping lines.
+  }).sort((left, right) => (left.scope === 'global' ? 0 : 1) - (right.scope === 'global' ? 0 : 1) || (left.contextId ? 1 : 0) - (right.contextId ? 1 : 0) || left.name.localeCompare(right.name) || left.key.localeCompare(right.key));
   return <div className={className ? `${styles.scopeLines} ${className}` : styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><Badge className={styles.scopeName}>{row.name}</Badge><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
     const item = mark(row.items.find((place) => place.toolId === tool.id));
     const reason = unavailable?.(tool.id, row.scope);

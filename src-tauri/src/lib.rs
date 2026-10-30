@@ -296,6 +296,8 @@ pub fn run() {
             commands::analyze_skill_document,
             commands::list_native_skill_files,
             commands::read_native_skill_file,
+            commands::resolve_native_skill_references,
+            commands::read_native_skill_reference,
             commands::save_native_skill,
             commands::preview_skill_target,
             commands::install_skill,
