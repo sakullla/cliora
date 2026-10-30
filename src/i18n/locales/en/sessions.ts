@@ -1,4 +1,9 @@
 export default {
+  restoringPrevious: 'Restoring your previous workbench sessions…',
+  restoreFailed: 'Could not restore previous sessions',
+  restorePending: '{{tool}} session awaiting restoration',
+  retryRestore: 'Retry restoration',
+  dismissRestore: 'Forget this tab',
   label: 'Session workbench',
   listLabel: 'Sessions',
   stageLabel: 'Current session',

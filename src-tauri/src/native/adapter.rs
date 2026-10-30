@@ -217,6 +217,24 @@ fn parse_node_version(output: &str) -> Option<(u32, u32, u32)> {
 }
 
 fn node_version() -> Option<(u32, u32, u32)> {
+    // All CLI pages ask about the same runtime. Share overlapping probes and
+    // invalidate when PATH or the executable changes (including failed probes).
+    type NodeVersion = Option<(u32, u32, u32)>;
+    type NodeEvidence = Option<(Instant, String, NodeVersion)>;
+    static CACHE: Mutex<NodeEvidence> = Mutex::new(None);
+    let path = crate::process_environment::directories().into_iter()
+        .map(|dir| dir.join(if cfg!(windows) { "node.exe" } else { "node" })).find(|path| path.is_file());
+    let stamp = format!("{:?}:{:?}:{:?}", env::var_os("PATH"), path, path.as_ref().and_then(|path| std::fs::metadata(path).ok()).map(|meta| (meta.len(), meta.modified().ok())));
+    let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some((at, previous, version)) = cache.as_ref() {
+        if previous == &stamp && at.elapsed() < Duration::from_secs(if version.is_some() { 60 } else { 5 }) { return *version; }
+    }
+    let version = node_version_uncached();
+    *cache = Some((Instant::now(), stamp, version));
+    version
+}
+
+fn node_version_uncached() -> Option<(u32, u32, u32)> {
     if !on_path("node") {
         return None;
     }
@@ -696,7 +714,19 @@ fn probe_group(paths: Vec<PathBuf>, adapter: &dyn CliAdapter) -> Installation {
 
 fn probe_installations(paths: Vec<PathBuf>, adapter: &dyn CliAdapter, stop_at_first: bool) -> Vec<Installation> {
     let mut installations = Vec::new();
-    for group in group_probe_paths(paths) {
+    let groups = group_probe_paths(paths);
+    if !stop_at_first {
+        // Independent installations may each take seconds to answer. Keep
+        // deterministic precedence while bounding simultaneous processes.
+        for batch in groups.chunks(4) {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = batch.iter().map(|group| scope.spawn(move || probe_group(group.clone(), adapter))).collect();
+                for handle in handles { installations.push(handle.join().expect("版本探测线程中断")); }
+            });
+        }
+        return installations;
+    }
+    for group in groups {
         let item = probe_group(group, adapter);
         let found = item.status == "available";
         installations.push(item);

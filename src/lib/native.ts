@@ -243,6 +243,9 @@ export const native = {
     return result;
   },
   listWorkbenchSessions: () => command<WorkbenchSession[]>('list_workbench_sessions'),
+  restoreWorkbenchSessions: () => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_sessions'),
+  checkpointWorkbenchSessions: () => command<void>('checkpoint_workbench_sessions'),
+  forgetWorkbenchRestore: (sessionId: string) => command<void>('forget_workbench_restore', { sessionId }),
   listRemoteSessions: () => command<RemoteSessionIndexEntry[]>('list_remote_sessions'),
   listRemoteHistory: () => command<RemoteSessionIndexEntry[]>('list_remote_history'),
   listRemoteNativeHistory: (targetId: string, refresh = false) => command<HistorySession[]>('list_remote_native_history', { targetId, refresh }),

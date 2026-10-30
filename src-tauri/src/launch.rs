@@ -177,6 +177,7 @@ pub struct LaunchCredential {
 
 #[derive(Clone, Debug)]
 pub struct LaunchPlan {
+    pub resume_native_id: Option<String>,
     pub account_version: Option<u32>,
     pub account_context: Option<(String, crate::accounts::NativeContext)>,
     pub tool_id: String,
@@ -462,6 +463,7 @@ fn remote_launch_plan(
     let terminal = session_terminal(db)
         .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;
     Ok(Some(LaunchPlan {
+        resume_native_id: None,
         account_version: None,
         account_context: None,
         tool_id: request.tool_id.clone(),
@@ -1207,6 +1209,7 @@ fn plan_with_stage_at(
         directory
     };
     Ok(LaunchPlan {
+        resume_native_id: request.session_id.clone(),
         account_version: account_context.as_ref().map(|(id,_)|crate::accounts::get(db,id).map(|account|account.version)).transpose().map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
         account_context,
         tool_id: request.tool_id,
@@ -1240,7 +1243,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let cli_args = adapter.login_args().ok_or("此 CLI 没有原生交互登录入口，请配置 API 连接")?;
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
-    Ok(LaunchPlan {account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
+    Ok(LaunchPlan {resume_native_id:None,account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
         directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None,remote_session_id:None,remote_end_args:None,environment:Vec::new()})
 }
 
@@ -1788,7 +1791,16 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
         return spawn_desktop(&plan, credential.as_ref());
     }
     if plan.terminal == TerminalId::Workbench {
-        return crate::session_host::start(plan, credential.as_ref());
+        let saved = crate::workbench_restore::from_plan(&plan);
+        let result = crate::session_host::start(plan, credential.as_ref())?;
+        if let (Some(mut saved), Some(id)) = (saved, result.session_id.as_ref()) {
+            saved.id = id.clone();
+            if let Err(error) = crate::workbench_restore::save(db, &saved) {
+                let _ = crate::session_host::close(id);
+                return Err(format!("无法保存会话恢复记录：{error}"));
+            }
+        }
+        return Ok(result);
     }
     let terminal_id = plan.terminal;
     let terminal = terminal_command(&plan, credential.as_ref())?;
@@ -2083,6 +2095,7 @@ mod desktop_launch {
 
     fn benign_desktop_plan(executable: PathBuf, args: Vec<String>) -> LaunchPlan {
         LaunchPlan {
+            resume_native_id: None,
             account_version: None,
             account_context: None,
             tool_id: "desktop_fixture".into(),

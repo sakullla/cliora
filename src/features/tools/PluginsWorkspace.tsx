@@ -99,7 +99,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
 }) {
   const { t } = useTranslation();
   const target = useMemo<PluginTarget>(() => ({ toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId }), [toolId, scope, projectPath, contextId]);
-  const cacheKey = JSON.stringify(target);
+  const cacheKey = JSON.stringify([remoteTargetId, target]);
   const [snapshot, setSnapshot] = useState<PluginSnapshot | null>(null);
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
@@ -139,9 +139,12 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     setSnapshot(null); setError(''); setNotice(''); setBusy(true); setStale(false); setSelectedKey(null); setOperations([]); setTrusted(false); setContents({}); setPreview(null); setInstallOpen(false);
     const cached = remembered.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
+    // Retain a previous inventory while revalidating; operations still scan
+    // again before applying a mutation.
+    if (cached) setSnapshot(cached.snapshot);
     let completed = false;
     const readRemote = () => native.getRemoteResourceStore(remoteTargetId!, toolId, 'plugins').then(value => (value as { snapshot?: PluginSnapshot }).snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' });
-    void (remoteTargetId ? readRemote() : native.previewNativePlugins(target)).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
+    if (!remoteTargetId && !cached) void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
     void (remoteTargetId ? readRemote() : scanOnce(target)).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [target, remoteTargetId]);

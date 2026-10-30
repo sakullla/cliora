@@ -172,6 +172,7 @@ fn macos_launch_script_runs_in_the_original_directory_with_literal_arguments() {
     std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\0' \"$PWD\" \"$@\"\n").unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let plan = LaunchPlan {
+        resume_native_id: None,
         account_version: None,
         account_context: None,
         directory: directory.canonicalize().unwrap(),
@@ -203,6 +204,7 @@ fn macos_terminal_denial_is_an_error_and_does_not_echo_private_commands() {
 
 fn sample(terminal: TerminalId) -> LaunchPlan {
     LaunchPlan {
+        resume_native_id: None,
         account_version: None,
         account_context: None,
         tool_id: "grok".into(),
@@ -885,6 +887,7 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
     let db = Database::open(&temp.path().join("sessions.db")).unwrap();
     let (program, args) = crate::session_host::shell_executable().unwrap();
     let plan = LaunchPlan {
+        resume_native_id: None,
         account_version: None,
         account_context: None,
         tool_id: "grok".into(),

@@ -3488,6 +3488,32 @@ pub fn list_workbench_sessions() -> Vec<crate::session_host::SessionSnapshot> {
     crate::session_host::list()
 }
 
+pub(crate) fn checkpoint_workbench(app: &AppHandle) -> Result<(), String> {
+    let database = app.state::<AppState>().database(app).map_err(|error| error.message)?;
+    crate::workbench_restore::checkpoint(&database)
+}
+
+#[tauri::command]
+pub async fn checkpoint_workbench_sessions(app: AppHandle) -> Result<(), ApiError> {
+    blocking(move || checkpoint_workbench(&app).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn restore_workbench_sessions(app: AppHandle) -> Result<crate::workbench_restore::RestoreReport, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::restore(&db, &adapters::Registry::builtins(), &home()?).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
+pub async fn forget_workbench_restore(app: AppHandle, session_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::forget(&db, &session_id).map_err(native_error)
+    }).await
+}
+
 #[tauri::command]
 pub async fn list_remote_sessions(
     app: AppHandle,
@@ -3594,6 +3620,8 @@ pub async fn resize_workbench_session(
 #[tauri::command]
 pub async fn close_workbench_session(app: AppHandle, session_id: String) -> Result<(), ApiError> {
     blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::forget(&database, &session_id).map_err(native_error)?;
         let remote_id = crate::session_host::remote_session_id(&session_id);
         crate::session_host::close(&session_id).map_err(native_error)?;
         if let Some(remote_id) = remote_id {

@@ -95,6 +95,7 @@ pub mod projects;
 pub mod remote;
 pub mod resources;
 pub mod session_host;
+pub mod workbench_restore;
 pub mod terminal_replay;
 pub mod tray;
 pub mod usage;
@@ -316,6 +317,9 @@ pub fn run() {
             commands::set_default_launch_mode,
             commands::launch_cli,
             commands::list_workbench_sessions,
+            commands::restore_workbench_sessions,
+            commands::checkpoint_workbench_sessions,
+            commands::forget_workbench_restore,
             commands::list_remote_sessions,
             commands::list_remote_history,
             commands::list_remote_native_history,
@@ -453,6 +457,9 @@ async fn auto_check_update(handle: tauri::AppHandle) {
 /// Dock click on macOS. A hidden main window stays hidden unless we show it.
 fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+        if let Err(error) = commands::checkpoint_workbench(app) {
+            eprintln!("工作台恢复检查点保存失败：{error}");
+        }
         session_host::shutdown();
     }
     #[cfg(target_os = "macos")]

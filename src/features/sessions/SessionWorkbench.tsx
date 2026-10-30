@@ -371,6 +371,41 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const firstSeenAt = useRef(new Map<string, number>());
   const autoRemoteReattachAttempted = useRef(false);
+  const autoLocalRestoreAttempted = useRef(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
+  const [restoreFailures, setRestoreFailures] = useState<import('../../types/launch').WorkbenchRestoreReport['failures']>([]);
+  async function restoreLocalSessions() {
+    if (restoring) return;
+    setRestoring(true);
+    setRestoreError('');
+    try {
+      const report = await native.restoreWorkbenchSessions();
+      // Older preview bridges may not implement restoration.
+      if (!report || !report.restored || !Array.isArray(report.failures)) return;
+      setRestoreFailures(report.failures);
+      if (!Object.keys(report.restored).length) return;
+      setArrangement(current => ({ pinned: current.pinned.map(id => report.restored[id] ?? id), order: current.order.map(id => report.restored[id] ?? id) }));
+      const listed = await native.listWorkbenchSessions();
+      setSessions(listed);
+      setSelectedId(current => {
+        let previous: string | null = null;
+        try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
+        return (previous && report.restored[previous]) || current || listed[0]?.id || null;
+      });
+    } catch (value) {
+      setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext')));
+    } finally { setRestoring(false); }
+  }
+  useEffect(() => {
+    if (!active || !nativeAvailable || autoLocalRestoreAttempted.current) return;
+    autoLocalRestoreAttempted.current = true;
+    void restoreLocalSessions();
+  }, [active]);
+  useEffect(() => {
+    if (!selectedId || restoring) return;
+    try { localStorage.setItem('cliora:workbench-selected', selectedId); } catch { /* optional */ }
+  }, [selectedId, restoring]);
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
   const pending = useRef(new Map<string, OutputChunk[]>());
@@ -1524,6 +1559,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       <section ref={stageRef} className={styles.stage} aria-label={t('sessions.stageLabel')}>
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void retry()} disabled={retrying}>{retrying ? t('sessions.loading') : t('sessions.retry')}</Button><Button size="sm" onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</Button></div></div>}
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setActionError('')} aria-label={t('common.dismissError')} /></div>}
+        {restoring && <div className={styles.banner} role="status"><p>{t('sessions.restoringPrevious')}</p></div>}
+        {restoreError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{restoreError}</p></div><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button></div>}
+        {restoreFailures.map(({ session, detail }) => <div className={styles.banner} role="status" key={session.id}>
+          <div className={styles.bannerCopy}><strong>{t('sessions.restorePending', { tool: tools.find(tool => tool.id === session.toolId)?.name ?? session.toolId })}</strong><p>{displayPath(session.directory)} · {detail}</p></div>
+          <div className={styles.bannerActions}><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button><Button size="sm" disabled={restoring} onClick={() => void native.forgetWorkbenchRestore(session.id).then(() => setRestoreFailures(current => current.filter(item => item.session.id !== session.id))).catch(value => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button></div>
+        </div>)}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setNotice('')} aria-label={t('common.dismissError')} /></div>}
 
         {selected && (() => {

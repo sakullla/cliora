@@ -27,7 +27,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\example-dev\agents`;
   await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
-    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false };
+    const state = { holdWorkspace, calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
     if (extended) state.entries.push({ ...entry, id: 'example-dev', name: 'example-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'example-dev' }] });
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries.map(item => ({ ...item })), baseline: state.baseline, detail: '静态列表，加载未验证' });
@@ -45,7 +45,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
         return { effectiveContextId: state.contextId, nativeContextError: null };
       }
       if (command === 'get_registered_tool_workspace') {
-        if (holdWorkspace && !args.summary) await new Promise<void>(resolve => { state.releaseWorkspace = resolve; });
+        if (state.holdWorkspace && !args.summary) await new Promise<void>(resolve => { state.releaseWorkspace = resolve; });
         return { probe: { tool: toolId, selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [] }, profiles: [], effectiveContextId: 'ctx-fixture', binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [] };
       }
       if (command === 'preview_native_plugins') {
@@ -330,6 +330,27 @@ test('returning to plugins uses the scoped snapshot and explicit scan refreshes 
   await page.getByRole('button', { name: '重新扫描' }).click();
   await expect(page.getByRole('button', { name: '重新扫描' })).toBeEnabled();
   expect(await scans()).toBe(first + 1);
+});
+
+for (const changedAccount of [false, true]) test(`configuration revisit shows cached presentation only after matching account context (${changedAccount})`, async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  await page.getByRole('tab', { name: '配置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '新建配置', exact: true })).toBeVisible();
+  await page.evaluate(changed => {
+    const state = (window as any).pluginsHarness;
+    state.holdWorkspace = true;
+    state.releaseWorkspace = null;
+    if (changed) state.contextId = 'another-account';
+  }, changedAccount);
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '全局配置' }).click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).pluginsHarness.releaseWorkspace)).toBe(true);
+  if (changedAccount) await expect(page.getByRole('button', { name: '新建配置', exact: true })).toHaveCount(0);
+  else await expect(page.getByRole('button', { name: '新建配置', exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).pluginsHarness.releaseWorkspace());
+  await expect(page.getByRole('button', { name: '新建配置', exact: true })).toBeVisible();
 });
 
 test('windows extended plugin paths are shown as ordinary paths', async ({ page }) => {
