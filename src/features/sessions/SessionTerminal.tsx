@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react';
+import type { WorkbenchTerminalSize } from '../../types/launch';
 import { useTranslation } from 'react-i18next';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -33,6 +34,7 @@ export function bytesPastEnd(bytes: Uint8Array, offset: number | undefined, end:
 }
 
 export type TerminalHandle = {
+  size: () => WorkbenchTerminalSize;
   focus: () => void;
   clear: () => void;
   scrollToBottom: () => void;
@@ -486,6 +488,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       cursorStyle: 'bar',
       cursorWidth: 2,
       cursorInactiveStyle: 'outline',
+      disableStdin: !runningRef.current,
       scrollback: TERMINAL_SCROLLBACK,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
@@ -504,6 +507,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(node);
+    if (term.textarea) term.textarea.disabled = !activeRef.current || !runningRef.current;
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
@@ -818,6 +822,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     });
 
     const handle: TerminalHandle = {
+      size: () => ({ cols: term.cols, rows: term.rows }),
       focus: () => { if (!disposed) term.focus(); },
       clear: () => { if (!disposed) term.clear(); },
       scrollToBottom: scrollToLatest,
@@ -1104,19 +1109,25 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     term.options.minimumContrastRatio = contrastFloor(theme);
   }, [theme]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const term = termRef.current;
     if (!term) return;
     // disableStdin suppresses protocol replies as well as keyboard events.
     // A hidden live CLI must still receive DSR/DA responses from its own buffer.
     term.options.disableStdin = !running;
     if (term.textarea) term.textarea.disabled = !active || !running;
+  }, [active, running]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
     if (term.options.fontSize !== fontSize || term.options.lineHeight !== lineHeight) {
       fitLockRef.current = { cols: 0, rows: 0, height: 0 };
     }
     term.options.fontSize = fontSize;
     term.options.lineHeight = lineHeight;
-    // A reattached transport opens a fresh PTY at its default grid.
+    // A reattached transport preserves its last native grid. Forget the sent
+    // size while disconnected so a view that changed dimensions can refresh it.
     if (!running) ptyGridRef.current = { cols: 0, rows: 0 };
     if (!active) {
       linksRef.current?.dismiss();

@@ -87,6 +87,15 @@ const awaitOutput = async (id, text) => {
   }
   throw new Error('Expected test output was not observed in its session.');
 };
+const awaitConnected = async (id, remoteId) => {
+  const deadline = performance.now() + 30000;
+  while (performance.now() < deadline) {
+    const current = (await invoke('list_workbench_sessions')).find(item => item.id === id && item.remoteSessionId === remoteId);
+    if (current?.running && current.connectionState === 'connected') return current;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw new Error('Failed: current native attachment did not report remote readiness.');
+};
 const awaitUi = async (expression, message) => {
   const deadline = performance.now() + 10000;
   while (performance.now() < deadline) {
@@ -234,7 +243,7 @@ try {
       check('saved identity automatically restored in native workbench', !!session);
       await showWorkbench(session.id);
       await awaitOutput(session.id, config.readyOutput);
-      resumed.push(session);
+      resumed.push(await awaitConnected(session.id, item.remoteId));
     }
     check('restored exact identities', resumed.every((item, index) => item.remoteSessionId === checkpoint.sessions[index].remoteId));
     check('restored connections report remote readiness', resumed.every(item => item.connectionState === 'connected'));

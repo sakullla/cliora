@@ -3677,8 +3677,15 @@ pub async fn close_workbench_session(app: AppHandle, session_id: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn reattach_workbench_session(session_id: String) -> Result<(), ApiError> {
-    blocking(move || crate::session_host::reattach(&session_id).map_err(native_error)).await
+pub async fn reattach_workbench_session(session_id: String, cols: Option<u16>, rows: Option<u16>) -> Result<(), ApiError> {
+    blocking(move || {
+        let size = match (cols, rows) {
+            (Some(cols), Some(rows)) => Some((cols, rows)),
+            (None, None) => None,
+            _ => return Err(native_error("重新附着需要完整的终端尺寸".into())),
+        };
+        crate::session_host::reattach(&session_id, size).map_err(native_error)
+    }).await
 }
 
 #[tauri::command]

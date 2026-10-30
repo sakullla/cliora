@@ -1482,6 +1482,8 @@
 .root[data-tight] .composerTrigger .toolLabel { display: none; }
 .root[data-tight] .interruptBtn[data-size] { width: 30px; padding: 0; }
 .root[data-tight] .interruptBtn .toolLabel { display: none; }
+.root[data-tight] .reattachBtn[data-size] { padding: 0; }
+.root[data-tight] .reattachBtn .toolLabel { display: none; }
 .root[data-tight] .statusChip { padding: 0 var(--space-1_5); }
 .root[data-tight] .statusChip .statusLabel { display: none; }
 .root[data-tight] .terminalActions .toolButton[data-size] { width: 28px; }

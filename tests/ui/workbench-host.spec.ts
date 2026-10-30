@@ -177,12 +177,13 @@ test('a remote session composer lists that host library, not this computer', asy
 });
 
 /** Product entry-point checks; the SSH/process identity is verified separately in Rust/native runs. */
-async function installIndependentSessions(page: Page, options: { indexed?: boolean; empty?: boolean; fail?: boolean; hold?: boolean; initial?: 'local' | 'saved-a'; holdIndex?: boolean; holdListAfterLaunch?: boolean } = {}) {
+async function installIndependentSessions(page: Page, options: { indexed?: boolean; empty?: boolean; fail?: boolean; hold?: boolean; initial?: 'local' | 'saved-a'; initialDisconnected?: boolean; holdIndex?: boolean; holdListAfterLaunch?: boolean } = {}) {
   await page.addInitScript(({ host, options }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const project = { id: 'same-project', targetId: host.id, name: 'shared-project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
     const make = (id: string) => ({ id, toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null as number | null, startedAt: 1, remoteSessionId: `cliora-${id}`, connectionState: 'connecting', reattachable: false, stateRevision: 0, remoteEndResult: null as unknown });
     const sessions = options.empty ? [] : [make('original-a')];
+    if (options.initialDisconnected) Object.assign(sessions[0], { running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
     if (options.initial === 'local') Object.assign(sessions[0], { projectId: null, directory: 'C:\\local-project', remoteSessionId: null });
     if (options.initial === 'saved-a') sessions[0].remoteSessionId = 'saved-a';
     const requests: Array<Record<string, unknown>> = [];
@@ -194,16 +195,17 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
     const listens: Record<string, number> = {};
     let releaseList = () => {};
     const listReady = new Promise<void>(resolve => { releaseList = resolve; });
-    const updateState = (patch: Record<string, unknown>) => {
+    const updateState = (patch: Record<string, unknown>, publish = true) => {
       const session = sessions[0];
       Object.assign(session, patch, { stateRevision: session.stateRevision + 1 });
-      handlers[listens['cliora:session-state']]?.({ payload: { ...session } });
+      if (publish) handlers[listens['cliora:session-state']]?.({ payload: { ...session } });
     };
     const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } };
     Object.assign(window, {
       isTauri: true, __independentRequests: requests, __independentSessions: sessions, __releaseIndependentLaunch: () => release(),
       __releaseIndependentIndex: () => releaseIndex(), __independentIndexPending: false,
       __releaseIndependentList: releaseList, __remoteState: updateState, __remoteEndFails: false, __remoteCloseCalls: [],
+      __independentFreshList: false, __independentDelayedListResolved: false, __reattachCalls: [], __terminalWrites: [], __queryOnReattach: false,
       __remoteExit: (stateRevision: number) => handlers[listens['cliora:session-exit']]?.({ payload: { sessionId: sessions[0].id, exitCode: 255, stateRevision } }),
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
@@ -218,7 +220,13 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
           if (command === 'save_remote_project') return { ...project, ...(args.project as object), id: project.id };
           if (command === 'list_workbench_sessions') {
             const snapshot = sessions.map(item => ({ ...item }));
-            if (options.holdListAfterLaunch && requests.length) await listReady;
+            const harness = window as unknown as { __independentFreshList: boolean };
+            const fresh = harness.__independentFreshList;
+            harness.__independentFreshList = false;
+            if (options.holdListAfterLaunch && requests.length && !fresh) {
+              await listReady;
+              Object.assign(window, { __independentDelayedListResolved: true });
+            }
             return snapshot;
           }
           if (command === 'close_workbench_session') {
@@ -232,7 +240,13 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
             if (index >= 0) sessions.splice(index, 1);
             return null;
           }
-          if (command === 'reattach_workbench_session') { updateState({ running: true, connectionState: 'connecting', reattachable: false, exitCode: null }); return null; }
+          if (command === 'reattach_workbench_session') {
+            const harness = window as unknown as { __reattachCalls: unknown[]; __queryOnReattach: boolean };
+            harness.__reattachCalls.push(args);
+            updateState({ running: true, connectionState: 'connecting', reattachable: false, exitCode: null });
+            if (harness.__queryOnReattach) handlers[listens['cliora:session-output']]?.({ payload: { sessionId: sessions[0].id, dataBase64: btoa('\x1b[6n') } });
+            return null;
+          }
           if (command === 'list_remote_sessions') {
             Object.assign(window, { __independentIndexPending: true });
             if (options.holdIndex) await indexReady;
@@ -255,7 +269,11 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
           if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'plugin:event|listen') { listens[String(args.event)] = Number(args.handler); return args.handler; }
-          if (command === 'plugin:event|unlisten' || command === 'resize_workbench_session' || command === 'write_workbench_session') return null;
+          if (command === 'write_workbench_session') {
+            (window as unknown as { __terminalWrites: unknown[] }).__terminalWrites.push(args);
+            return null;
+          }
+          if (command === 'plugin:event|unlisten' || command === 'resize_workbench_session') return null;
           return [];
         },
       },
@@ -428,3 +446,100 @@ test('a selected session awaiting listing never displays or accepts input in the
   await page.evaluate(() => (window as unknown as { __remoteExit: (revision: number) => void }).__remoteExit(0));
   await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeEnabled();
 });
+
+test('an older event cache cannot replace a newer listed state when an earlier list resolves', async ({ page }) => {
+  await installIndependentSessions(page, { holdListAfterLaunch: true });
+  await page.goto('/');
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeEnabled();
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  await page.evaluate(() => {
+    const harness = window as unknown as { __remoteState: (patch: object, publish?: boolean) => void; __independentFreshList: boolean };
+    // Event cache revision 1; the delayed launch list already captured revision 0.
+    harness.__remoteState({ connectionState: 'connected' });
+    // Revision 2 is observable only through a fresh list, not through an event.
+    harness.__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 }, false);
+    harness.__independentFreshList = true;
+  });
+  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.locator('[data-session-id="original-a"]').click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { __releaseIndependentList: () => void }).__releaseIndependentList());
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __independentDelayedListResolved: boolean }).__independentDelayedListResolved)).toBe(true);
+  await page.locator('[data-session-id="original-a"]').click();
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
+});
+
+test('an initially disconnected terminal starts with input disabled', async ({ page }) => {
+  await installIndependentSessions(page, { initialDisconnected: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage.locator('textarea')).toBeDisabled();
+});
+
+test('reattach uses the mounted grid after a disconnected resize and answers its first cursor query', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.locator('textarea')).toBeEnabled();
+  await page.evaluate(() => {
+    const harness = window as unknown as { __remoteState: (patch: object) => void; __queryOnReattach: boolean };
+    harness.__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+    harness.__queryOnReattach = true;
+  });
+  await expect(stage.locator('textarea')).toBeDisabled();
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect.poll(() => stage.locator('.xterm-screen').evaluate(node => node.clientWidth)).toBeGreaterThan(1000);
+  await stage.getByRole('button', { name: '重新附着远程会话', exact: true }).click();
+  const calls = await page.evaluate(() => (window as unknown as { __reattachCalls: Array<{ sessionId: string; cols: number; rows: number }> }).__reattachCalls);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].sessionId).toBe('original-a');
+  expect(calls[0].cols).toBeGreaterThan(80);
+  expect(calls[0].rows).toBeGreaterThan(24);
+  // The fixture supplies only the query; xterm must produce its own response.
+  const writes = () => page.evaluate(() => (window as unknown as { __terminalWrites: Array<{ dataBase64: string }> }).__terminalWrites.map(item => atob(item.dataBase64)).join(''));
+  await expect.poll(writes).toMatch(/\x1b\[\d+;\d+R/);
+  const reply = (await writes()).match(/\x1b\[(\d+);(\d+)R/)!;
+  expect(Number(reply[1])).toBeLessThanOrEqual(calls[0].rows);
+  expect(Number(reply[2])).toBeLessThanOrEqual(calls[0].cols);
+});
+
+for (const width of [900, 640]) {
+  for (const theme of ['light', 'dark']) {
+    test(`disconnected reattach does not overlap search at ${width}px in ${theme}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await installIndependentSessions(page);
+      await page.goto('/');
+      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+      await page.evaluate(theme => {
+        document.documentElement.setAttribute('data-theme', theme);
+        (window as unknown as { __remoteState: (patch: object) => void }).__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+      }, theme);
+      const stage = page.getByRole('region', { name: '当前会话' });
+      const reattach = stage.getByRole('button', { name: '重新附着远程会话', exact: true });
+      await expect(reattach).toBeVisible();
+      const geometry = await reattach.evaluate(button => {
+        const box = button.getBoundingClientRect();
+        const label = button.querySelector('span[class*="toolLabel"]');
+        const search = button.closest('header')?.querySelector('button[aria-label="查找输出"]');
+        const searchBox = search?.getBoundingClientRect();
+        return { labelVisible: !!label && getComputedStyle(label).display !== 'none', left: box.left, right: box.right, width: box.width, searchLeft: searchBox?.left };
+      });
+      expect(geometry.labelVisible).toBe(false);
+      expect(geometry.width).toBeGreaterThan(20);
+      expect(geometry.searchLeft).toBeDefined();
+      expect(geometry.right).toBeLessThanOrEqual(geometry.searchLeft!);
+      await expect(stage.getByRole('button', { name: '查找输出', exact: true })).toBeVisible();
+    });
+  }
+}

@@ -203,8 +203,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
   function applyListedSessions(listed: WorkbenchSession[]) {
     setSessions((current) => listed.map((item) => {
-      const known = sessionStateUpdates.current.get(item.id) ?? current.find(session => session.id === item.id);
-      return known && (known.stateRevision ?? 0) > (item.stateRevision ?? 0) ? { ...item, ...known } : item;
+      const candidates = [item, current.find(session => session.id === item.id), sessionStateUpdates.current.get(item.id)];
+      return candidates.reduce<WorkbenchSession>((newest, candidate) => candidate && (candidate.stateRevision ?? 0) > (newest.stateRevision ?? 0) ? { ...item, ...candidate } : newest, item);
     }));
   }
   const allSessionsRef = useRef(sessions);
@@ -1042,7 +1042,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setBusy('reattach:' + session.id);
     setActionError('');
     try {
-      await native.reattachWorkbenchSession(session.id);
+      await native.reattachWorkbenchSession(session.id, handles.current.get(session.id)?.size());
       const listed = await native.listWorkbenchSessions();
       applyListedSessions(listed);
       setSelectedId(session.id);

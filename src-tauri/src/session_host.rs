@@ -468,7 +468,7 @@ pub fn remote_session_id(id: &str) -> Option<String> {
 
 /// Reattach a disconnected SSH transport to the persistent tmux/screen session.
 /// The remote process is never recreated; only the local PTY attachment changes.
-pub fn reattach(id: &str) -> Result<(), String> {
+pub fn reattach(id: &str, requested_size: Option<(u16, u16)>) -> Result<(), String> {
     let session = lookup(id)?;
     let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
     if !session.remote {
@@ -482,7 +482,14 @@ pub fn reattach(id: &str) -> Result<(), String> {
     if let Some(tty) = args.iter_mut().find(|arg| arg.as_str() == "-T") { *tty = "-tt".into(); }
     let remote_id = session.remote_session_id.clone().ok_or("远程会话缺少稳定 ID")?;
     args.push(crate::launch::remote_reattach_command(&remote_id));
-    let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).map_err(|error| format!("无法创建重新附着终端：{error}"))?;
+    // ConPTY inherits the mounted terminal's cursor through DSR. Its response
+    // may be outside 80x24 after a real session has grown; keep the same grid
+    // so that the new console can accept that response before SSH starts.
+    let size = if let Some((cols, rows)) = requested_size {
+        if !(1..=500).contains(&cols) || !(1..=500).contains(&rows) { return Err("会话尺寸无效".into()); }
+        PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
+    } else { *session.grid.lock().map_err(|_| "会话状态不可用")? };
+    let pair = native_pty_system().openpty(size).map_err(|error| format!("无法创建重新附着终端：{error}"))?;
     let mut command = CommandBuilder::new(&session.executable);
     command.args(args);
     command.env("TERM", "xterm-256color");
@@ -497,7 +504,7 @@ pub fn reattach(id: &str) -> Result<(), String> {
     session.transport_generation.fetch_add(1, Ordering::SeqCst);
     *session.master.lock().map_err(|_| "会话状态不可用")? = Some(pair.master);
     *session.writer.lock().map_err(|_| "会话状态不可用")? = Some(writer);
-    *session.grid.lock().map_err(|_| "会话状态不可用")? = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    *session.grid.lock().map_err(|_| "会话状态不可用")? = size;
     *session.killer.lock().map_err(|_| "会话状态不可用")? = child.clone_killer();
     *session.child.lock().map_err(|_| "会话状态不可用")? = child;
     #[cfg(windows)]
@@ -505,13 +512,15 @@ pub fn reattach(id: &str) -> Result<(), String> {
     *session.exit_code.lock().map_err(|_| "会话状态不可用")? = None;
     session.connection.store(CONNECTING, Ordering::SeqCst);
     session.running.store(true, Ordering::SeqCst);
+    // Publish the transport's input availability before its first query can
+    // enter the output channel. Remote readiness still requires its signal.
+    session.notify_state();
     if let Err(error) = attach_reader(Arc::clone(&session), reader) {
         end_child(&session);
         session.connection.store(DISCONNECTED, Ordering::SeqCst);
         session.notify_state();
         return Err(error);
     }
-    session.notify_state();
     Ok(())
 }
 
@@ -891,13 +900,16 @@ exit 255
         assert_eq!(session.snapshot().connection_state, "disconnected");
         assert_eq!(session.snapshot().exit_code, Some(255));
         reject_reader_thread(true);
-        let result = reattach(&id);
+        assert!(reattach(&id, Some((0, 30))).unwrap_err().contains("尺寸无效"));
+        let result = reattach(&id, Some((104, 30)));
         reject_reader_thread(false);
         assert!(result.unwrap_err().contains("测试拒绝"));
         let snapshot = session.snapshot();
         assert!(!snapshot.running);
         assert!(snapshot.reattachable);
         assert_eq!(snapshot.connection_state, "disconnected");
+        let replay = replay_snapshot(&id).unwrap();
+        assert_eq!((replay.cols, replay.rows), (104, 30));
     }
 
     #[cfg(windows)]
