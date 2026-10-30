@@ -28,9 +28,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp'].includes(arg));
-const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules'].includes(arg));
+const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -46,7 +46,11 @@ async function mock(initialTheme){
  const names={codex:'Codex',claude_code:'Claude Code',grok:'Grok',pi:'Pi',open_code:'OpenCode'};
  const versions={codex:'0.160.0',claude_code:'2.1.287',grok:'1.0.46',pi:'1.0.0',open_code:'1.18.34'};
  const connectionPolicy=(id,scope)=>({apiKey:{state:scope==='project'&&id!=='claude_code'?'scope_denied':'writable',reason:scope==='project'&&id!=='claude_code'?names[id]+' 项目层不能写入供应商密钥；请使用全局配置':''},providerAddress:{state:'configurable',reason:''},projection:id==='pi'||id==='open_code'?'provider_models':id==='codex'?'current_model':'single_connection'});
- const ids=Object.keys(names); let theme=initialTheme; const tool_icons={};
+ const captureRules=typeof initialTheme==='object'&&initialTheme.rules;
+ const ids=Object.keys(names); let theme=captureRules?initialTheme.theme:initialTheme; const tool_icons={};
+ const bindingFixture={hold:!!captureRules,fail:false,saves:0,syncs:0}; const bindingReleases=[];
+ if(captureRules){localStorage.setItem('cliora:remote-target','capture-rule-host');const clockNow=Date.now;let offset=0;Date.now=()=>clockNow()+offset;window.__expireBindings=()=>{offset+=31000;};}
+ window.__captureBindings=bindingFixture;window.__releaseBindings=()=>{bindingFixture.hold=false;bindingReleases.splice(0).forEach(release=>release());};
  const projects=[{id:'cliora',name:'栖点 · 桌面工具',path:'C:\\Projects\\cliora',preferredTool:'codex',available:true,lastOpened:1790758800,modelOverrides:{},selectedProfiles:{codex:'codex-daily'},appliedProfiles:{codex:'codex-daily'}},{id:'site',name:'个人网站',path:'C:\\Projects\\personal-site',preferredTool:'claude_code',available:true,lastOpened:1790738800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}}];
  const library=[{id:'prompt-1',kind:'prompt',title:'代码审查',body:'检查代码变更是否正确、安全、易于维护。先说明影响用户的行为，再给出具体文件和可执行的建议。优先指出会导致故障的问题。',category:'开发',projectId:null,version:1,updatedAt:1790758800},{id:'prompt-2',kind:'prompt',title:'整理发布说明',body:'根据变更清单写一份简洁的发布说明。分成新功能、改进与修复，突出用户能直接感受到的变化。',category:'写作',projectId:null,version:1,updatedAt:1790672400},{id:'prompt-3',kind:'prompt',title:'排查问题',body:'从可以重复出现的现象开始，提出假设并用最小实验验证。列出实际观察，不把推测当成结论。',category:'开发',projectId:'cliora',version:1,updatedAt:1790589600},{id:'prompt-4',kind:'prompt',title:'解释一段代码',body:'用清晰的语言说明这段代码的作用、数据流与边界条件，再给出一个输入输出示例。',category:'学习',projectId:null,version:1,updatedAt:1790416800},{id:'rule-1',kind:'rule',title:'项目协作约定',body:'保持变更小而明确。先阅读现有实现，不覆盖其他人的工作。针对实际行为验证，保留失败原因与恢复步骤。',category:'项目规则',projectId:'cliora',version:1,updatedAt:1790503200}];
  const records=[{id:'s1',nativeId:'01992e52-1ac0-7387-a5e4-41067718dd93',toolId:'codex',title:'梳理配置继承与应用流程',cwd:projects[0].path,model:'gpt-6-astra',projectId:'cliora',startedAt:1790751600000,updatedAt:1790758800000,favorite:true,partial:false,stale:false,messageCount:8,usageCount:2},{id:'s2',nativeId:'29fbc87e',toolId:'claude_code',title:'为网站添加文章目录',cwd:projects[1].path,model:'claude-sonnet-4-6',projectId:'site',startedAt:1790748800000,updatedAt:1790751000000,favorite:false,partial:false,stale:false,messageCount:6,usageCount:1},{id:'s3',nativeId:null,toolId:'pi',title:'检查本地 API 连接',cwd:null,model:null,projectId:null,startedAt:1790718800000,updatedAt:1790718800000,favorite:false,partial:true,stale:false,messageCount:3,usageCount:0}];
@@ -84,7 +88,7 @@ async function mock(initialTheme){
  Object.assign(window,{isTauri:true,__uiCalls:[],__TAURI_INTERNALS__:{transformCallback(callback){const id=++callbackId;callbacks.set(id,callback);return id;},unregisterCallback(id){callbacks.delete(id);},runCallback(id,data){callbacks.get(id)?.(data);},callbacks,invoke:async(command,args={})=>{
   window.__uiCalls.push({command,args});
   if(command.startsWith('plugin:event|'))return 1;
-  if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
+  if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons,remote_ssh_enabled:!!captureRules},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
   if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok',nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
   if(command==='list_accounts')return window.__captureNativeOnly ? accounts.filter(account=>account.toolId!=='open_code') : accounts.map(account=>window.__captureLoginPending && account.toolId==='open_code'?{...account,state:'pending',pendingLogin:{id:'capture-attempt',operation:'login',expiresAt:1999999999}}:account);
   if(command==='account_impact')return {accountId:args.id,accountVersion:1,toolId:accounts.find(account=>account.id===args.id)?.toolId??'codex',currentContextId:null,contexts:[],profiles:[],scopes:[],usageReferences:[]};
@@ -107,6 +111,12 @@ async function mock(initialTheme){
    return {status:'native_result_observed',detail:'插件操作已完成',transactionId:'capture-operation',snapshot:pluginSnapshot(args.request.target)};
   }
   if(command==='scan_native_agents')return {target:args.target,capability:{version:versions[args.target.toolId],supported:true,format:'markdown',template:agentEntry.content,detail:'下一次委派读取定义'},entries:[agentEntry,{...agentEntry,id:'plugin-reviewer',name:'plugin-reviewer',owner:'插件：code-review@official',readOnly:true}],baseline:'capture-agents',detail:'合成原生定义，插件所属定义只读'};
+  if(captureRules&&command==='list_remote_targets')return [{id:'capture-rule-host',name:'规则测试主机',host:'fixture.invalid',port:22,user:'fixture',authMethod:'key',enabled:true,createdAt:1,updatedAt:1}];
+  if(captureRules&&['probe_remote_clis','list_remote_projects'].includes(command))return [];
+  if(captureRules&&command==='list_remote_library_items')return library.filter(item=>item.kind===args.kind&&(!args.search||(item.title+item.body).includes(args.search))).map(item=>({...item,projectId:null}));
+  if(captureRules&&command==='list_remote_rule_placements'){if(bindingFixture.hold)await new Promise(resolve=>bindingReleases.push(resolve));if(bindingFixture.fail)throw {message:'Synthetic placement permission failure'};return [{ruleId:'rule-1',toolId:'codex',scope:'global',projectPath:null,state:'current'}];}
+  if(captureRules&&command==='save_remote_library_item'){bindingFixture.saves++;const item=library.find(item=>item.id===args.draft.id);Object.assign(item,args.draft,{version:item.version+1});return {...item};}
+  if(captureRules&&command==='sync_remote_rule_clients'){bindingFixture.syncs++;return [{toolId:'codex',status:'written',path:'/fixture/.codex/AGENTS.md',detail:'合成写入结果',existing:'',proposed:''}];}
   if(command==='list_projects')return projects;
   if(command==='get_registered_tool_workspace'){const id=args.toolId;const format=id==='codex'||id==='grok'?'toml':'json';const file=format==='toml'?'config.toml':'settings.json';const text=format==='toml'?'# 日常开发\nmodel = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n[projects."C:/Projects/cliora"]\ntrust_level = "trusted"':JSON.stringify({model:'claude-sonnet-4-6',permissions:{allow:['Read','Edit']}},null,2);const profile={id:id+'-daily',tool:id,name:'日常开发',version:1,revision:'r1',inheritCommon:true,files:{settings:text},suppressed:{},nativeCredentials:{},connection:null};return {probe:{selectedPath:'C:/Tools/'+id+'.cmd',installations:[{path:'C:/Tools/'+id+'.cmd',version:versions[id],status:'available',source:'npm_shim'}],nativeFiles:[{role:'settings',path:'C:/Users/local/.'+id+'/'+file,format,writable:true,sensitive:false}],nativeWrites:{state:'supported',reason:'可编辑与应用原生配置'},interfaceFormats:['openai_chat'],providerPresets:[],dependencies:[],installUrl:'https://example.com',upgradeHint:'沿用官方安装方式升级',installCommand:'npm install -g '+id,upgradeCommand:null,connectionPolicy:connectionPolicy(id,args.scope??'global')},profiles:[profile,{...profile,id:id+'-work',name:id==='codex'?'GLM 官方套餐':'工作项目',version:1,inheritCommon:false,authentication:{kind:'api_key'},connection:id==='codex'?{providerId:'glm',interfaceFormat:'openai_responses',baseUrl:'https://open.bigmodel.cn/api/coding/paas/v4',model:'glm-5.3',secretRef:'synthetic-profile-key',authEnvVar:null}:null}],common:{tool:id,version:1,revision:'c1',files:{settings:format==='toml'?'# 所有配置共享的设置':'{}'}},binding:{profileId:profile.id,profileVersion:1},snapshots:[{role:'settings',fingerprint:'hash',error:null}],recoveryNeeded:[],customPath:null,effectiveContextId:null};}
   if(command==='inspect_registered_native_draft')return {model:null,providerId:null,connection:null,reasoningEffort:'high',projectedModels:null};
@@ -417,7 +427,7 @@ body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{positi
 const ids=['scenario','theme','width','query'];const controls=ids.map(id=>document.getElementById(id));const cards=[...document.querySelectorAll('figure')];function filter(){let count=0;const query=controls[3].value.trim().toLowerCase();for(const card of cards){card.hidden=controls.slice(0,3).some((control,index)=>control.value&&card.dataset[ids[index]]!==control.value)||!card.dataset.keywords.includes(query);if(!card.hidden)count++;}document.getElementById('count').textContent='显示 '+count+' / '+cards.length+' 张';document.getElementById('empty').hidden=count!==0;}controls.forEach(control=>control.addEventListener('input',filter));document.getElementById('filters').addEventListener('submit',event=>event.preventDefault());document.getElementById('filters').addEventListener('reset',()=>setTimeout(filter,0));filter();
 </script></body></html>`);
  const rows=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`| ${title} | ${captures.filter(item=>item.name===name).map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
- fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+ fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--rules\` 捕获远程规则绑定读取、失败、陈旧、编辑草稿与恢复；\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
  fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,...(measure?{firstScreen:{viewport:measureViewport,theme:'light',selector:'[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]',counts:firstScreen}}:{}),captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
@@ -602,7 +612,7 @@ async function capturePluginScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -624,6 +634,39 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'工具与连接'}).click();
   await captureConnectionScreens(page,capture,width);
   await page.close(); continue;
+ }
+ if(process.argv.includes('--rules')){
+  await nav.getByRole('button',{name:'资料库',exact:true}).click();
+  await page.getByRole('tab',{name:/^长期规则/}).click();
+  const ruleRow=page.getByRole('article').filter({has:page.getByRole('button',{name:'项目协作约定',exact:true})});
+  await ruleRow.getByRole('button',{name:'Codex · 写入状态尚未确定',exact:true}).waitFor();
+  await capture('rules-bindings-loading');
+  await page.getByRole('button',{name:'项目协作约定',exact:true}).click();
+  const dialog=page.getByRole('dialog');const editor=dialog.getByRole('textbox',{name:'资料正文',exact:true});
+  await editor.fill('保留规则编辑草稿，确认绑定后再分发。');
+  await expect(dialog.locator('[data-dialog-save]')).toBeDisabled();await capture('rules-bindings-editor-loading');
+  await page.evaluate(()=>{window.__captureBindings.fail=true;window.__releaseBindings();});
+  await dialog.getByText('无法读取规则写入状态。重试成功后可保存和分发规则。',{exact:true}).waitFor();
+  await capture('rules-bindings-editor-failed');
+  await page.evaluate(()=>window.__captureBindings.fail=false);await dialog.getByRole('button',{name:'重试写入状态',exact:true}).click();
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await page.evaluate(()=>window.__captureBindings.fail=true);await dialog.locator('[data-dialog-save]').click();
+  await dialog.getByText('规则写入状态刷新失败，当前显示上次成功读取的结果。重试成功后可保存和分发规则。',{exact:true}).waitFor();
+  await expect(editor).toHaveText('保留规则编辑草稿，确认绑定后再分发。');
+  expect(await page.evaluate(()=>window.__captureBindings.saves)).toBe(0);await capture('rules-bindings-editor-stale');
+  await page.evaluate(()=>window.__captureBindings.fail=false);await dialog.getByRole('button',{name:'重试写入状态',exact:true}).click();
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();await dialog.locator('[data-dialog-save]').click();await dialog.waitFor({state:'hidden'});
+  await expect(ruleRow.getByRole('button',{name:'Codex · 已生效',exact:true})).toBeEnabled();
+  const dismiss=page.getByRole('button',{name:'关闭提示',exact:true});if(await dismiss.isVisible()){await dismiss.click();await dismiss.waitFor({state:'hidden'});}
+  await capture('rules-bindings-ready');
+  await page.evaluate(()=>{window.__captureBindings.fail=true;window.__expireBindings();});
+  await nav.getByRole('button',{name:'快速开始',exact:true}).click();await nav.getByRole('button',{name:'资料库',exact:true}).click();
+  await page.getByText('规则写入状态刷新失败，当前显示上次成功读取的结果。重试成功后可保存和分发规则。',{exact:true}).waitFor();
+  await expect(ruleRow.getByRole('button',{name:'Codex · 已生效',exact:true})).toBeDisabled();await capture('rules-bindings-stale');
+  await page.evaluate(()=>window.__captureBindings.fail=false);await page.getByRole('button',{name:'重试写入状态',exact:true}).click();
+  await expect(ruleRow.getByRole('button',{name:'Codex · 已生效',exact:true})).toBeEnabled();
+  expect(await page.evaluate(()=>({saves:window.__captureBindings.saves,syncs:window.__captureBindings.syncs}))).toEqual({saves:1,syncs:1});
+  await page.close();continue;
  }
  if(process.argv.includes('--mcp')){
   await page.setViewportSize({width,height:Math.max(1000,page.viewportSize()?.height??1000)});

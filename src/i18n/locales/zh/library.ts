@@ -12,6 +12,12 @@ export default {
     loading: '正在读取账号上下文…',
   },
   page: {
+    bindingsLoading: '正在读取规则写入状态…',
+    bindingsUnknown: '写入状态尚未确定',
+    bindingsFailed: '无法读取规则写入状态。重试成功后可保存和分发规则。',
+    bindingsStale: '规则写入状态刷新失败，当前显示上次成功读取的结果。重试成功后可保存和分发规则。',
+    bindingsAfterWrite: '规则已写入，但写入状态读取失败。请重试读取后核查。',
+    retryBindings: '重试写入状态',
     copied: '完整正文已复制，可以粘贴使用。',
     listNext: '可调整搜索，或点击上方的新建。',
     savedListNext: '可点击关闭后查看列表。',

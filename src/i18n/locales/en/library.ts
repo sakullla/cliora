@@ -12,6 +12,12 @@ export default {
     loading: 'Reading account context…',
   },
   page: {
+    bindingsLoading: 'Reading rule placement status…',
+    bindingsUnknown: 'Placement status is not yet known',
+    bindingsFailed: 'Could not read rule placement status. Retry before saving and distributing rules.',
+    bindingsStale: 'Rule placement refresh failed. Showing the last successful status. Retry before saving and distributing rules.',
+    bindingsAfterWrite: 'The rule was written, but its placement status could not be read. Retry to check the result.',
+    retryBindings: 'Retry placement status',
     copied: 'Full text copied. Paste it anywhere.',
     listNext: 'Adjust the search, or click New above.',
     savedListNext: 'Close to view the list.',
