@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
-import type { LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
+import type { LaunchRequest, LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
@@ -47,6 +47,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState('');
   const copiedTimer = useRef(0);
+  const launchPending = useRef(false);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
   const repairToolSelect = useRef<HTMLButtonElement>(null);
   const repairCard = useRef<HTMLElement>(null);
@@ -270,8 +271,10 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   }
 
   async function launch(toolId: string, projectId: string | null, mode: 'normal' | 'yolo', resumeId?: string, surface: 'page' | 'dialog' = 'page', resumeLatest = false) {
+    if (launchPending.current) return;
+    launchPending.current = true;
     begin(projectId ?? 'global');
-    const request = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(resumeLatest ? { resumeLatest: true } : {}) };
+    const request: LaunchRequest = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}), ...(resumeLatest ? { resumeLatest: true } : {}) };
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeLatest || resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
       const result = await native.launchCli(request);
@@ -300,7 +303,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       }
       if (surface === 'dialog') showDialogError(value); else showPageError(value);
     }
-    finally { setBusy(''); }
+    finally { launchPending.current = false; setBusy(''); }
   }
 
   async function removeRemote(project: RemoteProject) {

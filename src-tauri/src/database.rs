@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 27 {
+        if version > 28 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -556,6 +556,41 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 27;")?;
             tx.commit()?;
         }
+        if version < 28 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE remote_session_index (
+                   target_id TEXT NOT NULL,
+                   remote_session_id TEXT NOT NULL,
+                   data TEXT NOT NULL,
+                   revision INTEGER NOT NULL DEFAULT 1,
+                   PRIMARY KEY(target_id, remote_session_id)
+                 );",
+            )?;
+            let legacy: Option<String> = tx.query_row(
+                "SELECT value FROM app_settings WHERE key = 'remote_session_index_v1'",
+                [], |row| row.get(0),
+            ).optional()?;
+            // Keep the legacy value as a recovery source, including malformed rows.
+            // Only identical remote identities are deduplicated, never directories.
+            if let Some(entries) = legacy.as_deref().and_then(|value| serde_json::from_str::<Vec<serde_json::Value>>(value).ok()) {
+                let mut valid = entries.into_iter().filter_map(|value| {
+                    serde_json::from_value::<crate::launch::RemoteSessionIndexEntry>(value).ok()
+                }).collect::<Vec<_>>();
+                valid.sort_by_key(|entry| entry.last_seen_at);
+                for entry in valid {
+                    let data = serde_json::to_string(&entry).expect("remote session metadata serializes");
+                    tx.execute(
+                        "INSERT INTO remote_session_index (target_id, remote_session_id, data)
+                         VALUES (?1, ?2, ?3) ON CONFLICT(target_id, remote_session_id)
+                         DO UPDATE SET data = excluded.data, revision = remote_session_index.revision + 1",
+                        params![entry.target_id, entry.remote_session_id, data],
+                    )?;
+                }
+            }
+            tx.execute_batch("PRAGMA user_version = 28;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -821,7 +856,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 27);
+            assert_eq!(version, 28);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

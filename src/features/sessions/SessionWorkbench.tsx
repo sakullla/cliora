@@ -261,6 +261,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [resumeLatest, setResumeLatest] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [launchingNew, setLaunchingNew] = useState(false);
+  const newLaunchPending = useRef(false);
   const [dialogError, setDialogError] = useState('');
   const [remotePrefillToolId, setRemotePrefillToolId] = useState<string | null>(null);
   const [remoteQuickLaunch, setRemoteQuickLaunch] = useState(false);
@@ -303,34 +304,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             : (availableProjects.find((item) => item.id === rememberedId && item.targetId === targetId)
               ?? [...availableProjects].filter((item) => item.targetId === targetId && (!toolId || !item.preferredTool || item.preferredTool === toolId)).sort((a, b) => b.updatedAt - a.updatedAt)[0]);
           if (candidate && (!toolId || !candidate.preferredTool || candidate.preferredTool === toolId)) {
-            // Left-click quick launch reuses the already attached local tab as
-            // well as the persistent remote tmux/screen session. Starting a
-            // second SSH transport to the same session only creates duplicate
-            // workbench rows and makes input/close state ambiguous.
-            const existing = sessionsRef.current.find((item) => item.projectId === `remote:${candidate.id}` && (!toolId || item.toolId === toolId));
-            if (existing) {
-              setNewDialogOpen(false);
-              setRemoteDialogOpen(false);
-              if (existing.running) {
-                setSelectedId(existing.id);
-                return;
-              }
-              if (existing.reattachable) {
-                setLaunchingNew(true);
-                try {
-                  await native.reattachWorkbenchSession(existing.id);
-                  const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
-                  if (Array.isArray(listed)) setSessions(listed);
-                  setSelectedId(existing.id);
-                  return;
-                } catch {
-                  // The durable remote session may have been removed outside
-                  // Cliora. Fall through and create/reuse it by name below.
-                } finally {
-                  setLaunchingNew(false);
-                }
-              }
-            }
             void launchRemoteProject(candidate, toolId);
           } else {
             setNewDialogOpen(false);
@@ -798,20 +771,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         const indexed = Array.isArray(remoteSessions)
           ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
           : [];
-        const requests = indexed.length
-          ? indexed.map((item) => native.launchCli({
-              toolId: item.toolId,
-              projectId: `remote:${item.projectId}`,
-              sessionId: `__remote_reattach__:${item.remoteSessionId}`,
-              mode: item.mode ?? 'normal',
-              directory: item.directory ?? null,
-              initialPrompt: null,
-              resumeLatest: false,
-            }))
-          : (() => {
-              const candidate = Array.isArray(remoteProjects) ? remoteProjects.find((item) => item?.id && item.preferredTool) : null;
-              return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
-            })();
+        const requests = indexed.map((item) => native.launchCli({
+          toolId: item.toolId,
+          projectId: `remote:${item.projectId}`,
+          sessionId: null,
+          remoteIntent: { kind: 'reattach', remoteSessionId: item.remoteSessionId },
+          mode: item.mode ?? 'normal',
+          directory: item.directory ?? null,
+          initialPrompt: null,
+          resumeLatest: false,
+        }));
         if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
       }
     }).catch(() => { /* Session list failures are reported by the attachment above. */ });
@@ -943,7 +912,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function taskTitle(session: WorkbenchSession): string {
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
-    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    const title = railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    const remoteProject = remoteProjects.find((item) => `remote:${item.id}` === session.projectId);
+    return session.projectId?.startsWith('remote:')
+      ? `${title || remoteProject?.name || shortPath(displayPath(session.directory)) || toolName(session)} · ${(session.remoteSessionId || session.id).slice(-8)}`
+      : title;
   }
 
   function railPlaceOf(session: WorkbenchSession): string {
@@ -1046,6 +1019,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setActionError('');
     try {
       const result = failure.retry.kind === 'launch' ? await native.launchCli(failure.retry.request) : await native.resumeHistorySession(failure.retry.id, failure.retry.mode);
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         onFailure(null);
@@ -1091,7 +1065,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       : project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
         ? project.preferredTool
         : effectiveLaunchToolId;
-    if (!toolId) return;
+    if (!toolId || newLaunchPending.current) return;
+    newLaunchPending.current = true;
     setLaunchingNew(true);
     setDialogError('');
     setActionError('');
@@ -1103,12 +1078,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         toolId,
         projectId: `remote:${project.id}`,
         sessionId: null,
+        remoteIntent: { kind: 'new' },
         mode,
         directory: null,
         initialPrompt: null,
         resumeLatest: false,
       });
       try { localStorage.setItem(`cliora:remote-launch-project:${project.targetId}:${toolId}`, project.id); } catch { /* optional */ }
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         setRemoteQuickLaunch(false);
@@ -1123,8 +1100,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
       }
     } catch (value) {
-      setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { setLaunchingNew(false); }
+      setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
+    } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
   function handleRemoteProjectSaved(project: RemoteProject) {
@@ -1161,7 +1138,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   async function launchFromDialog() {
-    if (!effectiveLaunchToolId || launchingNew) return;
+    if (!effectiveLaunchToolId || newLaunchPending.current) return;
+    newLaunchPending.current = true;
     setLaunchingNew(true);
     setDialogError('');
     setActionError('');
@@ -1182,12 +1160,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         toolId: effectiveLaunchToolId,
         projectId,
         sessionId: null,
+        ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}),
         mode: selectedLaunchTool?.yoloAvailable ? launchMode : 'normal',
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
-        ...(resumeLatest && selectedLaunchTool?.resumeLatestAvailable ? { resumeLatest: true } : {}),
+        ...(resumeLatest && selectedLaunchTool?.resumeLatestAvailable && !projectId?.startsWith('remote:') ? { resumeLatest: true } : {}),
       };
       const result = await native.launchCli(request);
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         onFailure(null);
@@ -1202,7 +1182,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { setLaunchingNew(false); }
+    } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean) {
@@ -1222,6 +1202,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         mode: session.mode,
         directory: session.directory || null,
       });
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         if (replaceEnded && !session.running) {

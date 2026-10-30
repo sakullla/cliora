@@ -234,6 +234,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         status: "session_started",
         session_id: Some(id),
         remote_session_id: plan.remote_session_id,
+        warnings: Vec::new(),
     })
 }
 

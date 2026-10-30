@@ -135,6 +135,14 @@ struct DefaultLaunchModes {
     project: LaunchMode,
 }
 
+/// Remote terminal intent is separate from native CLI conversation resume.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteLaunchIntent {
+    New,
+    Reattach { #[serde(rename = "remoteSessionId")] remote_session_id: String },
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchRequest {
@@ -150,6 +158,8 @@ pub struct LaunchRequest {
     /// with `session_id`. Absent requests stay a normal launch.
     #[serde(default)]
     pub resume_latest: bool,
+    #[serde(default)]
+    pub remote_intent: Option<RemoteLaunchIntent>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -162,6 +172,8 @@ pub struct LaunchResult {
     pub status: &'static str,
     pub session_id: Option<String>,
     pub remote_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A managed connection key the CLI reads only from the OS environment
@@ -211,74 +223,43 @@ pub struct RemoteSessionIndexEntry {
     pub last_seen_at: u64,
 }
 
-const REMOTE_SESSION_INDEX_KEY: &str = "remote_session_index_v1";
 const REMOTE_REATTACH_PREFIX: &str = "__remote_reattach__:";
 
 fn read_remote_session_index(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
-    let raw = read_setting(db, REMOTE_SESSION_INDEX_KEY)?;
-    Ok(raw
-        .and_then(|value| serde_json::from_str::<Vec<RemoteSessionIndexEntry>>(&value).ok())
-        .unwrap_or_default())
-}
-
-fn write_remote_session_index(db: &Database, entries: &[RemoteSessionIndexEntry]) -> Result<(), String> {
-    let value = serde_json::to_string(entries).map_err(|error| error.to_string())?;
-    write_setting(db, REMOTE_SESSION_INDEX_KEY, &value)
-}
-
-pub fn list_remote_sessions(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
-    let entries = read_remote_session_index(db)?;
-    // Older builds recorded one index row for every local SSH attachment. A
-    // remote project/tool has one persistent tmux/screen session, so collapse
-    // those historical rows before the workbench tries to reattach them.
-    let mut latest = std::collections::HashMap::<(String, String, String), RemoteSessionIndexEntry>::new();
-    for entry in entries {
-        let key = (entry.target_id.clone(), entry.project_id.clone(), entry.tool_id.clone());
-        let replace = latest.get(&key).is_none_or(|current| entry.last_seen_at > current.last_seen_at);
-        if replace { latest.insert(key, entry); }
-    }
-    let mut entries: Vec<_> = latest.into_values().collect();
-    // Drop rows for removed remote projects before asking SSH to reattach.
-    let project_ids: std::collections::HashSet<String> = crate::remote::list_projects(db, None)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|project| project.id)
-        .collect();
-    entries.retain(|entry| project_ids.contains(&entry.project_id));
-    // A reachable host is authoritative about whether the persistent terminal
-    // still exists. If probing fails (offline host, password prompt, etc.) keep
-    // the row so the user can retry later instead of silently losing it.
-    let targets = crate::remote::list_targets(db).map_err(|error| error.to_string())?;
-    for target in targets.into_iter().filter(|target| target.enabled) {
-        let ids: Vec<String> = entries
-            .iter()
-            .filter(|entry| entry.target_id == target.id)
-            .map(|entry| entry.remote_session_id.clone())
-            .collect();
-        if ids.is_empty() { continue; }
-        if let Ok(active) = crate::remote::active_session_ids(&target, &ids) {
-            entries.retain(|entry| entry.target_id != target.id || active.contains(&entry.remote_session_id));
+    db.with_read_connection(|conn| {
+        let mut statement = conn.prepare("SELECT data FROM remote_session_index")
+            .map_err(|error| error.to_string())?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        let mut entries = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|error| error.to_string())?;
+            entries.push(serde_json::from_str::<RemoteSessionIndexEntry>(&raw)
+                .map_err(|error| format!("远程会话索引无法读取：{error}"))?);
         }
-    }
-    entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
-    let _ = write_remote_session_index(db, &entries);
-    Ok(entries)
+        entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at)
+            .then_with(|| a.remote_session_id.cmp(&b.remote_session_id)));
+        Ok(entries)
+    })
 }
 
-/// Durable index for history views. Ended and offline sessions stay visible;
-/// the workbench reattach path continues to use `list_remote_sessions`.
+/// Listing is a local snapshot. Liveness checks belong to a selected connection,
+/// never to the critical path of a new launch or to a destructive index rewrite.
+pub fn list_remote_sessions(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
+    read_remote_session_index(db)
+}
+
 pub fn list_remote_history(db: &Database) -> Result<Vec<RemoteSessionIndexEntry>, String> {
-    let mut entries = read_remote_session_index(db)?;
-    entries.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
-    Ok(entries)
+    read_remote_session_index(db)
 }
 
-pub fn forget_remote_session(db: &Database, remote_session_id: &str) -> Result<(), String> {
-    let entries = read_remote_session_index(db)?
-        .into_iter()
-        .filter(|entry| entry.remote_session_id != remote_session_id)
-        .collect::<Vec<_>>();
-    write_remote_session_index(db, &entries)
+pub fn forget_remote_session(db: &Database, target_id: &str, remote_session_id: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM remote_session_index WHERE target_id = ?1 AND remote_session_id = ?2",
+            rusqlite::params![target_id, remote_session_id]).map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    })
 }
 
 pub fn remember_remote_session(
@@ -292,23 +273,30 @@ pub fn remember_remote_session(
     let project = crate::remote::list_projects(db, None).map_err(|error| error.to_string())?.into_iter().find(|item| item.id == project_key)
         .ok_or_else(|| "远程项目不存在".to_owned())?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
-    let mut entries = read_remote_session_index(db)?;
-    // Keep the durable index aligned with the one-session-per-project/tool
-    // contract. This also cleans rows created by pre-reuse versions.
-    let mut compacted = std::collections::HashMap::<(String, String, String), RemoteSessionIndexEntry>::new();
-    for entry in entries.drain(..) {
-        let key = (entry.target_id.clone(), entry.project_id.clone(), entry.tool_id.clone());
-        let replace = compacted.get(&key).is_none_or(|current| entry.last_seen_at > current.last_seen_at);
-        if replace { compacted.insert(key, entry); }
-    }
-    let mut entries: Vec<_> = compacted.into_values().collect();
-    if let Some(existing) = entries.iter_mut().find(|entry| entry.remote_session_id == remote_session_id) {
-        existing.last_seen_at = now;
-    } else {
-        entries.retain(|entry| !(entry.project_id == project_key && entry.target_id == project.target_id && entry.tool_id == tool_id));
-        entries.push(RemoteSessionIndexEntry { remote_session_id: remote_session_id.to_owned(), project_id: project_key.to_owned(), target_id: project.target_id, tool_id: tool_id.to_owned(), directory: project.path, mode, started_at: now, last_seen_at: now });
-    }
-    write_remote_session_index(db, &entries)
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let current: Option<String> = tx.query_row(
+            "SELECT data FROM remote_session_index WHERE target_id = ?1 AND remote_session_id = ?2",
+            rusqlite::params![project.target_id, remote_session_id], |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?;
+        let mut entry = if let Some(value) = current {
+            let entry: RemoteSessionIndexEntry = serde_json::from_str(&value).map_err(|error| error.to_string())?;
+            if entry.project_id != project_key || entry.tool_id != tool_id {
+                return Err("远程会话身份与所选项目或工具不匹配".into());
+            }
+            entry
+        } else {
+            RemoteSessionIndexEntry { remote_session_id: remote_session_id.to_owned(), project_id: project_key.to_owned(), target_id: project.target_id, tool_id: tool_id.to_owned(), directory: project.path, mode, started_at: now, last_seen_at: now }
+        };
+        entry.last_seen_at = now;
+        let value = serde_json::to_string(&entry).map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO remote_session_index (target_id, remote_session_id, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(target_id, remote_session_id) DO UPDATE SET data = excluded.data, revision = remote_session_index.revision + 1",
+            rusqlite::params![entry.target_id, entry.remote_session_id, value],
+        ).map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    })
 }
 
 fn remote_project_key(project_id: Option<&str>) -> Option<&str> {
@@ -381,7 +369,7 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     let session_q = remote_shell_quote(session);
     let path_q = remote_shell_quote(path);
     format!(
-        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -A -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then screen -U -dmS {session_q} sh -lc {interactive} >/dev/null 2>&1 || true; screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi",
+        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -s {session_q} -c {path_q} -- sh -lc {interactive}; elif command -v screen >/dev/null 2>&1; then if screen -list | grep -Fq -- {session_q}; then echo 'Cliora remote session identity already exists' >&2; exit 45; fi; screen -U -dmS {session_q} sh -lc {interactive} && screen -U -r {session_q}; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi",
         crate::remote::LINUX_TMUX_INSTALL
     )
 }
@@ -446,6 +434,9 @@ fn remote_launch_plan(
         .into_iter()
         .find(|item| item.id == project.target_id && item.enabled)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程目标不可用".into()))?;
+    if request.resume_latest {
+        return Err(LaunchPlanError::new(LaunchStage::Tool, "远程终端新建与 CLI 历史恢复必须分开执行".into()));
+    }
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
@@ -463,26 +454,38 @@ fn remote_launch_plan(
     // the workbench already reports connection state in its status bar.
     let mut args = vec!["-tt".into(), "-o".into(), "LogLevel=ERROR".into()];
     args.extend(crate::remote::connection_args(&target));
-    let requested_session = request.session_id.as_deref().and_then(|value| value.strip_prefix(REMOTE_REATTACH_PREFIX));
-    // A quick launch reuses the latest persistent session for this remote
-    // project/tool. Closing the app therefore detaches the local transport
-    // without creating another tmux/screen process next time.
-    let indexed_session = list_remote_sessions(db).ok().and_then(|items| items.into_iter().find(|item| item.project_id == project_key && item.target_id == project.target_id && item.tool_id == request.tool_id).map(|item| item.remote_session_id));
-    let existing_session = requested_session.map(str::to_owned).or(indexed_session);
-    let session = existing_session.clone().unwrap_or_else(|| {
-        let suffix = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
-        remote_session_name(project_key, Some(&suffix))
-    });
+    let legacy_session = match request.session_id.as_deref() {
+        Some(value) => Some(value.strip_prefix(REMOTE_REATTACH_PREFIX)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "恢复远程会话必须指定有效的会话身份".into()))?),
+        None => None,
+    };
+    let requested_session = match (&request.remote_intent, legacy_session) {
+        (Some(RemoteLaunchIntent::New), Some(_)) => return Err(LaunchPlanError::new(LaunchStage::Tool, "新建不能同时恢复远程会话".into())),
+        (Some(RemoteLaunchIntent::Reattach { remote_session_id }), legacy) => {
+            if legacy.is_some_and(|id| id != remote_session_id) || request.resume_latest || request.initial_prompt.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+                return Err(LaunchPlanError::new(LaunchStage::Tool, "恢复会话不能混用其它启动参数".into()));
+            }
+            Some(remote_session_id.as_str())
+        }
+        (_, legacy) => legacy,
+    };
+    let (session, session_directory, session_mode) = if let Some(id) = requested_session {
+        if !id.starts_with("cliora-") || id.len() > 200 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "远程会话身份无效".into()));
+        }
+        let indexed = read_remote_session_index(db)
+            .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?
+            .into_iter().find(|item| item.target_id == target.id && item.remote_session_id == id
+                && item.project_id == project_key && item.tool_id == request.tool_id)
+            .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "所选远程会话不存在或不属于当前主机、项目和工具".into()))?;
+        (indexed.remote_session_id, indexed.directory, indexed.mode)
+    } else {
+        (remote_session_name(project_key, Some(&uuid::Uuid::new_v4().simple().to_string())), path.to_owned(), request.mode)
+    };
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         launch_args.push(prompt.to_owned());
     }
-    // Remote project reattach requests use the reserved session marker so the
-    // existing IPC contract stays backwards compatible with native resume IDs.
-    // A quick launch reuses the persistent tmux/screen session when it is
-    // still alive, but recreates the CLI in the same named session when an old
-    // index row points at a session that no longer exists. Explicit reattach
-    // requests keep strict attach semantics so the UI can report a real
-    // connection failure.
     let remote_command = if requested_session.is_some() {
         remote_reattach_command(&session)
     } else {
@@ -499,10 +502,10 @@ fn remote_launch_plan(
         account_context: None,
         tool_id: request.tool_id.clone(),
         project_id: request.project_id.clone(),
-        mode: request.mode,
+        mode: session_mode,
         executable,
         cli_args: args,
-        directory: PathBuf::from(path),
+        directory: PathBuf::from(session_directory),
         terminal,
         session_markers: &[],
         credential: None,
@@ -1047,6 +1050,9 @@ fn plan_with_stage_at(
 ) -> Result<LaunchPlan, LaunchPlanError> {
     if let Some(plan) = remote_launch_plan(db, registry, &request)? {
         return Ok(plan);
+    }
+    if request.remote_intent.is_some() {
+        return Err(LaunchPlanError::new(LaunchStage::Tool, "远程会话意图只能用于远程项目".into()));
     }
     let skill_issues = skills::recover_report(db).map_err(|message| {
         LaunchPlanError::new(
@@ -1844,6 +1850,7 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
         status: "terminal_requested",
         session_id: None,
         remote_session_id: plan.remote_session_id,
+        warnings: Vec::new(),
     })
 }
 
@@ -1893,6 +1900,7 @@ fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Re
         status: "desktop_requested",
         session_id: None,
         remote_session_id: plan.remote_session_id.clone(),
+        warnings: Vec::new(),
     })
 }
 
@@ -2007,7 +2015,7 @@ mod desktop_launch {
             directory,
             initial_prompt: None,
             mode,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         }
     }
 
@@ -2235,7 +2243,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         }
     }
 
@@ -2281,7 +2289,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
@@ -2351,7 +2359,7 @@ mod installed_desktop_launch {
                     directory: None,
                     initial_prompt: None,
                     mode: LaunchMode::Normal,
-                    resume_latest: false,
+                    resume_latest: false, remote_intent: None,
                 },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));

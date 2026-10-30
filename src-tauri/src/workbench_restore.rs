@@ -154,7 +154,7 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
             if !claimed.insert((key, native.clone())) { return Err("此会话已经恢复".into()); }
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
                 tool_id: session.tool_id.clone(), project_id: session.project_id.clone(), session_id: Some(native),
-                directory: None, initial_prompt: None, mode: session.mode, resume_latest: false,
+                directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None,
             }, Path::new(&session.directory), context).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
             let result = launch::spawn(db, plan)?;
