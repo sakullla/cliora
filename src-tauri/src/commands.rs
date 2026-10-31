@@ -4634,6 +4634,27 @@ pub async fn list_remote_directories(
 }
 
 #[tauri::command]
+pub fn list_remote_directory_receipts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::remote::directory_receipts::Receipt>, ApiError> {
+    state.with_database(&app, |database| {
+        crate::remote::directory_receipts::list(database).map_err(native_error)
+    })
+}
+
+#[tauri::command]
+pub fn save_remote_directory_receipt(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    receipt: crate::remote::directory_receipts::Receipt,
+) -> Result<(), ApiError> {
+    state.with_database(&app, |database| {
+        crate::remote::directory_receipts::save(database, &receipt).map_err(native_error)
+    })
+}
+
+#[tauri::command]
 pub async fn create_remote_directory(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
@@ -4641,19 +4662,37 @@ pub async fn create_remote_directory(
     state: State<'_, AppState>,
     target_id: String,
     path: String,
+    receipt_id: Option<String>,
 ) -> Result<(), ApiError> {
     let _ = state;
+    let database = app.state::<AppState>().database(&app)?;
+    let target = crate::remote::list_targets(&database)
+        .map_err(|error| native_error(error.to_string()))?
+        .into_iter().find(|item| item.id == target_id)
+        .ok_or_else(|| native_error("远程目标不存在".into()))?;
+    let claim = crate::remote::directory_receipts::claim(&database, receipt_id.as_deref(), &target, &path).map_err(native_error)?;
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
-        let database = app.state::<AppState>().database(&app)?;
-        crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
-        let target = crate::remote::list_targets(&database)
-            .map_err(|error| native_error(error.to_string()))?
-            .into_iter()
-            .find(|item| item.id == target_id)
-            .ok_or_else(|| native_error("远程目标不存在".into()))?;
-        bind_remote_target(&target)?;
-        crate::remote::create_directory(&target, &path)
-            .map_err(|error| native_error(error.to_string()))
+        let mut dispatched = false;
+        let result = (|| {
+            crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
+            // Re-read before dispatch; a host can be edited while queued.
+            let current = crate::remote::list_targets(&database).map_err(|error| native_error(error.to_string()))?
+                .into_iter().find(|item| item.id == target.id)
+                .ok_or_else(|| native_error("远程目标不存在".into()))?;
+            if current.updated_at != target.updated_at { return Err(native_error("原主机连接信息已变化，请核查原路径".into())); }
+            bind_remote_target(&current)?;
+            dispatched = true;
+            crate::remote::create_directory(&current, &path).map_err(|error| native_error(error.to_string()))
+        })();
+        use crate::remote::directory_receipts::Outcome;
+        let outcome = match &result {
+            Ok(()) => Outcome::Created,
+            Err(error) if error.remote.as_ref().map_or(dispatched, |failure| failure.outcome == "unknown") => Outcome::Unknown,
+            Err(_) => Outcome::Failed,
+        };
+        let detail = result.as_ref().err().map(|error| error.message.clone()).unwrap_or_default();
+        claim.finish(&database, outcome, detail).map_err(native_error)?;
+        result
     }).await
 }
 

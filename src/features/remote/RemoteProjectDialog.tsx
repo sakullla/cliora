@@ -9,7 +9,7 @@ import { StatusBanner } from '../../components/StatusBanner';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { Button, Card, Toolbar } from '../../components/ui';
-import { beginDirectoryReceipt, blocksDirectoryCreation, updateDirectoryReceipt, useDirectoryReceipts, type DirectoryReceipt } from './directoryReceipts';
+import { beginDirectoryInspection, beginDirectoryReceipt, blocksDirectoryCreation, loadDirectoryReceipts, updateDirectoryReceipt, useDirectoryReceipts, type DirectoryReceipt } from './directoryReceipts';
 import styles from './RemoteProjectDialog.module.css';
 
 function errorText(error: unknown) {
@@ -46,7 +46,9 @@ export function RemoteProjectDialog({
   const [busy, setBusy] = useState<'list' | 'mkdir' | 'save' | ''>('');
   const [message, setMessage] = useState('');
   const receipts = useDirectoryReceipts();
+  const [receiptsReady, setReceiptsReady] = useState(false);
   const inspections = useRef(new Set<AbortController>());
+  const inspectingIds = useRef(new Set<string>());
   useEffect(() => () => { for (const controller of inspections.current) controller.abort(); inspections.current.clear(); }, [open]);
 
   const reads = useRemoteReads(targetId, parent.trim(), open);
@@ -127,6 +129,8 @@ export function RemoteProjectDialog({
     const request = begin();
     setBusy('list'); setMessage('');
     try {
+      await loadDirectoryReceipts(fresh);
+      setReceiptsReady(true);
       const value = await reads.native.listRemoteDirectories(targetId, parent.trim(), { fresh, signal: request.controller.signal });
       if (request.isCurrent()) setListing({ key: context, value });
     } catch (error) { if (request.isCurrent()) setMessage(errorText(error)); }
@@ -135,16 +139,20 @@ export function RemoteProjectDialog({
 
   async function createDirectory() {
     const next = path.trim();
-    if (!target || !next || creationBlocked) return;
-    const receipt = beginDirectoryReceipt(target, next);
-    if (!receipt) { setMessage(t('home.remote.receiptLimit')); return; }
+    if (!target || !next || creationBlocked || !receiptsReady || busy) return;
     const request = begin();
+    let receipt: DirectoryReceipt | null = null;
+    let dispatched = false;
     let created = false;
     setBusy('mkdir'); setMessage('');
     try {
-      await native.createRemoteDirectory(targetId, next, { signal: request.controller.signal, targetRevision: receipt.target.updatedAt });
+      receipt = await beginDirectoryReceipt(target, next);
+      if (!receipt) { if (request.isCurrent()) setMessage(t('home.remote.receiptLimit')); return; }
+      request.controller.signal.throwIfAborted();
+      dispatched = true;
+      await native.createRemoteDirectory(receipt.target.id, next, { signal: request.controller.signal, targetRevision: receipt.target.updatedAt }, receipt.id);
       created = true;
-      updateDirectoryReceipt(receipt.id, { outcome: 'created' });
+      await updateDirectoryReceipt(receipt.id, { outcome: 'created' });
       if (!request.isCurrent()) return;
       if (request.controller.signal.aborted) return;
       const value = await reads.native.listRemoteDirectories(targetId, parent.trim(), { fresh: true, signal: request.controller.signal });
@@ -152,34 +160,37 @@ export function RemoteProjectDialog({
         setListing({ key: context, value });
       }
     } catch (error) {
-      if (!created) {
-        const outcome = (error as { remote?: { outcome?: string } })?.remote?.outcome === 'unknown' ? 'unknown' : 'failed';
-        updateDirectoryReceipt(receipt.id, { outcome, detail: errorText(error) });
+      if (!created && receipt) {
+        const remoteOutcome = (error as { remote?: { outcome?: string } })?.remote?.outcome;
+        const outcome = dispatched && remoteOutcome !== 'failed' ? 'unknown' : 'failed';
+        await updateDirectoryReceipt(receipt.id, { outcome, detail: errorText(error) });
       } else if (request.isCurrent()) setMessage(errorText(error));
     }
     finally { if (request.isCurrent()) { setBusy(''); operation.current = null; } }
   }
 
   async function inspectReceipt(receipt: DirectoryReceipt) {
-    if (receipt.outcome === 'pending' || receipt.inspection?.state === 'checking') return;
+    if (receipt.outcome === 'pending' || receipt.inspection?.state === 'checking' || inspectingIds.current.has(receipt.id)) return;
+    inspectingIds.current.add(receipt.id);
+    const isCurrent = beginDirectoryInspection(receipt.id);
     const controller = new AbortController();
     inspections.current.add(controller);
-    updateDirectoryReceipt(receipt.id, { inspection: { state: 'checking', detail: '' } });
     try {
+      if (!await updateDirectoryReceipt(receipt.id, { inspection: { state: 'checking', detail: '' } }, isCurrent)) return;
       // The consumer's host props may lag a configuration event. Check local
       // persisted identity before using the original revision for a remote read.
       const original = (await native.listRemoteTargets()).find(item => item.id === receipt.target.id);
       controller.signal.throwIfAborted();
-      if (!original || original.updatedAt !== receipt.target.updatedAt) {
-        updateDirectoryReceipt(receipt.id, { inspection: { state: 'failed', detail: t('home.remote.receiptIdentityChanged') } });
+      if (!original || original.updatedAt !== receipt.target.updatedAt || original.host !== receipt.target.host || original.port !== receipt.target.port || original.user !== receipt.target.user) {
+        await updateDirectoryReceipt(receipt.id, { inspection: { state: 'failed', detail: t('home.remote.receiptIdentityChanged') } }, isCurrent);
         return;
       }
       await native.listRemoteDirectories(receipt.target.id, receipt.path, { fresh: true, targetRevision: receipt.target.updatedAt, signal: controller.signal });
-      updateDirectoryReceipt(receipt.id, { inspection: { state: 'exists', detail: t('home.remote.receiptExists') } });
+      await updateDirectoryReceipt(receipt.id, { inspection: { state: 'exists', detail: t('home.remote.receiptExists') } }, isCurrent);
     } catch (error) {
       const missing = (error as { remote?: { reason?: string } })?.remote?.reason === 'directory_missing';
-      updateDirectoryReceipt(receipt.id, { inspection: { state: missing ? 'missing' : 'failed', detail: missing ? t('home.remote.receiptMissing') : errorText(error) } });
-    } finally { inspections.current.delete(controller); }
+      await updateDirectoryReceipt(receipt.id, { inspection: { state: missing ? 'missing' : 'failed', detail: missing ? t('home.remote.receiptMissing') : errorText(error) } }, isCurrent);
+    } finally { inspections.current.delete(controller); inspectingIds.current.delete(receipt.id); }
   }
 
   function close() {
@@ -241,7 +252,7 @@ export function RemoteProjectDialog({
             <label className={styles.field}><span>{t('home.remote.path')}</span><input disabled={busy === 'save'} value={path} spellCheck={false} autoComplete="off" onChange={(event) => { setPath(event.target.value); setMessage(''); }} placeholder={t('home.remote.pathPlaceholder')} /></label>
           </div>
           <small className={styles.fieldHint}>{t('home.remote.manualPathHint')}</small>
-          <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== '' || creationBlocked} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
+          <Button size="sm" className={styles.createDirectory} disabled={!targetId || !path.trim() || busy !== '' || creationBlocked || !receiptsReady} onClick={() => void createDirectory()}>{busy === 'mkdir' ? t('home.remote.creatingDirectory') : t('home.remote.createDirectory')}</Button>
         </div>
         <div className={styles.grid}>
           <label className={styles.field}><span>{t('home.remote.name')}</span><input disabled={busy === 'save'} value={name} onChange={(event) => { setName(event.target.value); }} placeholder={t('home.remote.namePlaceholder')} /></label>

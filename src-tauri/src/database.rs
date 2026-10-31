@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 28 {
+        if version > 29 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -591,6 +591,18 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 28;")?;
             tx.commit()?;
         }
+        if version < 29 {
+            let tx = connection.transaction()?;
+            // Keep faults even when the corresponding target is edited/deleted.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS remote_directory_receipts (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   data TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 29;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -856,7 +868,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 28);
+            assert_eq!(version, 29);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

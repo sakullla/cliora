@@ -28,6 +28,17 @@ export type RemoteDirectoryListing = {
   truncated: boolean;
 };
 
+export type DirectoryReceipt = {
+  id: string;
+  target: Pick<RemoteTarget, 'id' | 'name' | 'host' | 'port' | 'user' | 'updatedAt'>;
+  path: string;
+  outcome: 'pending' | 'created' | 'failed' | 'unknown';
+  detail: string;
+  inspection?: { state: 'checking' | 'exists' | 'missing' | 'failed'; detail: string };
+  /** Native process still owns this dispatched operation (not a stored flag). */
+  active?: boolean;
+};
+
 export type RemoteProbe = {
   targetId: string;
   stage: string;

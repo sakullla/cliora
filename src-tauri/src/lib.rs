@@ -396,6 +396,8 @@ pub fn run() {
             commands::list_remote_projects,
             commands::list_remote_directories,
             commands::create_remote_directory,
+            commands::list_remote_directory_receipts,
+            commands::save_remote_directory_receipt,
             commands::save_remote_project,
             commands::delete_remote_project,
             commands::test_remote_target,

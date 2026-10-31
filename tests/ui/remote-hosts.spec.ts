@@ -4,7 +4,9 @@ async function install(page: Page) {
   await page.addInitScript(() => {
     const targets = ['key', 'password'].map((authMethod, index) => ({ id: `host-${index}`, name: `${authMethod} fixture`, host: `${authMethod}.invalid`, port: 22, user: 'fixture', authMethod, defaultPath: `/fixture/${authMethod}`, enabled: true, createdAt: 1, updatedAt: 1 }));
     const state = { hold: '', failure: '', response: '', createOutcome: '', generation: '', savedRevision: 0, replaceHost: () => {}, reads: [] as string[], readOperations: [] as unknown[], cancelled: 0, writes: [] as string[], release: () => {}, releases: [] as Array<() => void> };
-    state.replaceHost = () => { targets[0].updatedAt++; targets[0].host = 'replacement.invalid'; state.generation = 'replacement-'; window.dispatchEvent(new Event('cliora:remote-targets-changed')); };
+    const savedHost = localStorage.getItem('fixture:replaced-host');
+    if (savedHost) Object.assign(targets[0], JSON.parse(savedHost));
+    state.replaceHost = () => { targets[0].updatedAt++; targets[0].host = 'replacement.invalid'; localStorage.setItem('fixture:replaced-host', JSON.stringify(targets[0])); state.generation = 'replacement-'; window.dispatchEvent(new Event('cliora:remote-targets-changed')); };
     localStorage.setItem('cliora:remote-target', 'host-0');
     const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', launch: { state: 'available', reason: '' } };
     Object.assign(window, {
@@ -13,6 +15,8 @@ async function install(page: Page) {
       __TAURI_INTERNALS__: {
         transformCallback: () => 0,
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          const backend = (window as unknown as { __directoryBackend?: (command: string, args: Record<string, unknown>) => Promise<unknown> }).__directoryBackend;
+          if (backend && ['list_remote_directory_receipts', 'save_remote_directory_receipt', 'create_remote_directory'].includes(command)) return backend(command, args);
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: true }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [descriptor], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_remote_targets') return targets.map(item => ({ ...item }));
@@ -21,10 +25,19 @@ async function install(page: Page) {
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'cancel_remote_operation') { state.cancelled++; return true; }
           if (command === 'list_remote_directories') { state.reads.push(`${args.targetId}:${args.parent}`); state.readOperations.push(args); }
-          if (command === 'create_remote_directory') state.writes.push(String(args.path));
+          if (command === 'create_remote_directory') { state.writes.push(String(args.path)); localStorage.setItem('fixture:mkdir-count', String(Number(localStorage.getItem('fixture:mkdir-count') ?? 0) + 1)); }
           if (command === state.hold) await new Promise<void>(resolve => { state.releases.push(resolve); state.release = () => { for (const release of state.releases.splice(0)) release(); }; });
           if (command === 'create_remote_directory' && state.createOutcome === 'unknown') throw { code: 'remote_unknown', message: 'remote may have created directory', action: '核查远端原路径后再操作。', remote: { outcome: 'unknown', action: '核查远端原路径后再操作。' } };
-          if (command === state.failure) throw { message: 'Permission denied fixture', action: '检查远端权限。', remote: { reason: 'permission' } };
+          if (command === state.failure) throw { message: 'Permission denied fixture', action: '检查远端权限。', remote: { reason: 'permission', outcome: 'failed' } };
+          // Synthetic shared database survives a full document reload. Product
+          // persistence is SQLite; localStorage is only this IPC fixture.
+          if (command === 'list_remote_directory_receipts') return JSON.parse(localStorage.getItem('fixture:directory-receipts') ?? '[]').map((item: any) => ({ ...item, outcome: item.outcome === 'pending' ? 'unknown' : item.outcome, inspection: item.inspection?.state === 'checking' ? undefined : item.inspection }));
+          if (command === 'save_remote_directory_receipt') {
+            const receipt = args.receipt as { id: string };
+            const stored = JSON.parse(localStorage.getItem('fixture:directory-receipts') ?? '[]') as Array<{ id: string }>;
+            localStorage.setItem('fixture:directory-receipts', JSON.stringify([...stored.filter(item => item.id !== receipt.id), receipt]));
+            return null;
+          }
           if (command === 'list_remote_directories' && state.response === 'missing') throw { message: 'Directory does not exist', remote: { reason: 'directory_missing' } };
           if (command === 'list_remote_directories') return state.response === 'invalid' ? [] : { parent: args.parent, items: state.response === 'empty' ? [] : [`${args.parent}/${state.generation}child`, ...state.writes], truncated: state.response === 'truncated' };
           if (command === 'test_remote_target') return { reachable: true, system: 'Linux fixture' };
@@ -69,6 +82,130 @@ async function hosts(page: Page) {
   await page.getByRole('button', { name: '管理主机', exact: true }).click();
   return page.getByRole('region', { name: '远程主机', exact: true });
 }
+
+for (const outcome of ['unknown', 'pending', 'checking']) test(`directory ${outcome} receipt survives a full document restart without replay`, async ({ page }) => {
+  await install(page); await page.goto('/');
+  let dialog = await directory(page);
+  const path = `/fixture/key/restart-${outcome}`;
+  await dialog.getByLabel('远程路径', { exact: true }).fill(path);
+  await fixture(page, { createOutcome: 'unknown', ...(outcome === 'pending' ? { hold: 'create_remote_directory' } : {}) });
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+  let receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  if (outcome !== 'pending') await expect(receipt).toContainText('结果不确定');
+  if (outcome === 'checking') {
+    await fixture(page, { hold: 'list_remote_directories' });
+    await receipt.getByRole('button', { name: '核查原路径', exact: true }).click();
+    await expect(receipt.getByRole('button', { name: '核查原路径', exact: true })).toBeDisabled();
+  }
+  await page.reload();
+  dialog = await directory(page);
+  receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  await expect(receipt).toContainText('结果不确定');
+  await expect(receipt).toContainText('fixture@key.invalid:22');
+  await expect(receipt).toContainText(path);
+  await expect(receipt.getByRole('button', { name: '核查原路径', exact: true })).toBeEnabled();
+  await dialog.getByLabel('远程路径', { exact: true }).fill(path);
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  await fixture(page, { failure: 'list_remote_directories' });
+  await receipt.getByRole('button', { name: '核查原路径', exact: true }).click();
+  await expect(receipt).toContainText('Permission denied fixture');
+  await expect(receipt.getByRole('button', { name: '核查原路径', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  await fixture(page, { failure: '' });
+  await receipt.getByRole('button', { name: '核查原路径', exact: true }).click();
+  await expect(receipt).toContainText('原路径当前是目录');
+  expect(await page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+});
+
+test('a still running native mkdir remains pending across WebView reload and is never replayed', async ({ page }) => {
+  let stored: any;
+  let active = false;
+  let writes = 0;
+  let finish!: () => void;
+  await page.exposeFunction('__directoryBackend', async (command: string, args: any) => {
+    if (command === 'list_remote_directory_receipts') return stored ? [{ ...stored, active, outcome: active ? 'pending' : stored.outcome }] : [];
+    if (command === 'save_remote_directory_receipt') { stored = structuredClone(args.receipt); return; }
+    active = true; writes++;
+    await new Promise<void>(resolve => { finish = resolve; });
+    stored = { ...stored, outcome: 'created', inspection: undefined }; active = false;
+  });
+  await install(page); await page.goto('/');
+  let dialog = await directory(page);
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/active-reload');
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect.poll(() => active).toBe(true);
+  await page.reload();
+  dialog = await directory(page);
+  const receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  await expect(receipt).toContainText('正在创建原路径');
+  await expect(receipt.getByRole('button', { name: '核查原路径', exact: true })).toBeDisabled();
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/active-reload');
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  finish();
+  await expect(receipt).toContainText('远端目录已创建');
+  expect(writes).toBe(1);
+});
+
+test('receipt storage failures block dispatch and can recover without losing the draft', async ({ page }) => {
+  await install(page); await page.goto('/');
+  await fixture(page, { failure: 'list_remote_directory_receipts' });
+  const dialog = await directory(page);
+  await expect(dialog.getByRole('status')).toContainText('Permission denied fixture');
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  await fixture(page, { failure: '' });
+  await dialog.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/storage-recovery');
+  await dialog.getByLabel('项目名称', { exact: true }).fill('保留草稿');
+  await fixture(page, { failure: 'save_remote_directory_receipt' });
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('Permission denied fixture');
+  expect(await page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(0);
+  await expect(dialog.getByLabel('项目名称', { exact: true })).toHaveValue('保留草稿');
+  await fixture(page, { failure: '' });
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('远端目录已创建');
+  expect(await page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+});
+
+test('an outcome persistence failure after dispatch retains an inspectable fault across restart', async ({ page }) => {
+  await install(page); await page.goto('/');
+  let dialog = await directory(page);
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/outcome-storage-failed');
+  await fixture(page, { hold: 'create_remote_directory', createOutcome: 'unknown' });
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+  await fixture(page, { hold: '', failure: 'save_remote_directory_receipt', release: true });
+  await expect(dialog.getByRole('region', { name: '目录创建结果' })).toContainText('结果不确定');
+  await page.reload();
+  dialog = await directory(page);
+  const receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  await expect(receipt).toContainText('结果不确定');
+  await expect(receipt.getByRole('button', { name: '核查原路径', exact: true })).toBeEnabled();
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/outcome-storage-failed');
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  expect(await page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+});
+
+test('restarted unknown receipt refuses a revised host before any inspection read', async ({ page }) => {
+  await install(page); await page.goto('/');
+  let dialog = await directory(page);
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/revised-restart');
+  await fixture(page, { createOutcome: 'unknown' });
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect(dialog.getByRole('region', { name: '目录创建结果' })).toContainText('结果不确定');
+  await page.evaluate(() => (window as any).__remoteFixture.replaceHost());
+  await page.reload();
+  dialog = await directory(page);
+  await expect(dialog.getByLabel('已有目录')).toContainText('/child');
+  const before = await page.evaluate(() => (window as any).__remoteFixture.reads.length);
+  const receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  await receipt.getByRole('button', { name: '核查原路径', exact: true }).click();
+  await expect(receipt).toContainText('原主机连接信息已变化或已移除');
+  await expect(receipt).toContainText('fixture@key.invalid:22');
+  expect(await page.evaluate(() => (window as any).__remoteFixture.reads.length)).toBe(before);
+  expect(await page.evaluate(() => Number(localStorage.getItem('fixture:mkdir-count')))).toBe(1);
+});
 
 test('a name-only host save keeps its connection revision and remains renamed after re-entering settings', async ({ page }) => {
   await install(page); await page.goto('/');

@@ -16,7 +16,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, Remote
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
-import type { RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore, RemoteWriteReceipt } from '../types/remote';
+import type { DirectoryReceipt, RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore, RemoteWriteReceipt } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
@@ -322,7 +322,9 @@ export const native = {
   deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); rememberedRemoteTargets.delete(id); remoteTargetObservations.delete(id); for (const listener of remoteIdentityListeners) listener(); },
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
   listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<RemoteDirectoryListing>('list_remote_directories', { targetId, parent }, 'read', options),
-  createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),
+  createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions, receiptId?: string) => remoteCommand<void>('create_remote_directory', { targetId, path, receiptId }, 'write', options),
+  listRemoteDirectoryReceipts: () => command<DirectoryReceipt[]>('list_remote_directory_receipts'),
+  saveRemoteDirectoryReceipt: (receipt: DirectoryReceipt) => command<void>('save_remote_directory_receipt', { receipt }),
   saveRemoteProject: (project: RemoteProject) => command<RemoteProject>('save_remote_project', { project }),
   deleteRemoteProject: (id: string) => command<void>('delete_remote_project', { id }),
   testRemoteTarget: (target: RemoteTarget, password?: string | null, options?: RemoteOperationOptions) => remoteCommand<RemoteProbe>('test_remote_target', { target, password: password || null }, 'read', options),
