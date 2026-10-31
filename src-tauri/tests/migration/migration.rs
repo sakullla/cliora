@@ -29,6 +29,77 @@ fn database(directory: &Path) -> Database {
 }
 
 #[test]
+fn stale_binding_is_not_exported_or_retried_and_native_files_are_preserved() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let native = root.path().join("native.json");
+    fs::write(&native, "current-native-configuration").unwrap();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','minimax_code','deleted-profile',1,'{}')", []).unwrap();
+        Ok(())
+    }).unwrap();
+    let key = format!("binding:{}", binding_id("minimax_code", "global"));
+    record_blocker(&db, RestoreBlocker { key: key.clone(), label: "MiniMax".into(), action: "retry".into(), detail: "命名配置不存在".into() });
+    let snapshot = collect_snapshot(&db, &MemoryCredentials::default(), &Registry::builtins()).unwrap();
+    assert!(!snapshot.entities.iter().any(|item| item.key() == key));
+    assert!(load_blockers(&db).unwrap().is_empty());
+    assert!(find_binding(&db, &key).unwrap().is_some());
+    assert_eq!(fs::read_to_string(native).unwrap(), "current-native-configuration");
+}
+
+#[test]
+fn unreadable_profile_and_its_binding_are_held_without_losing_their_secrets() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let mut profile = bare_profile("locked-profile", "codex", "Locked", BTreeMap::new());
+    profile.native_credentials.insert("auth".into(), BTreeMap::from([("token".into(), "connection-locked".into())]));
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES ('locked-profile','codex',1,?1)", [serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','locked-profile',1,'{}')", []).unwrap();
+        Ok(())
+    }).unwrap();
+    let (snapshot, blocked) = collect_reported(&db, &store, &registry).unwrap();
+    assert!(snapshot.entities.iter().all(|item| !matches!(item.kind(), "profile" | "binding")));
+    assert!(blocked.iter().any(|item| item.key == "profile:locked-profile"));
+    assert!(blocked.iter().any(|item| item.key.starts_with("binding:")));
+    store.put("connection-locked", "recovered-original").unwrap();
+    let (snapshot, blocked) = collect_reported(&db, &store, &registry).unwrap();
+    assert!(blocked.is_empty());
+    assert!(load_blockers(&db).unwrap().is_empty());
+    let PortablePayload::Profile(value) = &snapshot.entities.iter().find(|item| item.kind() == "profile").unwrap().payload else { panic!() };
+    assert_eq!(value.native_secrets["auth"]["token"], "recovered-original");
+}
+
+#[test]
+fn deferred_native_apply_survives_restart_and_waits_for_dependencies() {
+    let _roots = RestoreRootsGuard;
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home.clone(), root.path().to_path_buf())));
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let profile = bare_profile("pending", "codex", "Pending", BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]));
+    let snapshot = PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![
+        PortableEntity { id: binding_id("codex", "global"), payload: PortablePayload::Binding(PortableBinding { scope_key: "global".into(), tool: "codex".into(), profile_id: "pending".into(), context_id: None }) },
+        PortableEntity { id: "pending".into(), payload: PortablePayload::Profile(Box::new(PortableProfile { profile, connection_secret: None, native_secrets: BTreeMap::new(), pending_fields: vec![] })) },
+    ] };
+    let draft = preview_import(&db, &store, &registry, snapshot).unwrap();
+    let selected = draft.items.iter().map(|item| item.key.clone()).collect();
+    apply_import_selecting(&db, &store, &registry, &draft, &selected, &BTreeSet::new(), false, false).unwrap();
+    assert!(!home.join(".codex/config.toml").exists());
+    drop(db);
+    let restarted = database(root.path());
+    apply_synced_bindings(&restarted, &store, &registry).unwrap();
+    assert!(fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("gpt-6"));
+    assert!(restarted.with_connection(|conn| pending_native_on(conn)).unwrap().is_empty());
+    assert!(load_blockers(&restarted).unwrap().is_empty());
+}
+
+#[test]
 fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_idempotent() {
     let temp = tempfile::tempdir().unwrap();
     let source = database(&temp.path().join("old"));

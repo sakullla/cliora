@@ -436,7 +436,7 @@ fn localize_entity(registry: &Registry, entity: &mut PortableEntity) -> Result<(
         PortablePayload::Project(value) => value.path = value.path.as_deref().map(paths::decode).transpose()?,
         PortablePayload::Binding(value) => value.scope_key = paths::decode_scope(&value.scope_key)?,
         PortablePayload::Mcp(value) => {
-            value.definition.command = paths::decode(&value.definition.command)?;
+            value.definition.command = paths::decode(&paths::command(&value.definition.command))?;
             for arg in &mut value.definition.args { *arg = paths::decode(arg)?; }
             for value in value.definition.env.values_mut() { *value = paths::decode(value)?; }
         }

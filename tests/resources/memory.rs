@@ -1423,7 +1423,7 @@ fn import_export_do_not_rewrite_memory_files() {
 
     let snapshot =
         portable::collect_snapshot(&harness.db, &harness.store, &harness.registry).unwrap();
-    assert_eq!(snapshot.schema_version, 3);
+    assert_eq!(snapshot.schema_version, crate::portable::SNAPSHOT_VERSION);
     let encoded = serde_json::to_string(&snapshot).unwrap();
     assert!(!encoded.contains("memory-body-not-in-snapshot"));
     for entity in &snapshot.entities {
