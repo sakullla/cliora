@@ -496,6 +496,35 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
   await expect.poll(scrollTop).toBeGreaterThan(up);
 });
 
+test('tmux-style SGR wheel reports stay with the hovered alternate-screen session', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '分屏', exact: true }).click();
+  await expect(stage.locator('[data-pane-session="s2"]')).toContainText('claude-ready');
+  await page.evaluate(() => {
+    const output = (window as unknown as { __output: (text: string, id: string) => void }).__output;
+    for (const id of ['s1', 's2']) output(`\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[Hmux-${id}`, id);
+  });
+  for (const id of ['s1', 's2']) await expect(stage.locator(`[data-pane-session="${id}"]`)).toContainText(`mux-${id}`);
+  // Keep keyboard focus on the other pane: mouse ownership follows the pane
+  // receiving the event, even when both tmux clients request SGR tracking.
+  for (const [id, other] of [['s1', 's2'], ['s2', 's1']]) {
+    await stage.locator(`[data-pane-session="${other}"] .xterm-helper-textarea`).focus();
+    const pane = stage.locator(`[data-pane-session="${id}"]`);
+    const box = (await pane.locator('.xterm-screen').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+    await page.mouse.wheel(0, -400);
+    await expect.poll(async () => (await writeLog(page)).some(item => item.sessionId === id && /^\x1b\[<64;\d+;\d+M$/.test(item.text))).toBe(true);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => (await writeLog(page)).some(item => item.sessionId === id && /^\x1b\[<65;\d+;\d+M$/.test(item.text))).toBe(true);
+    const reports = await writeLog(page);
+    expect(reports.every(item => item.sessionId === id && /^\x1b\[<6[45];\d+;\d+M$/.test(item.text))).toBe(true);
+    expect(await pane.locator('.xterm-viewport').evaluate(el => el.scrollTop)).toBe(0);
+  }
+});
+
 test('mouse-tracking terminal clicks are forwarded to the CLI', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1000hclick-target'));
