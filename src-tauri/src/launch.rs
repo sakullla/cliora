@@ -376,12 +376,15 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
 
 pub(crate) fn remote_reattach_command(session: &str) -> String {
     let session_q = remote_shell_quote(session);
-    let target_q = remote_shell_quote(&format!("={session}"));
+    let session_target_q = remote_shell_quote(&format!("={session}"));
+    // set-option parses a target-pane, unlike attach-session's target-session.
+    // The colon makes the exact session component explicit for the pane lookup.
+    let pane_target_q = remote_shell_quote(&format!("={session}:"));
     // tmux owns the history while its client uses xterm's alternate screen.
     // Enable its existing wheel/copy-mode bindings only for this exact session,
     // on both first attach and reconnect. Keep CLI mouse reporting untouched.
     format!(
-        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {target_q} mouse on || {{ echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
+        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {pane_target_q} mouse on || {{ echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {session_target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
         remote_mux_probe(session), remote_state_signal(session, "ended"), remote_state_signal(session, "ready"),
         remote_state_signal(session, "ended"), remote_state_signal(session, "disconnected")
     )

@@ -116,8 +116,6 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
 /// Execute the production shell with function-only muxes. No SSH, tmux server,
 /// user configuration, package manager, or persistent fixture files are used.
 fn run_remote_mux_shell(command: &str, scenario: &str) -> std::process::Output {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
     let shell = format!(r#"
 scenario={scenario}
 created=0
@@ -139,7 +137,7 @@ tmux() {{
             # Existing unrelated setup is inert. A mouse change must be exact,
             # session-scoped, and must never touch the sibling/global setting.
             if [ "$1" = -g ]; then [ "$2" = status ] || return 91; return 0; fi
-            [ "$#" = 4 ] && [ "$1" = -t ] && [ "$2" = =cliora-fixture ] && [ "$3" = mouse ] && [ "$4" = on ] || return 92
+            [ "$#" = 4 ] && [ "$1" = -t ] && [ "$2" = =cliora-fixture: ] && [ "$3" = mouse ] && [ "$4" = on ] || return 92
             printf 'MOUSE:=cliora-fixture:on\n'
             [ "$scenario" != setup_failed ] && [ "$scenario" != new_setup_failed ] ;;
         attach-session)
@@ -158,6 +156,12 @@ screen() {{
 }}
 {command}
 "#);
+    run_posix_shell(&shell)
+}
+
+fn run_posix_shell(shell: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     #[cfg(windows)]
     let mut process = {
         let mut process = Command::new("wsl.exe");
@@ -198,6 +202,83 @@ fn remote_tmux_mouse_setup_is_exact_and_precedes_ready_on_new_and_reattach() {
         assert_eq!(stdout.contains("NEW"), new, "{stdout}");
         assert!(stdout.contains(";cliora-fixture;disconnected"), "{stdout}");
     }
+}
+
+#[test]
+#[ignore = "requires local POSIX shell and tmux; opt in with --include-ignored"]
+fn remote_generated_commands_use_real_tmux_target_parsing_on_an_isolated_socket() {
+    // Optional paths let Windows development use a locally extracted tmux in WSL.
+    // No installation, default server, user tmux config, SSH or native app is used.
+    let binary = remote_shell_quote(&std::env::var("CLIORA_TEST_TMUX").unwrap_or_else(|_| "tmux".into()));
+    let libraries = remote_shell_quote(&std::env::var("CLIORA_TEST_TMUX_LIBRARY_PATH").unwrap_or_default());
+    let reattach = remote_reattach_command("cliora-fixture");
+    let legacy = reattach.replace("set-option -t '=cliora-fixture:'", "set-option -t '=cliora-fixture'");
+    assert_ne!(legacy, reattach, "negative control must reproduce the original target");
+    let new = remote_persistent_command("/tmp", "sleep", &["60".into()], "cliora-fixture", Default::default());
+    let shell = format!(r#"
+set -eu
+tmux_bin={binary}
+export LD_LIBRARY_PATH={libraries}
+unset TMUX TMUX_PANE
+task_root=$(mktemp -d /tmp/cliora-launch-tmux-XXXXXX)
+socket="$task_root/socket"
+export HOME="$task_root/home"
+mkdir "$HOME"
+cleanup() {{
+    "$tmux_bin" -S "$socket" kill-server >/dev/null 2>&1 || :
+    if [ -S "$socket" ]; then rm -- "$socket"; fi
+    rmdir "$HOME" "$task_root"
+}}
+trap cleanup EXIT
+mux() {{ "$tmux_bin" -f /dev/null -S "$socket" "$@"; }}
+tmux() {{
+    if [ "$1" = -u ] && [ "$2" = attach-session ]; then
+        # Control mode exercises the real attach-session parser and attachment,
+        # then detaches immediately without requiring a desktop PTY.
+        printf 'detach-client\n' | mux -C "$@"
+    else
+        mux "$@"
+    fi
+}}
+mux -V
+mux new-session -d -s cliora-fixture-long -- sleep 60
+mux set-option -g mouse off
+mux new-session -d -s cliora-fixture -- sleep 60
+if legacy_output=$( ( set +e; {legacy} ) ); then
+    echo 'legacy target unexpectedly succeeded' >&2; exit 80
+else
+    [ "$?" = 46 ] || exit 81
+fi
+case "$legacy_output" in *';ready'*) exit 82 ;; esac
+[ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = off ]
+mux has-session -t '=cliora-fixture'
+printf 'LEGACY_FAILED_BEFORE_READY\n'
+mux kill-session -t '=cliora-fixture'
+new_output=$( ( set +e; {new} ) )
+printf 'NEW_RESULT:%s\n' "$new_output"
+[ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = on ]
+[ "$(mux show-options -Av -t '=cliora-fixture-long:' mouse)" = off ]
+[ "$(mux show-options -gv mouse)" = off ]
+mux set-option -t '=cliora-fixture:' mouse off
+reattach_output=$( ( set +e; {reattach} ) )
+printf 'REATTACH_RESULT:%s\n' "$reattach_output"
+[ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = on ]
+[ "$(mux show-options -Av -t '=cliora-fixture-long:' mouse)" = off ]
+[ "$(mux show-options -gv mouse)" = off ]
+mux kill-session -t '=cliora-fixture'
+if missing_output=$( ( set +e; {reattach} ) ); then exit 83; else [ "$?" = 44 ] || exit 84; fi
+case "$missing_output" in *';ready'*) exit 85 ;; esac
+mux has-session -t '=cliora-fixture-long'
+printf 'ISOLATED_TMUX_OK\n'
+"#);
+    let output = run_posix_shell(&shell);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("LEGACY_FAILED_BEFORE_READY") && stdout.contains("ISOLATED_TMUX_OK"), "{stdout}");
+    assert_eq!(stdout.matches(";cliora-fixture;ready").count(), 2, "{stdout}");
+    assert_eq!(stdout.matches("%session-changed").count(), 2, "{stdout}");
+    assert_eq!(stdout.matches(";cliora-fixture;disconnected").count(), 2, "{stdout}");
+    assert!(!stdout.contains("%error"), "{stdout}");
 }
 
 #[test]
