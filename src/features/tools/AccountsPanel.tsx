@@ -1,3 +1,4 @@
+import { useRemoteReads } from '../../lib/remoteReads';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
@@ -55,6 +56,7 @@ function readNativeLogins(toolId: string) {
   return request;
 }
 export function useAccounts(tool: string, active = true, remoteTargetId: string | null = null) {
+  const remoteReads = useRemoteReads(remoteTargetId, tool, active);
   const currentTool = useRef(tool); currentTool.current = tool;
   const mounted = useRef(false);
   const generation = useRef(0);
@@ -67,7 +69,7 @@ export function useAccounts(tool: string, active = true, remoteTargetId: string 
     const scope = generation.current; const currentRequest = ++request.current;
     try {
       const [all, rawCaps] = remoteTargetId
-        ? await native.getRemoteResourceStore(remoteTargetId, tool, 'accounts').then(value => {
+        ? await remoteReads.native.getRemoteResourceStore(remoteTargetId, tool, 'accounts').then(value => {
           const store = value as { accounts?: AuthAccount[]; capability?: AccountCapability | null };
           return [store.accounts ?? [], store.capability ?? null] as const;
         })

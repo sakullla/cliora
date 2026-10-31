@@ -1,0 +1,8 @@
+{
+  "targetId": "host-native",
+  "toolId": "claude_code",
+  "executable": "claude",
+  "installed": false,
+  "version": null,
+  "detail": "sh: claude: command not found"
+}

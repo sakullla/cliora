@@ -1,3 +1,4 @@
+import { useRemoteIdentity } from '../../lib/remoteReads';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
@@ -16,7 +17,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchGitContext, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchExit, WorkbenchGitContext, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -26,13 +27,16 @@ import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, t
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailSession, type SessionTone } from './SessionRail';
+import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { railPlace, railTaskTitle } from './railTitle';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
+import { StatusBanner } from '../../components/StatusBanner';
 import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
 import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
+import { requestWriteRecovery, useWriteRecoveryNeeded } from '../remote/writeReceipts';
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
@@ -198,7 +202,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   onOpenHome: () => void;
 }) {
   const { t } = useTranslation();
+  const writeRecoveryNeeded = useWriteRecoveryNeeded(remoteTargetId);
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
+  const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
+  function applyListedSessions(listed: WorkbenchSession[]) {
+    setSessions((current) => listed.map((item) => {
+      const candidates = [item, current.find(session => session.id === item.id), sessionStateUpdates.current.get(item.id)];
+      return candidates.reduce<WorkbenchSession>((newest, candidate) => candidate && (candidate.stateRevision ?? 0) > (newest.stateRevision ?? 0) ? { ...item, ...candidate } : newest, item);
+    }));
+  }
+  const allSessionsRef = useRef(sessions);
+  allSessionsRef.current = sessions;
   const [projects, setProjects] = useState<Project[]>([]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
@@ -206,9 +220,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
   const [hostManagerOpen, setHostManagerOpen] = useState(false);
   const [promptsByHost, setPromptsByHost] = useState<Record<string, LibraryItem[]>>({});
+  const [promptStatus, setPromptStatus] = useState<Record<string, { identity: string; stale: boolean; at: number; failed: boolean }>>({});
+  const [promptReload, setPromptReload] = useState(0);
+  const promptFreshHosts = useRef(new Set<string>());
   const promptRequestSeq = useRef(new Map<string, number>());
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
+  const pendingSelectionId = useRef<string | null>(focusSessionId);
+  const selectionTarget = useRef(activeTargetId);
+  function selectPendingSession(id: string) {
+    pendingSelectionId.current = id;
+    setSelectedId(id);
+  }
   const [loading, setLoading] = useState(nativeAvailable);
   const [listError, setListError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -261,6 +284,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [resumeLatest, setResumeLatest] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [launchingNew, setLaunchingNew] = useState(false);
+  const newLaunchPending = useRef(false);
   const [dialogError, setDialogError] = useState('');
   const [remotePrefillToolId, setRemotePrefillToolId] = useState<string | null>(null);
   const [remoteQuickLaunch, setRemoteQuickLaunch] = useState(false);
@@ -271,11 +295,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return sessions.filter((item) => !!item.projectId && remoteProjectIds.has(item.projectId));
   }, [activeTargetId, remoteProjects, sessions]);
   useEffect(() => {
-    setSelectedId((current) => current && scopedSessions.some((item) => item.id === current)
-      ? current
-      : scopedSessions.find((item) => item.running)?.id ?? scopedSessions[0]?.id ?? null);
+    const targetChanged = selectionTarget.current !== activeTargetId;
+    selectionTarget.current = activeTargetId;
+    if (targetChanged) pendingSelectionId.current = null;
+    setSelectedId((current) => {
+      if (current && scopedSessions.some((item) => item.id === current)) {
+        if (pendingSelectionId.current === current) pendingSelectionId.current = null;
+        return current;
+      }
+      if (current && pendingSelectionId.current === current) return current;
+      return scopedSessions.find((item) => item.running)?.id ?? scopedSessions[0]?.id ?? null;
+    });
     setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
-  }, [scopedSessions]);
+  }, [activeTargetId, scopedSessions]);
 
   useEffect(() => { setActiveTargetId(remoteTargetId); }, [remoteTargetId]);
   useEffect(() => {
@@ -303,34 +335,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             : (availableProjects.find((item) => item.id === rememberedId && item.targetId === targetId)
               ?? [...availableProjects].filter((item) => item.targetId === targetId && (!toolId || !item.preferredTool || item.preferredTool === toolId)).sort((a, b) => b.updatedAt - a.updatedAt)[0]);
           if (candidate && (!toolId || !candidate.preferredTool || candidate.preferredTool === toolId)) {
-            // Left-click quick launch reuses the already attached local tab as
-            // well as the persistent remote tmux/screen session. Starting a
-            // second SSH transport to the same session only creates duplicate
-            // workbench rows and makes input/close state ambiguous.
-            const existing = sessionsRef.current.find((item) => item.projectId === `remote:${candidate.id}` && (!toolId || item.toolId === toolId));
-            if (existing) {
-              setNewDialogOpen(false);
-              setRemoteDialogOpen(false);
-              if (existing.running) {
-                setSelectedId(existing.id);
-                return;
-              }
-              if (existing.reattachable) {
-                setLaunchingNew(true);
-                try {
-                  await native.reattachWorkbenchSession(existing.id);
-                  const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
-                  if (Array.isArray(listed)) setSessions(listed);
-                  setSelectedId(existing.id);
-                  return;
-                } catch {
-                  // The durable remote session may have been removed outside
-                  // Cliora. Fall through and create/reuse it by name below.
-                } finally {
-                  setLaunchingNew(false);
-                }
-              }
-            }
             void launchRemoteProject(candidate, toolId);
           } else {
             setNewDialogOpen(false);
@@ -388,7 +392,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!Object.keys(report.restored).length) return;
       setArrangement(current => ({ pinned: current.pinned.map(id => report.restored[id] ?? id), order: current.order.map(id => report.restored[id] ?? id) }));
       const listed = await native.listWorkbenchSessions();
-      setSessions(listed);
+      applyListedSessions(listed);
       setSelectedId(current => {
         let previous: string | null = null;
         try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
@@ -528,36 +532,52 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
   // A remote library read is its own SSH handshake. Reuse a recent result when
   // the workbench or composer opens again; a failed read is retried next time.
-  const remotePromptFetchedAt = useRef(new Map<string, number>());
-  const REMOTE_PROMPT_REFRESH_MS = 45_000;
-  // Library prompts can change on the 资料库 page at any time, so re-read them whenever the workbench
-  // becomes visible or the composer / new-session dialog opens. Cached items stay on screen meanwhile.
+  const composerIdentity = useRemoteIdentity(composerHostId);
+  const dialogIdentity = useRemoteIdentity(dialogHostId);
+  const promptHostIdentities = useRef(new Map<string, string>());
   useEffect(() => {
     if (!active || !nativeAvailable) return;
+    const controller = new AbortController();
     const hosts = new Set([composerHostId, dialogHostId].filter((host): host is string => !!host));
     for (const hostId of hosts) {
-      if (hostId !== 'local') {
-        const fetchedAt = remotePromptFetchedAt.current.get(hostId) ?? 0;
-        if (Date.now() - fetchedAt < REMOTE_PROMPT_REFRESH_MS) continue;
-        remotePromptFetchedAt.current.set(hostId, Date.now());
+      const identity = hostId === composerHostId ? composerIdentity : dialogIdentity;
+      if (promptHostIdentities.current.get(hostId) !== identity) {
+        setPromptsByHost(prev => ({ ...prev, [hostId]: [] }));
+        promptHostIdentities.current.set(hostId, identity);
       }
       const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
       promptRequestSeq.current.set(hostId, seq);
-      const current = () => promptRequestSeq.current.get(hostId) === seq;
+      const current = () => !controller.signal.aborted && promptRequestSeq.current.get(hostId) === seq;
+      const report = (state: { stale: boolean; at: number }) => {
+        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: { identity, ...state, at: state.at || (state.stale && previous[hostId]?.identity === identity ? previous[hostId].at : 0), failed: state.stale } }));
+      };
+      const fresh = promptFreshHosts.current.delete(hostId);
       const request = hostId === 'local'
         ? native.listLibraryItems('prompt', null, '')
-        : native.listRemoteLibraryItems(hostId, 'prompt', '');
-      void request.then((items) => {
-        if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
+        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal, fresh, onFreshness: report });
+      void request.then(items => {
+        if (current()) {
+          setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
+          if (hostId === 'local') report({ stale: false, at: Date.now() });
+        }
       }).catch(() => {
-        if (hostId !== 'local') remotePromptFetchedAt.current.delete(hostId);
-        if (current()) setPromptsByHost((prev) => ({ ...prev, [hostId]: prev[hostId] ?? [] }));
+        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: {
+          identity, stale: true, at: previous[hostId]?.identity === identity ? previous[hostId].at : 0, failed: true,
+        } }));
       });
     }
-  }, [active, composerHostId, dialogHostId, composerOpen]);
+    return () => controller.abort();
+  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity, promptReload]);
+  function promptFeedback(hostId: string | null, identity: string) {
+    const state = hostId ? promptStatus[hostId] : undefined;
+    if (!hostId || !state?.failed || state.identity !== identity) return null;
+    return <StatusBanner tone={state.at ? 'warning' : 'error'} action={<Button size="sm" onClick={() => { promptFreshHosts.current.add(hostId); setPromptReload(value => value + 1); }}>{t('sessions.retryPrompts')}</Button>}>
+      {t(state.at ? 'sessions.promptsStale' : 'sessions.promptsFailed')}
+    </StatusBanner>;
+  }
   const showEmpty = !loading && !scopedSessions.length;
   const runningCount = scopedSessions.filter((item) => item.running).length;
-  const endedCount = scopedSessions.length - runningCount;
+  const endedCount = scopedSessions.filter(sessionConfirmedEnded).length;
 
   function flashCopied(state: 'path' | 'output' | 'selection' | 'empty') {
     window.clearTimeout(copyTimerRef.current);
@@ -665,7 +685,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // A launch elsewhere asks the workbench to focus its new session once. Returning to the
   // page later must keep whatever the user selected since, not jump back to that launch.
   const appliedFocusToken = useRef<number | null>(null);
-  useEffect(() => { if (focusSessionId) setSelectedId(focusSessionId); }, [focusSessionId, focusToken]);
+  useEffect(() => { if (focusSessionId) selectPendingSession(focusSessionId); }, [focusSessionId, focusToken]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -721,7 +741,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     void listen<WorkbenchOutput>('cliora:session-output', (event) => {
       if (alive) push(event.payload.sessionId, { data: event.payload.dataBase64, offset: typeof event.payload.offset === 'number' ? event.payload.offset : undefined });
     }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
-    void listen<{ sessionId: string; exitCode: number | null }>('cliora:session-exit', (event) => {
+    void listen<WorkbenchSession>('cliora:session-state', (event) => {
+      if (!alive) return;
+      const next = event.payload;
+      const known = sessionStateUpdates.current.get(next.id);
+      if (known && (known.stateRevision ?? 0) > (next.stateRevision ?? 0)) return;
+      sessionStateUpdates.current.set(next.id, next);
+      // Exit events can trail tab removal. Bound the small pre-list/tail cache
+      // rather than retaining one snapshot for every session ever closed.
+      const limit = allSessionsRef.current.length + 32;
+      while (sessionStateUpdates.current.size > limit) {
+        const oldest = sessionStateUpdates.current.keys().next().value;
+        if (oldest === undefined) break;
+        sessionStateUpdates.current.delete(oldest);
+      }
+      setSessions((current) => current.map((item) => item.id === next.id && (item.stateRevision ?? 0) <= (next.stateRevision ?? 0) ? { ...item, ...next } : item));
+    }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
+    void listen<WorkbenchExit>('cliora:session-exit', (event) => {
       if (!alive) return;
       if (soundEnabledRef.current) playWorkbenchChime('exit');
       setActiveOutputIds((current) => {
@@ -730,7 +766,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         next.delete(event.payload.sessionId);
         return next;
       });
-      setSessions((current) => current.map((item) => item.id === event.payload.sessionId ? { ...item, running: false, exitCode: event.payload.exitCode ?? null } : item));
+      setSessions((current) => current.map((item) => item.id === event.payload.sessionId
+        && (event.payload.stateRevision === undefined || (item.stateRevision ?? 0) <= event.payload.stateRevision)
+        ? { ...item, running: false, exitCode: event.payload.exitCode ?? null, ...(event.payload.stateRevision === undefined ? {} : { stateRevision: event.payload.stateRevision }) } : item));
     }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
     return () => { alive = false; stops.forEach((stop) => { void Promise.resolve(stop()).catch(() => {}); }); };
   }, []);
@@ -747,13 +785,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const next = Array.isArray(listed) ? listed : [];
       const now = Date.now();
       for (const item of next) if (!firstSeenAt.current.has(item.id)) firstSeenAt.current.set(item.id, item.startedAt ?? now);
-      setSessions(next);
+      applyListedSessions(next);
       setListError('');
       const takeFocus = !!focusSessionId && appliedFocusToken.current !== focusToken && next.some((item) => item.id === focusSessionId);
       if (takeFocus) appliedFocusToken.current = focusToken;
       setSelectedId((current) => {
         if (takeFocus) return focusSessionId;
         if (current && next.some((item) => item.id === current)) return current;
+        if (current && pendingSelectionId.current === current) return current;
         return next.find((item) => item.running)?.id ?? next[0]?.id ?? null;
       });
       for (const session of next) {
@@ -788,31 +827,41 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       listedRemoteProjects,
       listedRemoteTargets,
       remoteSshEnabled ? native.listRemoteSessions().catch(() => []) : Promise.resolve([]),
-    ]).then(([listed, remoteProjects, remoteTargets, remoteSessions]) => {
-      if (!alive) return;
-      const next = Array.isArray(listed) ? listed : [];
-      if (!next.length && !sessionsRef.current.length && !autoRemoteReattachAttempted.current) {
+    ]).then(async ([, remoteProjects, remoteTargets, remoteSessions]) => {
+      if (!alive || !remoteSshEnabled || autoRemoteReattachAttempted.current) return;
+      // Discovery can finish after local restoration or a user launch. Compare
+      // the index with a fresh, unscoped list instead of the startup snapshot.
+      const latest = await native.listWorkbenchSessions();
+      if (!alive || autoRemoteReattachAttempted.current) return;
+      if (Array.isArray(latest)) {
         autoRemoteReattachAttempted.current = true;
-        const validProjectIds = new Set((Array.isArray(remoteProjects) ? remoteProjects : []).map((item) => item.id));
+        const projectTargets = new Map((Array.isArray(remoteProjects) ? remoteProjects : []).map((item) => [`remote:${item.id}`, item.targetId]));
         const validTargetIds = new Set((Array.isArray(remoteTargets) ? remoteTargets : []).filter((item) => item.enabled).map((item) => item.id));
+        const identity = (targetId: string, remoteSessionId: string) => JSON.stringify([targetId, remoteSessionId]);
+        const attached = new Set([...latest, ...allSessionsRef.current].flatMap((session) => {
+          const targetId = session.projectId ? projectTargets.get(session.projectId) : undefined;
+          return targetId && session.remoteSessionId ? [identity(targetId, session.remoteSessionId)] : [];
+        }));
         const indexed = Array.isArray(remoteSessions)
-          ? remoteSessions.filter((item) => item?.remoteSessionId && item.projectId && item.toolId && validProjectIds.has(item.projectId) && validTargetIds.has(item.targetId))
+          ? remoteSessions.filter((item) => {
+            if (!item?.remoteSessionId || !item.projectId || !item.toolId || projectTargets.get(`remote:${item.projectId}`) !== item.targetId || !validTargetIds.has(item.targetId)) return false;
+            const key = identity(item.targetId, item.remoteSessionId);
+            if (attached.has(key)) return false;
+            attached.add(key);
+            return true;
+          })
           : [];
-        const requests = indexed.length
-          ? indexed.map((item) => native.launchCli({
-              toolId: item.toolId,
-              projectId: `remote:${item.projectId}`,
-              sessionId: `__remote_reattach__:${item.remoteSessionId}`,
-              mode: item.mode ?? 'normal',
-              directory: item.directory ?? null,
-              initialPrompt: null,
-              resumeLatest: false,
-            }))
-          : (() => {
-              const candidate = Array.isArray(remoteProjects) ? remoteProjects.find((item) => item?.id && item.preferredTool) : null;
-              return candidate?.preferredTool ? [native.launchCli({ toolId: candidate.preferredTool, projectId: `remote:${candidate.id}`, sessionId: '__remote_reattach__', mode: 'normal', directory: null, initialPrompt: null, resumeLatest: false })] : [];
-            })();
-        if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) setSessions(sessions); }).catch(() => {});
+        const requests = indexed.map((item) => native.launchCli({
+          toolId: item.toolId,
+          projectId: `remote:${item.projectId}`,
+          sessionId: null,
+          remoteIntent: { kind: 'reattach', remoteSessionId: item.remoteSessionId },
+          mode: item.mode ?? 'normal',
+          directory: item.directory ?? null,
+          initialPrompt: null,
+          resumeLatest: false,
+        }));
+        if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) applyListedSessions(sessions); }).catch(() => {});
       }
     }).catch(() => { /* Session list failures are reported by the attachment above. */ });
     return () => { alive = false; };
@@ -943,7 +992,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function taskTitle(session: WorkbenchSession): string {
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
-    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    const title = railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    const remoteProject = remoteProjects.find((item) => `remote:${item.id}` === session.projectId);
+    return session.projectId?.startsWith('remote:')
+      ? `${title || remoteProject?.name || shortPath(displayPath(session.directory)) || toolName(session)} · ${(session.remoteSessionId || session.id).slice(-8)}`
+      : title;
   }
 
   function railPlaceOf(session: WorkbenchSession): string {
@@ -956,6 +1009,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function sessionTone(session: WorkbenchSession): SessionTone {
+    if (!session.running && remoteSessionMayExist(session)) return 'ended';
     if (!session.running) return session.exitCode != null && session.exitCode !== 0 ? 'error' : 'ended';
     if (attentionIds.has(session.id)) return 'bell';
     if (activeOutputIds.has(session.id)) return 'live';
@@ -963,6 +1017,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function forgetSession(id: string) {
+    sessionStateUpdates.current.delete(id);
     firstSeenAt.current.delete(id);
     setTitles((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setActiveOutputIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
@@ -984,10 +1039,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   async function endSession(session: WorkbenchSession) {
     if (busy) return;
-    if (session.running) {
+    if (session.running || remoteSessionMayExist(session)) {
       const accepted = await confirmAction(
         t('sessions.endConfirmMessage', { tool: toolName(session), place: placeOf(session) }),
-        () => sessionsRef.current.some((item) => item.id === session.id && item.running),
+        () => sessionsRef.current.some((item) => item.id === session.id),
         { title: t('sessions.endConfirmTitle'), confirmLabel: t('sessions.endConfirmAction'), destructive: true },
       );
       if (!accepted || busy) return;
@@ -1010,9 +1065,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setBusy('reattach:' + session.id);
     setActionError('');
     try {
-      await native.reattachWorkbenchSession(session.id);
+      await native.reattachWorkbenchSession(session.id, handles.current.get(session.id)?.size());
       const listed = await native.listWorkbenchSessions();
-      setSessions(listed);
+      applyListedSessions(listed);
       setSelectedId(session.id);
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.reattachFailed'), t('sessions.reattachNext')));
@@ -1020,7 +1075,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   async function clearEndedSessions() {
-    const ended = scopedSessions.filter((item) => !item.running);
+    const ended = scopedSessions.filter(sessionConfirmedEnded);
     if (!ended.length || busy) return;
     setBusy('__clear_ended');
     setActionError('');
@@ -1046,12 +1101,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setActionError('');
     try {
       const result = failure.retry.kind === 'launch' ? await native.launchCli(failure.retry.request) : await native.resumeHistorySession(failure.retry.id, failure.retry.mode);
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         onFailure(null);
-        setSelectedId(opened);
+        selectPendingSession(opened);
         const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
-        if (Array.isArray(listed)) setSessions(listed);
+        if (Array.isArray(listed)) applyListedSessions(listed);
         return;
       }
       onFailure(null);
@@ -1091,7 +1147,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       : project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
         ? project.preferredTool
         : effectiveLaunchToolId;
-    if (!toolId) return;
+    if (!toolId || newLaunchPending.current) return;
+    newLaunchPending.current = true;
     setLaunchingNew(true);
     setDialogError('');
     setActionError('');
@@ -1103,12 +1160,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         toolId,
         projectId: `remote:${project.id}`,
         sessionId: null,
+        remoteIntent: { kind: 'new' },
         mode,
         directory: null,
         initialPrompt: null,
         resumeLatest: false,
       });
       try { localStorage.setItem(`cliora:remote-launch-project:${project.targetId}:${toolId}`, project.id); } catch { /* optional */ }
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         setRemoteQuickLaunch(false);
@@ -1116,15 +1175,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         onFailure(null);
         setNewDialogOpen(false);
         setRemoteDialogOpen(false);
-        setSelectedId(opened);
+        selectPendingSession(opened);
         const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
-        if (Array.isArray(listed)) setSessions(listed);
+        if (Array.isArray(listed)) applyListedSessions(listed);
       } else {
         setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
       }
     } catch (value) {
-      setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { setLaunchingNew(false); }
+      setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
+    } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
   function handleRemoteProjectSaved(project: RemoteProject) {
@@ -1161,7 +1220,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   async function launchFromDialog() {
-    if (!effectiveLaunchToolId || launchingNew) return;
+    if (!effectiveLaunchToolId || newLaunchPending.current) return;
+    newLaunchPending.current = true;
     setLaunchingNew(true);
     setDialogError('');
     setActionError('');
@@ -1182,27 +1242,29 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         toolId: effectiveLaunchToolId,
         projectId,
         sessionId: null,
+        ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}),
         mode: selectedLaunchTool?.yoloAvailable ? launchMode : 'normal',
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
-        ...(resumeLatest && selectedLaunchTool?.resumeLatestAvailable ? { resumeLatest: true } : {}),
+        ...(resumeLatest && selectedLaunchTool?.resumeLatestAvailable && !projectId?.startsWith('remote:') ? { resumeLatest: true } : {}),
       };
       const result = await native.launchCli(request);
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         onFailure(null);
         setNewDialogOpen(false);
         setInitialPrompt('');
-        setSelectedId(opened);
+        selectPendingSession(opened);
         const listed = await native.listWorkbenchSessions().catch(() => sessions);
-        if (Array.isArray(listed)) setSessions(listed);
+        if (Array.isArray(listed)) applyListedSessions(listed);
         return;
       }
       setNewDialogOpen(false);
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { setLaunchingNew(false); }
+    } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean) {
@@ -1222,6 +1284,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         mode: session.mode,
         directory: session.directory || null,
       });
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
         if (replaceEnded && !session.running) {
@@ -1229,9 +1292,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           forgetSession(session.id);
         }
         onFailure(null);
-        setSelectedId(opened);
+        selectPendingSession(opened);
         const listed = await native.listWorkbenchSessions().catch(() => sessions);
-        if (Array.isArray(listed)) setSessions(listed);
+        if (Array.isArray(listed)) applyListedSessions(listed);
         return;
       }
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
@@ -1547,6 +1610,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       : copiedState === 'selection' ? t('sessions.selectionCopied') : t('sessions.outputEmpty');
 
   function stateLabel(session: WorkbenchSession, tone: SessionTone): string {
+    if (!session.running && remoteSessionMayExist(session)) return t('sessions.activityUnknown');
     if (!session.running) return tone === 'error' ? t('sessions.stateError') : t('sessions.ended');
     if (tone === 'bell') return t('sessions.bellBadge');
     return tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
@@ -1555,10 +1619,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // Every live terminal stays mounted, including other hosts' sessions: a remount replays history
   // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
   const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
-  // While a just-launched session is not listed yet, the stage keeps showing the previous one.
-  const lastStageIdRef = useRef<string | null>(null);
-  if (selected) lastStageIdRef.current = selected.id;
-  const stageSession = selected ?? (selectedId ? scopedSessions.find((item) => item.id === lastStageIdRef.current) ?? null : null);
+  // A pending selection has no input target until that identity has been listed.
+  const stageSession = selected;
 
   const railDocked = !!railHost;
   const showRail = !focusMode && !(showEmpty && !listError);
@@ -1589,6 +1651,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       {!railDocked && showRail && rail}
 
       <section ref={stageRef} className={styles.stage} aria-label={t('sessions.stageLabel')}>
+        {writeRecoveryNeeded && !stageSession && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{t('common.remoteWrite.unknown')}</p></div><div className={styles.bannerActions}><Button size="sm" onClick={() => requestWriteRecovery(remoteTargetId)}>{t('common.remoteWrite.open')}</Button></div></div>}
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void retry()} disabled={retrying}>{retrying ? t('sessions.loading') : t('sessions.retry')}</Button><Button size="sm" onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</Button></div></div>}
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setActionError('')} aria-label={t('common.dismissError')} /></div>}
         {restoring && <div className={styles.banner} role="status"><p>{t('sessions.restoringPrevious')}</p></div>}
@@ -1615,7 +1678,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             t('sessions.stateError'),
             t('sessions.ended'),
           ].filter((label) => label !== currentStateLabel);
-          const endLabel = current && busy === current.id ? t('sessions.ending') : current?.running ? t('sessions.endShort') : t('sessions.closeTabShort');
+          const endLabel = current && busy === current.id ? t('sessions.ending') : current && (current.running || remoteSessionMayExist(current)) ? t('sessions.endShort') : t('sessions.closeTabShort');
           const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
             .filter((label) => label !== endLabel);
           const git = current ? gitContexts.get(current.id) ?? null : null;
@@ -1653,7 +1716,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
                   </span>
-                  {current.reattachable && <span className={styles.actionGroup}><Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button></span>}
+                  {(current.reattachable || writeRecoveryNeeded) && <span className={styles.actionGroup}>{current.reattachable && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button>}{writeRecoveryNeeded && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.unknown')} disabled={!!busy} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={14} />}><span className={styles.toolLabel}>{t('common.remoteWrite.open')}</span></Button>}</span>}
                   <span className={styles.actionGroup}>
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
                     {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
@@ -1661,7 +1724,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6); }} icon={<Icon name="more" size={15} />} />
                   </span>
                 </div>
-                <Button size="sm" className={styles.endBtn} data-running={current.running || undefined} onClick={() => void endSession(current)} disabled={!!busy} aria-label={current.running ? t('sessions.end') : t('sessions.closeTab')} title={current.running ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={current.running ? 'square' : 'close'} size={current.running ? 11 : 13} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
+                <Button size="sm" className={styles.endBtn} data-running={current.running || undefined} onClick={() => void endSession(current)} disabled={!!busy} aria-label={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} title={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={current.running || remoteSessionMayExist(current) ? 'square' : 'close'} size={current.running || remoteSessionMayExist(current) ? 11 : 13} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
               </div>
             </header>}
 
@@ -1712,17 +1775,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     </> : null}
                     footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
                       <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
-                      <span className={styles.endedText}><strong>{t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{t('sessions.endedHintShort')}</span></span>
-                      <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('sessions.restartHint')} onClick={() => void restartOrCloneSession(session, true)} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
+                      <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
+                      <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={session.reattachable ? t('sessions.reattachRemote') : t('sessions.restartHint')} onClick={() => void (session.reattachable ? reattachSession(session) : restartOrCloneSession(session, true))} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{session.reattachable ? t(busy === 'reattach:' + session.id ? 'sessions.reattaching' : 'sessions.reattachShort') : busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
+                      {writeRecoveryNeeded && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('common.remoteWrite.unknown')} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={13} />}><span className={styles.endedRestartLabel}>{t('common.remoteWrite.open')}</span></Button>}
                     </div> : null} />;
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
-                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'disconnected' ? 'danger' : current.running ? 'success' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {current.connectionState === 'disconnected' ? (current.reattachable ? t('sessions.sshDisconnectedReattachable') : t('sessions.sshConnectionLost')) : current.running ? t('sessions.sshConnected') : t('sessions.sshEnded')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}</Badge>}
+                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
                 <span className={styles.statusSpacer} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
@@ -1735,7 +1799,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           </div>;
         })()}
 
-        {loading && !scopedSessions.length && <div className={styles.loading}><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
+        {((loading && !scopedSessions.length) || (selectedId && !selected)) && <div className={styles.loading} role="status"><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
         {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
@@ -1810,7 +1874,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} /></div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
         <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>

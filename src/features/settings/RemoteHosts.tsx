@@ -21,7 +21,8 @@ function draftFrom(target: RemoteTarget): Draft {
 
 function errorText(error: unknown, fallback: string) {
   if (typeof error === 'string') return error;
-  return (error as { message?: string } | null)?.message || fallback;
+  const value = error as { message?: string; action?: string } | null;
+  return [value?.message || fallback, value?.action].filter(Boolean).join(' · ');
 }
 
 function address(target: Pick<RemoteTarget, 'user' | 'host' | 'port'>) {
@@ -39,6 +40,19 @@ export function RemoteHosts() {
   const [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);
   const [tests, setTests] = useState<Record<string, TestState>>({});
+  const testRequests = useRef(new Map<string, AbortController>());
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; for (const request of testRequests.current.values()) request.abort(); testRequests.current.clear(); };
+  }, []);
+  function cancelTest(id: string) {
+    testRequests.current.get(id)?.abort();
+    testRequests.current.delete(id);
+    setTests(old => { const next = { ...old }; delete next[id]; return next; });
+  }
+  function edit(target: RemoteTarget) { cancelTest(target.id); setEditing(draftFrom(target)); }
+
 
   async function reload() {
     if (!nativeAvailable) return;
@@ -57,19 +71,25 @@ export function RemoteHosts() {
       setTests((old) => ({ ...old, [target.id]: { state: 'failed', detail: t('settings.remoteSsh.testNeedsPassword') } }));
       return;
     }
+    cancelTest(target.id);
+    const controller = new AbortController();
+    testRequests.current.set(target.id, controller);
+    const current = () => mounted.current && testRequests.current.get(target.id) === controller && !controller.signal.aborted;
     setTests((old) => ({ ...old, [target.id]: { state: 'running' } }));
     try {
-      const result = await native.testRemoteTarget(target);
+      const result = await native.testRemoteTarget(target, null, { signal: controller.signal });
+      if (!current()) return;
       setTests((old) => ({ ...old, [target.id]: { state: 'ok', detail: result.system?.trim() || t('settings.remoteSsh.ready') } }));
     } catch (error) {
-      setTests((old) => ({ ...old, [target.id]: { state: 'failed', detail: errorText(error, t('settings.remoteSsh.testFailed')) } }));
-    }
+      if (current()) setTests((old) => ({ ...old, [target.id]: { state: 'failed', detail: errorText(error, t('settings.remoteSsh.testFailed')) } }));
+    } finally { if (testRequests.current.get(target.id) === controller) testRequests.current.delete(target.id); }
   }
 
   async function remove(target: RemoteTarget) {
     const accepted = await confirmAction(t('settings.remoteSsh.deleteMessage'), () => true, { title: t('settings.remoteSsh.deleteTitle', { name: target.name }), confirmLabel: t('settings.remoteSsh.delete'), destructive: true });
     if (!accepted) return;
     try {
+      cancelTest(target.id);
       await native.deleteRemoteTarget(target.id);
       setTargets((items) => items.filter((item) => item.id !== target.id));
       notifyTargetsChanged();
@@ -79,6 +99,7 @@ export function RemoteHosts() {
   }
 
   function onSaved(target: RemoteTarget, passwordSaved: boolean) {
+    cancelTest(target.id);
     setTargets((items) => [...items.filter((item) => item.id !== target.id), target].sort((a, b) => a.name.localeCompare(b.name)));
     setSaved((old) => {
       const next = new Set(old);
@@ -121,8 +142,9 @@ export function RemoteHosts() {
             {status && status.state !== 'running' && <span className={styles.result} data-tone={status.state} role="status"><Icon name={status.state === 'ok' ? 'check' : 'alert'} size={12} />{status.state === 'ok' ? `${t('settings.remoteSsh.testOk')} · ${status.detail}` : status.detail}</span>}
           </span>
           <span className={styles.hostActions}>
-            <Button loading={status?.state === 'running'} icon={<Icon name="refresh" size={14} />} onClick={() => void test(target)}>{status?.state === 'running' ? t('settings.remoteSsh.testing') : t('settings.remoteSsh.test')}</Button>
-            <IconButton aria-label={`${t('settings.remoteSsh.edit')} ${target.name}`} title={t('settings.remoteSsh.edit')} icon={<Icon name="pencil" size={15} />} onClick={() => setEditing(draftFrom(target))} />
+            {status?.state === 'running' && <Button onClick={() => cancelTest(target.id)}>{t('settings.remoteSsh.cancelTest')}</Button>}
+            <Button disabled={status?.state === 'running'} loading={status?.state === 'running'} icon={<Icon name="refresh" size={14} />} onClick={() => void test(target)}>{status?.state === 'running' ? t('settings.remoteSsh.testing') : t('settings.remoteSsh.test')}</Button>
+            <IconButton aria-label={`${t('settings.remoteSsh.edit')} ${target.name}`} title={t('settings.remoteSsh.edit')} icon={<Icon name="pencil" size={15} />} onClick={() => edit(target)} />
             <IconButton className={styles.danger} aria-label={`${t('settings.remoteSsh.delete')} ${target.name}`} title={t('settings.remoteSsh.delete')} icon={<Icon name="trash" size={15} />} onClick={() => void remove(target)} />
           </span>
         </li>;
@@ -141,6 +163,12 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
   const [result, setResult] = useState<TestState | null>(null);
   const hostRef = useRef<HTMLInputElement>(null);
   const formId = useId();
+  const revision = useRef(0);
+  const testRequest = useRef<AbortController | null>(null);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; testRequest.current?.abort(); }; }, []);
+  function cancelTest() { testRequest.current?.abort(); testRequest.current = null; setBusy(''); setResult(null); }
+  function close() { if (busy === 'save') return; testRequest.current?.abort(); onCancel(); }
   useEffect(() => { hostRef.current?.focus(); }, []);
 
   const port = Number(draft.port);
@@ -151,7 +179,7 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
     password: draft.authMethod === 'password' && !passwordSaved && !draft.password ? t('settings.remoteSsh.passwordRequired') : '',
   };
   const valid = !errors.host && !errors.port && !errors.user;
-  const set = (patch: Partial<Draft>) => { setDraft((old) => ({ ...old, ...patch })); setResult(null); };
+  const set = (patch: Partial<Draft>) => { if (busy === 'save') return; revision.current++; if (testRequest.current) cancelTest(); setDraft((old) => ({ ...old, ...patch })); setResult(null); };
 
   function toTarget(): RemoteTarget {
     const host = draft.host.trim();
@@ -171,24 +199,29 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
     try {
       const password = draft.authMethod === 'password' ? draft.password : '';
       const saved = await native.saveRemoteTarget(toTarget(), password || null);
-      onSaved(saved, Boolean(password));
+      if (alive.current) onSaved(saved, Boolean(password));
     } catch (error) {
-      setResult({ state: 'failed', detail: errorText(error, t('settings.remoteSsh.saveFailed')) });
-    } finally { setBusy(''); }
+      if (alive.current) setResult({ state: 'failed', detail: errorText(error, t('settings.remoteSsh.saveFailed')) });
+    } finally { if (alive.current) setBusy(''); }
   }
 
   async function test() {
     setSubmitted(true);
     if (!valid || busy) return;
     if (draft.authMethod === 'password' && !draft.password && !passwordSaved) { setResult({ state: 'failed', detail: t('settings.remoteSsh.testNeedsPassword') }); return; }
+    const controller = new AbortController();
+    const testedRevision = revision.current;
+    testRequest.current = controller;
+    const current = () => alive.current && !controller.signal.aborted && testRequest.current === controller && revision.current === testedRevision;
     setBusy('test');
     setResult({ state: 'running' });
     try {
-      const probe = await native.testRemoteTarget(toTarget(), draft.authMethod === 'password' ? draft.password || null : null);
+      const probe = await native.testRemoteTarget(toTarget(), draft.authMethod === 'password' ? draft.password || null : null, { signal: controller.signal });
+      if (!current()) return;
       setResult({ state: 'ok', detail: probe.system?.trim() || t('settings.remoteSsh.ready') });
     } catch (error) {
-      setResult({ state: 'failed', detail: errorText(error, t('settings.remoteSsh.testFailed')) });
-    } finally { setBusy(''); }
+      if (current()) setResult({ state: 'failed', detail: errorText(error, t('settings.remoteSsh.testFailed')) });
+    } finally { if (current()) { testRequest.current = null; setBusy(''); } }
   }
 
   async function pickKey() {
@@ -199,7 +232,8 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
   }
 
   const field = (name: keyof typeof errors) => submitted && errors[name] ? errors[name] : '';
-  return <form className={styles.editor} aria-label={draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} onSubmit={(event) => void save(event)} noValidate onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onCancel(); } }}>
+  return <form className={styles.editor} aria-label={draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} onSubmit={(event) => void save(event)} noValidate onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); close(); } }}>
+    <fieldset className={styles.fields} disabled={busy === 'save'}>
     <div className={styles.editorTitle}><Icon name="server" size={16} /><strong>{draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')}</strong></div>
     <div className={styles.grid}>
       <label className={styles.field} data-span="host">
@@ -253,9 +287,11 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
     {result && <p className={styles.result} data-tone={result.state} role="status">{result.state === 'running' ? <span className="spinner" aria-hidden="true" /> : <Icon name={result.state === 'ok' ? 'check' : 'alert'} size={13} />}{result.state === 'running' ? t('settings.remoteSsh.testing') : result.state === 'ok' ? `${t('settings.remoteSsh.testOk')} · ${result.detail}` : result.detail}</p>}
     <div className={styles.footer}>
       <Button disabled={!!busy} loading={busy === 'test'} icon={<Icon name="refresh" size={14} />} onClick={() => void test()}>{t('settings.remoteSsh.test')}</Button>
+      {busy === 'test' && <Button onClick={cancelTest}>{t('settings.remoteSsh.cancelTest')}</Button>}
       <span className={styles.footerGap} />
-      <Button onClick={onCancel}>{t('settings.remoteSsh.cancel')}</Button>
+      <Button onClick={close}>{t('settings.remoteSsh.cancel')}</Button>
       <Button variant="primary" type="submit" data-dialog-save disabled={!!busy} loading={busy === 'save'}>{t('settings.remoteSsh.save')}</Button>
     </div>
+    </fieldset>
   </form>;
 }

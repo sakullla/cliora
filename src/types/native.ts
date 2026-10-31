@@ -106,6 +106,8 @@ export type AdapterDescriptor = {
   management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement; memoryReason?: string };
   remote?: RemoteCapabilities;
   remoteNativeFiles?: RemoteNativeDocument[];
+  remoteResources?: import('./remote').RemoteResourceLayout;
+  remoteSkillDirectories?: import('./remote').RemoteSkillDirectory[];
 };
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];
@@ -162,3 +164,5 @@ export type AppliedSummary = { authentication: ProfileAuthentication; providerId
 
 export type MaintenanceResult = { output: string; version: string | null };
 export type MaintenanceProgress = { toolId: string; output: string };
+
+export type RemoteApiError = import('./domain').ApiError & { remote?: import('./remote').RemoteFailure };

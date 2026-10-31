@@ -321,7 +321,7 @@ fn missing_project_never_falls_back_to_user_home() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
     );
     let failure = result.unwrap_err();
@@ -355,7 +355,7 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
     );
     assert_eq!(result.unwrap_err().stage, LaunchStage::Tool);
@@ -413,7 +413,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
     )
     .unwrap();
@@ -429,7 +429,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
     )
     .unwrap_err();
@@ -498,7 +498,7 @@ fn damaged_project_skill_backup_only_blocks_that_project() {
         directory: None,
             initial_prompt: None,
         mode: LaunchMode::Normal,
-        resume_latest: false,
+        resume_latest: false, remote_intent: None,
     };
     assert_eq!(
         plan_with_stage(&db, &registry, temp.path(), request(Some(first.id)))
@@ -556,7 +556,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         directory: None,
         initial_prompt: None,
         mode: LaunchMode::Yolo,
-        resume_latest: false,
+        resume_latest: false, remote_intent: None,
     };
     let defaulted = plan(&db, &registry, temp.path(), request.clone()).unwrap();
     assert_eq!(defaulted.terminal, TerminalId::Workbench);
@@ -597,7 +597,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
     )
     .unwrap_err();

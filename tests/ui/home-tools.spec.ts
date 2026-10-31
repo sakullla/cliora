@@ -512,7 +512,7 @@ test('a remote project launches another tool from the menu without saving it', a
   await page.getByRole('menu', { name: '用其他工具启动 远程仓库' }).getByRole('menuitem', { name: /Grok/ }).click();
   await expect(card.getByRole('button', { name: '远程仓库 的工具' })).toContainText('Grok');
   await expect.poll(() => splitCalls(page)).toEqual([
-    ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null }],
+    ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null, remoteIntent: { kind: 'new' } }],
   ]);
 });
 

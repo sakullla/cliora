@@ -7,6 +7,7 @@ import { modLabel } from '../../lib/shortcut';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import { SessionTitle, stableTitle } from './SessionTitle';
 import type { WorkbenchSession } from '../../types/launch';
+import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import styles from './SessionWorkbench.module.css';
 
 export type SessionTone = 'live' | 'idle' | 'bell' | 'error' | 'ended';
@@ -65,6 +66,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const toggleTitle = `${toggleLabel} (${modLabel}+Shift+B) · ${t('sessions.railToggleHint')}`;
 
   const activityLabel = (item: RailSession) => {
+    if (!item.session.running && remoteSessionMayExist(item.session)) return t('sessions.activityUnknown');
     if (item.attention) return t('sessions.bellBadge');
     if (!item.session.running) return item.tone === 'error' ? t('sessions.stateError') : t('sessions.ended');
     return item.tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
@@ -90,19 +92,21 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const waiting = sessions.filter((item) => item.attention && item.session.id !== selectedId);
   const pinnedSessions = sessions.filter((item) => item.pinned);
   const runningSessions = sessions.filter((item) => !item.pinned && item.session.running);
-  const endedSessions = sessions.filter((item) => !item.pinned && !item.session.running);
+  const pendingSessions = sessions.filter((item) => !item.pinned && !item.session.running && remoteSessionMayExist(item.session));
+  const endedSessions = sessions.filter((item) => !item.pinned && sessionConfirmedEnded(item.session));
   // A collapsed ended group still shows the session on screen, so the selection never vanishes.
   const endedVisible = endedCollapsed && !narrow ? endedSessions.filter((item) => item.session.id === selectedId) : endedSessions;
   const groups = [
     { key: 'pinned', label: t('sessions.pinSession'), items: pinnedSessions, count: pinnedSessions.length },
     { key: 'running', label: t('sessions.running'), items: runningSessions, count: runningSessions.length },
+    { key: 'pending', label: t('sessions.sshNeedsCheck'), items: pendingSessions, count: pendingSessions.length },
     { key: 'ended', label: t('sessions.ended'), items: endedVisible, count: endedSessions.length },
   ].filter((group) => group.count > 0);
 
   const renderSession = (item: RailSession) => {
     const { session } = item;
     const selected = session.id === selectedId;
-    const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
+    const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
     const tooltip = [stableTitle(item.title), item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
@@ -141,7 +145,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
           </span>
           <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', activityLabel(item)].filter(Boolean).join(' · ')}</span>
         </span>
-        <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : t('sessions.ended')}</span>
+        <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : remoteSessionMayExist(session) ? t('sessions.sshNeedsCheck') : t('sessions.ended')}</span>
       </button>
       <div className={styles.rowActions}>
         <IconButton size="sm" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {

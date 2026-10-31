@@ -970,8 +970,9 @@
 .terminalHost :global(.xterm) { height: 100%; padding: 0; }
 .terminalHost :global(.xterm:focus),
 .terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; }
-.terminalHost :global(.xterm-viewport) { background: var(--term-bg); scrollbar-width: none; }
-.terminalHost :global(.xterm-viewport::-webkit-scrollbar) { display: none; width: 0; height: 0; }
+.terminalHost :global(.xterm .xterm-viewport),
+.terminalHost :global(.xterm-scrollable-element) { background: var(--term-bg); }
+.terminalHost :global(.xterm-scrollable-element > .scrollbar) { display: none; }
 /* The IME composition sits on the input cell as a floating chip, always readable over output. */
 .terminalHost :global(.xterm .composition-view) {
   z-index: 6;
@@ -1482,6 +1483,8 @@
 .root[data-tight] .composerTrigger .toolLabel { display: none; }
 .root[data-tight] .interruptBtn[data-size] { width: 30px; padding: 0; }
 .root[data-tight] .interruptBtn .toolLabel { display: none; }
+.root[data-tight] .reattachBtn[data-size] { padding: 0; }
+.root[data-tight] .reattachBtn .toolLabel { display: none; }
 .root[data-tight] .statusChip { padding: 0 var(--space-1_5); }
 .root[data-tight] .statusChip .statusLabel { display: none; }
 .root[data-tight] .terminalActions .toolButton[data-size] { width: 28px; }

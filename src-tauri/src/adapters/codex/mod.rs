@@ -89,6 +89,10 @@ fn skill_path_matches(item: &Value, skill_path: &Path) -> bool {
 }
 
 impl CliAdapter for Codex {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".codex/config.toml", format: "toml", table: "mcp_servers", nested: false }), skill_root: Some(".codex/skills"), agent_root: Some(".codex/agents"), agent_extension: Some("toml") }
+    }
+
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
         Some(self)
     }
@@ -342,10 +346,10 @@ impl CliAdapter for Codex {
             })
             .collect()
     }
-    fn remote_skill_directories(&self) -> &'static [super::RemoteSkillDirectory] {
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
         use super::RemoteSkillDirectory;
         const BUNDLED: &str = "Codex 捆绑 Skill，只读";
-        &[
+        vec![
             RemoteSkillDirectory { relative: ".codex/skills", read_only: false, detail: "远程主机目录" },
             RemoteSkillDirectory { relative: ".codex/skills/.system", read_only: true, detail: BUNDLED },
             RemoteSkillDirectory { relative: ".agents/skills", read_only: false, detail: "远程主机目录" },

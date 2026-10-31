@@ -1,4 +1,45 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+
+// The existing accessible scrollbar exposes the public buffer's row position.
+// xterm 6 virtualizes scrolling instead of assigning a native DOM scrollTop.
+function scrollState(node: Element) {
+  const scrollbar = node.closest('[data-pane-session]')?.querySelector('[role="scrollbar"]');
+  const top = Number(scrollbar?.getAttribute('aria-valuenow') ?? 0);
+  const max = Number(scrollbar?.getAttribute('aria-valuemax') ?? 0);
+  return { top, max, remaining: max - top, ratio: max ? top / max : 0 };
+}
+const readScroll = (viewport: Locator) => viewport.evaluate(scrollState);
+test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } });
+// These real terminal renderers share the software GPU. Keep this file on one
+// worker so competing contexts cannot starve its rendering assertions.
+test.describe.configure({ mode: 'default' });
+
+test.describe('product WebGL input integration', () => {
+  test('composition retains its text and anchor while the real renderer receives output', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toBeVisible();
+    const textarea = page.locator('.xterm-helper-textarea:visible');
+    await textarea.focus();
+    await resetWrites(page);
+    const before = await textarea.evaluate(input => {
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      (input as HTMLTextAreaElement).value = '你好7，';
+      input.dispatchEvent(new CompositionEvent('compositionupdate', { data: '你好7，', bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', keyCode: 229, isComposing: true, bubbles: true }));
+      return { left: (input as HTMLElement).style.left, top: (input as HTMLElement).style.top };
+    });
+    await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b[10;20Hbackground redraw'));
+    await expect(textarea).toHaveValue('你好7，');
+    expect(await textarea.evaluate(input => ({ left: (input as HTMLElement).style.left, top: (input as HTMLElement).style.top }))).toEqual(before);
+    expect(await writes(page)).toEqual([]);
+    await textarea.dispatchEvent('compositionend', { data: '你好7，' });
+    await expect.poll(async () => (await writes(page)).join('')).toBe('你好7，');
+    expect(await textarea.evaluate(input => document.activeElement === input)).toBe(true);
+  });
+});
 
 test('terminal code loads on demand and an opening request survives the first module load', async ({ page }) => {
   await installWorkbenchMock(page);
@@ -85,6 +126,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             writes.push(text);
             writeBytes.push([...raw]);
             writeLog.push({ sessionId: args.sessionId, text });
+            const beforeWrite = (window as unknown as { __beforeWrite?: (sessionId: string, text: string) => Promise<void> }).__beforeWrite;
+            if (beforeWrite) await beforeWrite(args.sessionId, text);
             return null;
           }
           if (command === 'resize_workbench_session') { resizes.push({ sessionId: args.sessionId, cols: args.cols, rows: args.rows }); return null; }
@@ -135,6 +178,57 @@ async function openWorkbench(page: Page, english = false) {
 const writes = (page: Page) => page.evaluate(() => (window as unknown as { __writes: string[] }).__writes.slice());
 const resetWrites = (page: Page) => page.evaluate(() => { (window as unknown as { __writes: string[] }).__writes.length = 0; });
 const openedUrls = (page: Page) => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened.slice());
+
+test('terminal and quick input preserve session order while another session stays independent', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  const input = await openWorkbench(page);
+  await page.evaluate(() => {
+    let release = () => {};
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0;
+    Object.assign(window, {
+      __releaseWrite: release,
+      __beforeWrite: async (id: string, text: string) => { if (id === 's1' && text === 'b') await ready; },
+    });
+  });
+  await input.press('b');
+  await input.press('Enter');
+  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = page.getByRole('region', { name: '多行输入与提示词投递' });
+  await composer.locator('textarea').fill('quick-command');
+  await composer.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.locator('.xterm-helper-textarea:visible').press('x');
+  await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }, { sessionId: 's2', text: 'x' }]);
+  await page.evaluate(() => (window as unknown as { __releaseWrite: () => void }).__releaseWrite());
+  await expect.poll(() => writeLog(page)).toEqual([
+    { sessionId: 's1', text: 'b' }, { sessionId: 's2', text: 'x' },
+    { sessionId: 's1', text: '\r' }, { sessionId: 's1', text: 'quick-command\r' },
+  ]);
+});
+
+test('a failed input reports its error and releases queued and later input', async ({ page }) => {
+  const input = await openWorkbench(page);
+  await page.evaluate(() => {
+    let reject = (_error: Error) => {};
+    const ready = new Promise<void>((_resolve, fail) => { reject = fail; });
+    (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0;
+    Object.assign(window, {
+      __rejectWrite: () => reject(new Error('input-write-failed')),
+      __beforeWrite: async (_id: string, text: string) => { if (text === 'b') await ready; },
+    });
+  });
+  await input.press('b');
+  await input.press('Enter');
+  expect(await writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }]);
+  await page.evaluate(() => (window as unknown as { __rejectWrite: () => void }).__rejectWrite());
+  await expect(page.getByRole('alert')).toContainText('input-write-failed');
+  await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }, { sessionId: 's1', text: '\r' }]);
+  await input.press('z');
+  await expect.poll(() => writeLog(page)).toEqual([
+    { sessionId: 's1', text: 'b' }, { sessionId: 's1', text: '\r' }, { sessionId: 's1', text: 'z' },
+  ]);
+});
 
 async function pointForTerminalText(page: Page, text: string, last = false) {
   const locate = () => page.evaluate(({ text, last }) => {
@@ -427,10 +521,10 @@ test('a mouse-tracking CLI receives the wheel, and Shift+wheel reads normal scro
     const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1002h' + lines + '\r\n');
   });
-  const viewport = page.locator('.xterm-viewport');
-  const remaining = () => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  const viewport = page.locator('.xterm-scrollable-element');
+  const remaining = async () => (await readScroll(viewport)).remaining;
   await expect.poll(remaining).toBeLessThan(3);
-  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const scrollTop = async () => (await readScroll(viewport)).top;
   const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
   const box = await screen.boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
@@ -463,8 +557,8 @@ test('the wheel on a fullscreen TUI scrolls the CLI instead of the xterm viewpor
     (window as unknown as { __output: (text: string) => void }).__output(`${lines}\r\n\u001b[?1049h\u001b[?1000h\u001b[Hgrok-transcript`);
   });
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('grok-transcript');
-  const viewport = page.locator('.xterm-viewport:visible');
-  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const viewport = page.locator('.xterm-scrollable-element:visible');
+  const scrollTop = async () => (await readScroll(viewport)).top;
   const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
   const box = await screen.boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
@@ -483,9 +577,9 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
     const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string) => void }).__output(lines + '\r\n');
   });
-  const viewport = page.locator('.xterm-viewport');
-  await expect.poll(() => viewport.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
-  const scrollTop = () => viewport.evaluate((el) => el.scrollTop);
+  const viewport = page.locator('.xterm-scrollable-element');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
+  const scrollTop = async () => (await readScroll(viewport)).top;
   const box = await page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen').boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
   const start = await scrollTop();
@@ -494,6 +588,35 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
   const up = await scrollTop();
   await page.mouse.wheel(0, 600);
   await expect.poll(scrollTop).toBeGreaterThan(up);
+});
+
+test('tmux-style SGR wheel reports stay with the hovered alternate-screen session', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '分屏', exact: true }).click();
+  await expect(stage.locator('[data-pane-session="s2"]')).toContainText('claude-ready');
+  await page.evaluate(() => {
+    const output = (window as unknown as { __output: (text: string, id: string) => void }).__output;
+    for (const id of ['s1', 's2']) output(`\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[Hmux-${id}`, id);
+  });
+  for (const id of ['s1', 's2']) await expect(stage.locator(`[data-pane-session="${id}"]`)).toContainText(`mux-${id}`);
+  // Keep keyboard focus on the other pane: mouse ownership follows the pane
+  // receiving the event, even when both tmux clients request SGR tracking.
+  for (const [id, other] of [['s1', 's2'], ['s2', 's1']]) {
+    await stage.locator(`[data-pane-session="${other}"] .xterm-helper-textarea`).focus();
+    const pane = stage.locator(`[data-pane-session="${id}"]`);
+    const box = (await pane.locator('.xterm-screen').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+    await page.mouse.wheel(0, -400);
+    await expect.poll(async () => (await writeLog(page)).some(item => item.sessionId === id && /^\x1b\[<64;\d+;\d+M$/.test(item.text))).toBe(true);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => (await writeLog(page)).some(item => item.sessionId === id && /^\x1b\[<65;\d+;\d+M$/.test(item.text))).toBe(true);
+    const reports = await writeLog(page);
+    expect(reports.every(item => item.sessionId === id && /^\x1b\[<6[45];\d+;\d+M$/.test(item.text))).toBe(true);
+    expect((await readScroll(pane.locator('.xterm-scrollable-element'))).top).toBe(0);
+  }
 });
 
 test('mouse-tracking terminal clicks are forwarded to the CLI', async ({ page }) => {
@@ -580,11 +703,7 @@ test('a replayed session with long output opens scrolled to the latest line', as
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('latest-output-marker');
   // The viewport parks on the latest output, not at the top of the scrollback.
-  await expect.poll(() => page.evaluate(() => {
-    const viewport = document.querySelector('.xterm-viewport');
-    if (!viewport) return Number.POSITIVE_INFINITY;
-    return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-  })).toBeLessThan(3);
+  await expect.poll(async () => (await readScroll(page.locator('.xterm-scrollable-element'))).remaining).toBe(0);
   await expect(page.getByRole('button', { name: '回到最新输出' })).toHaveCount(0);
   const screen = await page.locator('.xterm-screen:visible').boundingBox();
   await page.mouse.move(screen!.x + screen!.width / 2, screen!.y + screen!.height / 2);
@@ -592,7 +711,7 @@ test('a replayed session with long output opens scrolled to the latest line', as
   const latest = page.getByRole('button', { name: '回到最新输出', exact: true });
   await expect(latest).toBeVisible();
   await latest.click();
-  await expect.poll(() => page.locator('.xterm-viewport:visible').evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  await expect.poll(async () => (await readScroll(page.locator('.xterm-scrollable-element:visible'))).remaining).toBe(0);
 });
 
 test('numbered output that overlaps the replay is written once', async ({ page }) => {
@@ -726,7 +845,7 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
     const lines = Array.from({ length: 200 }, (_, index) => `scrollbar-line-${index}`).join('\r\n');
     (window as unknown as { __output: (text: string) => void }).__output(lines + '\r\n');
   });
-  const viewport = page.locator('.xterm-viewport:visible');
+  const viewport = page.locator('.xterm-scrollable-element:visible');
   await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('scrollbar-line-199');
   const measure = () => viewport.evaluate((node) => {
     const bounds = node.getBoundingClientRect();
@@ -734,17 +853,17 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
     const gutter = node.offsetWidth - node.clientWidth;
     const style = getComputedStyle(node);
     return {
-      hasOverflow: node.scrollHeight > node.clientHeight,
+      hasOverflow: Number(node.closest('[data-pane-session]')?.querySelector('[role="scrollbar"]')?.getAttribute('aria-valuemax')) > 0,
       contentClear: screen.right <= bounds.right - gutter + 1,
       background: style.backgroundColor,
-      nativeHidden: style.scrollbarWidth === 'none',
+      nativeHidden: [...node.querySelectorAll('.scrollbar')].every(bar => getComputedStyle(bar).display === 'none'),
     };
   });
   await expect.poll(async () => {
     const metrics = await measure();
     return metrics.hasOverflow && metrics.contentClear && metrics.nativeHidden && metrics.background === 'rgb(251, 252, 250)';
   }).toBe(true);
-  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
   await expect(scrollbar).toBeVisible();
   await expect(scrollbar).toHaveCSS('width', '14px');
@@ -755,32 +874,37 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
   await page.mouse.down();
   await page.mouse.move(trackX, track!.y + track!.height * 0.45, { steps: 6 });
   await page.mouse.up();
-  await expect.poll(() => viewport.evaluate((node) => node.scrollTop / (node.scrollHeight - node.clientHeight))).toBeGreaterThan(0.3);
-  await expect.poll(() => viewport.evaluate((node) => node.scrollTop / (node.scrollHeight - node.clientHeight))).toBeLessThan(0.65);
+  await expect.poll(async () => (await readScroll(viewport)).ratio).toBeGreaterThan(0.3);
+  await expect.poll(async () => (await readScroll(viewport)).ratio).toBeLessThan(0.65);
   await scrollbar.focus();
   await page.keyboard.press('Home');
-  await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBe(0);
+  await expect.poll(async () => (await readScroll(viewport)).top).toBe(0);
+  await expect(page.locator('.xterm-rows > div').first()).toContainText('codex-ready');
   await expect.poll(() => page.locator('[data-scroll-away]').count()).toBe(1);
   await expect(latest).toBeVisible();
   await page.keyboard.press('End');
-  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  await expect(page.locator('.xterm-rows')).toContainText('scrollbar-line-199');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   await expect(page.locator('[data-scroll-away]')).toHaveCount(0);
-  const initialScroll = await viewport.evaluate((node) => node.scrollTop);
+  const initialScroll = (await readScroll(viewport)).top;
   expect(initialScroll).toBeGreaterThan(0);
   const screen = await page.locator('.xterm-screen:visible').boundingBox();
   await page.mouse.move(screen!.x + screen!.width / 2, screen!.y + screen!.height / 2);
   await page.mouse.wheel(0, -1000);
-  await expect.poll(() => viewport.evaluate((node) => node.scrollTop)).toBeLessThan(initialScroll);
+  await expect.poll(async () => (await readScroll(viewport)).top).toBeLessThan(initialScroll);
   await expect(latest).toBeVisible();
-  const readingPosition = await viewport.evaluate((node) => node.scrollTop);
-  const readingHeight = await viewport.evaluate((node) => node.scrollHeight);
+  const readingPosition = (await readScroll(viewport)).top;
+  const visibleReadingLine = await page.locator('.xterm-rows > div').first().textContent();
+  const readingHeight = (await readScroll(viewport)).max;
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\nwhile-reading\r\n'));
-  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight)).toBeGreaterThan(readingHeight);
-  // Native viewport positions snap to the nearest terminal row after output reflow.
-  await expect.poll(async () => Math.abs(await viewport.evaluate((node) => node.scrollTop) - readingPosition)).toBeLessThanOrEqual(24);
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(readingHeight);
+  // The public virtual viewport preserves the same row after output reflow.
+  await expect.poll(async () => Math.abs((await readScroll(viewport)).top - readingPosition)).toBeLessThanOrEqual(1);
+  await expect(page.locator('.xterm-rows > div').first()).toHaveText(visibleReadingLine ?? '');
   await expect(latest).toBeVisible();
   await latest.click();
-  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  await expect(page.locator('.xterm-rows')).toContainText('while-reading');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
 });
 
 test('a live agent footer redraw does not bounce the viewport', async ({ page }) => {
@@ -789,23 +913,24 @@ test('a live agent footer redraw does not bounce the viewport', async ({ page })
     const lines = Array.from({ length: 50 }, (_, index) => `history-${String(index).padStart(2, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string) => void }).__output(`${lines}\r\n> `);
   });
-  const viewport = page.locator('.xterm-viewport:visible');
-  await expect.poll(() => viewport.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(3);
+  const viewport = page.locator('.xterm-scrollable-element:visible');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const result = await page.evaluate(async () => {
-    const node = document.querySelector<HTMLElement>('.xterm-viewport')!;
+    const scrollbar = document.querySelector('[role="scrollbar"]')!;
+    const read = () => ({ top: Number(scrollbar.getAttribute('aria-valuenow')), max: Number(scrollbar.getAttribute('aria-valuemax')) });
     const output = (window as unknown as { __output: (text: string) => void }).__output;
     let dips = 0;
-    let previous = node.scrollTop;
+    let previous = read().top;
     for (let index = 0; index < 16; index += 1) {
       output(`\u001b7\u001b[2;1Hagent ${index} running · 3m ${String(index).padStart(2, '0')}s · 56.0k\u001b8`);
       output(`\rfooter ${String(index).padStart(2, '0')}`);
       output(`\nexplore-${index}\r\n> `);
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const top = node.scrollTop;
+      const top = read().top;
       if (top + 1 < previous) dips += 1;
       previous = top;
     }
-    return { dips, remaining: node.scrollHeight - node.scrollTop - node.clientHeight };
+    return { dips, remaining: read().max - read().top };
   });
   expect(result.dips).toBe(0);
   expect(result.remaining).toBeLessThan(3);
@@ -1143,6 +1268,32 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog.filter(item => item.sessionId === 's1').map(item => item.text))).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
   await expect(page.locator('[data-pane-session="s1"] textarea')).toBeDisabled();
   await expect(page.locator('[data-pane-session="s2"] textarea')).toBeEnabled();
+});
+
+test('switching sessions preserves a reading position while background output keeps arriving', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(Array.from({ length: 240 }, (_, index) => `reading-row-${index}`).join('\r\n') + '\r\n'));
+  const viewport = page.locator('[data-pane-session="s1"] .xterm-scrollable-element');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
+  const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
+  await scrollbar.focus();
+  await page.keyboard.press('Home');
+  await expect.poll(async () => (await readScroll(viewport)).top).toBe(0);
+  await expect(page.getByRole('button', { name: '回到最新输出', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  for (let index = 0; index < 12; index++) {
+    await page.evaluate(index => (window as unknown as { __output: (text: string, id: string) => void }).__output(`background-ordered-${index}\r\n`, 's1'), index);
+  }
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(viewport).toBeVisible();
+  await expect.poll(async () => (await readScroll(viewport)).top).toBeLessThanOrEqual(1);
+  await expect(page.getByRole('button', { name: '回到最新输出', exact: true })).toBeVisible();
+  const terminalTree = page.locator('[data-pane-session="s1"] .xterm-accessibility-tree');
+  // Explicitly returning to live output remains available after preserving history.
+  await page.getByRole('button', { name: '回到最新输出', exact: true }).click();
+  await expect(terminalTree).toContainText('background-ordered-11');
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
 });
 
 test('restoration keeps selected and pinned sessions and runs once across page switches', async ({ page }) => {

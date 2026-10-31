@@ -1605,7 +1605,7 @@ pub fn resume_plan(
             directory: None,
             initial_prompt: None,
             mode,
-            resume_latest: false,
+            resume_latest: false, remote_intent: None,
         },
         &cwd,
         context,

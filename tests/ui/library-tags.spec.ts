@@ -10,6 +10,7 @@ test('library category is edited and filtered as tags', async ({ page }) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_projects') return [];
+          if (command === 'list_rule_placements') return [];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);

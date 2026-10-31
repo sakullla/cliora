@@ -1,3 +1,4 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -29,15 +30,22 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
-function remoteSkillPackages(toolIds: string[], stores: unknown[]): SkillPackage[] {
+type LibrarySkill = SkillPackage & { remoteToolId?: string; remoteReadOnly?: boolean };
+
+function remoteSkillPackages(toolIds: string[], stores: unknown[]): LibrarySkill[] {
   return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
     const toolId = toolIds[index];
-    return { id: entry.packageId ?? `remote:${toolId}:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true };
+    return { id: entry.packageId ?? `remote:${toolId}:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true, remoteToolId: toolId, remoteReadOnly: entry.source === 'read_only' || entry.state === 'read_only' };
   }));
 }
 
-async function readRemoteSkillStores(targetId: string, toolIds: string[]) {
-  const bundle = await native.listRemoteResourceStores(targetId, toolIds, 'skills');
+function remoteSkillInstallations(items: LibrarySkill[]): SkillInstallation[] {
+  return items.flatMap(item => item.remoteToolId ? [{ packageId: item.id, toolId: item.remoteToolId, scope: 'global' as const, projectPath: null, targetPath: item.source, digest: item.digest, state: 'current' as const }] : []);
+}
+
+async function readRemoteSkillStores(targetId: string, toolIds: string[], reader = native, fresh = false) {
+  if (!toolIds.length) return [];
+  const bundle = await reader.listRemoteResourceStores(targetId, toolIds, 'skills', { fresh });
   return toolIds.map(toolId => bundle.stores?.[toolId] ?? { entries: [] });
 }
 
@@ -45,10 +53,15 @@ async function readRemoteSkillStores(targetId: string, toolIds: string[]) {
 export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels(!!remoteTargetId);
-  const remoteToolId = tools[0]?.id ?? 'codex';
-  const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
-  const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
-  const [packages, setPackages] = useState<SkillPackage[]>([]);
+  const remoteTools = tools.filter(tool => tool.remoteSkillDirectories ? tool.remoteSkillDirectories.length > 0 : tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
+  const remoteWritableTools = remoteTools.filter(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
+  const remoteToolId = remoteTools[0]?.id ?? '';
+  const remoteToolIds = remoteTools.map(tool => tool.id);
+  const remoteToolFor = (item: SkillPackage) => (item as LibrarySkill).remoteToolId ?? remoteToolId;
+  const packageWritable = (item: SkillPackage) => !remoteTargetId || (!(item as LibrarySkill).remoteReadOnly && remoteWritableTools.some(tool => tool.id === remoteToolFor(item)));
+  const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
+  const native = remoteReads.native;
+  const [packages, setPackages] = useState<LibrarySkill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [busy, setBusy] = useState(false);
   // Page results float as toasts so the card grid never jumps.
@@ -67,10 +80,12 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (!active) return;
     if (remoteTargetId) {
       let live = true;
-      void readRemoteSkillStores(remoteTargetId, remoteToolIds).then(values => {
-        if (!live) return;
-        setPackages(remoteSkillPackages(remoteToolIds, values));
-        setInstallations([]);
+      const sequence = ++reloadSequence.current;
+      void readRemoteSkillStores(remoteTargetId, remoteToolIds, native).then(values => {
+        if (!live || sequence !== reloadSequence.current) return;
+        const items = remoteSkillPackages(remoteToolIds, values);
+        setPackages(items);
+        setInstallations(remoteSkillInstallations(items));
       }).catch(value => { if (live) setError(failure(value)); });
       return () => { live = false; };
     }
@@ -93,13 +108,20 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   useEffect(() => {
     if (createSignal === handledCreate.current) return;
     handledCreate.current = createSignal;
-    if (!busy) { setDialogError(''); setSkillOpen(true); }
+    if (!busy && (!remoteTargetId || remoteWritableTools.length > 0)) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
 
+  const reloadSequence = useRef(0);
+  useEffect(() => () => { reloadSequence.current++; }, [remoteTargetId, active]);
   async function reloadSkills() {
+    remoteReads.rebaseWriteAction();
+    const sequence = ++reloadSequence.current;
     if (remoteTargetId) {
-      setPackages(remoteSkillPackages(remoteToolIds, await readRemoteSkillStores(remoteTargetId, remoteToolIds)));
-      setInstallations([]);
+      const values = await readRemoteSkillStores(remoteTargetId, remoteToolIds, native, true);
+      if (sequence !== reloadSequence.current) return;
+      const items = remoteSkillPackages(remoteToolIds, values);
+      setPackages(items);
+      setInstallations(remoteSkillInstallations(items));
       return;
     }
     const items = await native.listSkillPackages();
@@ -164,12 +186,14 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function addFolder() {
+    remoteReads.beginWriteAction();
     try {
       const source = await pickPath({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
       setBusy(true); setDialogError('');
       if (remoteTargetId) {
-        const toolIds = installTools.length ? installTools : [remoteToolId];
+        const toolIds = installTools.length ? installTools.filter(id => remoteWritableTools.some(tool => tool.id === id)) : remoteWritableTools.slice(0, 1).map(tool => tool.id);
+        if (!toolIds.length) throw new Error(t('library.page.remoteUnavailable'));
         for (const toolId of toolIds) await native.importRemoteSkillDirectory(remoteTargetId, toolId, source);
         await reloadSkills();
         closeSkill();
@@ -218,13 +242,15 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function removePackage(item: SkillPackage) {
-    const placed = installations.some((entry) => entry.packageId === item.id);
+    if (!packageWritable(item)) return;
+    remoteReads.beginWriteAction();
+    const placed = !remoteTargetId && installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
+        const targetToolId = remoteToolFor(item); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { fresh: true }) as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
         const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
         const entries = (store.entries ?? []).filter(value => value !== entry);
         const documents = { ...(store.documents ?? {}) };
@@ -238,23 +264,14 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    if (remoteTargetId || !packageWritable(item)) return;
+    remoteReads.beginWriteAction();
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
     setBusy(true); setError(''); setNotice('');
     try {
-      if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'skills') as { entries?: NativeSkillEntry[]; documents?: Record<string, string> };
-        const entry = (store.entries ?? []).find(value => (value.packageId ?? `remote:${targetToolId}:${value.path}`) === item.id || value.path === item.source);
-        if (entry) {
-          const next = (store.entries ?? []).filter(value => value !== entry);
-          await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'skills', { ...store, entries: next, documents: Object.fromEntries(Object.entries(store.documents ?? {}).filter(([path]) => path !== entry.path)) });
-        }
-        await reloadSkills();
-        setNotice(t('library.resources.removed'));
-        return;
-      }
       if (place) {
         await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
         setNotice(t('library.page.removed', { where, tool: toolName }));
@@ -274,7 +291,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const libraryPackages = packages.filter((item) => item.inLibrary !== false)
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
-  return <div className={styles.layout}>
+  return <div className={styles.layout}><RemoteReadStatus state={remoteReads} />
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
@@ -286,13 +303,13 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardBar}>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+            {packageWritable(item) && <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
-            }} />
-            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
+            }} />}
+            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
         </Card>;
       }) : needle
@@ -305,7 +322,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           <section className={styles.skillSection}>
             <h3>{t('library.resources.installAfterImport')}</h3>
             <p>{t('library.resources.installAfterHint')}</p>
-            <CliTargetGrid tools={tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
+            <CliTargetGrid tools={remoteTargetId ? remoteWritableTools : tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
           </section>
           <section className={styles.skillSection}>
             <h3>{t('library.resources.importFrom')}</h3>

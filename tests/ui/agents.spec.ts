@@ -18,23 +18,37 @@ function row(page: Page, name: string) {
   return page.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) });
 }
 
-async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true, longBody = false) {
-  await page.addInitScript(({ holdScan, emptyEntries, supported, longBody }) => {
+async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true, longBody = false, remote = false) {
+  await page.addInitScript(({ holdScan, emptyEntries, supported, longBody, remote }) => {
     const body = longBody ? Array.from({ length: 80 }, (_, index) => `## Step ${index + 1}\n\nReview code carefully.\n`).join('\n') : 'Review code.\n';
-    const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: '/fixture/agents/reviewer.md', format: 'markdown', content: `---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\n${body}`, enabled: true, readOnly: false, owner: '独立定义', detail: '' };
+    const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: remote ? '/root/.claude/agents/reviewer.md' : '/fixture/agents/reviewer.md', format: 'markdown', content: `---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\n${body}`, enabled: true, readOnly: false, owner: '独立定义', detail: '' };
     const conflicted = { ...entry, id: 'conflicted', name: 'planner', description: 'Plan', path: '/fixture/opencode.json', format: 'json', content: '{"description":"Plan"}', readOnly: true, detail: 'agent 与 agents 同义并存，原生形态冲突；请在原生配置统一为一种形态后再编辑' };
-    const state = { calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted], fail: false, releaseScan: null as (() => void) | null };
+    const host = { id: 'agent-host', name: 'Agent fixture', host: 'fixture.invalid', port: 22, user: 'root', authMethod: 'key', enabled: true, createdAt: 1, updatedAt: 1 };
+    if (remote) localStorage.setItem('cliora:remote-target', host.id);
+    const versions = new Map<string, Record<string, string>>();
+    const state = { version: 'old', saves: 0, attempts: [] as string[], calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted], fail: false, releaseScan: null as (() => void) | null };
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', supported, format: 'markdown', template: entry.content, detail: supported ? '下一次委派加载' : '此版本未证实统一的原生 agent 定义格式。' }, entries: supported ? state.entries : [], baseline: 'fixture-baseline', detail: supported ? '原生定义管理' : '规则与扩展可在各自入口管理。' });
     Object.assign(window, { isTauri: true, agentsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
-      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
-      if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], login: { hint: '原生登录' } }], managedIds: ['claude_code'], preservedUnknown: [] };
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system', remote_ssh_enabled: remote }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], remoteResources: { mcp: null, skillRoot: null, agentRoot: '.claude/agents', agentExtension: 'md' }, login: { hint: '原生登录' } }], managedIds: ['claude_code'], preservedUnknown: [] };
       if (['list_projects', 'list_usage_queries', 'list_usage_cache'].includes(command)) return [];
       if (command === 'list_accounts') return [{ id: 'a1', toolId: 'claude_code', label: 'Fixture account', context: { id: 'ctx-fixture' }, retiredContexts: [] }];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;
       if (command === 'get_registered_tool_workspace') return { probe: { tool: 'claude_code', selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [] }, profiles: [], effectiveContextId: 'ctx-fixture', binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [] };
+      if (command === 'list_remote_targets') return remote ? [host] : [];
+      if (command === 'probe_remote_cli') return { installed: true, targetId: host.id, toolId: 'claude_code', executable: 'claude', version: 'fixture' };
+      if (command === 'get_remote_tool_store') return { profiles: [], common: null, currentFiles: {} };
+      if (command === 'get_remote_write_snapshot') return versions.get(args.requestId) ?? {};
+      if (command === 'get_remote_resource_store') { versions.set(args.operation.requestId, { [entry.path]: state.version }); return { snapshot: snapshot({ toolId: 'claude_code', scope: 'global', projectPath: null, contextId: null }) }; }
+      if (command === 'save_remote_resource_store') {
+        const expected = args.operation.expectedFiles[entry.path]; state.attempts.push(expected);
+        if (expected !== state.version) throw { message: 'fixture agent version conflict' };
+        state.entries = args.value.snapshot.entries; state.version = `saved-${++state.saves}`;
+        versions.set(args.operation.requestId, { [entry.path]: state.version }); return null;
+      }
       if (command === 'scan_native_agents') { if (holdScan) await new Promise<void>(resolve => { state.releaseScan = resolve; }); return snapshot(args.target); }
       if (command === 'operate_native_agent') {
         const req = args.request;
@@ -46,9 +60,10 @@ async function setup(page: Page, holdScan = false, emptyEntries = false, support
         if (req.action === 'delete') state.entries = state.entries.filter(item => item.id !== req.id);
         return { transactionId: 'tx-1', changedPaths: ['/fixture/agents/reviewer.md'], restorePath: '/fixture/agents/reviewer.md', detail: '已修改原生定义；现有会话加载未验证', snapshot: snapshot(req.target) };
       }
+      if (remote && command.startsWith('list_')) return [];
       return null;
     } } });
-  }, { holdScan, emptyEntries, supported, longBody });
+  }, { holdScan, emptyEntries, supported, longBody, remote });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   if (!holdScan && !emptyEntries && supported) await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
@@ -357,4 +372,29 @@ test('opening another agent starts its document at the top', async ({ page }) =>
   const next = page.getByRole('article', { name: 'plugin-agent' });
   await expect(next).toContainText('Step 80');
   await expect.poll(() => scroller(next)).toBe(0);
+});
+
+test('a saved remote agent keeps external changes safe until an explicit native rescan rebuilds the draft', async ({ page }) => {
+  await setup(page, false, false, true, false, true);
+  await row(page, 'reviewer').getByRole('button').click();
+  const card = page.getByRole('article', { name: 'reviewer' });
+  await card.getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
+  await editor.fill('first saved body');
+  await page.getByRole('button', { name: '保存定义' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).agentsHarness.saves)).toBe(1);
+  await card.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor.fill('preserve user draft');
+  await page.evaluate(() => { const state = (window as any).agentsHarness; state.entries.find((entry: any) => entry.id === 'fixture').content = 'external native body'; state.version = 'external'; });
+  await page.getByRole('button', { name: '保存定义' }).click();
+  await expect(page.getByText('fixture agent version conflict')).toBeVisible();
+  await expect(editor).toContainText('preserve user draft');
+  await page.getByRole('button', { name: '重新扫描', exact: true }).click();
+  await page.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await card.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(editor).toContainText('external native body');
+  await editor.fill('external native body plus accepted edit');
+  await page.getByRole('button', { name: '保存定义' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).agentsHarness.saves)).toBe(2);
+  expect(await page.evaluate(() => (window as any).agentsHarness.attempts)).toEqual(['old', 'saved-1', 'external']);
 });

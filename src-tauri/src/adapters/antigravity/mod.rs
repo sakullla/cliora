@@ -70,6 +70,9 @@ pub(crate) fn data_root(home: &Path) -> PathBuf {
 pub struct Antigravity;
 
 impl CliAdapter for Antigravity {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { skill_root: Some(".gemini/antigravity-cli/skills"), ..Default::default() }
+    }
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }

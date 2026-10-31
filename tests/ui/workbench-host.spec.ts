@@ -42,7 +42,7 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
             if (holdTargets) await targetsReady;
             return [host];
           }
-          if (command === 'list_remote_directories') return [];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions' || command === 'list_projects' || command === 'list_remote_projects' || command === 'list_remote_sessions' || command === 'list_library_items') return [];
@@ -134,11 +134,15 @@ test('a remote session composer lists that host library, not this computer', asy
     localStorage.setItem('cliora:remote-target', host.id);
     const sessions = [{ id: 'remote-1', toolId: 'codex', projectId: 'remote:proj-1', directory: '/srv/project', mode: 'normal', running: true, exitCode: null, startedAt: 1 }];
     const calls: Array<{ command: string; targetId?: string; kind?: string }> = [];
+    const state = { fail: false, failures: 0 };
+    const actualNow = Date.now; let advance = 0; Date.now = () => actualNow() + advance;
     const names: Record<string, string> = { codex: 'Codex' };
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     Object.assign(window, {
       isTauri: true,
       __libraryCalls: calls,
+      __promptState: state,
+      __expirePromptCache: () => { advance += 31000; },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
@@ -147,9 +151,12 @@ test('a remote session composer lists that host library, not this computer', asy
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
           if (command === 'list_remote_projects') return [{ id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 }];
+          if (command === 'save_remote_project') return { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'local-1', kind: 'prompt', title: 'ui/ux重做', body: 'local-only-body', category: '', projectId: null, version: 1, updatedAt: 1 }] : [];
+          if (command === 'list_remote_library_items' && state.fail) { state.failures++; throw { message: 'prompt fixture denied' }; }
           if (command === 'list_remote_library_items') return args.targetId === host.id && args.kind === 'prompt' ? [{ id: 'remote-prompt', kind: 'prompt', title: '远端提示', body: 'remote-only-body', category: '', projectId: null, version: 1, updatedAt: 1 }] : [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -174,4 +181,402 @@ test('a remote session composer lists that host library, not this computer', asy
   const remoteCalls = await page.evaluate(() => (window as unknown as { __libraryCalls: Array<{ command: string; targetId?: string; kind?: string }> }).__libraryCalls.filter((item) => item.command === 'list_remote_library_items'));
   expect(remoteCalls.length).toBeGreaterThan(0);
   expect(remoteCalls.every((item) => item.targetId === host.id && item.kind === 'prompt')).toBe(true);
+  const input = composer.getByRole('textbox');
+  await input.fill('keep-composer-draft');
+  await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
+  await expect(input).toHaveValue('keep-composer-draft');
+  expect(await page.evaluate(() => (window as any).__promptState.failures)).toBeGreaterThan(0);
+  await page.evaluate(() => { (window as any).__promptState.fail = false; });
+  await composer.getByRole('button', { name: '重试提示词' }).click();
+  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(input).toHaveValue('keep-composer-draft');
+  await expect(stage).toContainText('/srv/project');
+  await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  await page.getByRole('dialog', { name: '选择远程目录' }).getByRole('button', { name: '继续启动', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  const initial = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
+  await initial.fill('keep-new-session-draft');
+  await page.evaluate(() => { (window as any).__promptState.fail = false; });
+  await dialog.getByRole('button', { name: '重试提示词' }).click();
+  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '远端提示' })).toBeVisible();
+  await expect(initial).toHaveValue('keep-new-session-draft');
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(input).toHaveValue('keep-composer-draft');
+  await expect(stage).toContainText('/srv/project');
 });
+
+/** Product entry-point checks; the SSH/process identity is verified separately in Rust/native runs. */
+async function installIndependentSessions(page: Page, options: { indexed?: boolean; empty?: boolean; fail?: boolean; hold?: boolean; initial?: 'local' | 'saved-a'; initialDisconnected?: boolean; holdIndex?: boolean; holdListAfterLaunch?: boolean } = {}) {
+  await page.addInitScript(({ host, options }) => {
+    localStorage.setItem('cliora:remote-target', host.id);
+    const project = { id: 'same-project', targetId: host.id, name: 'shared-project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
+    const make = (id: string) => ({ id, toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null as number | null, startedAt: 1, remoteSessionId: `cliora-${id}`, connectionState: 'connecting', reattachable: false, stateRevision: 0, remoteEndResult: null as unknown });
+    const sessions = options.empty ? [] : [make('original-a')];
+    if (options.initialDisconnected) Object.assign(sessions[0], { running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+    if (options.initial === 'local') Object.assign(sessions[0], { projectId: null, directory: 'C:\\local-project', remoteSessionId: null });
+    if (options.initial === 'saved-a') sessions[0].remoteSessionId = 'saved-a';
+    const requests: Array<Record<string, unknown>> = [];
+    let release = () => {};
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    let releaseIndex = () => {};
+    const indexReady = new Promise<void>(resolve => { releaseIndex = resolve; });
+    const handlers: Array<(event: { payload: unknown }) => void> = [];
+    const listens: Record<string, number> = {};
+    let releaseList = () => {};
+    const listReady = new Promise<void>(resolve => { releaseList = resolve; });
+    const updateState = (patch: Record<string, unknown>, publish = true) => {
+      const session = sessions[0];
+      Object.assign(session, patch, { stateRevision: session.stateRevision + 1 });
+      if (publish) handlers[listens['cliora:session-state']]?.({ payload: { ...session } });
+    };
+    const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } };
+    Object.assign(window, {
+      isTauri: true, __independentRequests: requests, __independentSessions: sessions, __releaseIndependentLaunch: () => release(),
+      __releaseIndependentIndex: () => releaseIndex(), __independentIndexPending: false,
+      __releaseIndependentList: releaseList, __remoteState: updateState, __remoteEndFails: false, __remoteCloseCalls: [],
+      __independentFreshList: false, __independentDelayedListResolved: false, __reattachCalls: [], __terminalWrites: [], __queryOnReattach: false,
+      __remoteExit: (stateRevision: number) => handlers[listens['cliora:session-exit']]?.({ payload: { sessionId: sessions[0].id, exitCode: 255, stateRevision } }),
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { handlers.push(callback); return handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [descriptor], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'list_remote_targets') return [host];
+          if (command === 'list_remote_projects') return [project];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [project.path], truncated: false };
+          if (command === 'save_remote_project') return { ...project, ...(args.project as object), id: project.id };
+          if (command === 'list_workbench_sessions') {
+            const snapshot = sessions.map(item => ({ ...item }));
+            const harness = window as unknown as { __independentFreshList: boolean };
+            const fresh = harness.__independentFreshList;
+            harness.__independentFreshList = false;
+            if (options.holdListAfterLaunch && requests.length && !fresh) {
+              await listReady;
+              Object.assign(window, { __independentDelayedListResolved: true });
+            }
+            return snapshot;
+          }
+          if (command === 'close_workbench_session') {
+            const harness = window as unknown as { __remoteEndFails: boolean; __remoteCloseCalls: unknown[] };
+            harness.__remoteCloseCalls.push(args.sessionId);
+            if (harness.__remoteEndFails) {
+              updateState({ connectionState: 'unknown', remoteEndResult: { outcome: 'unknown', stage: 'timeout', exitCode: null } });
+              throw { message: '远程结束结果未知，记录已保留，请重试结束以核查' };
+            }
+            const index = sessions.findIndex(item => item.id === args.sessionId);
+            if (index >= 0) sessions.splice(index, 1);
+            return null;
+          }
+          if (command === 'reattach_workbench_session') {
+            const harness = window as unknown as { __reattachCalls: unknown[]; __queryOnReattach: boolean };
+            harness.__reattachCalls.push(args);
+            updateState({ running: true, connectionState: 'connecting', reattachable: false, exitCode: null });
+            if (harness.__queryOnReattach) handlers[listens['cliora:session-output']]?.({ payload: { sessionId: sessions[0].id, dataBase64: btoa('\x1b[6n') } });
+            return null;
+          }
+          if (command === 'list_remote_sessions') {
+            Object.assign(window, { __independentIndexPending: true });
+            if (options.holdIndex) await indexReady;
+            return options.indexed ? ['a', 'b', 'c'].map(id => ({ remoteSessionId: `saved-${id}`, targetId: host.id, projectId: project.id, toolId: 'codex', directory: project.path, mode: 'normal', startedAt: 1, lastSeenAt: 1 })) : [];
+          }
+          if (command === 'launch_cli') {
+            const request = args.request as Record<string, unknown>;
+            requests.push(request);
+            const ordinal = requests.length;
+            if (options.hold) await ready;
+            if (options.fail) throw { message: 'new remote process rejected' };
+            const session = make(`new-${ordinal}`);
+            const intent = request.remoteIntent as { kind?: string; remoteSessionId?: string } | undefined;
+            if (intent?.kind === 'reattach') session.remoteSessionId = intent.remoteSessionId!;
+            sessions.push(session);
+            return { toolId: 'codex', projectId: `remote:${project.id}`, mode: 'normal', terminal: 'workbench', status: 'session_started', sessionId: session.id, remoteSessionId: session.remoteSessionId };
+          }
+          if (command === 'probe_remote_clis') return [{ targetId: host.id, toolId: 'codex', executable: 'codex', installed: true, version: '1.0', detail: null }];
+          if (command === 'replay_workbench_session') return btoa('fixture-ready\r\n');
+          if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'plugin:event|listen') { listens[String(args.event)] = Number(args.handler); return args.handler; }
+          if (command === 'write_workbench_session') {
+            (window as unknown as { __terminalWrites: unknown[] }).__terminalWrites.push(args);
+            return null;
+          }
+          if (command === 'plugin:event|unlisten' || command === 'resize_workbench_session') return null;
+          return [];
+        },
+      },
+    });
+  }, { host, options });
+}
+
+const independentRequests = (page: Page) => page.evaluate(() => (window as unknown as { __independentRequests: Array<Record<string, unknown>> }).__independentRequests);
+
+async function quickRemoteLaunch(page: Page) {
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: 'codex', targetId: 'host-1', quickLaunch: true } })));
+}
+
+test('remote tool quick launch creates a new request with an existing same-directory session and guards duplicate submission', async ({ page }) => {
+  await installIndependentSessions(page, { hold: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+  await quickRemoteLaunch(page);
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  expect((await independentRequests(page))[0]).toMatchObject({ projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' } });
+  await page.evaluate(() => (window as unknown as { __releaseIndependentLaunch: () => void }).__releaseIndependentLaunch());
+  await expect(page.locator('[role="tab"][data-session-id="new-1"]')).toBeVisible();
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(2);
+  await expect(page.locator('[role="tab"][data-session-id="new-2"]')).toBeVisible();
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+});
+
+test('remote project launch sends new intent even when its directory is already running', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  const card = page.locator('[data-project-id="remote:same-project"]');
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: '启动', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  expect((await independentRequests(page))[0]).toMatchObject({ projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' } });
+});
+
+test('workbench new remote dialog creates an independent request for the saved directory', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const directory = page.getByRole('dialog', { name: '选择远程目录' });
+  await directory.getByRole('button', { name: '继续启动', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  expect((await independentRequests(page))[0]).toMatchObject({ projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' } });
+});
+
+test('remote startup restores every indexed identity and never falls back to an unindexed project', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, empty: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(3);
+  const requests = await independentRequests(page);
+  expect(requests.map(item => item.remoteIntent)).toEqual(['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
+  expect(requests.every(item => item.sessionId === null)).toBe(true);
+});
+
+test('remote startup restores indexed sessions alongside an existing local session', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, initial: 'local' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(3);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual(['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
+  await expect(page.locator('[role="tab"][data-session-id="new-3"]')).toBeVisible();
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：测试远程主机' }).click();
+  await page.getByRole('menuitemradio', { name: /本机/ }).click();
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+});
+
+test('remote startup restores only missing identities when one indexed session is already attached', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, initial: 'saved-a' });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(2);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual(['b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` })));
+  for (const id of ['original-a', 'new-1', 'new-2']) await expect(page.locator(`[role="tab"][data-session-id="${id}"]`)).toBeVisible();
+});
+
+test('late remote index discovery preserves a newly launched session and still restores saved identities', async ({ page }) => {
+  await installIndependentSessions(page, { indexed: true, empty: true, holdIndex: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __independentIndexPending: boolean }).__independentIndexPending)).toBe(true);
+  await quickRemoteLaunch(page);
+  await expect(page.locator('[role="tab"][data-session-id="new-1"]')).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __releaseIndependentIndex: () => void }).__releaseIndependentIndex());
+  await expect.poll(() => independentRequests(page)).toHaveLength(4);
+  expect((await independentRequests(page)).map(item => item.remoteIntent)).toEqual([{ kind: 'new' }, ...['a', 'b', 'c'].map(id => ({ kind: 'reattach', remoteSessionId: `saved-${id}` }))]);
+  for (const id of ['new-1', 'new-2', 'new-3', 'new-4']) await expect(page.locator(`[role="tab"][data-session-id="${id}"]`)).toBeVisible();
+});
+
+test('remote startup without an index does not create a session implicitly', async ({ page }) => {
+  await installIndependentSessions(page, { empty: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
+  expect(await independentRequests(page)).toEqual([]);
+});
+
+test('failed same-directory quick launch keeps the old session and reports the new failure', async ({ page }) => {
+  await installIndependentSessions(page, { fail: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+  await expect(page.getByText('new remote process rejected', { exact: false })).toBeVisible();
+});
+
+test('remote readiness, disconnect, unknown and remote end stay distinct from CLI activity', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('SSH · 连接中');
+  const state = (patch: Record<string, unknown>) => page.evaluate(patch => (window as unknown as { __remoteState: (patch: Record<string, unknown>) => void }).__remoteState(patch), patch);
+  await state({ connectionState: 'connected' });
+  await expect(stage).toContainText('SSH · 已连接');
+  await state({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage).toContainText('CLI 活动未知');
+  await expect(page.getByRole('button', { name: '清理已结束', exact: true })).toHaveCount(0);
+  await stage.getByRole('button', { name: '继续会话', exact: true }).first().click();
+  await expect(stage).toContainText('SSH · 连接中');
+  await expect(stage.locator('textarea')).toBeEnabled();
+  await state({ running: false, connectionState: 'unknown', reattachable: true, exitCode: 46 });
+  await expect(stage).toContainText('SSH · 远端状态未知');
+  await state({ running: false, connectionState: 'remote_ended', reattachable: false, exitCode: 44 });
+  await expect(stage).toContainText('SSH · 远端已结束');
+  await expect(stage.getByRole('button', { name: '重新附着远程会话', exact: true })).toHaveCount(0);
+});
+
+test('an unconfirmed remote end preserves its tab, terminal and recovery action', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.evaluate(() => { (window as unknown as { __remoteEndFails: boolean }).__remoteEndFails = true; });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '结束此会话', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '结束进程', exact: true }).click();
+  await expect(page.locator('[data-session-id="original-a"]')).toBeVisible();
+  await expect(stage).toContainText('结束未确认，记录已保留');
+  await expect(stage.locator('textarea')).toBeEnabled();
+  await expect(stage.getByRole('button', { name: '结束此会话', exact: true })).toBeEnabled();
+});
+
+test('a selected session awaiting listing never displays or accepts input in the previous terminal', async ({ page }) => {
+  await installIndependentSessions(page, { holdListAfterLaunch: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-pane-session="original-a"]')).toBeVisible();
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  await expect(page.locator('[data-pane-session="original-a"]')).toBeHidden();
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('正在读取会话');
+  await page.evaluate(() => (window as unknown as { __remoteState: (patch: object) => void }).__remoteState({ connectionState: 'connected' }));
+  await page.evaluate(() => (window as unknown as { __releaseIndependentList: () => void }).__releaseIndependentList());
+  await expect(page.locator('[data-pane-session="new-1"]')).toBeVisible();
+  await expect(page.locator('[data-pane-session="new-1"] textarea')).toBeEnabled();
+  await page.locator('[data-session-id="original-a"]').click();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('SSH · 已连接');
+  await page.evaluate(() => (window as unknown as { __remoteExit: (revision: number) => void }).__remoteExit(0));
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeEnabled();
+});
+
+test('an older event cache cannot replace a newer listed state when an earlier list resolves', async ({ page }) => {
+  await installIndependentSessions(page, { holdListAfterLaunch: true });
+  await page.goto('/');
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeEnabled();
+  await quickRemoteLaunch(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  await page.evaluate(() => {
+    const harness = window as unknown as { __remoteState: (patch: object, publish?: boolean) => void; __independentFreshList: boolean };
+    // Event cache revision 1; the delayed launch list already captured revision 0.
+    harness.__remoteState({ connectionState: 'connected' });
+    // Revision 2 is observable only through a fresh list, not through an event.
+    harness.__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 }, false);
+    harness.__independentFreshList = true;
+  });
+  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await page.locator('[data-session-id="original-a"]').click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
+  await page.evaluate(() => (window as unknown as { __releaseIndependentList: () => void }).__releaseIndependentList());
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __independentDelayedListResolved: boolean }).__independentDelayedListResolved)).toBe(true);
+  await page.locator('[data-session-id="original-a"]').click();
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
+});
+
+test('an initially disconnected terminal starts with input disabled', async ({ page }) => {
+  await installIndependentSessions(page, { initialDisconnected: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage.locator('textarea')).toBeDisabled();
+});
+
+test('reattach uses the mounted grid after a disconnected resize and answers its first cursor query', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.locator('textarea')).toBeEnabled();
+  await page.evaluate(() => {
+    const harness = window as unknown as { __remoteState: (patch: object) => void; __queryOnReattach: boolean };
+    harness.__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+    harness.__queryOnReattach = true;
+  });
+  await expect(stage.locator('textarea')).toBeDisabled();
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect.poll(() => stage.locator('.xterm-screen').evaluate(node => node.clientWidth)).toBeGreaterThan(1000);
+  await stage.getByRole('button', { name: '重新附着远程会话', exact: true }).click();
+  const calls = await page.evaluate(() => (window as unknown as { __reattachCalls: Array<{ sessionId: string; cols: number; rows: number }> }).__reattachCalls);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].sessionId).toBe('original-a');
+  expect(calls[0].cols).toBeGreaterThan(80);
+  expect(calls[0].rows).toBeGreaterThan(24);
+  // The fixture supplies only the query; xterm must produce its own response.
+  const writes = () => page.evaluate(() => (window as unknown as { __terminalWrites: Array<{ dataBase64: string }> }).__terminalWrites.map(item => atob(item.dataBase64)).join(''));
+  await expect.poll(writes).toMatch(/\x1b\[\d+;\d+R/);
+  const reply = (await writes()).match(/\x1b\[(\d+);(\d+)R/)!;
+  expect(Number(reply[1])).toBeLessThanOrEqual(calls[0].rows);
+  expect(Number(reply[2])).toBeLessThanOrEqual(calls[0].cols);
+});
+
+for (const width of [900, 640]) {
+  for (const theme of ['light', 'dark']) {
+    test(`disconnected reattach does not overlap search at ${width}px in ${theme}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await installIndependentSessions(page);
+      await page.goto('/');
+      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+      await page.evaluate(theme => {
+        document.documentElement.setAttribute('data-theme', theme);
+        (window as unknown as { __remoteState: (patch: object) => void }).__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
+      }, theme);
+      const stage = page.getByRole('region', { name: '当前会话' });
+      const reattach = stage.getByRole('button', { name: '重新附着远程会话', exact: true });
+      await expect(reattach).toBeVisible();
+      const geometry = await reattach.evaluate(button => {
+        const box = button.getBoundingClientRect();
+        const label = button.querySelector('span[class*="toolLabel"]');
+        const search = button.closest('header')?.querySelector('button[aria-label="查找输出"]');
+        const searchBox = search?.getBoundingClientRect();
+        return { labelVisible: !!label && getComputedStyle(label).display !== 'none', left: box.left, right: box.right, width: box.width, searchLeft: searchBox?.left };
+      });
+      expect(geometry.labelVisible).toBe(false);
+      expect(geometry.width).toBeGreaterThan(20);
+      expect(geometry.searchLeft).toBeDefined();
+      expect(geometry.right).toBeLessThanOrEqual(geometry.searchLeft!);
+      await expect(stage.getByRole('button', { name: '查找输出', exact: true })).toBeVisible();
+    });
+  }
+}

@@ -26,6 +26,7 @@ pub mod plugins;
 pub mod providers;
 pub(crate) mod qoder_cn;
 mod registry;
+pub(crate) mod remote_resources;
 pub mod version;
 pub(crate) mod zcode;
 pub use contract::*;

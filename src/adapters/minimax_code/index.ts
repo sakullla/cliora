@@ -3,6 +3,7 @@ import type { ToolUiAdapter } from '../contract';
 import { MiniMaxCodeConfigurationEditor } from './ConfigurationEditor';
 
 export const minimaxCodeUiAdapter: ToolUiAdapter = {
+  remoteAgent: { root: '.minimax/agents', extension: 'md' },
   icon: { light: icon, source: 'https://mintcdn.com/minimax-zh/1UjvBcdoC6r0UeyA/logo/light.svg' },
   id: 'minimax_code',
   configuration: { Editor: MiniMaxCodeConfigurationEditor },

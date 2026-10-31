@@ -42,6 +42,7 @@ const modelMapping: ModelMappingControl = {
 };
 
 export const claudeUiAdapter: ToolUiAdapter = {
+  remoteAgent: { root: '.claude/agents', extension: 'md' },
   icon: { light: icon, source: 'https://code.claude.com/docs/logo/light.svg' },
   id: 'claude_code',
   accounts: {

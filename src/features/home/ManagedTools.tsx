@@ -1,9 +1,10 @@
+import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { BoundedCache } from '../../lib/boundedCache';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable } from '../../lib/native';
+import { nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace, ToolProbe } from '../../types/native';
@@ -129,8 +130,10 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   </div>;
 }
 
-export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; remoteTargetId?: string; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', onOpenTool, onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; visible?: boolean; remoteTargetId?: string; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
+  const remoteReads = useRemoteReads(remoteTargetId, tools.map(item => item.id).join('|'), visible);
+  const native = remoteReads.native;
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
     const workspace = cached ?? null;
@@ -276,6 +279,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   }, [remoteTargetId, tools.map((item) => item.id).join('|')]);
 
   useEffect(() => {
+    if (!visible) return;
     if (!nativeAvailable || remoteTargetId === 'local') {
       setRemoteStates({});
       setRemoteChecking(new Set());
@@ -288,7 +292,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
     setStates(Object.fromEntries(ids.map((toolId) => [toolId, { workspace: null, error: null, busy: false, activity: null, notice: null }])));
     // Probe the complete list through one SSH command. This avoids a burst of
     // handshakes on high-latency hosts and makes the result atomic for the UI.
-    void native.probeRemoteClis(remoteTargetId, ids).then((results) => {
+    void native.probeRemoteClis(remoteTargetId, ids, { fresh: remoteProbeRetry > 0 }).then((results) => {
       if (!active) return;
       setRemoteStates(Object.fromEntries(results.map((result) => [result.toolId, result])));
       setStates((current) => {
@@ -304,7 +308,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
       setRemoteChecking(new Set());
     });
     return () => { active = false; };
-  }, [remoteTargetId, remoteProbeRetry, tools.map((item) => item.id).join('|')]);
+  }, [visible, remoteTargetId, remoteProbeRetry, tools.map((item) => item.id).join('|')]);
 
   async function launchTool(toolId: string, pickDirectory = false) {
     const previous = states[toolId];
@@ -450,7 +454,7 @@ export function ManagedTools({ tools, remoteTargetId = 'local', onOpenTool, onWo
   const common = [...pinned, ...daily];
   const others = unpinned.filter((item) => !daily.includes(item));
   const shown = othersOpen ? [...common, ...others] : common;
-  return <div className={styles.list} aria-label={t('home.managed.title')}>
+  return <div className={styles.list} aria-label={t('home.managed.title')}><RemoteReadStatus state={remoteReads} />
     {shown.map((tool) => {
       const loaded = states[tool.id];
       const isRemote = remoteTargetId !== 'local';
