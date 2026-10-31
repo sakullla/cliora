@@ -5,9 +5,10 @@ import { RemoteReadStatus, useRemoteReads } from '../../lib/remoteReads';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteDirectoryListing, RemoteProject, RemoteTarget } from '../../types/remote';
 import { GuideDialog } from '../../components/GuideDialog';
+import { StatusBanner } from '../../components/StatusBanner';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
-import { Button } from '../../components/ui';
+import { Button, Card, Toolbar } from '../../components/ui';
 import { beginDirectoryReceipt, blocksDirectoryCreation, updateDirectoryReceipt, useDirectoryReceipts, type DirectoryReceipt } from './directoryReceipts';
 import styles from './RemoteProjectDialog.module.css';
 
@@ -215,15 +216,17 @@ export function RemoteProjectDialog({
     <div className={styles.dialog}>
       <RemoteReadStatus state={reads} />
       {message && <p className={styles.message} role="status">{message}</p>}
-      {receipts.length > 0 && <section className={styles.receipts} aria-label={t('home.remote.receiptTitle')}>
-        <strong>{t('home.remote.receiptTitle')}</strong>
-        {receipts.map(receipt => <article key={receipt.id} className={styles.receipt} data-outcome={receipt.outcome}>
-          <strong>{receipt.target.name} · {receipt.target.user}@{receipt.target.host}:{receipt.target.port}</strong>
-          <code>{receipt.path}</code>
-          <p role="status">{t(`home.remote.receiptOutcome.${receipt.outcome}`)}{receipt.detail && ` · ${receipt.detail}`}</p>
-          {receipt.inspection && <p role="status">{receipt.inspection.state === 'checking' ? t('home.remote.receiptChecking') : receipt.inspection.detail}</p>}
-          <Button size="sm" disabled={receipt.outcome === 'pending' || receipt.inspection?.state === 'checking'} onClick={() => void inspectReceipt(receipt)}>{t('home.remote.receiptInspect')}</Button>
-        </article>)}
+      {receipts.length > 0 && <section aria-label={t('home.remote.receiptTitle')}>
+        <Toolbar title={t('home.remote.receiptTitle')} titleAs="h3" count={receipts.length} />
+        <Card padding="compact">{receipts.map(receipt => <article key={receipt.id} data-outcome={receipt.outcome}>
+          <StatusBanner tone={receipt.outcome === 'created' ? 'success' : 'warning'}>
+            <strong>{receipt.target.name} · {receipt.target.user}@{receipt.target.host}:{receipt.target.port}</strong><br />
+            <code>{receipt.path}</code><br />
+            {t(`home.remote.receiptOutcome.${receipt.outcome}`)}{receipt.detail && ` · ${receipt.detail}`}
+          </StatusBanner>
+          {receipt.inspection && <StatusBanner tone={receipt.inspection.state === 'exists' ? 'success' : 'warning'}>{receipt.inspection.state === 'checking' ? t('home.remote.receiptChecking') : receipt.inspection.detail}</StatusBanner>}
+          <Toolbar actions={<Button size="sm" disabled={receipt.outcome === 'pending' || receipt.inspection?.state === 'checking'} onClick={() => void inspectReceipt(receipt)}>{t('home.remote.receiptInspect')}</Button>} />
+        </article>)}</Card>
       </section>}
       {!targets.length ? <div className={styles.empty}><Icon name="globe" size={20} /><span>{t('home.remote.noTargets')}</span></div> : <>
         <label className={styles.field}><span>{t('home.remote.target')}</span><select disabled={busy === 'save'} value={targetId} onChange={(event) => chooseTarget(event.target.value)}><option value="">{t('home.remote.pickTarget')}</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.user}@{item.host}</option>)}</select></label>

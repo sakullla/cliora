@@ -110,7 +110,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     const remoteTargets = [{ id: 'remote-prod', name: '测试远程主机', host: '212.60.153.19', port: 22, user: 'root', authMethod: 'key', identityFile: 'C:/Users/demo/.ssh/id_ed25519', sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: now, updatedAt: now }];
     if (writeRecovery) localStorage.setItem('cliora:remote-writes:v1', JSON.stringify([{ id: '6754f794-3c8a-4cb3-aec1-5f5dcb197b36', targetId: 'remote-prod', targetRevision: now, identity: 'synthetic', outcome: 'recovering', items: [{ path: '$HOME/.codex/config.toml', before: 'a'.repeat(64), after: 'b'.repeat(64), state: 'applying', observed: null }] }]));
     if (directoryMode === 'password') remoteTargets[0].authMethod = 'password';
-    const directoryFixture = { failure: false, release: () => {} };
+    const directoryFixture = { failure: false, creates: 0, release: () => {} };
     const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
@@ -157,6 +157,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             return { parent: args.parent, items: ['/srv/project', '/srv/services', '/srv/tools'], truncated: false };
           }
           if (command === 'create_remote_directory') {
+            directoryFixture.creates++;
             if (directoryMode?.startsWith('receipt-')) {
               await new Promise(resolve => { directoryFixture.release = resolve; });
               throw { code: 'remote_unknown', message: '远端可能已执行；结果尚未确认。', action: '核查原路径后再操作。', remote: { outcome: 'unknown' } };
@@ -260,11 +261,13 @@ if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
-  for (const directoryMode of ['key', 'password', 'permission', 'loading', 'receipt-unknown', 'receipt-inspected']) {
+  for (const directoryMode of ['key', 'password', 'permission', 'loading', 'receipt-unknown', 'receipt-inspected', 'receipt-multiple-top', 'receipt-multiple-end']) {
     await shot(`workbench-t5-directory-${directoryMode}-${theme}-${width}`, theme, width, async page => {
       await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
       const dialog = page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') });
-      await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill('/srv/project/a-long-remote-directory-with-editable-input');
+      const multiple = directoryMode.startsWith('receipt-multiple');
+      const longPath = index => `/srv/project/${index}-${'long-unbroken-segment'.repeat(16)}`;
+      await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill(multiple ? longPath(0) : '/srv/project/a-long-remote-directory-with-editable-input');
       await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('保留正在编辑的远程项目名称');
       if (directoryMode === 'permission') {
         await page.evaluate(() => { window.__directoryFixture.failure = true; });
@@ -282,6 +285,28 @@ for (const width of widths) {
         if (directoryMode === 'receipt-inspected') {
           await receipt.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
           await receipt.getByRole('status').filter({ hasText: copy('原路径当前是目录', 'The original path is currently a directory') }).waitFor();
+        }
+        if (multiple) {
+          for (let index = 1; index < 4; index++) {
+            await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill(longPath(index));
+            await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).click();
+            await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation'), exact: true }).click();
+            await page.evaluate(() => window.__directoryFixture.release());
+            await receipt.locator('article[data-outcome="unknown"]').nth(index).waitFor();
+          }
+          const last = receipt.locator('article[data-outcome="unknown"]').last();
+          await last.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
+          await last.getByRole('status').filter({ hasText: copy('原路径当前是目录', 'The original path is currently a directory') }).waitFor();
+          await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('核查后继续编辑的草稿');
+          if (!await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).isDisabled()) throw new Error('Unknown original path must remain blocked after inspection');
+          if (!await dialog.getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).isEnabled()) throw new Error('The existing project action must remain available');
+          const observation = await dialog.evaluate(element => {
+            const body = element.querySelector('.guide-dialog-body');
+            return { horizontalOverflow: body.scrollWidth > body.clientWidth, scrollable: body.scrollHeight > body.clientHeight, writes: window.__directoryFixture.creates };
+          });
+          if (observation.horizontalOverflow || !observation.scrollable || observation.writes !== 4) throw new Error('Long receipts must scroll vertically without overflow or replay');
+          await (directoryMode === 'receipt-multiple-end' ? last : receipt.getByRole('heading')).scrollIntoViewIfNeeded();
+          return observation;
         }
         await receipt.scrollIntoViewIfNeeded();
       }
