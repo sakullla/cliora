@@ -211,7 +211,7 @@ export const native = {
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
   listRemoteTargets: () => command<RemoteTarget[]>('list_remote_targets'),
-  /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
+  /** `password` goes to the local credential store; omit or pass '' to keep the saved one. */
   saveRemoteTarget: (target: RemoteTarget, password?: string | null) => command<RemoteTarget>('save_remote_target', { target, password: password || null }),
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
   deleteRemoteTarget: (id: string) => command<void>('delete_remote_target', { id }),

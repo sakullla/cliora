@@ -235,6 +235,114 @@ fn setup(server: &Server) -> SyncSetup {
     }
 }
 
+#[test]
+fn reconnect_with_valid_password_does_not_need_the_locked_old_credential() {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    configure(&db, &store, setup(&server)).unwrap();
+    let old = read_config(&db).unwrap().unwrap();
+    store.delete(&old.auth_secret_id).unwrap();
+    store.delete(&old.space_secret_id).unwrap();
+    configure(&db, &store, setup(&server)).unwrap();
+    let result = run(&db, &store, &Registry::builtins(), false).unwrap();
+    assert!(result.last_error.is_none());
+    assert!(result.last_success.is_some());
+}
+
+#[test]
+fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver() {
+    use crate::native::profile::{RegisteredProfile, Connection, ProfileAuthentication};
+    use crate::resources::{mcp, skills};
+    use crate::native::adapter::Scope;
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { super::super::set_restore_roots_for_test(None); } }
+    let _guard = Guard;
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let source = database(&root.path().join("source"));
+    let target = database(&root.path().join("target"));
+    let old_store = MemoryCredentials::default();
+    let new_store = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let source_home = std::path::PathBuf::from(r"C:\Users\Alice");
+    let target_home = root.path().join("mac-home");
+    std::fs::create_dir_all(target_home.join("projects/demo")).unwrap();
+    old_store.put("connection-source", "synthetic-api-key").unwrap();
+    let profile = RegisteredProfile { editing: None, authentication: ProfileAuthentication::Native,
+        id: "synced-profile".into(), tool: "codex".into(), name: "Work".into(), version: 1, revision: String::new(),
+        inherit_common: false, files: BTreeMap::new(), suppressed: BTreeMap::new(), native_credentials: BTreeMap::new(),
+        connection: Some(Connection { provider_id: "example".into(), interface_format: "openai_responses".into(),
+            base_url: "https://example.test/v1".into(), model: "gpt-6".into(), secret_ref: Some("connection-source".into()), auth_env_var: None, model_records: vec![] }),
+    };
+    let definition = mcp::McpDefinition { id: "runner".into(), name: "runner".into(), transport: mcp::McpTransport::Stdio,
+        command: r"C:\Program Files\nodejs\npx.cmd".into(), args: vec!["-y".into(), "synthetic-mcp-package".into(), r"C:\Users\Alice\projects\demo".into()],
+        url: String::new(), env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    let skill_dir = root.path().join("synthetic-skill");
+    std::fs::create_dir(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "---\nname: synthetic-skill\ndescription: Synthetic test\n---\n# Test\n").unwrap();
+    let skill = skills::import_local(&source, skill_dir.to_str().unwrap(), None, None).unwrap();
+    source.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES ('synced-profile','codex',1,?1)", [serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','synced-profile',1,'{}')", []).unwrap();
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES ('demo','Demo',?1,'codex',0)", [r"C:\Users\Alice\projects\demo"]).unwrap();
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES ('runner','runner','stdio',?1,1)", [serde_json::to_string(&definition).unwrap()]).unwrap();
+        conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES ('runner','codex','global',1,'synthetic')", []).unwrap();
+        conn.execute("INSERT INTO skill_installations(package_id,tool,scope_key,target_path,digest) VALUES (?1,'codex','global',?2,?3)", rusqlite::params![skill.id, r"C:\Users\Alice\.agents\skills\synthetic-skill", skill.digest]).unwrap();
+        Ok(())
+    }).unwrap();
+    let source_roots = || super::super::set_restore_roots_for_test(Some((source_home.clone(), root.path().join("source"))));
+    let target_roots = || super::super::set_restore_roots_for_test(Some((target_home.clone(), root.path().join("target"))));
+    source_roots();
+    configure(&source, &old_store, setup(&server)).unwrap();
+    run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    configure(&target, &new_store, setup(&server)).unwrap();
+    let received = run(&target, &new_store, &registry, false).unwrap();
+    assert!(received.blockers.is_empty(), "{:?}", received.blockers);
+    assert!(received.conflicts.is_empty());
+    let local = crate::native::profile::get_registered_profile(&target, "synced-profile").unwrap();
+    assert_eq!(new_store.get(local.connection.unwrap().secret_ref.as_deref().unwrap()).unwrap(), "synthetic-api-key");
+    let project = crate::projects::get(&target, "demo").unwrap();
+    assert_eq!(project.path.as_deref(), target_home.join("projects/demo").to_str());
+    let native = std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap();
+    assert!(native.contains("mcp_servers.runner"), "{native}");
+    assert!(native.contains("npx"));
+    assert!(!native.contains("Alice"));
+    assert!(!native.contains("Program Files"));
+    let installations = skills::installations(&target, &registry, &target_home, &skill.id).unwrap();
+    assert_eq!(installations.len(), 1);
+    assert!(std::path::Path::new(&installations[0].target_path).join("SKILL.md").is_file());
+    let repeated = run(&target, &new_store, &registry, false).unwrap();
+    assert_eq!((repeated.uploaded, repeated.downloaded), (0, 0));
+    // Disable travels with the resource, rather than making the user install
+    // and toggle it again after the next synchronization.
+    source.with_connection(|conn| {
+        conn.execute("UPDATE mcp_targets SET enabled=0", []).unwrap();
+        conn.execute("INSERT INTO app_settings(key,value) VALUES (?1,'{}')", [format!("native_skill_switch:codex:global:{}", skill.id)]).unwrap();
+        Ok(())
+    }).unwrap();
+    source_roots(); run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    let disabled = run(&target, &new_store, &registry, false).unwrap();
+    assert!(disabled.blockers.is_empty(), "{:?}", disabled.blockers);
+    assert!(!skills::enabled(&target, &registry, &target_home, &skill.id, "codex", Scope::Global, None).unwrap());
+    source.with_connection(|conn| {
+        conn.execute("DELETE FROM mcp_definitions WHERE id='runner'", []).unwrap();
+        conn.execute("DELETE FROM skill_packages WHERE id=?1", [&skill.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    source_roots(); run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    let deleted = run(&target, &new_store, &registry, false).unwrap();
+    assert!(deleted.blockers.is_empty(), "{:?}", deleted.blockers);
+    assert!(deleted.conflicts.is_empty(), "{:?}", deleted.conflicts);
+    assert!(!std::path::Path::new(&installations[0].target_path).exists());
+    assert!(!std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap().contains("mcp_servers.runner"));
+}
+
 
 
 #[test]
@@ -548,7 +656,8 @@ fn inbound_snapshot_cannot_replace_an_edit_made_while_remote_was_read() {
         &registry,
         "library:library-1",
         Some(remote),
-        &expected
+        &expected,
+        false
     )
     .unwrap_err()
     .contains("本机资料已变化"));

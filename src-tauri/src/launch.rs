@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
 use crate::adapters::{self, CliAdapter, LaunchForm, LaunchMode, Registry};
-use crate::credentials::{CredentialStore, SystemCredentialStore};
+use crate::credentials::{CredentialStore, AppCredentialStore};
 use crate::projects;
 use crate::resources::skills;
 
@@ -1817,7 +1817,7 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     if let Some((id,context))=&plan.account_context { if Some(crate::accounts::get(db,id)?.version)!=plan.account_version {return Err("账号在计划后发生变化，请重新启动".into());} crate::accounts::validate_selected_context(db,id,&context.id)?; crate::accounts::context::check_path(&context.root)?; }
     // The stored connection key is read here, at injection time, and only
     // travels into the child process environment.
-    let credential = resolve_credential(&plan, &SystemCredentialStore)?;
+    let credential = resolve_credential(&plan, &AppCredentialStore)?;
     if plan.terminal == TerminalId::Desktop {
         return spawn_desktop(&plan, credential.as_ref());
     }

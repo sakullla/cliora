@@ -82,4 +82,4 @@ Adapter architecture is a mandatory repository constraint:
 - Keep state machines, concurrency/cancellation, safe filesystem/process primitives, credential access policy, cache/scheduling, and transaction/backup logic in shared services. Adapters must not bypass these protections.
 - Keep domain/IPC contracts independent of concrete implementations, synchronize Rust/TypeScript changes, document extension points, and test registry-based extension when changing adapter contracts.
 
-Update TypeScript and Rust contracts together when changing IPC. Use the shared database and versioned migrations. Store managed secrets in the system credential store; never commit real keys or private native configurations.
+Update TypeScript and Rust contracts together when changing IPC. Use the shared database and versioned migrations. Store managed secrets through the shared credential boundary (private local files on macOS, the system credential store elsewhere); never commit real keys or private native configurations.

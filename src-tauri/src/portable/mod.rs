@@ -1,5 +1,7 @@
 pub mod crypto;
 pub mod sync;
+mod paths;
+mod resources;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
@@ -20,8 +22,22 @@ use crate::native::format::{self, FileKind};
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 
-pub(crate) const SNAPSHOT_VERSION: u32 = 3;
+pub(crate) const SNAPSHOT_VERSION: u32 = 4;
 const MAX_ENTITIES: usize = 10_000;
+
+pub(crate) fn dependency_order(key: &str) -> u8 {
+    match key.split_once(':').map(|(kind, _)| kind) {
+        Some("preferences") => 0,
+        Some("project") => 1,
+        Some("account") => 2,
+        Some("common") => 3,
+        Some("profile") => 4,
+        Some("mcp" | "skill" | "library") => 5,
+        Some("binding") => 6,
+        Some("deployment") => 7,
+        _ => 8,
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -128,6 +144,7 @@ pub enum PortablePayload {
     Skill(PortableSkill),
     Account(Box<PortableAccount>),
     Binding(PortableBinding),
+    Deployment(resources::PortableDeployment),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -149,6 +166,7 @@ impl PortableEntity {
             PortablePayload::Skill(_) => "skill",
             PortablePayload::Account(_) => "account",
             PortablePayload::Binding(_) => "binding",
+            PortablePayload::Deployment(_) => "deployment",
         }
     }
     pub fn key(&self) -> String {
@@ -187,12 +205,13 @@ impl PortableEntity {
             PortablePayload::Skill(value) => value.name.clone(),
             PortablePayload::Account(value) => value.account.label.clone(),
             PortablePayload::Binding(value) => format!("{} 活动配置", value.tool),
+            PortablePayload::Deployment(value) => format!("{} · {} 启用状态", value.tool, value.resource_kind),
         }
     }
     pub fn pending_fields(&self) -> Vec<String> {
         match &self.payload {
             PortablePayload::Profile(value) => value.pending_fields.clone(),
-            PortablePayload::Project(value) if !value.path.as_deref().is_some_and(|path| Path::new(path).is_dir()) => {
+            PortablePayload::Project(value) if !value.path.as_deref().is_some_and(|path| paths::decode(path).is_ok_and(|path| Path::new(&path).is_dir())) => {
                 vec!["项目本机目录".into()]
             }
             PortablePayload::Mcp(value) => value.pending_fields.clone(),
@@ -310,8 +329,11 @@ fn scrub_value(value: Value, path: &str, pending: &mut Vec<String>, adapter: Opt
                 .collect(),
         )),
         Value::String(text) if looks_absolute(&text) => {
-            pending.push(path.into());
-            None
+            let portable = paths::encode(&text);
+            if paths::is_portable(&portable) { Some(Value::String(portable)) } else {
+                pending.push(path.into());
+                None
+            }
         }
         Value::Null => None,
         other => Some(other),
@@ -385,6 +407,44 @@ fn references_in_text(text: &str) -> bool {
     })
 }
 
+fn localize_entity(registry: &Registry, entity: &mut PortableEntity) -> Result<(), String> {
+    fn files(registry: &Registry, tool: &str, files: &mut BTreeMap<String, String>) -> Result<(), String> {
+        let Some(adapter) = registry.get(tool) else { return Ok(()) };
+        for (role, text) in files {
+            if !text.contains("cliora-home:/") { continue; }
+            let kind = adapter.file_kind(role)?;
+            let mut value = format::parse(kind, text)?;
+            paths::decode_value(&mut value)?;
+            *text = match kind {
+                FileKind::Toml => toml::to_string_pretty(&value).map_err(|_| "无法转换迁移 TOML 路径")?,
+                FileKind::Json | FileKind::Jsonc => serde_json::to_string_pretty(&value).map_err(|_| "无法转换迁移 JSON 路径")?,
+                FileKind::Yaml => serde_yaml::to_string(&value).map_err(|_| "无法转换迁移 YAML 路径")?,
+            };
+        }
+        Ok(())
+    }
+    match &mut entity.payload {
+        PortablePayload::Profile(value) => {
+            files(registry, &value.profile.tool, &mut value.profile.files)?;
+            if let Some(editing) = &mut value.profile.editing {
+                let mut json = serde_json::to_value(&editing).map_err(|_| "迁移编辑资料无效")?;
+                paths::decode_value(&mut json)?;
+                *editing = serde_json::from_value(json).map_err(|_| "迁移编辑资料无效")?;
+            }
+        }
+        PortablePayload::Common(value) => files(registry, &value.tool, &mut value.files)?,
+        PortablePayload::Project(value) => value.path = value.path.as_deref().map(paths::decode).transpose()?,
+        PortablePayload::Binding(value) => value.scope_key = paths::decode_scope(&value.scope_key)?,
+        PortablePayload::Mcp(value) => {
+            value.definition.command = paths::decode(&value.definition.command)?;
+            for arg in &mut value.definition.args { *arg = paths::decode(arg)?; }
+            for value in value.definition.env.values_mut() { *value = paths::decode(value)?; }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn valid_skill_files(files: &BTreeMap<String, String>) -> Result<(), String> {
     if files.is_empty() || files.len() > 256 {
         return Err("Skill 文件数量无效".into());
@@ -430,8 +490,8 @@ fn read_rows<T>(
 
 struct Collected {
     snapshot: PortableSnapshot,
-    blocked_accounts: Vec<RestoreBlocker>,
-    readable_account_keys: Vec<String>,
+    blocked_entities: Vec<RestoreBlocker>,
+    readable_entity_keys: Vec<String>,
 }
 
 enum AccountRead {
@@ -447,16 +507,35 @@ pub fn collect_snapshot(
     Ok(collect_reported(db, store, registry)?.0)
 }
 
-/// Snapshot plus accounts whose auth files could not be read. Those accounts are omitted
-/// so a signed-in row is not exported without its login material.
+/// Snapshot plus entities whose credentials/auth files could not be read.
+/// Incomplete profiles/accounts and their bindings are held, never exported as deletions.
 fn collect_reported(
     db: &Database,
     store: &dyn CredentialStore,
     registry: &Registry,
 ) -> Result<(PortableSnapshot, Vec<RestoreBlocker>), String> {
+    clear_orphaned_binding_blockers(db)?;
     let collected = db.with_connection(|conn| collect_snapshot_on(conn, store, registry))?;
     persist_auth_read_blockers(db, &collected)?;
-    Ok((collected.snapshot, collected.blocked_accounts))
+    Ok((collected.snapshot, collected.blocked_entities))
+}
+
+/// An obsolete binding cannot be repaired by retrying a deleted profile. Keep
+/// its ownership bookkeeping and the actual native files; do not export the
+/// dangling reference or keep presenting it as an unfinished sync write.
+fn clear_orphaned_binding_blockers(db: &Database) -> Result<(), String> {
+    let orphaned: BTreeSet<_> = db.with_connection(|conn| {
+        read_rows(conn,
+            "SELECT b.tool,b.scope_key FROM applied_bindings b LEFT JOIN native_profiles p ON p.id=b.profile_id AND p.tool=b.tool WHERE p.id IS NULL",
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+    })?.into_iter().map(|(tool, scope)| format!("binding:{}", binding_id(&tool, &scope))).collect();
+    if orphaned.is_empty() { return Ok(()) }
+    let pending: BTreeSet<_> = load_pending_releases(db)?.into_iter().map(|item| item.key).collect();
+    let mut blockers = load_blockers(db)?;
+    let before = blockers.len();
+    blockers.retain(|blocker| !orphaned.contains(&blocker.key) || pending.contains(&blocker.key));
+    if before != blockers.len() { write_blockers(db, &blockers)?; }
+    Ok(())
 }
 
 fn collect_snapshot_on(
@@ -530,8 +609,8 @@ fn collect_snapshot_on(
         ))
     }?;
     let mut entities = Vec::new();
-    let mut blocked_accounts = Vec::new();
-    let mut readable_account_keys = Vec::new();
+    let mut blocked_entities = Vec::new();
+    let mut readable_entity_keys = Vec::new();
     // Defaults are a view fallback, not a persisted portable entity or a CAS baseline.
     if let Some(preferences) = preferences {
     let preferences: Value = serde_json::from_str(&preferences).map_err(|_| "管理偏好格式错误")?;
@@ -588,7 +667,9 @@ fn collect_snapshot_on(
                 }
             });
         }
-        // Connection API keys travel with the profile. An adapter flag must not drop them.
+        // A locked key on one profile must not prevent every unrelated item
+        // from syncing, or publish a profile stripped of its credentials.
+        let secrets = (|| -> Result<_, String> {
         let connection_secret = if let Some(connection) = profile.connection.as_mut() {
             let id = connection.secret_ref.take();
             id.map(|id| store.get(&id)).transpose()?
@@ -605,6 +686,17 @@ fn collect_snapshot_on(
                 native_secrets.insert(role, values);
             }
         }
+            Ok((connection_secret, native_secrets))
+        })();
+        let profile_key = format!("profile:{}", profile.id);
+        let (connection_secret, native_secrets) = match secrets {
+            Ok(secrets) => { readable_entity_keys.push(profile_key); secrets }
+            Err(error) => {
+                blocked_entities.push(RestoreBlocker { key: profile_key, label: profile.name.clone(), action: "retry".into(),
+                    detail: format!("配置的密钥无法读取，不能当作已导出：{error}") });
+                continue;
+            }
+        };
         pending_fields.sort();
         pending_fields.dedup();
         entities.push(PortableEntity {
@@ -640,7 +732,7 @@ fn collect_snapshot_on(
             payload: PortablePayload::Project(PortableProject {
                 id: id.clone(),
                 name,
-                path,
+                path: path.map(|path| paths::encode(&path)),
                 model_overrides: project_models.remove(&id).unwrap_or_default(),
             }),
         });
@@ -669,17 +761,20 @@ fn collect_snapshot_on(
         let mut definition: McpDefinition =
             serde_json::from_str(&text).map_err(|_| "MCP 定义格式错误")?;
         let mut pending_fields = Vec::new();
+        definition.command = paths::command(&definition.command);
         if looks_absolute(&definition.command) {
             definition.command.clear();
             pending_fields.push("MCP 命令本机路径".into());
         }
         for (index, arg) in definition.args.iter_mut().enumerate() {
+            *arg = paths::encode(arg);
             if looks_absolute(arg) {
                 *arg = "<待关联路径>".into();
                 pending_fields.push(format!("MCP 参数 {}", index + 1));
             }
         }
         for (name, value) in &mut definition.env {
+            *value = paths::encode(value);
             if looks_absolute(value) {
                 *value = "<待关联路径>".into();
                 pending_fields.push(format!("MCP 环境变量 {name}"));
@@ -724,27 +819,36 @@ fn collect_snapshot_on(
         // A bad auth file blocks only this account. The rest of the snapshot stays usable.
         match portable_account(account) {
             AccountRead::Ready(account, auth_files) => {
-                readable_account_keys.push(format!("account:{}", account.id));
+                readable_entity_keys.push(format!("account:{}", account.id));
                 entities.push(PortableEntity {
                     id: account.id.clone(),
                     payload: PortablePayload::Account(Box::new(PortableAccount { account: *account, auth_files })),
                 });
             }
-            AccountRead::Blocked(blocker) => blocked_accounts.push(blocker),
+            AccountRead::Blocked(blocker) => blocked_entities.push(blocker),
         }
     }
     let bindings = read_rows(
         conn,
-        "SELECT scope_key,tool,profile_id,context_id FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%' ORDER BY tool, scope_key",
+        "SELECT b.scope_key,b.tool,b.profile_id,b.context_id FROM applied_bindings b JOIN native_profiles p ON p.id=b.profile_id AND p.tool=b.tool WHERE b.scope_key='global' OR b.scope_key LIKE 'project:%' ORDER BY b.tool, b.scope_key",
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
     )?;
     for (scope_key, tool, profile_id, context_id) in bindings {
+        let scope_key = paths::encode_scope(&scope_key);
         let id = binding_id(&tool, &scope_key);
+        let key = format!("binding:{id}");
+        if blocked_entities.iter().any(|item| item.key == format!("profile:{profile_id}")) {
+            blocked_entities.push(RestoreBlocker { key, label: format!("{tool} 活动配置"), action: "retry".into(),
+                detail: "活动配置的密钥尚未读取，不能当作已导出；原生文件保持可用".into() });
+            continue;
+        }
+        readable_entity_keys.push(key);
         entities.push(PortableEntity {
             id,
             payload: PortablePayload::Binding(PortableBinding { scope_key, tool, profile_id, context_id }),
         });
     }
+    entities.extend(resources::collect(conn)?);
     if entities.len() > MAX_ENTITIES {
         return Err("可迁移资料超过 10000 项".into());
     }
@@ -753,13 +857,13 @@ fn collect_snapshot_on(
             schema_version: SNAPSHOT_VERSION,
             entities,
         },
-        blocked_accounts,
-        readable_account_keys,
+        blocked_entities,
+        readable_entity_keys,
     })
 }
 
 pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
-    if !matches!(snapshot.schema_version, 1 | 2 | SNAPSHOT_VERSION) || snapshot.entities.len() > MAX_ENTITIES {
+    if !matches!(snapshot.schema_version, 1..=SNAPSHOT_VERSION) || snapshot.entities.len() > MAX_ENTITIES {
         return Err("配置包资料版本或数量不受支持".into());
     }
     let mut keys = HashSet::new();
@@ -809,6 +913,7 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
                     && entity.id == binding_id(&value.tool, &value.scope_key)
                     && !value.profile_id.is_empty()
                     && (value.scope_key == "global" || value.scope_key.starts_with("project:")) => {}
+            PortablePayload::Deployment(value) if snapshot.schema_version >= 4 && value.valid() && entity.id == value.id() => {}
             _ => return Err("配置包包含无效资料".into()),
         }
     }
@@ -981,10 +1086,11 @@ pub fn apply_import(
     draft: &ImportDraft,
     selected: &BTreeSet<String>,
 ) -> Result<usize, String> {
-    apply_import_selecting(db, store, registry, draft, selected, &BTreeSet::new(), false)
+    apply_import_selecting(db, store, registry, draft, selected, &BTreeSet::new(), false, true)
 }
 
 /// `selected` is written. `unchanged` must still match the preview baseline but is not written.
+#[allow(clippy::too_many_arguments)]
 fn apply_import_selecting(
     db: &Database,
     store: &dyn CredentialStore,
@@ -993,6 +1099,7 @@ fn apply_import_selecting(
     selected: &BTreeSet<String>,
     unchanged: &BTreeSet<String>,
     remember_conflicts: bool,
+    apply_native: bool,
 ) -> Result<usize, String> {
     if selected.iter().chain(unchanged.iter()).any(|key| !draft.baseline.contains_key(key)) {
         return Err("导入选择含未知资料".into());
@@ -1003,13 +1110,16 @@ fn apply_import_selecting(
     let mut account_rows: BTreeMap<String, String> = BTreeMap::new();
     let mut issues = Vec::new();
     let roots = restore_roots(db);
-    for entity in &draft.snapshot.entities {
+    let mut ordered: Vec<_> = draft.snapshot.entities.iter().collect();
+    ordered.sort_by_key(|entity| dependency_order(&entity.key()));
+    for entity in ordered {
         if !selected.contains(&entity.key())
             || draft.baseline.get(&entity.key()) == Some(&Some(entity.digest()?))
         {
             continue;
         }
         let mut entity = entity.clone();
+        localize_entity(registry, &mut entity)?;
         if let PortablePayload::Common(common) = &mut entity.payload {
             common.revision = Uuid::new_v4().to_string();
         }
@@ -1148,13 +1258,20 @@ fn apply_import_selecting(
                         params![value.scope_key, value.tool, value.profile_id, value.context_id]).map_err(|error| error.to_string())?;
                     remember_outbox(&tx, &entity.key())?;
                 }
+                PortablePayload::Deployment(value) => resources::queue(&tx, value, false)?,
             }
         }
+        resources::refresh_changed(&tx, &prepared)?;
         let retired_secrets = if remember_conflicts {
             retain_bundle_conflicts(&tx, store, draft, &current, selected, unchanged, &mut created_secrets)?
         } else {
             Vec::new()
         };
+        if !apply_native {
+            let mut pending = pending_native_on(&tx)?;
+            pending.extend(touched.iter().cloned());
+            write_pending_native_on(&tx, &pending)?;
+        }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(retired_secrets)
     });
@@ -1189,9 +1306,16 @@ fn apply_import_selecting(
                 Err(error) => issues.push(RestoreBlocker { key, label, action: "retry".into(), detail: error.to_string() }),
             }
         }
-        issues.extend(apply_active_bindings(db, store, registry, &home, &touched));
+        if apply_native {
+            issues.extend(apply_active_bindings(db, store, registry, &home, &touched));
+        }
     }
     store_blockers(db, &touched, &issues)?;
+    if apply_native {
+        if let Some((home, _)) = restore_roots(db) {
+            resources::apply_pending(db, store, registry, &home)?;
+        }
+    }
     imported += prepared.len();
     Ok(imported)
 }
@@ -1212,7 +1336,37 @@ pub fn restore_preview(
             _ => return Err("导入资料状态无效".into()),
         }
     }
-    apply_import_selecting(db, store, registry, draft, &selected, &unchanged, true)
+    apply_import_selecting(db, store, registry, draft, &selected, &unchanged, true, true)
+}
+
+fn pending_native_on(conn: &Connection) -> Result<BTreeSet<String>, String> {
+    let json: Option<String> = conn.query_row("SELECT value FROM app_settings WHERE key='sync_pending_native_v1'", [], |row| row.get(0))
+        .optional().map_err(|error| error.to_string())?;
+    json.map(|text| serde_json::from_str(&text).map_err(|_| "同步待应用记录损坏".into())).transpose().map(|keys| keys.unwrap_or_default())
+}
+
+fn write_pending_native_on(conn: &Connection, keys: &BTreeSet<String>) -> Result<(), String> {
+    conn.execute("INSERT INTO app_settings(key,value) VALUES ('sync_pending_native_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(keys).map_err(|_| "无法记录同步待应用资料")?]).map(|_| ()).map_err(|error| error.to_string())
+}
+
+pub(crate) fn apply_synced_bindings(db: &Database, store: &dyn CredentialStore, registry: &Registry) -> Result<(), String> {
+    let touched = db.with_connection(|conn| pending_native_on(conn))?;
+    if touched.is_empty() { return Ok(()) }
+    if let Some((home, _)) = restore_roots(db) {
+        let issues = apply_active_bindings(db, store, registry, &home, &touched);
+        // Only clear binding failures here; account-read failures still need
+        // their credential/auth-file reads to succeed.
+        let bindings = touched.iter().filter(|key| key.starts_with("binding:")).cloned().collect();
+        store_blockers(db, &bindings, &issues)?;
+        resources::apply_pending(db, store, registry, &home)?;
+    }
+    db.with_connection(|conn| {
+        let mut pending = pending_native_on(conn)?;
+        pending.retain(|key| !touched.contains(key));
+        write_pending_native_on(conn, &pending)
+    })?;
+    Ok(())
 }
 
 /// Record conflict bodies in the same transaction as the import. WebDAV `run` replaces
@@ -1366,6 +1520,7 @@ fn remember_outbox(conn: &Connection, key: &str) -> Result<(), String> {
 }
 
 pub(crate) fn binding_id(tool: &str, scope_key: &str) -> String {
+    let scope_key = paths::encode_scope(scope_key);
     let raw = format!("{tool}\u{1f}{scope_key}");
     if raw.len() <= 200 {
         raw
@@ -1415,8 +1570,8 @@ fn is_auth_read_blocker(item: &RestoreBlocker) -> bool {
 }
 
 fn persist_auth_read_blockers(db: &Database, collected: &Collected) -> Result<(), String> {
-    let readable = &collected.readable_account_keys;
-    let blocked = &collected.blocked_accounts;
+    let readable = &collected.readable_entity_keys;
+    let blocked = &collected.blocked_entities;
     let mut current = load_blockers(db)?;
     let stale = current.iter().any(|item| {
         is_auth_read_blocker(item)
@@ -1545,8 +1700,8 @@ pub fn refresh_auth_read_blockers(db: &Database) -> Result<(), String> {
         db,
         &Collected {
             snapshot: PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: Vec::new() },
-            blocked_accounts: blocked,
-            readable_account_keys: readable,
+            blocked_entities: blocked,
+            readable_entity_keys: readable,
         },
     )
 }
@@ -1613,7 +1768,20 @@ fn place_account(
                 issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {} 的位置无效", file.name) });
                 continue;
             };
-            let path = local.root.join(relative);
+            // AppData/XDG/macOS layouts can differ for the same CLI. Prefer
+            // the receiver adapter's unique auth-file destination, not the
+            // source platform's relative layout. Ambiguous names retain their
+            // recorded relative location instead of overwriting another file.
+            let matching: Vec<_> = local.auth_files.iter()
+                .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(file.name.as_str()))
+                .collect();
+            let unique_source = portable.auth_files.iter()
+                .filter(|other| other.context_id == source.id && other.name == file.name).count() == 1;
+            let path = if unique_source && matching.len() == 1 {
+                matching[0].clone()
+            } else {
+                local.root.join(relative)
+            };
             match STANDARD.decode(&file.contents) {
                 Ok(bytes) => {
                     if let Some(parent) = path.parent() {
@@ -2167,6 +2335,21 @@ pub(crate) fn retry_native_blocker(
     let Some(blocker) = blockers.into_iter().find(|item| item.key == key) else {
         return Ok(());
     };
+    if key.starts_with("deployment:") {
+        let (home, _) = restore_roots(db).ok_or("无法定位用户目录")?;
+        resources::apply_pending(db, store, registry, &home)?;
+        return match load_blockers(db)?.into_iter().find(|item| item.key == key) {
+            Some(item) => Err(item.detail),
+            None => Ok(()),
+        };
+    }
+    if key.starts_with("profile:") && is_auth_read_blocker(&blocker) {
+        collect_reported(db, store, registry)?;
+        return match load_blockers(db)?.into_iter().find(|item| item.key == key) {
+            Some(item) => Err(item.detail),
+            None => Ok(()),
+        };
+    }
     if selected_directory(&blocker.detail).is_some() {
         return Err(blocker.detail);
     }
@@ -2195,6 +2378,9 @@ pub(crate) fn finish_pending_native(
     store: &dyn CredentialStore,
     registry: &Registry,
 ) -> Result<(), String> {
+    if let Some((home, _)) = restore_roots(db) {
+        resources::apply_pending(db, store, registry, &home)?;
+    }
     let keys: Vec<String> = load_blockers(db)?
         .into_iter()
         .filter(|item| {

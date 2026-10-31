@@ -1041,7 +1041,7 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     .unwrap();
     assert!(exported >= 8);
     let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
-    assert_eq!(snapshot.schema_version, 3);
+    assert_eq!(snapshot.schema_version, SNAPSHOT_VERSION);
     let rendered = serde_json::to_string(&snapshot).unwrap();
     assert!(!rendered.contains("session-body-must-stay"));
     assert!(!rendered.contains("pending-should-not-travel"));
@@ -1469,7 +1469,7 @@ fn binding_update_keeps_existing_managed_until_apply_rewrites_it() {
             .find(|item| item.key == key)
             .unwrap()
             .status,
-        "conflict"
+        "new"
     );
     apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([key])).unwrap();
     let (saved, version, profile_id): (String, i64, String) = db.with_connection(|conn| {

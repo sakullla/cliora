@@ -74,8 +74,8 @@ pub(crate) fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result
         return Err("原生密钥引用无效，请重新安全接入".into());
     }
     let secret = credentials
-        .get(id)
-        .map_err(|_| "系统凭据库中找不到原生密钥，请重新安全接入")?;
+        .lookup(id)?
+        .ok_or("本机凭据库中找不到原生密钥，请重新安全接入")?;
     if secret.is_empty() {
         return Err("原生密钥为空，请重新安全接入".into());
     }

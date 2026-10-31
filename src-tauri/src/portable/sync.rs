@@ -390,7 +390,7 @@ fn test_connection(dav: &Dav) -> Result<(), String> {
 }
 
 fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> {
-    if !matches!(manifest.schema_version, 1..=3)
+    if !matches!(manifest.schema_version, 1..=super::SNAPSHOT_VERSION)
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
         || manifest.history.len() > 10_000
@@ -489,7 +489,7 @@ fn save_manifest(
     etag: Option<&str>,
 ) -> Result<bool, String> {
     let mut upgraded = manifest.clone();
-    upgraded.schema_version = 3;
+    upgraded.schema_version = super::SNAPSHOT_VERSION;
     let manifest = &upgraded;
     validate_manifest(manifest, &manifest.space_id)?;
     let plain = serde_json::to_vec(manifest).map_err(|_| "无法整理同步清单".to_string())?;
@@ -796,7 +796,7 @@ fn take_remote(
         read_version(dav, key, space_id, entity_key, head)?
     };
     let described = describe_transfer(entity.as_ref(), entity_key);
-    apply_entity(db, store, registry, entity_key, entity, expected_digest)?;
+    apply_entity(db, store, registry, entity_key, entity, expected_digest, true)?;
     Ok(described)
 }
 
@@ -829,18 +829,20 @@ pub fn configure(
     }
     let previous_password = if !setup.previous_encryption_password.is_empty() {
         Some(setup.previous_encryption_password.clone())
-    } else if let Some(existing) = old.as_ref().filter(|item| item.endpoint == url.as_str()) {
-        Some(store.get(&existing.space_secret_id)?)
     } else {
         None
     };
     let mut finalize_rotation = false;
     let (space_id, key, created_space) = match dav.read("space.cliora")? {
         Some((old_bytes, etag)) => {
-            let opened = previous_password
-                .as_deref()
-                .and_then(|password| crypto::open_sync_space(password, &old_bytes).ok())
-                .or_else(|| crypto::open_sync_space(&encryption_password, &old_bytes).ok())
+            // A newly supplied working password repairs a locked/lost local
+            // credential. Only consult the old store when rotation needs it.
+            let opened = crypto::open_sync_space(&encryption_password, &old_bytes).ok()
+                .or_else(|| previous_password.as_deref()
+                    .and_then(|password| crypto::open_sync_space(password, &old_bytes).ok()))
+                .or_else(|| old.as_ref().filter(|item| item.endpoint == url.as_str())
+                    .and_then(|existing| store.get(&existing.space_secret_id).ok())
+                    .and_then(|password| crypto::open_sync_space(&password, &old_bytes).ok()))
                 .ok_or("同步空间无法用当前或旧加密口令解锁；本机连接保持不变")?;
             let (space_id, key) = opened;
             if old.as_ref().is_some_and(|existing| {
@@ -906,7 +908,7 @@ pub fn configure(
                 return Err("远端同步清单缺失；请先恢复远端备份，本机资料未改动".into());
             }
             let manifest = Manifest {
-                schema_version: 3,
+                schema_version: super::SNAPSHOT_VERSION,
                 space_id: space_id.clone(),
                 heads: BTreeMap::new(),
                 history: BTreeMap::new(),
@@ -1224,10 +1226,17 @@ fn delete_local(
                 tx.execute("DELETE FROM library_items WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "mcp" => {
+                super::resources::require_released(&tx, "mcp", id)?;
                 tx.execute("DELETE FROM mcp_definitions WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "skill" => {
+                super::resources::require_released(&tx, "skill", id)?;
                 tx.execute("DELETE FROM skill_packages WHERE id=?1", [id]).map_err(|error| error.to_string())?;
+            }
+            "deployment" => {
+                if let Some(PortableEntity { payload: PortablePayload::Deployment(value), .. }) = current {
+                    super::resources::queue(&tx, &value, true)?;
+                }
             }
             _ => return Err("未知同步资料类型".into()),
         }
@@ -1245,6 +1254,9 @@ fn delete_local(
             &release.scope_key,
             &release.managed,
         );
+    }
+    if let Some((home, _)) = super::restore_roots(db) {
+        super::resources::apply_pending(db, store, registry, &home)?;
     }
     Ok(())
 }
@@ -1268,9 +1280,11 @@ fn apply_remote(
         entity_key,
         read_version(dav, key, space_id, entity_key, head)?,
         expected_digest,
+        false,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_entity(
     db: &Database,
     store: &dyn CredentialStore,
@@ -1278,6 +1292,7 @@ fn apply_entity(
     entity_key: &str,
     entity: Option<PortableEntity>,
     expected_digest: &str,
+    defer_native: bool,
 ) -> Result<(), String> {
     match entity {
         Some(entity) => {
@@ -1299,12 +1314,15 @@ fn apply_entity(
             {
                 return Err("本机资料已变化，请重新同步后处理冲突".into());
             }
-            apply_import(
+            super::apply_import_selecting(
                 db,
                 store,
                 registry,
                 &draft,
                 &BTreeSet::from([entity_key.to_owned()]),
+                &BTreeSet::new(),
+                false,
+                !defer_native,
             )?;
         }
         None => delete_local(db, store, registry, entity_key, expected_digest)?,
@@ -1407,6 +1425,31 @@ fn clear_outbox(
     })
 }
 
+fn acknowledge_received_writes(db: &Database, store: &dyn CredentialStore, registry: &Registry, keys: &BTreeSet<String>) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let pending = super::read_rows(&tx, "SELECT id FROM sync_outbox", |row| row.get::<_, String>(0))?;
+        if pending.is_empty() { return Ok(()) }
+        let collected = super::collect_snapshot_on(&tx, store, registry)?;
+        let blocked: BTreeSet<_> = collected.blocked_entities.iter().map(|item| item.key.as_str()).collect();
+        let current: BTreeMap<_, _> = collected.snapshot.entities.into_iter().map(|item| (item.key(), item)).collect();
+        for key in pending {
+            if !keys.contains(&key) || blocked.contains(key.as_str()) { continue; }
+            let known: Option<(String, bool)> = tx.query_row("SELECT local_digest,deleted FROM sync_entity_state WHERE entity_key=?1", [&key], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional().map_err(|error| error.to_string())?;
+            let Some((digest, deleted)) = known else { continue };
+            let entity = current.get(&key);
+            if deleted == entity.is_none() && entity.map(PortableEntity::digest).transpose()?.unwrap_or_default() == digest {
+                // Receive/native-apply writes produce their own outbox tokens.
+                // A matching digest is already synchronized. Recheck and clear
+                // under one transaction so a concurrent user edit survives.
+                tx.execute("DELETE FROM sync_outbox WHERE id=?1", [&key]).map_err(|error| error.to_string())?;
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
 fn merge_head(heads: &mut Vec<Version>, version: Version) -> Result<(), String> {
     let parents: BTreeSet<_> = version.parents.iter().collect();
     heads.retain(|head| !parents.contains(&head.id));
@@ -1425,6 +1468,11 @@ fn run_once(
     progress: &dyn Fn(&SyncProgress),
 ) -> Result<SyncStatus, String> {
     report_progress(progress, "connect", "", 0, 0);
+    // Finish a previously interrupted resource removal before its definition
+    // is considered for deletion again. This never installs missing CLIs.
+    if let Some((home, _)) = super::restore_roots(db) {
+        super::resources::apply_pending(db, store, registry, &home)?;
+    }
     let dav = Dav::new(
         endpoint(&config.endpoint)?,
         &config.username,
@@ -1443,8 +1491,8 @@ fn run_once(
         return Err("远端同步空间已更换，本机资料未改动".into());
     }
     let pending_tokens = outbox_tokens(db)?;
-    let (snapshot, blocked_accounts) = super::collect_reported(db, store, registry)?;
-    let skipped_accounts: BTreeSet<String> = blocked_accounts.into_iter().map(|item| item.key).collect();
+    let (snapshot, blocked_entities) = super::collect_reported(db, store, registry)?;
+    let skipped_accounts: BTreeSet<String> = blocked_entities.into_iter().map(|item| item.key).collect();
     let seen = seen_versions(db)?;
     let mut verified = BTreeMap::new();
     for (entity_key, heads) in &manifest.heads {
@@ -1473,6 +1521,14 @@ fn run_once(
     let compared = all_keys.len().saturating_sub(skipped_accounts.len());
     let mut seen_count = 0usize;
     report_progress(progress, "compare", "", 0, compared);
+    let mut all_keys: Vec<_> = all_keys.into_iter().collect();
+    // A binding must never be applied ahead of its profile/account/project;
+    // lexical order used to download "binding:" before "profile:".
+    all_keys.sort_by_key(|key| {
+        let deleted = manifest.heads.get(key).is_some_and(|heads| heads.len() == 1 && heads[0].deleted);
+        let rank = super::dependency_order(key);
+        (if deleted { 0 } else { 1 }, if deleted { 8 - rank } else { rank }, key.clone())
+    });
     for entity_key in all_keys {
         if skipped_accounts.contains(&entity_key) {
             continue;
@@ -1695,12 +1751,14 @@ fn run_once(
         processed_keys.remove(&conflict.key);
     }
     clear_outbox(db, &processed_keys, &pending_tokens)?;
-    status.pending_changes = self::status(db)?.pending_changes;
     // Matching digests skip the entity body. They must not skip a CLI write or release
     // that failed after the saved entity was already current.
     report_progress(progress, "apply", "", compared, compared);
-    super::finish_pending_native(db, store, registry).ok();
-    status.blockers = super::load_blockers(db).unwrap_or_default();
+    super::apply_synced_bindings(db, store, registry)?;
+    super::finish_pending_native(db, store, registry)?;
+    acknowledge_received_writes(db, store, registry, &processed_keys)?;
+    status.pending_changes = self::status(db)?.pending_changes;
+    status.blockers = super::load_blockers(db)?;
     status.transfers = transfers;
     status.compared = compared;
     report_progress(progress, "done", "", compared, compared);
@@ -1746,7 +1804,7 @@ pub fn run_with_progress(
                 transfers: result.transfers.clone(),
             };
             let receipt_json = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
-            let complete = result.conflicts.is_empty();
+            let complete = result.conflicts.is_empty() && result.blockers.is_empty() && result.pending_changes == 0;
             let previous_success = config.last_success;
             db.with_connection(|conn| {
                 let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -2029,6 +2087,7 @@ fn summary(entity: Option<&PortableEntity>) -> String {
         ),
         PortablePayload::Account(value) => format!("{} · {}", value.account.label, value.account.tool_id),
         PortablePayload::Binding(value) => format!("{} · {}", value.tool, value.scope_key),
+        PortablePayload::Deployment(value) => format!("{} · {} · {}", value.tool, value.resource_kind, if value.enabled { "启用" } else { "停用" }),
     }
 }
 

@@ -682,6 +682,7 @@ fn payload_kind(payload: &PortablePayload) -> &'static str {
         PortablePayload::Skill(_) => "skill",
         PortablePayload::Account(_) => "account",
         PortablePayload::Binding(_) => "binding",
+        PortablePayload::Deployment(_) => "deployment",
     }
 }
 
