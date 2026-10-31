@@ -1,4 +1,4 @@
-import { getWriteReceipts, rememberWriteReceipt, unresolvedWrite } from '../features/remote/writeReceipts';
+import { getWriteFaults, getWriteReceipts, rememberWriteFault, rememberWriteReceipt, requestWriteRecovery, unresolvedWrite } from '../features/remote/writeReceipts';
 import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
 import type { RemoteApiError } from '../types/native';
 import type { MaintenanceResult } from '../types/native';
@@ -92,7 +92,16 @@ function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 're
   const cacheable = kind === 'read' && cachedRemoteReads.has(name);
   // Refresh is request policy, never part of the resource identity.
   const identityArgs = (name === 'list_remote_native_history' || name === 'list_remote_native_history_snapshot') ? { ...args, refresh: false } : args;
-  if (kind === 'write' && transactionalWrites.has(name) && getWriteReceipts().some(item => item.targetId === targetId && unresolvedWrite(item))) return Promise.reject({ message: i18n.t('common.remoteWrite.unknown'), action: i18n.t('common.remoteWrite.open') });
+  const transactional = kind === 'write' && transactionalWrites.has(name);
+  const unresolved = transactional && getWriteReceipts().find(item => item.targetId === targetId && unresolvedWrite(item));
+  const undiscovered = transactional && getWriteFaults().some(item => item.targetId === targetId);
+  if (unresolved || undiscovered) {
+    const error = { message: i18n.t('common.remoteWrite.unknown'), action: i18n.t('common.remoteWrite.open'), ...(unresolved ? { remote: { receipt: unresolved } } : {}) };
+    window.dispatchEvent(new CustomEvent('cliora:remote-write', { detail: { targetId, error } }));
+    if (undiscovered) requestWriteRecovery(targetId);
+    return Promise.reject(error);
+  }
+  const targetRevision = options?.targetRevision ?? target?.updatedAt ?? remoteRevisions.get(targetId);
   if (kind === 'write') remoteOperations.invalidate(targetId);
   const result = remoteOperations.start<T>(name, identityArgs, targetId, kind, {
     targetRevision: target?.updatedAt ?? remoteRevisions.get(targetId),
@@ -104,7 +113,12 @@ function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 're
       options?.onVersions?.(versions);
     },
   }).promise;
-  return kind === 'write' ? result.then(value => { remoteOperations.invalidate(targetId); return value; }).catch(error => { if (error?.remote?.receipt) rememberWriteReceipt(error.remote.receipt); window.dispatchEvent(new CustomEvent('cliora:remote-write', { detail: { targetId, error } })); throw error; }) : result;
+  return kind === 'write' ? result.then(value => { remoteOperations.invalidate(targetId); return value; }).catch(error => {
+    if (error?.remote?.receipt) rememberWriteReceipt(error.remote.receipt);
+    else if (transactional && typeof targetRevision === 'number') rememberWriteFault(targetId, targetRevision);
+    window.dispatchEvent(new CustomEvent('cliora:remote-write', { detail: { targetId, error } }));
+    throw error;
+  }) : result;
 }
 
 // Share only overlapping reads. Settled workspace data is always read again so

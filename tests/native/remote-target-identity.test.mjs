@@ -14,11 +14,57 @@ async function loadNative() {
     if (line.includes("'@tauri-apps/api/core'")) return 'const invoke = (...args) => globalThis.__targetIdentityInvoke(...args); const isTauri = () => true;';
     if (line.includes("'./onboarding'")) return 'const markOnboardingLaunched = () => {};';
     if (line.includes("'../i18n'")) return 'const i18n = { t: key => key }; const bindLanguagePersist = () => {};';
-    if (line.includes("remote/writeReceipts")) return "const getWriteReceipts = () => []; const rememberWriteReceipt = () => {}; const unresolvedWrite = () => false;";
+    if (line.includes("remote/writeReceipts")) return "const getWriteReceipts = () => globalThis.__writeReceipts ?? []; const getWriteFaults = () => globalThis.__writeFaults ?? []; const rememberWriteReceipt = () => {}; const unresolvedWrite = item => !['committed', 'rolled_back', 'prepare_failed', 'conflict_before_commit'].includes(item.outcome); const rememberWriteFault = (targetId, targetRevision) => globalThis.__writeFaults.push({ targetId, targetRevision }); const requestWriteRecovery = targetId => globalThis.window.dispatchEvent(new CustomEvent('cliora:remote-write-recovery', { detail: { targetId } }));";
     throw new Error(`Unexpected runtime dependency: ${line}`);
   });
   return import(moduleUrl(code));
 }
+
+test('a local unresolved write exposes recovery with the original receipt and makes no native submission', async () => {
+  const receipt = { id: 'receipt', targetId: 'local-blocked', targetRevision: 7, outcome: 'recovering', items: [] };
+  const calls = [];
+  const events = [];
+  const oldWindow = globalThis.window;
+  globalThis.window = new EventTarget();
+  globalThis.window.addEventListener('cliora:remote-write', event => events.push(event.detail));
+  globalThis.__writeReceipts = [receipt];
+  globalThis.__targetIdentityInvoke = async name => { calls.push(name); return null; };
+  try {
+    const { native } = await loadNative();
+    await assert.rejects(native.saveRemoteLibraryItem(receipt.targetId, { title: 'draft' }), error => error.remote.receipt === receipt);
+    assert.deepEqual(calls, []);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].targetId, receipt.targetId);
+    assert.equal(events[0].error.remote.receipt.targetRevision, 7);
+  } finally {
+    globalThis.window = oldWindow; delete globalThis.__writeReceipts; delete globalThis.__targetIdentityInvoke;
+  }
+});
+
+test('a receipt-less transaction failure preserves its captured host revision for fault-only discovery', async () => {
+  const calls = [];
+  const events = [];
+  const oldWindow = globalThis.window;
+  globalThis.window = new EventTarget();
+  globalThis.window.addEventListener('cliora:remote-write', event => events.push(event.detail));
+  globalThis.__writeFaults = [];
+  globalThis.__targetIdentityInvoke = async name => { calls.push(name); throw { message: 'durable journal guard', remote: { outcome: 'failed' } }; };
+  try {
+    const { native } = await loadNative();
+    await assert.rejects(native.saveRemoteLibraryItem('remote-blocked', { title: 'draft' }, { targetRevision: 3 }));
+    assert.deepEqual(calls, ['save_remote_library_item']);
+    assert.deepEqual(globalThis.__writeFaults, [{ targetId: 'remote-blocked', targetRevision: 3 }]);
+    assert.equal(events[0].targetId, 'remote-blocked');
+    const recovery = [];
+    globalThis.window.addEventListener('cliora:remote-write-recovery', event => recovery.push(event.detail));
+    await assert.rejects(native.saveRemoteLibraryItem('remote-blocked', { title: 'retain draft' }, { targetRevision: 4 }));
+    assert.deepEqual(calls, ['save_remote_library_item'], 'pending discovery also blocks blind replay');
+    assert.deepEqual(recovery, [{ targetId: 'remote-blocked' }]);
+    assert.equal(globalThis.__writeFaults[0].targetRevision, 3, 'a new view cannot claim the failed write revision');
+  } finally {
+    globalThis.window = oldWindow; delete globalThis.__writeFaults; delete globalThis.__targetIdentityInvoke;
+  }
+});
 
 test('a late target list cannot roll back saved identity, notify consumers, or invalidate their warm reads', async () => {
   const old = { id: 'revision-race', name: 'before', host: 'old.invalid', port: 22, user: 'fixture', authMethod: 'key', enabled: true, createdAt: 1, updatedAt: 1 };

@@ -636,6 +636,10 @@ for(const width of widths)for(const theme of themes){
  if(process.argv.includes('--write-recovery')){
   await page.getByText('存在未确认的远程写入，请先核查回执，保留草稿并勿直接重试。',{exact:true}).waitFor();
   await capture('write-unknown');
+  await nav.getByRole('button',{name:'工作台',exact:true}).click();
+  await page.getByRole('region',{name:'当前会话'}).getByRole('button',{name:'写入恢复',exact:true}).waitFor();
+  await capture('write-no-session-fault');
+  await nav.getByRole('button',{name:'快速开始',exact:true}).click();
   await page.getByRole('button',{name:'写入恢复',exact:true}).click();
   const recovery=page.getByRole('dialog',{name:'远程写入与恢复',exact:true});
   await recovery.getByRole('button',{name:'核查实际结果',exact:true}).click();
@@ -653,6 +657,9 @@ for(const width of widths)for(const theme of themes){
   await recovery.getByText('当前文件已被后续修改。此回执的完成状态保留，历史备份不能覆盖这些修改。',{exact:true}).waitFor();
   await expect(recovery.getByRole('button',{name:'恢复写入前备份',exact:true})).toBeDisabled();
   await capture('write-historical-drift');
+  await recovery.getByRole('button',{name:'关闭',exact:true}).click();
+  await expect(page.getByRole('button',{name:'写入恢复',exact:true})).toHaveCount(0);
+  await capture('write-resolved-no-entry');
   await page.close();continue;
  }
  if(process.argv.includes('--remote-hosts')){

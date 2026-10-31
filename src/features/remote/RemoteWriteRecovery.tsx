@@ -6,7 +6,7 @@ import { Button } from '../../components/ui';
 import { StatusBanner } from '../../components/StatusBanner';
 import { confirmAction } from '../../lib/confirm';
 import type { RemoteTarget, RemoteWriteReceipt } from '../../types/remote';
-import { beginWriteReceiptInspection, captureWriteReceiptVersions, rememberListedWriteReceipt, rememberWriteReceipt, unresolvedWrite, useWriteReceipts } from './writeReceipts';
+import { beginWriteReceiptInspection, captureWriteReceiptVersions, clearWriteFault, rememberListedWriteReceipt, rememberWriteReceipt, unresolvedWrite, useWriteFaults, useWriteReceipts } from './writeReceipts';
 import styles from './RemoteWriteRecovery.module.css';
 
 const text = (error: unknown) => error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
@@ -14,21 +14,31 @@ const text = (error: unknown) => error && typeof error === 'object' && 'message'
 export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null }) {
   const { t } = useTranslation();
   const receipts = useWriteReceipts();
+  const faults = useWriteFaults();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const generation = useRef(0);
+  const loading = useRef<AbortController | null>(null);
   const current = receipts.filter(item => item.targetId === target?.id);
-  const unresolved = current.filter(unresolvedWrite);
+  const fault = faults.find(item => item.targetId === target?.id);
 
-  async function load() {
+  async function load(discover = false) {
     if (!target) return;
+    if (fault && fault.targetRevision !== target.updatedAt) { setError(t('common.remoteWrite.identityChanged')); return; }
+    loading.current?.abort();
+    const controller = new AbortController(); loading.current = controller;
     const version = ++generation.current;
     const receiptVersions = captureWriteReceiptVersions();
     setBusy(true); setError('');
     try {
-      const values = await native.listRemoteWriteReceipts(target.id, { targetRevision: target.updatedAt });
-      if (generation.current === version && Array.isArray(values)) for (const value of values) rememberListedWriteReceipt(value, receiptVersions);
+      const values = await native.listRemoteWriteReceipts(target.id, { targetRevision: target.updatedAt, signal: controller.signal });
+      if (Array.isArray(values)) {
+        // Results retain their original host even if the visible target changed.
+        for (const value of values) rememberListedWriteReceipt(value, receiptVersions);
+        clearWriteFault(target.id, target.updatedAt);
+        if (discover && generation.current === version && values.some(unresolvedWrite)) setOpen(true);
+      }
     } catch (error) { if (generation.current === version) setError(text(error)); }
     finally { if (generation.current === version) setBusy(false); }
   }
@@ -37,12 +47,27 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
       const detail = (event as CustomEvent).detail;
       const receipt = detail?.error?.remote?.receipt as RemoteWriteReceipt | undefined;
       if (receipt) rememberWriteReceipt(receipt);
-      if (detail?.targetId === target?.id && receipt) { setOpen(true); setError(text(detail.error)); }
+      if (detail?.targetId === target?.id && receipt && unresolvedWrite(receipt)) { setOpen(true); setError(text(detail.error)); }
     };
     window.addEventListener('cliora:remote-write', onWrite);
     return () => window.removeEventListener('cliora:remote-write', onWrite);
   }, [target?.id]);
-  useEffect(() => { setOpen(false); setError(''); setBusy(false); generation.current++; }, [target?.id, target?.updatedAt]);
+  useEffect(() => {
+    setOpen(false); setError(''); setBusy(false); generation.current++;
+    return () => { generation.current++; loading.current?.abort(); };
+  }, [target?.id, target?.updatedAt]);
+  useEffect(() => {
+    if (fault && fault.targetRevision === target?.updatedAt) void load(true);
+    // Discovery is triggered only by a persisted write failure, never normal navigation.
+  }, [fault, target?.id, target?.updatedAt]);
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      if ((event as CustomEvent).detail?.targetId !== target?.id) return;
+      setOpen(true); void load();
+    };
+    window.addEventListener('cliora:remote-write-recovery', onOpen);
+    return () => window.removeEventListener('cliora:remote-write-recovery', onOpen);
+  });
 
   async function inspect(receipt: RemoteWriteReceipt, rollback: boolean) {
     if (!target || target.updatedAt !== receipt.targetRevision) { setError(t('common.remoteWrite.identityChanged')); return; }
@@ -58,10 +83,7 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
     finally { finish(); if (generation.current === version) setBusy(false); }
   }
   if (!target) return null;
-  return <div className={styles.root}>
-    {unresolved.length > 0 && <StatusBanner tone="warning" action={<Button size="sm" onClick={() => { setOpen(true); void load(); }}>{t('common.remoteWrite.open')}</Button>}>{t('common.remoteWrite.unknown')}</StatusBanner>}
-    {unresolved.length === 0 && <Button size="sm" onClick={() => { setOpen(true); void load(); }}>{t('common.remoteWrite.open')}</Button>}
-    <GuideDialog open={open} title={t('common.remoteWrite.title')} hint={t('common.remoteWrite.hint')} wide onClose={() => setOpen(false)}>
+  return <GuideDialog open={open} title={t('common.remoteWrite.title')} hint={t('common.remoteWrite.hint')} wide onClose={() => setOpen(false)}>
       <div className={styles.body}>
         <p>{target.name} · {target.user}@{target.host}:{target.port}</p>
         {error && <StatusBanner tone="error">{error}</StatusBanner>}
@@ -83,6 +105,5 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
           {target.updatedAt !== receipt.targetRevision && <p>{t('common.remoteWrite.identityChanged')}</p>}
         </article>)}
       </div>
-    </GuideDialog>
-  </div>;
+    </GuideDialog>;
 }

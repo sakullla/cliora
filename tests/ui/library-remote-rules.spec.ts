@@ -26,7 +26,7 @@ const rule = {
   updatedAt: 1,
 };
 
-async function installRemoteRules(page: Page, options: { bound?: boolean; delay?: boolean; fail?: boolean; category?: string; versions?: boolean; recoveryRace?: boolean } = {}) {
+async function installRemoteRules(page: Page, options: { bound?: boolean; delay?: boolean; fail?: boolean; category?: string; versions?: boolean; recoveryRace?: boolean; journalBlocked?: boolean } = {}) {
   await page.addInitScript(({ host, rule, options }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
@@ -68,15 +68,15 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools };
           if (command === 'list_cli_adapters') return { registered, managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host];
-          if (options.recoveryRace && command === 'list_remote_write_receipts') {
+          if ((options.recoveryRace || options.journalBlocked) && command === 'list_remote_write_receipts') {
             state.receiptLoads++;
             const snapshot = structuredClone(receipt);
             if (state.delayReceipts) await new Promise<void>(resolve => receiptReleases.push(resolve));
             return [snapshot];
           }
-          if (options.recoveryRace && command === 'inspect_remote_write') {
+          if ((options.recoveryRace || options.journalBlocked) && command === 'inspect_remote_write') {
             state.inspections++;
-            await new Promise<void>(resolve => inspectionReleases.push(resolve));
+            if (options.recoveryRace) await new Promise<void>(resolve => inspectionReleases.push(resolve));
             receipt = { ...receipt, outcome: 'committed', items: receipt.items.map(item => ({ ...item, state: 'committed', observed: 'after' })) };
             return structuredClone(receipt);
           }
@@ -88,7 +88,7 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
             if (state.fail) throw { message: 'fixture placement denied' };
             return rows;
           }
-          if (command === 'save_remote_library_item') { if (options.versions) { const expected = args.operation.expectedFiles['/root/.cliora/library.json']; state.attempts.push(expected); if (expected !== state.fileVersion) throw { message: 'fixture version conflict; preserve draft' }; } state.saves++; savedDrafts.push({ ...args.draft }); if (state.delaySave) await new Promise<void>(resolve => saveReleases.push(resolve)); Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
+          if (command === 'save_remote_library_item') { if (options.journalBlocked) throw { message: 'fixture unresolved durable journal', remote: { stage: 'remote_command', outcome: 'failed' } }; if (options.versions) { const expected = args.operation.expectedFiles['/root/.cliora/library.json']; state.attempts.push(expected); if (expected !== state.fileVersion) throw { message: 'fixture version conflict; preserve draft' }; } state.saves++; savedDrafts.push({ ...args.draft }); if (state.delaySave) await new Promise<void>(resolve => saveReleases.push(resolve)); Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
           if (command === 'sync_remote_rule_clients') { if (state.delaySync) await new Promise<void>(resolve => syncReleases.push(resolve)); if (state.failAfterSync) state.fail = true; return [{ toolId: 'codex', path: '/root/.codex/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
           if (command === 'list_library_items' || command === 'list_projects' || command === 'list_accounts' || command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages' || command === 'list_remote_resource_stores') return [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
@@ -98,6 +98,28 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
       },
     });
   }, { host, rule, options });
+}
+
+for (const journalBlocked of [false, true]) {
+  test(`${journalBlocked ? 'a receipt-less durable guard' : 'a local unresolved precheck'} preserves a no-session library draft and reaches recovery without replay`, async ({ page }) => {
+    await installRemoteRules(page, journalBlocked ? { journalBlocked: true } : { recoveryRace: true }); await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+    await page.getByRole('tab', { name: /长期规则/ }).click();
+    await page.getByRole('button', { name: '远端规则', exact: true }).click();
+    const editor = page.getByRole('dialog');
+    await editor.getByRole('textbox', { name: '资料正文', exact: true }).fill('retain blocked draft');
+    await editor.locator('[data-dialog-save]').click();
+    const recovery = page.getByRole('dialog', { name: '远程写入与恢复', exact: true });
+    await expect(recovery).toBeVisible();
+    await recovery.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: '资料正文', exact: true })).toHaveText('retain blocked draft');
+    expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(0);
+    await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(page.locator('.error-banner').getByRole('button', { name: '写入恢复' })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('button', { name: '写入恢复', exact: true })).toBeVisible();
+    if (journalBlocked) expect(await page.evaluate(() => (window as any).__ruleState.receiptLoads)).toBe(0);
+  });
 }
 
 test('inspection survives close/reopen and a delayed old receipt list, then permits a normal rule save', async ({ page }) => {
@@ -368,6 +390,7 @@ test('a persisted unknown write blocks another rule save before native submissio
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('textbox', { name: '资料正文', exact: true }).fill('preserve blocked draft');
   await dialog.locator('[data-dialog-save]').click();
+  await page.getByRole('dialog', { name: '远程写入与恢复' }).getByRole('button', { name: '关闭', exact: true }).click();
   await expect(dialog.getByText(/存在未确认的远程写入/)).toBeVisible();
   await expect(dialog.getByRole('textbox', { name: '资料正文', exact: true })).toHaveText('preserve blocked draft');
   expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(0);

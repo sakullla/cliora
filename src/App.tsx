@@ -1,4 +1,5 @@
 import { RemoteWriteRecovery } from './features/remote/RemoteWriteRecovery';
+import { requestWriteRecovery, useWriteRecoveryNeeded } from './features/remote/writeReceipts';
 import { useRemoteIdentity } from './lib/remoteReads';
 import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +11,7 @@ import brandIcon from '../src-tauri/icons/128x128@2x.png';
 import { useUpdateOffer } from './lib/appUpdate';
 import { ConfirmationHost } from './components/ConfirmationHost';
 import { EmptyState } from './components/EmptyState';
-import { Badge, Button } from './components/ui';
+import { Badge, Button, IconButton } from './components/ui';
 import { PageSkeleton } from './components/Skeleton';
 import { PageHeader } from './components/PageHeader';
 import { Tabs } from './components/Tabs';
@@ -151,6 +152,8 @@ export default function App() {
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteTargetId, setRemoteTargetId] = useState(() => { try { return localStorage.getItem('cliora:remote-target') ?? 'local'; } catch { return 'local'; } });
   const remoteIdentity = useRemoteIdentity(remoteTargetId);
+  const writeRecoveryNeeded = useWriteRecoveryNeeded(remoteTargetId);
+  const writeRecoveryFallback = nativeAvailable && bootstrap.preferences.remote_ssh_enabled && page !== 'sessions' && writeRecoveryNeeded;
   const activePage = useRef<Page>(page);
   activePage.current = page;
   const workspaceDirty = useRef(false);
@@ -638,9 +641,8 @@ export default function App() {
     </aside>
     <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}${page === 'sessions' ? ' content-workbench' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
-      {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
+      {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       {page !== 'sessions' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
-      {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}
@@ -687,5 +689,5 @@ export default function App() {
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>
-  </div><CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
+  </div>{nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
 }

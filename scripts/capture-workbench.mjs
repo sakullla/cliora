@@ -95,8 +95,8 @@ const openCodeTranscript = [
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
 
-async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null) {
-  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode }) => {
+async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
+  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode, writeRecovery }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
     const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const facet = { state: 'available', reason: '' };
@@ -108,6 +108,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       { id: 'site', name: '个人网站', path: 'C:\\Projects\\personal-site', available: true, preferredTool: 'claude_code', lastOpened: 1790738800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
     ];
     const remoteTargets = [{ id: 'remote-prod', name: '测试远程主机', host: '212.60.153.19', port: 22, user: 'root', authMethod: 'key', identityFile: 'C:/Users/demo/.ssh/id_ed25519', sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: now, updatedAt: now }];
+    if (writeRecovery) localStorage.setItem('cliora:remote-writes:v1', JSON.stringify([{ id: '6754f794-3c8a-4cb3-aec1-5f5dcb197b36', targetId: 'remote-prod', targetRevision: now, identity: 'synthetic', outcome: 'recovering', items: [{ path: '$HOME/.codex/config.toml', before: 'a'.repeat(64), after: 'b'.repeat(64), state: 'applying', observed: null }] }]));
     if (directoryMode === 'password') remoteTargets[0].authMethod = 'password';
     const directoryFixture = { failure: false, release: () => {} };
     const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
@@ -204,7 +205,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     r1: b64('\u001b]0;远程项目 · 独立会话 A\u0007\u001b[36mPi · synthetic SSH terminal\u001b[0m\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-a\r\n\r\n  同一目录的其他会话独立运行，输入属于当前选中会话。\r\n\r\n> '),
     r2: b64('\u001b]0;远程项目 · 独立会话 B\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-b\r\n\r\n> '),
     r3: b64('\u001b]0;远程项目 · 独立会话 C\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-c\r\n\r\n> '),
-  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode });
+  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode, writeRecovery });
 }
 
 const manifest = [];
@@ -212,7 +213,7 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null) {
+async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
   if (!onlyPattern.test(name)) return;
   const errors = [];
   let actionError = null;
@@ -222,7 +223,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
   try {
     page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
     page.on('pageerror', (error) => errors.push(String(error)));
-    await install(page, theme, empty, remoteState, promptFailure, directoryMode);
+    await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     await page.waitForTimeout(900);
@@ -318,6 +319,11 @@ for (const width of widths) {
   for (const state of ['connecting', 'connected', 'disconnected', 'unknown', 'remote_ended']) {
     await shot(`workbench-remote-${state}-${theme}-${width}`, theme, width, null, false, state);
   }
+  await shot(`workbench-remote-write-recovery-${theme}-${width}`, theme, width, async page => {
+    const toolbar = page.getByRole('toolbar', { name: copy('终端操作', 'Terminal actions') });
+    await toolbar.getByRole('button', { name: copy('写入恢复', 'Write recovery'), exact: true }).waitFor();
+    await toolbar.getByRole('button', { name: copy('重新附着远程会话', 'Reattach remote session'), exact: true }).waitFor();
+  }, false, 'disconnected', null, null, true);
   await shot(`workbench-remote-stream-${theme}-${width}`, theme, width, async page => {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');

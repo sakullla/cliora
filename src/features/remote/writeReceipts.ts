@@ -2,6 +2,13 @@ import { useSyncExternalStore } from 'react';
 import type { RemoteWriteReceipt } from '../../types/remote';
 
 const key = 'cliora:remote-writes:v1';
+const faultKey = 'cliora:remote-write-faults:v1';
+type WriteFault = { targetId: string; targetRevision: number };
+let faults: WriteFault[] = [];
+try {
+  const stored: unknown = JSON.parse(localStorage.getItem(faultKey) ?? '[]');
+  if (Array.isArray(stored)) faults = stored.filter(item => item && typeof item.targetId === 'string' && typeof item.targetRevision === 'number');
+} catch { /* A failed discovery can be retried on the original host. */ }
 let receipts: RemoteWriteReceipt[] = [];
 try {
   const stored: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
@@ -24,7 +31,30 @@ export function rememberListedWriteReceipt(receipt: RemoteWriteReceipt, snapshot
 }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const getWriteReceipts = () => receipts;
+export const getWriteFaults = () => faults;
 export const useWriteReceipts = () => useSyncExternalStore(subscribe, () => receipts);
+export const useWriteFaults = () => useSyncExternalStore(subscribe, () => faults);
+export function useWriteRecoveryNeeded(targetId: string | null | undefined) {
+  const currentReceipts = useWriteReceipts();
+  const currentFaults = useWriteFaults();
+  return currentReceipts.some(item => item.targetId === targetId && unresolvedWrite(item)) || currentFaults.some(item => item.targetId === targetId);
+}
+export function rememberWriteFault(targetId: string, targetRevision: number) {
+  if (faults.some(item => item.targetId === targetId && item.targetRevision === targetRevision)) return;
+  faults = [...faults, { targetId, targetRevision }];
+  publishFaults();
+}
+export function clearWriteFault(targetId: string, targetRevision: number) {
+  faults = faults.filter(item => item.targetId !== targetId || item.targetRevision !== targetRevision);
+  publishFaults();
+}
+function publishFaults() {
+  try { localStorage.setItem(faultKey, JSON.stringify(faults)); } catch { /* Keep the in-memory fault reachable. */ }
+  for (const listener of listeners) listener();
+}
+export function requestWriteRecovery(targetId: string) {
+  window.dispatchEvent(new CustomEvent('cliora:remote-write-recovery', { detail: { targetId } }));
+}
 export const unresolvedWrite = (receipt: RemoteWriteReceipt) => !['committed', 'rolled_back', 'conflict_before_commit', 'prepare_failed'].includes(receipt.outcome);
 export function rememberWriteReceipt(receipt: RemoteWriteReceipt) {
   versions.set(receipt.id, (versions.get(receipt.id) ?? 0) + 1);

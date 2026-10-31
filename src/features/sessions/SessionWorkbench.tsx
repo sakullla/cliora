@@ -36,6 +36,7 @@ import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from '.
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
 import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
+import { requestWriteRecovery, useWriteRecoveryNeeded } from '../remote/writeReceipts';
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
@@ -201,6 +202,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   onOpenHome: () => void;
 }) {
   const { t } = useTranslation();
+  const writeRecoveryNeeded = useWriteRecoveryNeeded(remoteTargetId);
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
   function applyListedSessions(listed: WorkbenchSession[]) {
@@ -1649,6 +1651,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       {!railDocked && showRail && rail}
 
       <section ref={stageRef} className={styles.stage} aria-label={t('sessions.stageLabel')}>
+        {writeRecoveryNeeded && !stageSession && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{t('common.remoteWrite.unknown')}</p></div><div className={styles.bannerActions}><Button size="sm" onClick={() => requestWriteRecovery(remoteTargetId)}>{t('common.remoteWrite.open')}</Button></div></div>}
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void retry()} disabled={retrying}>{retrying ? t('sessions.loading') : t('sessions.retry')}</Button><Button size="sm" onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</Button></div></div>}
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setActionError('')} aria-label={t('common.dismissError')} /></div>}
         {restoring && <div className={styles.banner} role="status"><p>{t('sessions.restoringPrevious')}</p></div>}
@@ -1713,7 +1716,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
                   </span>
-                  {current.reattachable && <span className={styles.actionGroup}><Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button></span>}
+                  {(current.reattachable || writeRecoveryNeeded) && <span className={styles.actionGroup}>{current.reattachable && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button>}{writeRecoveryNeeded && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.unknown')} disabled={!!busy} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={14} />}><span className={styles.toolLabel}>{t('common.remoteWrite.open')}</span></Button>}</span>}
                   <span className={styles.actionGroup}>
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
                     {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
@@ -1774,6 +1777,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
                       <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
                       <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={session.reattachable ? t('sessions.reattachRemote') : t('sessions.restartHint')} onClick={() => void (session.reattachable ? reattachSession(session) : restartOrCloneSession(session, true))} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{session.reattachable ? t(busy === 'reattach:' + session.id ? 'sessions.reattaching' : 'sessions.reattachShort') : busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
+                      {writeRecoveryNeeded && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('common.remoteWrite.unknown')} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={13} />}><span className={styles.endedRestartLabel}>{t('common.remoteWrite.open')}</span></Button>}
                     </div> : null} />;
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
