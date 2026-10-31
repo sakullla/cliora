@@ -66,6 +66,8 @@ export type RemoteOperationRequest = {
   priority: RemotePriority;
   deadlineUnixMs: number;
   refresh?: boolean;
+  /** Complete frozen read baseline: at most 16384 paths / 4 MiB of path+hash
+   * bytes. A transaction separately allows at most 512 changed files. */
   expectedFiles?: Record<string, string>;
 };
 export type RemoteFailure = {

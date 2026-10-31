@@ -6,7 +6,7 @@ import { Button } from '../../components/ui';
 import { StatusBanner } from '../../components/StatusBanner';
 import { confirmAction } from '../../lib/confirm';
 import type { RemoteTarget, RemoteWriteReceipt } from '../../types/remote';
-import { rememberWriteReceipt, unresolvedWrite, useWriteReceipts } from './writeReceipts';
+import { beginWriteReceiptInspection, captureWriteReceiptVersions, rememberListedWriteReceipt, rememberWriteReceipt, unresolvedWrite, useWriteReceipts } from './writeReceipts';
 import styles from './RemoteWriteRecovery.module.css';
 
 const text = (error: unknown) => error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
@@ -24,10 +24,11 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
   async function load() {
     if (!target) return;
     const version = ++generation.current;
+    const receiptVersions = captureWriteReceiptVersions();
     setBusy(true); setError('');
     try {
       const values = await native.listRemoteWriteReceipts(target.id, { targetRevision: target.updatedAt });
-      if (generation.current === version && Array.isArray(values)) for (const value of values) rememberWriteReceipt(value);
+      if (generation.current === version && Array.isArray(values)) for (const value of values) rememberListedWriteReceipt(value, receiptVersions);
     } catch (error) { if (generation.current === version) setError(text(error)); }
     finally { if (generation.current === version) setBusy(false); }
   }
@@ -46,13 +47,15 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
   async function inspect(receipt: RemoteWriteReceipt, rollback: boolean) {
     if (!target || target.updatedAt !== receipt.targetRevision) { setError(t('common.remoteWrite.identityChanged')); return; }
     if (rollback && !await confirmAction(t('common.remoteWrite.restoreConfirm'))) return;
+    const finish = beginWriteReceiptInspection(receipt.id);
+    if (!finish) return;
     const version = ++generation.current; setBusy(true); setError('');
     try {
       // This targets the original host revision, even if the visible page changes.
       const value = await native.inspectRemoteWrite(receipt.targetId, receipt.id, rollback, { targetRevision: receipt.targetRevision }, receipt);
       rememberWriteReceipt(value);
     } catch (error) { if (generation.current === version) setError(text(error)); }
-    finally { if (generation.current === version) setBusy(false); }
+    finally { finish(); if (generation.current === version) setBusy(false); }
   }
   if (!target) return null;
   return <div className={styles.root}>

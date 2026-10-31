@@ -5,6 +5,32 @@ const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+/** Error payloads may include CLI output or configuration text. Persist only
+ * protocol labels, known product messages and hash-only receipt metadata. */
+export function transactionOutcomeDiagnostic(result) {
+  const error = result?.error;
+  const remote = error?.remote;
+  const label = value => typeof value === 'string' && /^[a-z_]{1,64}$/.test(value) ? value : null;
+  const safeMessages = new Set([
+    '远程目标不是可安全替换的普通文件，或无法核查版本',
+    '远程文件版本已变化，请保留草稿并刷新后比较',
+    '远程写入未确认完成；请核查持久回执，保留草稿，不要直接重试',
+    '无效或重复的远程请求身份',
+    '远程写入超过事务上限',
+  ]);
+  const message = remote?.message ?? error?.message;
+  const receipt = remote?.receipt;
+  return {
+    ok: result?.ok === true, code: label(error?.code), stage: label(remote?.stage), reason: label(remote?.reason), outcome: label(remote?.outcome),
+    message: result?.ok ? null : safeMessages.has(message) ? message : 'Native IPC error details omitted (unrecognized message).',
+    receipt: receipt ? {
+      id: typeof receipt.id === 'string' && /^[a-f0-9-]{36}$/.test(receipt.id) ? receipt.id : null,
+      outcome: label(receipt.outcome), itemCount: Array.isArray(receipt.items) ? receipt.items.length : null,
+      states: Array.isArray(receipt.items) ? receipt.items.map(item => label(item.state)) : [],
+    } : null,
+  };
+}
+
 export function transactionToolWrapper(tool, home, control) {
   assert(['mv', 'cp'].includes(tool), 'Unknown fixture tool.');
   return `#!/bin/sh
@@ -86,6 +112,8 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
     const initial = await read();
     nativeOriginalHash = initial.versions[`$HOME/${document.relative}`];
     assert(nativeOriginalHash && nativeOriginalHash !== 'missing', 'The fixed fixture must contain a native document.');
+    const management = Object.keys(initial.versions).filter(path => path.startsWith('$HOME/.cliora/registered-tools/'));
+    assert(management.length === 1 && initial.versions[management[0]] !== 'missing', 'The rollback-failure fixture requires an existing isolated management document as well as the native document. Seed and fingerprint both externally; restore both original states after this runner.');
     for (const receipt of await receipts()) {
       originalReceipts.add(receipt.id);
       assert(['committed', 'rolled_back', 'prepare_failed', 'conflict_before_commit'].includes(receipt.outcome), 'Existing unresolved transaction must be inspected before this fixture.');
@@ -115,6 +143,7 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
         await observe(`: > ${quote(control + '/release')}`);
       }
       const result = await submission;
+      (report.transactionOutcomes ??= []).push({ fault, ...transactionOutcomeDiagnostic(result) });
       if (fault === 'pause-replace') await relay(false);
       check(`${fault}: actual IPC outcome`, fault === 'success' ? result.ok : !result.ok);
       if (fault === 'pause-replace') check('disconnect returns unknown and does not claim undo', result.error?.remote?.outcome === 'unknown');
@@ -124,7 +153,7 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
       const receipt = added[0]; createdReceipts.add(receipt.id);
       check(`${fault}: management and native per-file receipt`, receipt.items.length === 2);
       check(`${fault}: receipt exposes hashes without snapshots`, receipt.items.every(item => /^[a-f0-9]{64}$|^missing$/.test(item.before) && /^[a-f0-9]{64}$|^missing$/.test(item.after) && !('contents' in item)));
-      if (fault === 'rollback-failure') check('real rollback failure remains recoverable', receipt.outcome === 'recovery_required' && receipt.items.some(item => item.state === 'rollback_failed'));
+      if (fault === 'rollback-failure') check('real rollback failure remains recoverable', receipt.items[0]?.before !== 'missing' && receipt.outcome === 'recovery_required' && receipt.items[0]?.state === 'rollback_failed');
       await mode('off');
       const inspected = await inspect(receipt.id, false);
       check(`${fault}: each actual version was inspected`, inspected.items.every(item => ['before', 'after'].includes(item.observed)));
@@ -141,6 +170,7 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
     externalHash = hash(baseline.value.currentFiles.settings + suffix);
     await observe(`printf '%s' ${quote(suffix)} >> ${quote(nativePath)}`);
     const rejected = await outcome('save_remote_tool_store', { targetId, toolId: config.toolId, store: baseline.value, scope: 'global', projectPath: null, operation: op('write', baseline.versions) });
+    (report.transactionOutcomes ??= []).push({ fault: 'stale-native-version', ...transactionOutcomeDiagnostic(rejected) });
     check('stale native version rejects whole write without replay', !rejected.ok && rejected.error?.remote?.outcome !== 'unknown');
     const changed = await read();
     check('external change survives rejected write', changed.versions[`$HOME/${document.relative}`] === externalHash);

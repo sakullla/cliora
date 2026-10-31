@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { transactionToolWrapper } from '../../scripts/remote-transaction-fixtures.mjs';
+import { transactionOutcomeDiagnostic, transactionToolWrapper } from '../../scripts/remote-transaction-fixtures.mjs';
+
+test('native transaction diagnostics retain failure stage/outcome without arbitrary message bodies or credentials', () => {
+  const known = '远程目标不是可安全替换的普通文件，或无法核查版本';
+  const diagnostic = transactionOutcomeDiagnostic({ ok: false, error: { code: 'remote_command', message: known, remote: { stage: 'remote_command', outcome: 'failed', reason: 'command' } } });
+  assert.equal(diagnostic.message, known);
+  assert.equal(diagnostic.stage, 'remote_command');
+  assert.equal(diagnostic.outcome, 'failed');
+  const unsafe = transactionOutcomeDiagnostic({ ok: false, error: { message: 'private config body secret-value', password: 'secret-value', remote: { stage: 'stage with secret-value', receipt: { id: 'private', items: [{ state: 'applying', contents: 'secret-value', path: '/private' }] } } } });
+  assert.ok(!JSON.stringify(unsafe).includes('secret-value'));
+  assert.ok(!JSON.stringify(unsafe).includes('/private'));
+  assert.deepEqual(unsafe.receipt.states, ['applying']);
+});
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 test('owned native fault wrappers affect only adjacent transaction replacement and protected backups', t => {

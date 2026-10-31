@@ -64,11 +64,18 @@ export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentit
 const remoteViewIdentities = new Map<string, number>();
 const remoteConnectionKeys = new Map<string, string>();
 const rememberedRemoteTargets = new Map<string, RemoteTarget>();
+let remoteTargetObservation = 0;
+const remoteTargetObservations = new Map<string, number>();
 export const getRemoteIdentity = (targetId: string | null | undefined) => `${targetId ?? 'local'}:${remoteViewIdentities.get(targetId ?? '') ?? ''}`;
-function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged = true) {
+function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged = true, observation = ++remoteTargetObservation) {
   const knownRevision = remoteRevisions.get(target.id);
-  if (knownRevision !== undefined && target.updatedAt <= knownRevision) return rememberedRemoteTargets.get(target.id) ?? target;
+  if (knownRevision !== undefined && (target.updatedAt < knownRevision
+    || (target.updatedAt === knownRevision && observation < (remoteTargetObservations.get(target.id) ?? 0)))) return rememberedRemoteTargets.get(target.id) ?? target;
+  remoteTargetObservations.set(target.id, observation);
   rememberedRemoteTargets.set(target.id, target);
+  // Name-only saves preserve connection/recovery authority. Accept their
+  // metadata without invalidating warm reads or notifying identity consumers.
+  if (target.updatedAt === knownRevision) return target;
   const connectionKey = JSON.stringify([target.host, target.port, target.user, target.authMethod, target.identityFile, target.sshConfig, target.enabled]);
   if (remoteConnectionKeys.get(target.id) !== connectionKey || authenticationMayHaveChanged) remoteViewIdentities.set(target.id, target.updatedAt);
   remoteConnectionKeys.set(target.id, connectionKey);
@@ -269,17 +276,19 @@ export const native = {
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   setRemoteSshEnabled: (enabled: boolean) => command<Bootstrap>('set_remote_ssh_enabled', { enabled }),
   listRemoteTargets: async () => {
+    const observation = ++remoteTargetObservation;
     const targets = await command<RemoteTarget[]>('list_remote_targets');
-    return targets.map(target => rememberRemoteTarget(target));
+    return targets.map(target => rememberRemoteTarget(target, true, observation));
   },
   /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
   saveRemoteTarget: async (target: RemoteTarget, password?: string | null) => {
     const saved = await command<RemoteTarget>('save_remote_target', { target, password: password || null });
-    rememberRemoteTarget(saved, !!password);
-    return saved;
+    // A confirmed save supersedes every list already in flight, including
+    // snapshots captured while that save was still pending.
+    return rememberRemoteTarget(saved, !!password);
   },
   listRemoteSavedPasswords: () => command<string[]>('list_remote_saved_passwords'),
-  deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); rememberedRemoteTargets.delete(id); for (const listener of remoteIdentityListeners) listener(); },
+  deleteRemoteTarget: async (id: string) => { remoteOperations.invalidate(id); await command<void>('delete_remote_target', { id }); remoteRevisions.delete(id); remoteViewIdentities.delete(id); remoteConnectionKeys.delete(id); rememberedRemoteTargets.delete(id); remoteTargetObservations.delete(id); for (const listener of remoteIdentityListeners) listener(); },
   listRemoteProjects: (targetId?: string) => command<RemoteProject[]>('list_remote_projects', { targetId: targetId ?? null }),
   listRemoteDirectories: (targetId: string, parent: string, options?: RemoteOperationOptions) => remoteCommand<RemoteDirectoryListing>('list_remote_directories', { targetId, parent }, 'read', options),
   createRemoteDirectory: (targetId: string, path: string, options?: RemoteOperationOptions) => remoteCommand<void>('create_remote_directory', { targetId, path }, 'write', options),

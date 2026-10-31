@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function install(page: Page) {
   await page.addInitScript(() => {
     const targets = ['key', 'password'].map((authMethod, index) => ({ id: `host-${index}`, name: `${authMethod} fixture`, host: `${authMethod}.invalid`, port: 22, user: 'fixture', authMethod, defaultPath: `/fixture/${authMethod}`, enabled: true, createdAt: 1, updatedAt: 1 }));
-    const state = { hold: '', failure: '', response: '', createOutcome: '', generation: '', replaceHost: () => {}, reads: [] as string[], readOperations: [] as unknown[], cancelled: 0, writes: [] as string[], release: () => {}, releases: [] as Array<() => void> };
+    const state = { hold: '', failure: '', response: '', createOutcome: '', generation: '', savedRevision: 0, replaceHost: () => {}, reads: [] as string[], readOperations: [] as unknown[], cancelled: 0, writes: [] as string[], release: () => {}, releases: [] as Array<() => void> };
     state.replaceHost = () => { targets[0].updatedAt++; targets[0].host = 'replacement.invalid'; state.generation = 'replacement-'; window.dispatchEvent(new Event('cliora:remote-targets-changed')); };
     localStorage.setItem('cliora:remote-target', 'host-0');
     const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', launch: { state: 'available', reason: '' } };
@@ -28,7 +28,18 @@ async function install(page: Page) {
           if (command === 'list_remote_directories' && state.response === 'missing') throw { message: 'Directory does not exist', remote: { reason: 'directory_missing' } };
           if (command === 'list_remote_directories') return state.response === 'invalid' ? [] : { parent: args.parent, items: state.response === 'empty' ? [] : [`${args.parent}/${state.generation}child`, ...state.writes], truncated: state.response === 'truncated' };
           if (command === 'test_remote_target') return { reachable: true, system: 'Linux fixture' };
-          if (command === 'save_remote_target') return { ...(args.target as object), id: 'saved-host', updatedAt: 2 };
+          if (command === 'save_remote_target') {
+            const incoming = args.target as typeof targets[number];
+            const existing = targets.find(item => item.id === incoming.id);
+            if (existing) {
+              const sameConnection = ['host', 'port', 'user', 'authMethod', 'identityFile', 'sshConfig', 'defaultPath', 'enabled'].every(key => ((existing as any)[key] ?? null) === ((incoming as any)[key] ?? null));
+              const updatedAt = sameConnection ? existing.updatedAt : existing.updatedAt + 1;
+              Object.assign(existing, incoming, { createdAt: existing.createdAt, updatedAt });
+              state.savedRevision = updatedAt;
+              return { ...existing };
+            }
+            return { ...incoming, id: 'saved-host', updatedAt: 2 };
+          }
           if (command === 'save_remote_project') return { ...(args.project as object), id: 'saved-project' };
           if (command === 'plugin:event|listen') return 0;
           return [];
@@ -58,6 +69,24 @@ async function hosts(page: Page) {
   await page.getByRole('button', { name: '管理主机', exact: true }).click();
   return page.getByRole('region', { name: '远程主机', exact: true });
 }
+
+test('a name-only host save keeps its connection revision and remains renamed after re-entering settings', async ({ page }) => {
+  await install(page); await page.goto('/');
+  const panel = await hosts(page);
+  await panel.getByRole('button', { name: '编辑 key fixture', exact: true }).click();
+  const form = page.getByRole('form', { name: '编辑主机', exact: true });
+  await form.getByLabel('显示名称', { exact: true }).fill('renamed fixture');
+  await form.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(panel.getByRole('button', { name: '编辑 renamed fixture', exact: true })).toBeVisible();
+  await expect(page.locator('.sidebar-host').getByRole('button', { name: '运行位置：renamed fixture' })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__remoteFixture.savedRevision)).toBe(1);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await expect(panel.getByRole('button', { name: '编辑 renamed fixture', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: '编辑 renamed fixture', exact: true }).click();
+  await expect(form.getByLabel('显示名称', { exact: true })).toHaveValue('renamed fixture');
+  await expect(form.getByLabel(/^主机地址/)).toHaveValue('key.invalid');
+});
 
 test('password directories can browse, refresh and create without rewriting a typed path', async ({ page }) => {
   await install(page); await page.goto('/');

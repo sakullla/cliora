@@ -60,7 +60,9 @@ umask 077
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 fingerprint() {
   if [ -L "$1" ]; then printf '%s' unsafe; return; fi
-  if [ -f "$1" ]; then sha256sum -- "$1" | cut -d ' ' -f 1
+  if [ -f "$1" ]; then
+    hash=$(sha256sum -- "$1") || return 1
+    printf '%s' "${hash%% *}"
   elif [ -e "$1" ]; then printf '%s' unsafe
   else printf '%s' missing; fi
 }
@@ -79,7 +81,7 @@ fn paths_script(paths: &[String]) -> Result<String, RemoteError> {
     let mut script = String::from(HELPERS);
     for path in paths {
         if !valid_path(path) { return Err(RemoteError::InvalidPath); }
-        script.push_str(&format!("fingerprint {}; printf '\\n'\n", remote_path_expr(path)));
+        script.push_str(&format!("value=$(fingerprint {}) || exit 80; printf '%s\\n' \"$value\"\n", remote_path_expr(path)));
     }
     Ok(script)
 }
@@ -283,6 +285,24 @@ mod tests {
 
     fn fixture() -> RemoteTarget {
         RemoteTarget { id: "transaction-fixture".into(), name: "synthetic".into(), host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 7 }
+    }
+    #[test]
+    fn versions_entry_frames_existing_empty_missing_and_mixed_files_and_rejects_hash_failure() {
+        let target = fixture();
+        super::super::tests::with_local_transport(&target, |_| {
+            run_command(&target, "printf body > \"$HOME/existing\"; : > \"$HOME/empty\"; mkdir \"$HOME/directory\"; ln -s \"$HOME/existing\" \"$HOME/link\"").unwrap();
+            for paths in [vec!["$HOME/existing"], vec!["$HOME/empty"], vec!["$HOME/missing"], vec!["$HOME/missing", "$HOME/existing", "$HOME/empty"]] {
+                let paths: Vec<_> = paths.into_iter().map(str::to_owned).collect();
+                let found = versions(&target, &paths).unwrap();
+                for path in &paths {
+                    assert_eq!(found[path], match path.as_str() { "$HOME/existing" => digest(b"body"), "$HOME/empty" => digest(b""), _ => "missing".into() });
+                }
+                assert_eq!(found.len(), paths.len());
+            }
+            for path in ["$HOME/directory", "$HOME/link"] { assert!(versions(&target, &[path.into()]).is_err()); }
+            run_command(&target, "mkdir -p \"$HOME/bin\"; printf '%s\\n' '#!/bin/sh' 'printf misleading-hash' 'exit 1' > \"$HOME/bin/sha256sum\"; chmod 700 \"$HOME/bin/sha256sum\"").unwrap();
+            assert!(matches!(versions(&target, &["$HOME/existing".into()]), Err(RemoteError::Transport { .. })));
+        });
     }
     fn shell(script: &str) -> Option<String> {
         let mut command = if cfg!(windows) {

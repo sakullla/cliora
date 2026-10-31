@@ -10,6 +10,11 @@ use super::{RemoteError, RemoteTarget};
 pub const HOST_LIMIT: usize = 2;
 pub const GLOBAL_LIMIT: usize = 8;
 const QUEUE_LIMIT: usize = 128;
+// Read inventories (up to 64 CLIs x 128 Skills, plus managed/native files)
+// are larger than the 512 files a single transaction may mutate. Preserve the
+// entire user baseline within explicit count/byte bounds; never truncate it.
+const EXPECTED_FILES_LIMIT: usize = 16_384;
+const EXPECTED_FILES_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -288,7 +293,9 @@ pub fn register(owner: &str, request: Request, kind: Kind) -> Result<Lease, Remo
     let invalid = || Context::local(kind, Duration::from_secs(40)).failure("identity", "无效或重复的远程请求身份");
     if uuid::Uuid::parse_str(&request.request_id).is_err() || uuid::Uuid::parse_str(&request.cancel_token).is_err()
         || request.kind != kind || request.target_id.len() > 256
-        || request.expected_files.len() > 512 || request.expected_files.iter().any(|(path, hash)| !super::transactions::valid_path(path) || !super::transactions::valid_hash(hash)) { return Err(invalid()); }
+        || request.expected_files.len() > EXPECTED_FILES_LIMIT
+        || request.expected_files.iter().map(|(path, hash)| path.len() + hash.len()).sum::<usize>() > EXPECTED_FILES_BYTES
+        || request.expected_files.iter().any(|(path, hash)| !super::transactions::valid_path(path) || !super::transactions::valid_hash(hash)) { return Err(invalid()); }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let remaining = request.deadline_unix_ms.saturating_sub(now).min(120_000);
     let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -409,6 +416,20 @@ mod tests {
             target_id: "fixture".into(), target_revision: Some(7), kind, priority: Priority::Interactive, refresh: false,
             deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + timeout,
         }
+    }
+
+    #[test]
+    fn inventory_baselines_have_independent_explicit_count_and_byte_bounds() {
+        let mut inventory = request(Kind::Write, 1000);
+        inventory.expected_files = (0..8192).map(|n| (format!("$HOME/.fixture/skills/{n}/SKILL.md"), "a".repeat(64))).collect();
+        assert!(register("large-inventory", inventory.clone(), Kind::Write).is_ok());
+        inventory.request_id = uuid::Uuid::new_v4().to_string();
+        inventory.expected_files = (0..=EXPECTED_FILES_LIMIT).map(|n| (format!("$HOME/{n}"), "missing".into())).collect();
+        assert!(register("too-many", inventory.clone(), Kind::Write).is_err());
+        inventory.expected_files = (0..1100).map(|n| (format!("$HOME/{}/{}", "x".repeat(3900), n), "a".repeat(64))).collect();
+        assert!(register("too-many-bytes", inventory.clone(), Kind::Write).is_err());
+        inventory.expected_files = BTreeMap::from([("$HOME/../unsafe".into(), "missing".into())]);
+        assert!(register("unsafe", inventory, Kind::Write).is_err());
     }
 
     #[test]

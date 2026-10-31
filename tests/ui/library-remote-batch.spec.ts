@@ -17,8 +17,8 @@ const host = {
 
 const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', cursor: 'Cursor' };
 
-async function installRemoteLibrary(page: Page) {
-  await page.addInitScript(({ host, names }) => {
+async function installRemoteLibrary(page: Page, largeSkills = false) {
+  await page.addInitScript(({ host, names, largeSkills }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
     const registered = Object.entries(names).map(([id, name]) => ({
@@ -28,6 +28,18 @@ async function installRemoteLibrary(page: Page) {
     }));
     const calls: Array<Record<string, unknown>> = [];
     const state = { fail: false, delay: false, name: 'node_repl' };
+    const versions: Record<string, string> = {};
+    const snapshots = new Map<string, Record<string, string>>();
+    const skillStores: Record<string, any> = {};
+    if (largeSkills) for (const cli of ['codex', 'grok']) {
+      versions[`$HOME/.cliora/resources/${cli}/skills.json`] = 'a'.repeat(64);
+      const entries = Array.from({ length: 128 }, (_, n) => ({ name: `${cli}-${n}`, path: `/home/fixture/.${cli}/skills/${cli}-${n}/SKILL.md`, state: 'external', source: 'writable', detail: 'fixture' }));
+      const documents = Object.fromEntries(entries.map(entry => {
+        versions[entry.path.replace('/home/fixture/', '$HOME/')] = 'b'.repeat(64);
+        return [entry.path, `---\nname: ${entry.name}\ndescription: fixture\n---\nbody`];
+      }));
+      skillStores[cli] = { entries, documents };
+    }
     let release = () => {};
     Object.assign(window, {
       isTauri: true,
@@ -40,6 +52,19 @@ async function installRemoteLibrary(page: Page) {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools };
           if (command === 'list_cli_adapters') return { registered, managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host, { ...host, id: 'host-2', name: '另一台主机', host: '203.0.113.22' }];
+          if (largeSkills && command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
+          if (largeSkills && ['list_remote_resource_stores', 'get_remote_resource_store'].includes(command) && args.kind === 'skills') {
+            snapshots.set(args.operation.requestId, { ...versions });
+            return command === 'list_remote_resource_stores' ? { stores: skillStores } : skillStores[args.toolId];
+          }
+          if (largeSkills && command === 'save_remote_resource_store') {
+            const expected = args.operation.expectedFiles;
+            if (Object.keys(expected).length > 16384 || Object.entries(versions).some(([path, hash]) => expected[path] !== hash)) throw { message: 'inventory baseline rejected' };
+            calls.push({ command, expected, value: args.value, toolId: args.toolId });
+            skillStores[args.toolId] = structuredClone(args.value);
+            snapshots.set(args.operation.requestId, { ...versions });
+            return null;
+          }
           if (command === 'list_remote_resource_stores') {
             calls.push({ command, kind: args.kind, toolIds: args.toolIds, targetId: args.targetId, refresh: args.operation?.refresh });
             if (state.fail) throw { message: 'fixture refresh permission failure' };
@@ -61,8 +86,26 @@ async function installRemoteLibrary(page: Page) {
         },
       },
     });
-  }, { host, names });
+  }, { host, names, largeSkills });
 }
+
+test('a library single-Skill removal carries both full 128-Skill baselines and reaches the write IPC', async ({ page }) => {
+  await installRemoteLibrary(page, true); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'codex-0', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'grok-127', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'codex-0 的更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'codex-0', exact: true })).toHaveCount(0);
+  const writes = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store'));
+  expect(writes).toHaveLength(1);
+  expect(Object.keys(writes[0].expected)).toHaveLength(258);
+  expect(writes[0].expected['$HOME/.grok/skills/grok-127/SKILL.md']).toBe('b'.repeat(64));
+  expect(writes[0].value.entries).toHaveLength(127);
+  expect(writes[0].toolId).toBe('codex');
+});
 
 test('remote library MCP reads every CLI in one batch', async ({ page }) => {
   await installRemoteLibrary(page);

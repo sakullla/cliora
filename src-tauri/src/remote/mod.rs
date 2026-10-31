@@ -175,9 +175,10 @@ fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &B
         let root = roots.get(index).unwrap_or(&roots[0]);
         let text = contents.get(path);
         if let Some(text) = text {
-            transactions::observe(path, Some(text.as_bytes()));
-            if let Some((_, suffix)) = path.split_once(&format!("/{}/", root.relative)) {
-                transactions::observe(&format!("$HOME/{}/{suffix}", root.relative), Some(text.as_bytes()));
+            // Materialization uses this canonical key too. An absolute scan
+            // path and its HOME alias must not consume two baseline entries.
+            if let Ok((canonical, _)) = skill_document_path(tool_id, path) {
+                transactions::observe(&canonical, Some(text.as_bytes()));
             }
             documents.insert(path.clone(), serde_json::Value::String(text.clone()));
         }
@@ -243,7 +244,6 @@ fn assemble_remote_agents(tool_id: &str, files: &[String], encoded: &str, capabi
         let Some(value) = lines.next() else { continue; };
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(value.trim()) else { continue; };
         let Ok(content) = String::from_utf8(bytes) else { continue; };
-        transactions::observe(path, Some(content.as_bytes()));
         if let Some(root) = remote_agent_root(tool_id, "global", None) {
             let disabled = format!("{}/.cliora-disabled-agents/agents", root.trim_end_matches("/agents"));
             if let Some(canonical) = canonical_agent_path(path, &root).or_else(|| canonical_agent_path(path, &disabled)) { transactions::observe(&canonical, Some(content.as_bytes())); }
@@ -500,7 +500,7 @@ fn resource_bundle_script(tool_ids: &[String], kind: &str) -> String {
         script.push_str(&store);
         script.push_str(" ]; then base64 < ");
         script.push_str(&store);
-        script.push_str(" | tr -d '\\n'; fi; printf '\\n'; ");
+        script.push_str(" | tr -d '\\n'; else printf %s __MISSING__; fi; printf '\\n'; ");
         if kind == "mcp" {
             script.push_str("printf '%s\\n' __CLIORA_CONFIG__; ");
             if let Some(path) = mcp_seed_path(tool_id) {
@@ -1950,6 +1950,8 @@ fn run_command_with_stdin(target: &RemoteTarget, command_line: &str, stdin_paylo
 fn command_output_with_stdin(target: &RemoteTarget, command_line: &str, stdin_payload: Option<&[u8]>) -> Result<std::process::Output, RemoteError> {
     validate_target(target)?;
     ensure_remote_command(command_line)?;
+    #[cfg(test)]
+    if let Some(output) = tests::local_transport(target, command_line, stdin_payload) { return Ok(output); }
     let command_line = format!("printf '%s\\n' '__CLIORA_REMOTE_STARTED__' >&2; {command_line}");
     run_ssh(target, || {
         let mut command = ssh_command(
@@ -2344,6 +2346,105 @@ pub fn ensure_enabled(db: &Database) -> Result<(), RemoteError> {
 mod tests {
     use super::*;
     use base64::Engine;
+    use std::io::Write;
+
+    // A target-bound local POSIX transport also follows shared-read workers.
+    // It exercises public entry points without SSH, app state or global env.
+    fn local_homes() -> &'static std::sync::Mutex<BTreeMap<String, String>> {
+        static HOMES: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, String>>> = std::sync::OnceLock::new();
+        HOMES.get_or_init(Default::default)
+    }
+    fn posix_output(script: &str) -> std::process::Output {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("wsl.exe"); command.args(["--exec", "sh", "-s"]); command
+        } else { let mut command = Command::new("sh"); command.arg("-s"); command };
+        hide_console_window(&mut command);
+        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("local POSIX transport");
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+    pub(super) fn local_transport(target: &RemoteTarget, command: &str, stdin: Option<&[u8]>) -> Option<std::process::Output> {
+        let home = local_homes().lock().unwrap().get(&operations::target_identity(target)).cloned();
+        home.map(|home| {
+            let script = if let Some(bytes) = stdin {
+                assert_eq!(command, "sh -s");
+                String::from_utf8(bytes.to_vec()).unwrap()
+            } else { command.to_owned() };
+            posix_output(&format!("export HOME={}\n{script}", shell_quote(&home)))
+        })
+    }
+    pub(super) fn with_local_transport(target: &RemoteTarget, run: impl FnOnce(&str)) {
+        let result = posix_output("mktemp -d /tmp/cliora-local-transport-XXXXXX");
+        assert!(result.status.success());
+        let home = String::from_utf8(result.stdout).unwrap().trim().to_owned();
+        assert!(home.starts_with("/tmp/cliora-local-transport-") && home.rsplit('/').next().unwrap().chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        struct Cleanup(String, String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                local_homes().lock().unwrap().remove(&self.1);
+                assert!(posix_output(&format!("rm -rf -- {}", shell_quote(&self.0))).status.success());
+            }
+        }
+        let identity = operations::target_identity(target);
+        let _cleanup = Cleanup(home.clone(), identity.clone());
+        assert!(local_homes().lock().unwrap().insert(identity, home.clone()).is_none());
+        run(&home);
+    }
+    fn write_with_versions(target: &RemoteTarget, versions: transactions::Versions, run: impl FnOnce()) {
+        let request = operations::Request {
+            request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(), target_id: target.id.clone(),
+            target_revision: Some(target.updated_at), kind: operations::Kind::Write, priority: operations::Priority::Interactive,
+            deadline_unix_ms: (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() + 120_000) as u64,
+            refresh: true, expected_files: versions,
+        };
+        let lease = operations::register("local-transport-test", request, operations::Kind::Write).unwrap();
+        operations::scoped(lease.context.clone(), run);
+    }
+
+    #[test]
+    fn missing_and_empty_resource_management_files_read_then_save_with_matching_versions() {
+        let target = gate_target("first-resource.invalid");
+        with_local_transport(&target, |_| {
+            for kind in ["mcp", "skills"] {
+                let path = format!("$HOME/.cliora/resources/codex/{kind}.json");
+                for empty in [false, true] {
+                    run_command(&target, &format!("rm -rf -- \"$HOME/.cliora\" \"$HOME/.codex\"; mkdir -p \"$HOME/.cliora/resources/codex\"; {}", if empty { format!(": > {}", remote_path_expr(&path)) } else { String::new() })).unwrap();
+                    read_cache::invalidate(&target.id);
+                    let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(40));
+                    let mut store = operations::scoped(context.clone(), || load_resource_store(&target, "codex", kind)).unwrap();
+                    let versions = context.file_versions();
+                    assert_eq!(versions[&path], if empty { transactions::digest(b"") } else { "missing".into() });
+                    if kind == "skills" {
+                        store["documents"] = serde_json::json!({"$HOME/.codex/skills/first/SKILL.md": "---\nname: first\ndescription: first skill\n---\nbody"});
+                    } else {
+                        store = serde_json::json!({"entries": [{"name": "first", "transport": "stdio", "command": "node", "args": []}]});
+                    }
+                    write_with_versions(&target, versions, || save_resource_store(&target, "codex", kind, &store).unwrap());
+                    let saved = load_resource_store(&target, "codex", kind).unwrap();
+                    assert_eq!(saved["entries"].as_array().unwrap().len(), 1, "{kind}, empty={empty}");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn two_full_skill_inventories_use_canonical_versions_and_allow_single_cli_save() {
+        let target = gate_target("large-skills.invalid");
+        with_local_transport(&target, |_| {
+            run_command(&target, "for cli in codex grok; do i=0; while [ \"$i\" -lt 128 ]; do dir=\"$HOME/.$cli/skills/skill-$i\"; mkdir -p \"$dir\"; printf '%s\\n' '---' \"name: skill-$i\" 'description: fixture' '---' body > \"$dir/SKILL.md\"; i=$((i+1)); done; done").unwrap();
+            let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(40));
+            let inventory = operations::scoped(context.clone(), || load_resource_stores(&target, &["codex".into(), "grok".into()], "skills")).unwrap();
+            let versions = context.file_versions();
+            assert_eq!(versions.len(), 258);
+            assert!(versions.keys().all(|path| path.starts_with("$HOME/")));
+            let mut store = inventory["stores"]["codex"].clone();
+            assert_eq!(store["entries"].as_array().unwrap().len(), 128);
+            let key = store["documents"].as_object().unwrap().keys().next().unwrap().clone();
+            store["documents"][&key] = serde_json::json!("---\nname: changed\ndescription: changed\n---\nchanged body");
+            write_with_versions(&target, versions, || save_resource_store(&target, "codex", "skills", &store).unwrap());
+            assert!(run_command(&target, &format!("cat {}", remote_path_expr(&key))).unwrap().stdout.ends_with("changed body"));
+        });
+    }
 
     #[test]
     fn directory_errors_preserve_path_type_permission_and_authentication() {
@@ -2756,7 +2857,7 @@ mod tests {
         let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
         let actual = operations::scoped(context.clone(), || assemble_remote_agents("codex", &[path.clone()], &encoded, crate::adapters::agents::capability("codex").unwrap(), "actual native reload".into()));
         assert_eq!(actual["snapshot"]["entries"][0]["content"], fresh);
-        assert_eq!(context.file_versions()[&path], transactions::digest(fresh.as_bytes()));
+        assert!(!context.file_versions().contains_key(&path), "absolute alias is not a second prerequisite");
         assert_eq!(context.file_versions()["$HOME/.codex/agents/owned.toml"], transactions::digest(fresh.as_bytes()));
     }
 
