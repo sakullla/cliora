@@ -369,7 +369,7 @@ for (const width of widths) {
     await page.mouse.move(screenBox.x + screenBox.width / 2, screenBox.y + screenBox.height / 2);
     await page.mouse.wheel(0, -480);
     await stage.getByRole('button', { name: copy('回到最新输出', 'Jump to latest output'), exact: true }).waitFor({ state: 'visible' });
-    const box = await stage.locator('.xterm-viewport:visible').boundingBox();
+    const box = await stage.locator('.xterm-scrollable-element:visible').boundingBox();
     await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
   });
   await shot('workbench-appearance-' + theme + '-' + width, theme, width, async (page) => {

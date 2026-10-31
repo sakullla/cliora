@@ -10,6 +10,7 @@ import { writeClipboard } from '../../lib/clipboard';
 import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalTheme';
 import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
 import { TerminalScrollbar } from './TerminalScrollbar';
+import { TerminalWebglLifecycle } from './terminalWebgl';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalMatch = { row: number; col: number; length: number };
@@ -454,7 +455,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   // The grid the PTY last received. Switching back to a session must not re-send an
   // unchanged grid: the CLI treats every resize as a reason to redraw.
   const ptyGridRef = useRef({ cols: 0, rows: 0 });
-  const webglRef = useRef<WebglAddon | null>(null);
+  const webglRef = useRef<TerminalWebglLifecycle | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
@@ -492,7 +493,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       scrollback: TERMINAL_SCROLLBACK,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
-      fastScrollModifier: 'alt',
       fastScrollSensitivity: 5,
       macOptionIsMeta: true,
       allowProposedApi: true,
@@ -508,6 +508,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     term.loadAddon(fit);
     term.open(node);
     if (term.textarea) term.textarea.disabled = !activeRef.current || !runningRef.current;
+    webglRef.current = new TerminalWebglLifecycle(term, () => new WebglAddon());
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
@@ -657,7 +658,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     // redraw rounds onto another row and paints the previous frame on top.
     const wheelScrollViewport = (event: WheelEvent) => {
       if (event.deltaY === 0) return;
-      const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
+      const viewport = term.element?.querySelector<HTMLElement>('.xterm-scrollable-element');
       if (!viewport) return;
       userScrollRef.current = true;
       const rowHeight = viewport.clientHeight / Math.max(1, term.rows);
@@ -709,16 +710,23 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     let awayFromBottom = false;
     let followFrame = 0;
     let scrollUiFrame = 0;
-    const viewport = term.element?.querySelector<HTMLElement>('.xterm-viewport');
+    const viewport = term.element?.querySelector<HTMLElement>('.xterm-scrollable-element');
     viewportRef.current = viewport ?? null;
     if (viewport) viewport.id = `terminal-viewport-${sessionId}`;
     const isAwayFromBottom = () => {
-      const rowHeight = viewport ? viewport.clientHeight / Math.max(1, term.rows) : 1;
-      const remaining = viewport ? viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight : 0;
       const buffer = term.buffer.active;
       return buffer.type === 'normal'
-        && remaining > Math.max(2, rowHeight);
+        && buffer.baseY - buffer.viewportY > 1;
     };
+    const trackWheelIntent = (event: WheelEvent) => {
+      if (!event.deltaY || term.buffer.active.type !== 'normal') return;
+      const mode = term.modes.mouseTrackingMode;
+      const appOwnsWheel = mode === 'vt200' || mode === 'drag' || mode === 'any';
+      if (!appOwnsWheel || event.shiftKey || (userScrollRef.current && isAwayFromBottom())) userScrollRef.current = true;
+    };
+    // xterm's virtual viewport consumes native scrolling before the terminal's
+    // bubbling wheel handler. Record intent before that internal propagation stop.
+    node.addEventListener('wheel', trackWheelIntent, { capture: true, passive: true });
     // Grok and other fullscreen TUIs enable mouse-wheel reporting and scroll their own
     // transcript. Taking that wheel moves xterm's viewport instead, so the view opens a
     // blank gap and the CLI never receives the scroll. Shift+wheel still reads the
@@ -756,11 +764,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
           if (!disposed) setScrollVersion((version) => version + 1);
         });
       }
-      // The DOM viewport also reflects wheel input whose xterm scroll event is suppressed.
-      // `viewportY/baseY` is xterm's authoritative scroll position. The DOM
-      // viewport can lag one frame behind it (especially with WebGL and a
-      // mouse-tracking CLI), so use both signals before deciding to follow
-      // incoming output.
+      // The public buffer reports the virtual viewport's authoritative position.
+      // xterm 6 no longer uses a native DOM scrollTop for terminal history.
       const away = userScrollRef.current && isAwayFromBottom();
       if (away) scheduleRepaint();
       if (away === awayFromBottom) return;
@@ -776,44 +781,20 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
         if (!disposed) term.refresh(0, Math.max(0, term.rows - 1));
       }, 40);
     };
-    const pinViewport = () => {
-      if (!viewport || term.buffer.active.type !== 'normal') return;
-      const deviceCell = (term as unknown as { _core?: { _renderService?: { dimensions?: { device?: { cell?: { height?: number } } } } } })._core
-        ?._renderService?.dimensions?.device?.cell?.height ?? 0;
-      const rowHeight = deviceCell > 0 ? deviceCell / (window.devicePixelRatio || 1) : 0;
-      if (rowHeight <= 0) return;
-      // Match xterm's own scroll offset. scrollHeight is taller than the buffer by the
-      // unused host pixels, and writing that max makes the viewport round to another row,
-      // scroll up, then snap back on the next agent redraw.
-      const top = term.buffer.active.baseY * rowHeight;
-      if (Math.abs(viewport.scrollTop - top) <= 0.5) return;
-      viewport.scrollTop = top;
-    };
     const scrollToLatest = () => {
       if (disposed) return;
       userScrollRef.current = false;
       term.scrollToBottom();
-      pinViewport();
       cancelAnimationFrame(followFrame);
       const applyLatest = () => {
         followFrame = 0;
         if (disposed || userScrollRef.current) return;
         term.scrollToBottom();
-        pinViewport();
         reportScroll();
       };
       followFrame = requestAnimationFrame(applyLatest);
       reportScroll();
     };
-    // xterm updates scroll-area height in a deferred frame; that actual change
-    // is the safe point to follow output, without interrupting history reading.
-    const scrollAreaObserver = new ResizeObserver(() => {
-      if (disposed || !activeRef.current || awayFromBottom) return;
-      scrollToLatest();
-    });
-    const scrollArea = viewport?.firstElementChild;
-    if (scrollArea instanceof Element) scrollAreaObserver.observe(scrollArea);
-    viewport?.addEventListener('scroll', reportScroll);
     const scrollSub = term.onScroll(reportScroll);
     const parsedSub = term.onWriteParsed(() => {
       if (activeRef.current && !awayFromBottom) scrollToLatest();
@@ -1067,12 +1048,11 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       cancelAnimationFrame(resizeFrame);
       cancelAnimationFrame(scrollUiFrame);
       cancelAnimationFrame(followFrame);
-      scrollAreaObserver.disconnect();
-      viewport?.removeEventListener('scroll', reportScroll);
       viewportRef.current = null;
       if (writers.current.get(sessionId) === publish) writers.current.delete(sessionId);
       if (handles.current.get(sessionId) === handle) handles.current.delete(sessionId);
       node.removeEventListener('paste', onPaste, true);
+      node.removeEventListener('wheel', trackWheelIntent, true);
       document.removeEventListener('scroll', resetAncestorScroll, true);
       bellSub.dispose();
       titleSub.dispose();
@@ -1092,13 +1072,16 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
-      webglRef.current?.dispose();
-      webglRef.current = null;
-      // xterm schedules a scroll-area sync while opening; let it finish before disposal.
-      window.setTimeout(() => term.dispose(), 0);
-      termRef.current = null;
-      fitRef.current = null;
-      fitNowRef.current = null;
+      try {
+        webglRef.current?.dispose();
+      } finally {
+        webglRef.current = null;
+        // xterm schedules a scroll-area sync while opening; let it finish before disposal.
+        window.setTimeout(() => term.dispose(), 0);
+        termRef.current = null;
+        fitRef.current = null;
+        fitNowRef.current = null;
+      }
     };
   }, [sessionId, writers, pending, handles, bridge]);
 
@@ -1133,8 +1116,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       linksRef.current?.dismiss();
       // Only one terminal renders at a time; releasing the GPU context on exit
       // keeps many mounted sessions within the browser's WebGL context budget.
-      webglRef.current?.dispose();
-      webglRef.current = null;
+      webglRef.current?.release(false);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -1146,17 +1128,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       fitNowRef.current?.();
       // Test automation locates glyphs through the DOM rows; keep that renderer
       // under webdriver so coordinates stay measurable. Everyone else gets WebGL.
-      if (!webglRef.current && navigator.webdriver !== true) {
-        try {
-          const addon = new WebglAddon();
-          addon.onContextLoss(() => {
-            addon.dispose();
-            if (webglRef.current === addon) webglRef.current = null;
-          });
-          term.loadAddon(addon);
-          webglRef.current = addon;
-        } catch { /* No WebGL here: the DOM renderer stays. */ }
-      }
+      if (navigator.webdriver !== true) webglRef.current?.activate();
       // A terminal that was hidden kept its IME anchor from before; place it on the input cell now.
       imeRef.current?.refresh();
       // Keyboard navigation in the session rail deliberately keeps focus on
@@ -1170,8 +1142,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
 
   useEffect(() => {
     const term = termRef.current;
-    if (term) term.options.cursorBlink = cursorBlink && focused && running;
-  }, [cursorBlink, focused, running]);
+    if (term) term.options.cursorBlink = cursorBlink && active && focused && running;
+  }, [cursorBlink, active, focused, running]);
 
   // In a split, moving focus between two visible panes does not change `active`.
   const wasFocusedRef = useRef(focused);

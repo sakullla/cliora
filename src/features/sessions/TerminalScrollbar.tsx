@@ -12,13 +12,12 @@ export function TerminalScrollbar({ terminal, viewport, onUserScroll }: {
   const dragPointer = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
   if (!terminal || !viewport || terminal.buffer.active.type !== 'normal') return null;
-  const maxScroll = viewport.scrollHeight - viewport.clientHeight;
   const total = terminal.buffer.active.baseY;
-  if (total < 1 || maxScroll <= 0) return null;
+  if (total < 1 || viewport.clientHeight <= 0) return null;
 
-  const ratio = Math.max(0, Math.min(1, viewport.scrollTop / maxScroll));
+  const ratio = Math.max(0, Math.min(1, terminal.buffer.active.viewportY / total));
   const trackHeight = Math.max(0, viewport.clientHeight - 8);
-  const thumbHeight = Math.min(trackHeight, Math.max(28, viewport.clientHeight / viewport.scrollHeight * trackHeight));
+  const thumbHeight = Math.min(trackHeight, Math.max(28, terminal.rows / (total + terminal.rows) * trackHeight));
   const thumbTop = (trackHeight - thumbHeight) * ratio;
 
   function scrollAt(clientY: number, track: HTMLElement) {
