@@ -83,6 +83,49 @@ async function hosts(page: Page) {
   return page.getByRole('region', { name: '远程主机', exact: true });
 }
 
+test('a cancelled consumer late intent response keeps another unknown directory reachable on reopen', async ({ page }) => {
+  const durable = new Map<string, any>();
+  const writes: string[] = [];
+  let releaseA!: () => void;
+  await page.exposeFunction('__directoryBackend', async (command: string, args: any) => {
+    if (command === 'list_remote_directory_receipts') return [...durable.values()].map(item => structuredClone(item));
+    if (command === 'save_remote_directory_receipt') {
+      durable.set(args.receipt.id, structuredClone(args.receipt));
+      if (args.receipt.path === '/fixture/key/A' && args.receipt.outcome === 'pending') await new Promise<void>(resolve => { releaseA = resolve; });
+      return;
+    }
+    writes.push(args.path);
+    throw { code: 'remote_unknown', message: 'B may already exist', remote: { outcome: 'unknown' } };
+  });
+  await install(page); await page.goto('/');
+  let dialog = await directory(page);
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/A');
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  await expect.poll(() => durable.size).toBe(1);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '关闭', exact: true }).click();
+  dialog = await directory(page);
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/B');
+  await dialog.getByRole('button', { name: '在远端新建目录', exact: true }).click();
+  let receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  await expect(receipt).toContainText('B may already exist');
+  releaseA();
+  await expect(receipt.locator('article[data-outcome]')).toHaveCount(2);
+  await expect(receipt.locator('article[data-outcome]').filter({ hasText: '/fixture/key/A' })).toContainText('创建失败');
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '关闭', exact: true }).click();
+  dialog = await directory(page);
+  receipt = dialog.getByRole('region', { name: '目录创建结果' });
+  const b = receipt.locator('article[data-outcome]').filter({ hasText: '/fixture/key/B' });
+  await expect(b).toContainText('结果不确定');
+  await dialog.getByLabel('远程路径', { exact: true }).fill('/fixture/key/B');
+  await expect(dialog.getByRole('button', { name: '在远端新建目录', exact: true })).toBeDisabled();
+  await b.getByRole('button', { name: '核查原路径', exact: true }).click();
+  await expect(b).toContainText('原路径当前是目录');
+  expect(writes).toEqual(['/fixture/key/B']);
+  expect([...durable.values()].find(item => item.path === '/fixture/key/B').outcome).toBe('unknown');
+});
+
 for (const outcome of ['unknown', 'pending', 'checking']) test(`directory ${outcome} receipt survives a full document restart without replay`, async ({ page }) => {
   await install(page); await page.goto('/');
   let dialog = await directory(page);

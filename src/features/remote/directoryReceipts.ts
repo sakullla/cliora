@@ -12,6 +12,9 @@ let version = 0;
 let poll: ReturnType<typeof setTimeout> | undefined;
 const inspectionVersions = new Map<string, number>();
 const updates = new Map<string, Promise<boolean>>();
+const intents = new Map<string, DirectoryReceipt>();
+const unresolved = (item: DirectoryReceipt) => item.outcome === 'pending'
+  || (item.outcome === 'unknown' && item.inspection?.state !== 'missing');
 export function beginDirectoryInspection(id: string) {
   const token = (inspectionVersions.get(id) ?? 0) + 1;
   inspectionVersions.set(id, token);
@@ -52,18 +55,27 @@ export function loadDirectoryReceipts(fresh = false): Promise<void> {
 
 export async function beginDirectoryReceipt(target: RemoteTarget, path: string): Promise<DirectoryReceipt | null> {
   await loadDirectoryReceipts();
-  if (receipts.some(item => blocksDirectoryCreation(item, target, path))) return null;
-  let next = receipts;
-  if (next.length >= 32) {
-    const discard = next.findIndex(item => item.outcome !== 'pending' && (item.outcome !== 'unknown' || item.inspection?.state === 'missing'));
-    if (discard < 0) return null; // Never evict an unresolved mutation to admit another one.
-    next = next.filter((_, index) => index !== discard);
-  }
+  // Reserve unresolved capacity without publishing an intent before SQLite
+  // accepts it. Count IDs once when a refresh also observes an in-flight save.
+  const admitted = new Map(receipts.map(item => [item.id, item]));
+  for (const [id, item] of intents) admitted.set(id, item);
+  if ([...admitted.values()].some(item => blocksDirectoryCreation(item, target, path))
+    || [...admitted.values()].filter(unresolved).length >= 32) return null;
   const { id, name, host, port, user, updatedAt } = target;
   const receipt: DirectoryReceipt = { id: crypto.randomUUID(), target: { id, name, host, port, user, updatedAt }, path, outcome: 'pending', detail: '' };
-  await native.saveRemoteDirectoryReceipt(receipt);
-  publish([...next, receipt]);
-  return receipt;
+  intents.set(receipt.id, receipt);
+  try {
+    await native.saveRemoteDirectoryReceipt(receipt);
+    // Other consumers can finish writes or inspections while this response is
+    // delayed. Merge the current snapshot and retain a newer same-ID result.
+    const current = new Map(receipts.map(item => [item.id, item]));
+    if (!current.has(receipt.id)) current.set(receipt.id, receipt);
+    const discard = new Set([...current.values()]
+      .filter(item => !unresolved(item) && !intents.has(item.id))
+      .slice(0, Math.max(0, current.size - 32)).map(item => item.id));
+    publish([...current.values()].filter(item => !discard.has(item.id)));
+    return receipt;
+  } finally { intents.delete(receipt.id); }
 }
 
 export function updateDirectoryReceipt(id: string, patch: Partial<Pick<DirectoryReceipt, 'outcome' | 'detail' | 'inspection'>>, isCurrent = () => true): Promise<boolean> {

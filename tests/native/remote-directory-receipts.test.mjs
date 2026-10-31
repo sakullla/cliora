@@ -14,6 +14,121 @@ async function loadStore(native) {
 }
 const target = { id: 'fixture', name: 'fixture', host: 'fixture.invalid', port: 22, user: 'fixture', updatedAt: 7 };
 
+test('a late intent from a cancelled consumer preserves another path unknown receipt on normal reopen', async () => {
+  let release;
+  let lists = 0;
+  const durable = new Map();
+  const store = await loadStore({
+    listRemoteDirectoryReceipts: async () => { lists++; return [...durable.values()].map(item => structuredClone(item)); },
+    saveRemoteDirectoryReceipt: async receipt => {
+      durable.set(receipt.id, structuredClone(receipt));
+      if (receipt.path === '/fixture/A' && receipt.outcome === 'pending') await new Promise(resolve => { release = resolve; });
+    },
+  });
+  const obsolete = new AbortController();
+  const pendingA = store.beginDirectoryReceipt(target, '/fixture/A');
+  await new Promise(resolve => setImmediate(resolve));
+  obsolete.abort();
+  const b = await store.beginDirectoryReceipt(target, '/fixture/B');
+  await store.updateDirectoryReceipt(b.id, { outcome: 'unknown', detail: 'B may already exist' });
+  release();
+  const a = await pendingA;
+  if (obsolete.signal.aborted) await store.updateDirectoryReceipt(a.id, { outcome: 'failed', detail: 'aborted before mkdir' });
+  await store.loadDirectoryReceipts();
+  assert.equal(lists, 1, 'ordinary consumer reopen uses the current store');
+  assert.equal(durable.get(b.id).outcome, 'unknown');
+  assert.equal(store.useDirectoryReceipts().find(item => item.id === b.id)?.outcome, 'unknown');
+  assert.equal(store.useDirectoryReceipts().find(item => item.id === a.id)?.outcome, 'failed');
+  assert.equal(store.useDirectoryReceipts().some(item => store.blocksDirectoryCreation(item, target, b.path)), true);
+  assert.equal(await store.beginDirectoryReceipt(target, b.path), null);
+});
+
+test('pending intent reservations enforce capacity and same-path exclusion before a delayed save returns', async () => {
+  const initial = Array.from({ length: 31 }, (_, index) => ({ id: `existing-${index}`, target, path: `/fixture/${index}`, outcome: 'unknown', detail: '' }));
+  let release;
+  let saves = 0;
+  const store = await loadStore({
+    listRemoteDirectoryReceipts: async () => initial,
+    saveRemoteDirectoryReceipt: async receipt => {
+      saves++;
+      if (receipt.path === '/fixture/A') await new Promise(resolve => { release = resolve; });
+    },
+  });
+  const a = store.beginDirectoryReceipt(target, '/fixture/A');
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.equal(await store.beginDirectoryReceipt(target, '/fixture/B'), null);
+    assert.equal(saves, 1, 'do not persist a 33rd unresolved intent');
+  } finally { release(); await a; }
+});
+
+test('out-of-order different-path intents evict only current resolved feedback at the 32 receipt limit', async () => {
+  const initial = Array.from({ length: 32 }, (_, index) => ({ id: `existing-${index}`, target, path: `/fixture/${index}`, outcome: 'unknown', detail: '' }));
+  let release;
+  const store = await loadStore({
+    listRemoteDirectoryReceipts: async () => initial,
+    saveRemoteDirectoryReceipt: async receipt => {
+      if (receipt.path === '/fixture/A' && receipt.outcome === 'pending') await new Promise(resolve => { release = resolve; });
+    },
+  });
+  await store.loadDirectoryReceipts();
+  await store.updateDirectoryReceipt('existing-0', { outcome: 'created' });
+  await store.updateDirectoryReceipt('existing-1', { inspection: { state: 'missing', detail: 'confirmed missing' } });
+  const pendingA = store.beginDirectoryReceipt(target, '/fixture/A');
+  await new Promise(resolve => setImmediate(resolve));
+  const b = await store.beginDirectoryReceipt(target, '/fixture/B');
+  await store.updateDirectoryReceipt(b.id, { outcome: 'unknown' });
+  release(); const a = await pendingA;
+  const current = store.useDirectoryReceipts();
+  assert.equal(current.length, 32);
+  assert.equal(new Set(current.map(item => item.id)).size, 32);
+  assert.equal(current.some(item => item.id === a.id), true);
+  assert.equal(current.some(item => item.id === b.id), true);
+  assert.equal(current.some(item => item.id === 'existing-0' || item.id === 'existing-1'), false);
+  assert.equal(initial.slice(2).every(item => current.some(visible => visible.id === item.id)), true);
+  assert.equal(await store.beginDirectoryReceipt(target, '/fixture/full'), null);
+});
+
+test('a same-path intent is not admitted while the first durable response is pending', async () => {
+  let release;
+  let saves = 0;
+  const store = await loadStore({
+    listRemoteDirectoryReceipts: async () => [],
+    saveRemoteDirectoryReceipt: async () => {
+      saves++;
+      if (saves === 1) await new Promise(resolve => { release = resolve; });
+    },
+  });
+  const pending = store.beginDirectoryReceipt(target, '/fixture/same');
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.equal(await store.beginDirectoryReceipt(target, '/fixture/same'), null);
+    assert.equal(saves, 1);
+  } finally { release(); await pending; }
+  assert.equal(store.useDirectoryReceipts().length, 1);
+});
+
+test('a late intent acknowledgement deduplicates its ID and preserves a newer hydrated inspection', async () => {
+  let release;
+  const durable = new Map();
+  const store = await loadStore({
+    listRemoteDirectoryReceipts: async () => [...durable.values()].map(item => ({ ...structuredClone(item), outcome: item.outcome === 'pending' ? 'unknown' : item.outcome })),
+    saveRemoteDirectoryReceipt: async receipt => {
+      durable.set(receipt.id, structuredClone(receipt));
+      if (receipt.outcome === 'pending') await new Promise(resolve => { release = resolve; });
+    },
+  });
+  const pending = store.beginDirectoryReceipt(target, '/fixture/hydrated');
+  await new Promise(resolve => setImmediate(resolve));
+  await store.loadDirectoryReceipts(true);
+  const hydrated = store.useDirectoryReceipts()[0];
+  await store.updateDirectoryReceipt(hydrated.id, { inspection: { state: 'exists', detail: 'newer observation' } });
+  release(); await pending;
+  assert.equal(store.useDirectoryReceipts().length, 1);
+  assert.equal(store.useDirectoryReceipts()[0].outcome, 'unknown');
+  assert.equal(store.useDirectoryReceipts()[0].inspection.state, 'exists');
+});
+
 test('pending is published only after durable intent and failed persistence permits a safe explicit retry', async () => {
   let release;
   let reject = true;
