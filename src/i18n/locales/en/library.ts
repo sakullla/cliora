@@ -121,6 +121,8 @@ export default {
     launchSubmit: 'Launch in external terminal',
   },
   resources: {
+    remoteSkillInstalled: 'Installed; use the more actions menu to delete',
+    remoteSkillDistributionUnavailable: 'Not installed; distributing remote Skills to other CLIs from these marks is unavailable',
     installState: {
       current: 'Installed',
       update_available: 'Update available',

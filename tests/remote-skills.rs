@@ -113,3 +113,80 @@ fn declared_readonly_skill_inventory_stays_available_and_unsupported_never_succe
     assert!(validate_remote_skills(&UNAVAILABLE).is_err());
     assert!(skill_adapter("unregistered_skill_fixture").is_err());
 }
+
+#[test]
+fn short_skill_alias_cannot_update_or_create_under_nested_readonly_root() {
+    let adapter = &crate::adapters::CODEX;
+    let original = serde_json::json!({"documents": {"/home/fixture/.codex/skills/.system/core/SKILL.md": "original"}});
+    for alias in ["/home/fixture/.codex/skills/.system/core/SKILL.md", "$HOME/.codex/skills/.system/core/SKILL.md", ".codex/skills/.system/core/SKILL.md", ".system/core/SKILL.md"] {
+        let edited = serde_json::json!({"documents": {alias: "replaced"}});
+        assert!(materialize_adapter_skills(adapter, Some(&original), &edited).is_err(), "readonly edit accepted: {alias}");
+        assert!(materialize_adapter_skills(adapter, None, &edited).is_err(), "readonly creation accepted: {alias}");
+        let unchanged = serde_json::json!({"documents": {alias: "original"}});
+        let upload = materialize_adapter_skills(adapter, Some(&original), &unchanged).unwrap();
+        assert!(upload.files.is_empty() && upload.removes.is_empty(), "unchanged readonly alias writes: {alias}");
+    }
+    assert!(materialize_adapter_skills(adapter, Some(&original), &serde_json::json!({"documents": {}})).is_err());
+    let writable = serde_json::json!({"documents": {"owned/SKILL.md": "body"}});
+    assert_eq!(materialize_adapter_skills(adapter, None, &writable).unwrap().files, vec![("$HOME/.codex/skills/owned/SKILL.md".into(), b"body".to_vec())]);
+    static EXTENSION: SkillFixture = SkillFixture { available: true, writable: true };
+    assert!(materialize_adapter_skills(&EXTENSION, None, &serde_json::json!({"documents": {"bundled/new/SKILL.md": "body"}})).is_err());
+}
+
+#[test]
+fn skill_scan_distinguishes_missing_directories_from_invalid_parents() {
+    #[cfg(windows)]
+    let shell = std::env::var("CLIORA_TEST_POSIX_SHELL").unwrap_or_else(|_| "C:/Program Files/Git/bin/bash.exe".into());
+    #[cfg(not(windows))]
+    let shell = "/bin/sh".to_owned();
+    assert!(Path::new(&shell).exists(), "POSIX shell is required to verify the generated scan");
+    let fixture = tempfile::tempdir().unwrap();
+    let home = fixture.path().to_string_lossy().replace('\\', "/");
+    let mut script = format!("HOME={}; ", shell_quote(&home));
+    append_skill_scan(&mut script, &SkillScanRoot { relative: ".claude/skills".into(), read_only: false, detail: "fixture".into() }, 0);
+    script.push_str("printf %s __SCAN_SUCCEEDED__");
+    let run = |script: &str| {
+        let mut command = Command::new(&shell);
+        command.args(["-c", script]);
+        #[cfg(windows)]
+        command.env("MSYS", "winsymlinks:nativestrict");
+        hide_console_window(&mut command);
+        command.output().unwrap()
+    };
+    let missing = run(&script);
+    assert!(missing.status.success());
+    assert_eq!(String::from_utf8(missing.stdout).unwrap(), "__SCAN_SUCCEEDED__");
+    std::fs::write(fixture.path().join(".claude"), "ordinary file").unwrap();
+    let file_parent = run(&script);
+    assert_eq!(file_parent.status.code(), Some(46), "ordinary parent file became empty success");
+    std::fs::remove_file(fixture.path().join(".claude")).unwrap();
+    // Make the dangling link in the POSIX shell so this also works on Windows without native symlink privileges.
+    assert!(run(&format!("ln -s {} {}", shell_quote(&format!("{home}/absent")), shell_quote(&format!("{home}/.claude")))).status.success());
+    assert!(run(&format!("[ -L {} ]", shell_quote(&format!("{home}/.claude")))).status.success());
+    assert_eq!(run(&script).status.code(), Some(46), "dangling parent link became empty success");
+    assert!(run(&format!("rm {}", shell_quote(&format!("{home}/.claude")))).status.success());
+    std::fs::create_dir(fixture.path().join(".claude")).unwrap();
+    assert!(run(&script).status.success(), "genuinely missing leaf is empty");
+    std::fs::write(fixture.path().join(".claude/skills"), "ordinary file").unwrap();
+    assert_eq!(run(&script).status.code(), Some(46), "ordinary root file became empty success");
+    std::fs::remove_file(fixture.path().join(".claude/skills")).unwrap();
+    std::fs::create_dir_all(fixture.path().join(".claude/skills/owned")).unwrap();
+    std::fs::write(fixture.path().join(".claude/skills/owned/SKILL.md"), "full Skill body\n").unwrap();
+    let valid = run(&script);
+    assert!(valid.status.success(), "{}", String::from_utf8_lossy(&valid.stderr));
+    let stdout = String::from_utf8(valid.stdout).unwrap();
+    assert!(stdout.contains("__CLIORA_FILE__\n0\n"));
+    assert!(stdout.contains(&base64::engine::general_purpose::STANDARD.encode("full Skill body\n")));
+
+    std::fs::rename(fixture.path().join(".claude/skills"), fixture.path().join("actual-skills")).unwrap();
+    assert!(run(&format!("ln -s {} {}", shell_quote(&format!("{home}/actual-skills")), shell_quote(&format!("{home}/.claude/skills")))).status.success());
+    assert!(run(&format!("[ -L {} ]", shell_quote(&format!("{home}/.claude/skills")))).status.success());
+    assert_eq!(run(&script).status.code(), Some(46), "root directory link became empty success");
+    assert!(run(&format!("rm {}", shell_quote(&format!("{home}/.claude/skills")))).status.success());
+    std::fs::rename(fixture.path().join("actual-skills"), fixture.path().join(".claude/skills")).unwrap();
+    std::fs::rename(fixture.path().join(".claude"), fixture.path().join("actual-parent")).unwrap();
+    assert!(run(&format!("ln -s {} {}", shell_quote(&format!("{home}/actual-parent")), shell_quote(&format!("{home}/.claude")))).status.success());
+    let parent_link = run(&script);
+    assert!(parent_link.status.success(), "valid traversable parent link must remain readable");
+    assert!(String::from_utf8(parent_link.stdout).unwrap().contains(&base64::engine::general_purpose::STANDARD.encode("full Skill body\n")));
+}

@@ -121,6 +121,8 @@ export default {
     launchSubmit: '在外部终端启动',
   },
   resources: {
+    remoteSkillInstalled: '已安装；如需删除，请使用更多操作',
+    remoteSkillDistributionUnavailable: '未安装；暂不支持从远程 Skill 标记分发到其他 CLI',
     installState: {
       current: '已安装',
       update_available: '有更新',

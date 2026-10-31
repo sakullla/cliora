@@ -543,9 +543,11 @@ fn append_skill_scan(script: &mut String, root: &SkillScanRoot, index: usize) {
     // Check traversed parents too: an inaccessible parent must not look missing.
     script.push_str("parent=\"$HOME\"; ");
     for part in root.relative.split('/') {
-        script.push_str(&format!("if [ -d \"$parent\" ]; then [ -r \"$parent\" ] && [ -x \"$parent\" ] || exit 46; parent=\"$parent/{part}\"; fi; "));
+        script.push_str(&format!("if [ -e \"$parent\" ] || [ -L \"$parent\" ]; then [ -d \"$parent\" ] && [ -r \"$parent\" ] && [ -x \"$parent\" ] || exit 46; fi; parent=\"$parent/{part}\"; "));
     }
-    script.push_str(&format!("if [ -e \"{dir}\" ] || [ -L \"{dir}\" ]; then [ -d \"{dir}\" ] && [ -r \"{dir}\" ] && [ -x \"{dir}\" ] || exit 46; find \"{dir}\" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -exec sh -c "));
+    // find does not follow a command-line directory symlink by default. Reject
+    // that root explicitly instead of reporting an empty successful inventory.
+    script.push_str(&format!("if [ -e \"{dir}\" ] || [ -L \"{dir}\" ]; then [ ! -L \"{dir}\" ] && [ -d \"{dir}\" ] && [ -r \"{dir}\" ] && [ -x \"{dir}\" ] || exit 46; find \"{dir}\" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -exec sh -c "));
     let body = format!("for file do encoded=$(base64 < \"$file\") || exit 46; printf '%s\\n' __CLIORA_FILE__ {index} \"$file\"; printf %s \"$encoded\" | tr -d '\\n'; printf '\\n'; done");
     script.push_str(&shell_quote(&body));
     script.push_str(" sh {} + || exit 46; fi; ");
@@ -688,14 +690,19 @@ fn adapter_skill_document_path(adapter: &dyn crate::adapters::CliAdapter, path: 
         } else { path.strip_prefix(&format!("{}/", root.relative)) };
         relative.map(|relative| (root, relative))
     }).max_by_key(|(root, _)| root.relative.len());
-    let (root, relative, read_only) = if let Some((root, relative)) = found {
-        (format!("$HOME/{}", root.relative), relative, root.read_only)
+    let (root, relative) = if let Some((root, relative)) = found {
+        (format!("$HOME/{}", root.relative), relative)
     } else {
         if path.starts_with('/') || path.starts_with('$') { return Err(RemoteError::InvalidPath); }
-        (adapter_skill_write_root(adapter)?, path, false)
+        (adapter_skill_write_root(adapter)?, path)
     };
     if !relative_allowed(relative) { return Err(RemoteError::InvalidPath); }
-    Ok((format!("{root}/{relative}"), read_only))
+    let destination = format!("{root}/{relative}");
+    // Permissions belong to the final destination, including short aliases
+    // relative to a writable root that contains a nested readonly directory.
+    let read_only = roots.iter().filter(|root| destination.starts_with(&format!("$HOME/{}/", root.relative)))
+        .max_by_key(|root| root.relative.len()).map(|root| root.read_only).ok_or(RemoteError::InvalidPath)?;
+    Ok((destination, read_only))
 }
 
 fn canonical_skill_documents<'a>(adapter: &dyn crate::adapters::CliAdapter, value: &'a serde_json::Value) -> Result<BTreeMap<String, (bool, &'a str)>, RemoteError> {

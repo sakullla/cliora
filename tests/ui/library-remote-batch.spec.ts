@@ -46,28 +46,34 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
       const entries = Array.from({ length: 40 }, (_, n) => ({ name: `perf-skill-${n}`, path: `/home/fixture/.claude/skills/perf-skill-${n}/SKILL.md`, state: skillMode === 'read-only' || skillMode === 'mixed' ? 'read_only' : 'external', source: skillMode === 'read-only' || skillMode === 'mixed' ? 'read_only' : 'writable', detail: 'fixture' }));
       skillStores.claude_code = { entries, documents: Object.fromEntries(entries.map(entry => [entry.path, '# fixture'])) };
     }
-    if (skillMode === 'mixed') skillStores.codex = { entries: [{ name: 'writable-fixture', path: '/home/fixture/.codex/skills/writable-fixture/SKILL.md', source: 'writable', state: 'external', detail: 'fixture' }], documents: {} };
+    if (skillMode === 'mixed') {
+      skillStores.codex = { entries: [{ name: 'writable-fixture', path: '/home/fixture/.codex/skills/writable-fixture/SKILL.md', source: 'writable', state: 'external', detail: 'fixture' }], documents: { '/home/fixture/.codex/skills/writable-fixture/SKILL.md': '---\nname: writable-fixture\n---\nFull source body, including unmanaged content.\n' } };
+      skillStores.cursor = { entries: [{ name: 'cursor-managed', packageId: 'managed-package-id', path: '/home/fixture/.cursor/skills/cursor-managed/SKILL.md', source: 'writable', state: 'managed', detail: 'fixture' }], documents: { '/home/fixture/.cursor/skills/cursor-managed/SKILL.md': '# Full Cursor body\n', '/home/fixture/.cursor/skills/other/SKILL.md': '# Preserve adjacent document\n' } };
+    }
     let release = () => {};
     Object.assign(window, {
       isTauri: true,
       __resourceCalls: calls,
       __resourceState: state,
+      __skillStores: skillStores,
       __releaseResources: () => release(),
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: () => 1,
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools };
           if (command === 'list_cli_adapters') return { registered, managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host, { ...host, id: 'host-2', name: '另一台主机', host: '203.0.113.22' }];
-          if (largeSkills && command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
+          if (command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
           if (['list_remote_resource_stores', 'get_remote_resource_store'].includes(command) && args.kind === 'skills') {
             calls.push({ command, kind: args.kind, toolIds: args.toolIds, toolId: args.toolId });
+            if (state.fail) throw { message: 'fixture Skill parent is not a directory' };
             snapshots.set(args.operation.requestId, { ...versions });
             return command === 'list_remote_resource_stores' ? { stores: skillStores } : skillStores[args.toolId];
           }
-          if (largeSkills && command === 'save_remote_resource_store') {
+          if (command === 'save_remote_resource_store') {
             const expected = args.operation.expectedFiles;
-            if (Object.keys(expected).length > 16384 || Object.entries(versions).some(([path, hash]) => expected[path] !== hash)) throw { message: 'inventory baseline rejected' };
+            if (largeSkills && (Object.keys(expected).length > 16384 || Object.entries(versions).some(([path, hash]) => expected[path] !== hash))) throw { message: 'inventory baseline rejected' };
             calls.push({ command, expected, value: args.value, toolId: args.toolId });
             skillStores[args.toolId] = structuredClone(args.value);
             snapshots.set(args.operation.requestId, { ...versions });
@@ -256,4 +262,68 @@ test('mixed remote Skills show write controls only for writable CLI targets', as
   await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: 'Cursor', exact: true })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: /Claude Code|Grok/ })).toHaveCount(0);
+});
+
+test('a remote Skill target mark preserves the source and reports actual target availability', async ({ page }) => {
+  await installRemoteLibrary(page, false, 'mixed'); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  const card = page.locator('[data-card]').filter({ has: page.getByRole('button', { name: 'writable-fixture', exact: true }) });
+  const cursor = card.getByRole('button', { name: /^Cursor ·/ });
+  await expect(cursor).toBeVisible();
+  const original = await page.evaluate(() => structuredClone((window as any).__skillStores));
+  // An actual DOM click exercises the old destructive handler and remains a no-op when unavailable.
+  await cursor.evaluate((button: HTMLButtonElement) => button.click());
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store'))).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__skillStores)).toEqual(original);
+  await expect(card.getByRole('button', { name: /^Codex ·/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(cursor).toHaveAttribute('aria-pressed', 'false');
+  await expect(cursor).toBeDisabled();
+  await expect(card.getByRole('button', { name: /^Codex ·/ })).toBeDisabled();
+  await card.getByRole('button', { name: /^Codex ·/ }).evaluate((button: HTMLButtonElement) => button.click());
+  expect(await page.evaluate(() => (window as any).__skillStores)).toEqual(original);
+});
+
+test('explicit remote Skill deletion confirms and changes only its inventory origin even with a managed package ID', async ({ page }) => {
+  await installRemoteLibrary(page, false, 'mixed'); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'cursor-managed', exact: true })).toBeVisible();
+  const original = await page.evaluate(() => structuredClone((window as any).__skillStores));
+  await page.getByRole('button', { name: 'cursor-managed 的更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store'))).toEqual([]);
+  await dialog.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'cursor-managed', exact: true })).toHaveCount(0);
+  const writes = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].toolId).toBe('cursor');
+  expect(writes[0].value).toEqual({ entries: [], documents: { '/home/fixture/.cursor/skills/other/SKILL.md': '# Preserve adjacent document\n' } });
+  const after = await page.evaluate(() => (window as any).__skillStores);
+  expect(after.codex).toEqual(original.codex);
+  expect(after.claude_code).toEqual(original.claude_code);
+});
+
+test('a failed fresh remote Skill scan retains the previous list as stale and recovers on retry', async ({ page }) => {
+  await installRemoteLibrary(page); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
+  const remove = async () => {
+    await page.getByRole('button', { name: 'perf-skill-0 的更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: '删除', exact: true }).click();
+  };
+  await page.evaluate(() => { (window as any).__resourceState.fail = true; });
+  await remove();
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
+  await page.evaluate(() => { (window as any).__resourceState.fail = false; });
+  await remove();
+  await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
 });
