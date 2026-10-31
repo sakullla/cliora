@@ -1504,6 +1504,8 @@ fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
         "directory_missing"
     } else if detail.contains("cliora:directory-type") {
         "directory_type"
+    } else if detail.contains("cliora:directory-access") {
+        "directory_access"
     } else if detail.contains("cliora:remote-path-failed") {
         "remote_path"
     } else if detail.contains("permission denied") || detail.contains("operation not permitted") {
@@ -2384,17 +2386,28 @@ pub fn list_directories(target: &RemoteTarget, parent: &str) -> Result<Directory
     read_cache::read(target, &key, false, move || list_directories_uncached(&owned, &parent))
 }
 
+// A false `test -e` also means an ancestor cannot be searched. Preserve stat's
+// actual failure rather than reporting an inaccessible existing path missing.
+fn directory_parent_probe() -> &'static str {
+    "if metadata=$(LC_ALL=C ls -Ldn -- \"$parent\" 2>&1); then \
+     case \"$metadata\" in d*) ;; *) printf '%s\\n' 'cliora:directory-type: Path is not a directory' >&2; exit 45;; esac; \
+     else case \"$metadata\" in \
+     *'Permission denied') printf '%s\\n' 'Permission denied: cannot access directory or ancestor' >&2; exit 43;; \
+     *'No such file or directory') printf '%s\\n' 'cliora:directory-missing: Directory does not exist' >&2; exit 44;; \
+     *'Not a directory') printf '%s\\n' 'cliora:directory-type: Path is not a directory' >&2; exit 45;; \
+     *) printf '%s\\n' 'cliora:directory-access: Cannot determine directory state' >&2; exit 46;; esac; fi;"
+}
+
 fn directory_list_command(parent: &str) -> Result<String, RemoteError> {
     if !valid_text(parent, 4096) || parent.starts_with('~') {
         return Err(RemoteError::InvalidPath);
     }
     Ok(format!(
-        "parent={}; if [ ! -e \"$parent\" ]; then printf '%s\\n' 'cliora:directory-missing: Directory does not exist' >&2; exit 44; fi; \
-         if [ ! -d \"$parent\" ]; then printf '%s\\n' 'cliora:directory-type: Path is not a directory' >&2; exit 45; fi; \
+        "parent={}; {} \
          if [ ! -r \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: directory requires read and search access' >&2; exit 43; fi; \
          count=0; for entry in \"${{parent%/}}\"/* \"${{parent%/}}\"/.[!.]* \"${{parent%/}}\"/..?*; do \
          if [ -d \"$entry\" ]; then count=$((count + 1)); if [ \"$count\" -gt 200 ]; then printf '%s\\n' 'cliora:directory-truncated'; break; fi; printf '%s\\n' \"$entry\"; fi; done",
-        shell_quote(parent)))
+        shell_quote(parent), directory_parent_probe()))
 }
 
 fn list_directories_uncached(target: &RemoteTarget, parent: &str) -> Result<DirectoryListing, RemoteError> {
@@ -2415,11 +2428,9 @@ fn directory_create_command(path: &str) -> Result<String, RemoteError> {
         return Err(RemoteError::InvalidPath);
     }
     Ok(format!(
-        "path={}; parent=$(dirname -- \"$path\") || exit 45; \
-         if [ ! -e \"$parent\" ]; then printf '%s\\n' 'cliora:directory-missing: Parent directory does not exist' >&2; exit 44; fi; \
-         if [ ! -d \"$parent\" ]; then printf '%s\\n' 'cliora:directory-type: Parent path is not a directory' >&2; exit 45; fi; \
+        "path={}; parent=$(dirname -- \"$path\") || exit 45; {} \
          if [ ! -w \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: parent requires write and search access' >&2; exit 43; fi; \
-         mkdir -- \"$path\"", shell_quote(path)))
+         mkdir -- \"$path\"", shell_quote(path), directory_parent_probe()))
 }
 
 /// Create one direct child of an existing writable directory. Do not silently
@@ -2475,6 +2486,7 @@ mod tests {
         for (detail, code, stage) in [
             ("cliora:directory-missing: Directory does not exist", 44, "directory_missing"),
             ("cliora:directory-type: Path is not a directory", 45, "directory_type"),
+            ("cliora:directory-access: Cannot determine directory state", 46, "directory_access"),
             ("Permission denied: directory requires read and search access", 43, "permission"),
             ("Permission denied (publickey,password)", 255, "authentication"),
         ] {
@@ -2487,6 +2499,54 @@ mod tests {
         let listing = parse_directory_listing("/parent", "/parent/ spaced name \ncliora:directory-truncated\n");
         assert_eq!(listing.items, ["/parent/ spaced name "]);
         assert!(listing.truncated);
+    }
+
+    #[test]
+    fn directory_permissions_include_unsearchable_ancestors() {
+        #[cfg(windows)]
+        let mut command = {
+            let Ok(distro) = std::env::var("CLIORA_TEST_WSL_DISTRO") else {
+                eprintln!("Set CLIORA_TEST_WSL_DISTRO for the unprivileged POSIX permission fixture on Windows");
+                return;
+            };
+            let mut command = Command::new("wsl.exe");
+            command.args(["--distribution", &distro, "--user", "root", "--exec", "/bin/sh", "-s"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("/bin/sh");
+            command.arg("-s");
+            command
+        };
+        let root = format!("/tmp/cliora-directory-{}", Uuid::new_v4());
+        let checks = [
+            (directory_list_command(&format!("{root}/missing")).unwrap(), 44),
+            (directory_list_command(&format!("{root}/file")).unwrap(), 45),
+            (directory_list_command(&format!("{root}/denied")).unwrap(), 43),
+            (directory_list_command(&format!("{root}/blocked/child")).unwrap(), 43),
+            (directory_create_command(&format!("{root}/missing/new")).unwrap(), 44),
+            (directory_create_command(&format!("{root}/file/new")).unwrap(), 45),
+            (directory_create_command(&format!("{root}/denied/new")).unwrap(), 43),
+            (directory_create_command(&format!("{root}/blocked/child/new")).unwrap(), 43),
+        ];
+        let mut script = format!(
+            "root={}; mkdir -- \"$root\" || exit 80; chmod 755 \"$root\"; \
+             cleanup() {{ chmod 755 \"$root/blocked\" \"$root/denied\"; rm -f -- \"$root/file\"; rmdir -- \"$root/blocked/child\" \"$root/blocked\" \"$root/denied\" \"$root\"; }}; trap cleanup EXIT; \
+             mkdir -- \"$root/blocked\" \"$root/blocked/child\" \"$root/denied\"; : > \"$root/file\"; chmod 000 \"$root/blocked\" \"$root/denied\"; \
+             if [ \"$(id -u)\" -eq 0 ]; then runner='runuser -u nobody --'; else runner=''; fi;\n", shell_quote(&root));
+        for (index, (check, expected)) in checks.into_iter().enumerate() {
+            script.push_str(&format!("$runner /bin/sh -c {} >/dev/null 2>\"$root/error\"; actual=$?; rm -f -- \"$root/error\"; if [ \"$actual\" -ne {expected} ]; then printf 'directory check {index}: expected {expected}, got %s\\n' \"$actual\" >&2; exit 81; fi;\n", shell_quote(&check)));
+        }
+        // Restore traversal and prove the child existed during both failures.
+        script.push_str("chmod 755 \"$root/blocked\"; [ -d \"$root/blocked/child\" ] || exit 82; printf '8 directory permission cases passed\\n';\n");
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        hide_console_window(&mut command);
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        eprintln!("{}", String::from_utf8_lossy(&output.stdout));
     }
 
     #[test]

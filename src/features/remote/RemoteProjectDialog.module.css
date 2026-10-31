@@ -16,5 +16,11 @@
 .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); }
 .actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-0_5); }
 .message { margin: 0; padding: var(--space-2) var(--space-2_5); border: 1px solid var(--info-line); border-radius: var(--radius-sm); background: var(--info-soft); color: var(--text); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.receipts { display: grid; gap: var(--space-2); min-width: 0; }
+.receipt { display: grid; gap: var(--space-1_5); min-width: 0; padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.receipt[data-outcome="unknown"] { border-color: var(--warning-line); background: var(--warning-soft); }
+.receipt p { margin: 0; }
+.receipt code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.receipt button { justify-self: start; }
 .empty { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-5); border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--text-2); }
 @media (max-width: 720px) { .dialog { min-width: 0; } .grid, .directoryRow { grid-template-columns: 1fr; } .cardHeader { flex-direction: column; } }

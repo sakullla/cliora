@@ -38,6 +38,15 @@ export default {
     panelDetail: 'Link local folders and launch them with a CLI in an external terminal.',
   },
   remote: {
+    receiptTitle: 'Directory creation results',
+    receiptOutcome: { pending: 'Creating the original path…', created: 'Remote directory created.', failed: 'Creation failed.', unknown: 'Outcome unknown. The directory may have been created. Inspect the original path before creating it again.' },
+    receiptInspect: 'Inspect original path',
+    receiptChecking: 'Inspecting original path…',
+    receiptExists: 'The original path is currently a directory. This does not prove this operation created it.',
+    receiptMissing: 'The original path is currently absent. The original operation outcome is unchanged; confirm before trying again.',
+    receiptIdentityChanged: 'The original host connection changed or was removed. Verify that host before inspecting its path.',
+    receiptLimit: 'Too many unresolved directory operations. Inspect the existing results first.',
+
     invalidDirectoryResponse: 'Invalid directory response. Refresh and try again.',
     parentDirectory: 'Browse directory',
     cancelOperation: 'Cancel current operation',

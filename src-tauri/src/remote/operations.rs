@@ -205,6 +205,7 @@ impl Context {
             "permission" => "检查远端目标目录和文件权限。",
             "directory_missing" => "检查父目录路径；请先创建已有目录下的直接子目录。",
             "directory_type" => "选择一个目录，不能使用普通文件作为父目录。",
+            "directory_access" => "无法确认目录状态；检查路径、祖先目录权限及远端文件系统后再操作。",
             "dependency" => "检查远端所需命令和会话依赖。",
             "cancelled" => "需要时重新发起读取。",
             "identity" => "刷新主机配置并重新发起操作。",

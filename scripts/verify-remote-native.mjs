@@ -266,7 +266,8 @@ try {
     const secretFile = JSON.parse(await readFile(path.resolve(config.passwordFile), 'utf8'));
     requireThat(typeof secretFile.password === 'string' && secretFile.password.length > 0, 'External passwordFile must contain a password field.');
     const root = `${config.testDirectory}/directory-${config.testRunId}`;
-    const paths = { empty: `${root}/empty`, denied: `${root}/denied`, readonly: `${root}/readonly`, file: `${root}/file` };
+    const paths = { empty: `${root}/empty`, denied: `${root}/denied`, readonly: `${root}/readonly`, blocked: `${root}/blocked`, file: `${root}/file` };
+    const blockedChild = `${paths.blocked}/child`;
     const leaves = ['key-created', 'password-created'].map(name => `${root}/${name}`);
     const projects = [];
     const sessions = [];
@@ -282,7 +283,7 @@ try {
       // else's directory to clean up.
       await remoteInspect(`mkdir -- ${shellQuote(root)}`);
       fixtureOwned = true;
-      await remoteInspect(`mkdir -- ${Object.values(paths).filter(value => value !== paths.file).map(shellQuote).join(' ')} && : > ${shellQuote(paths.file)} && chmod 000 ${shellQuote(paths.denied)} && chmod 500 ${shellQuote(paths.readonly)}`);
+      await remoteInspect(`mkdir -- ${Object.values(paths).filter(value => value !== paths.file).map(shellQuote).join(' ')} && mkdir -- ${shellQuote(blockedChild)} && : > ${shellQuote(paths.file)} && chmod 000 ${shellQuote(paths.denied)} ${shellQuote(paths.blocked)} && chmod 500 ${shellQuote(paths.readonly)}`);
       for (const [index, auth] of ['key', 'password'].entries()) {
         const source = auth === 'key' ? config.target : config.passwordTarget;
         const target = await invoke('save_remote_target', { target: { ...source, id: targetId, name: 'Isolated SSH acceptance', enabled: true, createdAt: 0, updatedAt: 0, defaultPath: root }, password: auth === 'password' ? secretFile.password : null });
@@ -290,17 +291,20 @@ try {
         check(`${auth}: real directory listing includes fixture`, listed.parent === root && listed.items.includes(paths.empty) && !listed.truncated);
         const empty = await read(target, paths.empty);
         check(`${auth}: empty directory is a successful empty result`, empty.parent === paths.empty && empty.items.length === 0 && !empty.truncated);
-        for (const [parent, stage] of [[`${root}/missing`, 'directory_missing'], [paths.file, 'directory_type'], [paths.denied, 'permission']]) {
+        for (const [parent, stage] of [[`${root}/missing`, 'directory_missing'], [paths.file, 'directory_type'], [paths.denied, 'permission'], [blockedChild, 'permission']]) {
           const result = await outcome('list_remote_directories', { targetId, parent });
           check(`${auth}: directory failure preserves ${stage}`, !result.ok && result.stage === stage);
         }
-        for (const [path, stage] of [[`${root}/missing/child`, 'directory_missing'], [`${paths.file}/child`, 'directory_type']]) {
+        for (const [path, stage] of [[`${root}/missing/child`, 'directory_missing'], [`${paths.file}/child`, 'directory_type'], [`${blockedChild}/refused`, 'permission']]) {
           const result = await outcome('create_remote_directory', { targetId, path });
           check(`${auth}: creation failure preserves ${stage}`, !result.ok && result.stage === stage);
         }
         check(`${auth}: missing creation parent was not implicitly created`, (await remoteInspect(`[ ! -e ${shellQuote(`${root}/missing`)} ] && printf yes`)).trim() === 'yes');
         const denied = await outcome('create_remote_directory', { targetId, path: `${paths.readonly}/refused` });
         check(`${auth}: creation denied without losing permission stage`, !denied.ok && denied.stage === 'permission');
+        await remoteInspect(`chmod 700 ${shellQuote(paths.blocked)}`);
+        check(`${auth}: inaccessible ancestor contained the existing child and creation did not occur`, (await remoteInspect(`[ -d ${shellQuote(blockedChild)} ] && [ ! -e ${shellQuote(`${blockedChild}/refused`)} ] && printf yes`)).trim() === 'yes');
+        await remoteInspect(`chmod 000 ${shellQuote(paths.blocked)}`);
         await invoke('create_remote_directory', { targetId, path: leaves[index] });
         const refreshed = await read(target, root);
         check(`${auth}: refresh observes created directory`, refreshed.parent === root && refreshed.items.includes(leaves[index]));
@@ -327,10 +331,16 @@ try {
     } finally {
       // Cleanup is explicit and limited to this run's known leaves. If a CLI
       // writes unexpected files, rmdir fails and the report remains unverified.
-      for (const id of sessions) await invoke('close_workbench_session', { sessionId: id });
-      for (const id of projects) await invoke('delete_remote_project', { id });
-      await invoke('delete_remote_target', { id: targetId });
-      if (fixtureOwned) await remoteInspect(`for entry in ${[paths.denied, paths.readonly].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then chmod 700 "$entry" || exit 49; fi; done; rm -f -- ${shellQuote(paths.file)} || exit 49; for entry in ${[...leaves, paths.empty, paths.denied, paths.readonly].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then rmdir -- "$entry" || exit 49; fi; done; rmdir -- ${shellQuote(root)} || exit 49`);
+      let cleanupFailed = false;
+      const cleanup = async action => { try { await action(); } catch { cleanupFailed = true; } };
+      // Always attempt restoration first, even after a failed native assertion
+      // or an unrelated session/database cleanup failure.
+      if (fixtureOwned) await cleanup(() => remoteInspect(`result=0; for entry in ${[paths.denied, paths.readonly, paths.blocked].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then chmod 700 "$entry" || result=49; fi; done; exit "$result"`));
+      for (const id of sessions) await cleanup(() => invoke('close_workbench_session', { sessionId: id }));
+      for (const id of projects) await cleanup(() => invoke('delete_remote_project', { id }));
+      await cleanup(() => invoke('delete_remote_target', { id: targetId }));
+      if (fixtureOwned) await cleanup(() => remoteInspect(`rm -f -- ${shellQuote(paths.file)} || exit 49; for entry in ${[...leaves, blockedChild, paths.blocked, paths.empty, paths.denied, paths.readonly].map(shellQuote).join(' ')}; do if [ -d "$entry" ]; then rmdir -- "$entry" || exit 49; fi; done; rmdir -- ${shellQuote(root)} || exit 49`));
+      requireThat(!cleanupFailed, 'Failed: directory fixture cleanup or permission restoration.');
       report.cleanupComplete = true;
     }
   } else if (phase === 'measure') {

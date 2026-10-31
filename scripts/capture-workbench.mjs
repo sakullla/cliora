@@ -109,7 +109,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     ];
     const remoteTargets = [{ id: 'remote-prod', name: '测试远程主机', host: '212.60.153.19', port: 22, user: 'root', authMethod: 'key', identityFile: 'C:/Users/demo/.ssh/id_ed25519', sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: now, updatedAt: now }];
     if (directoryMode === 'password') remoteTargets[0].authMethod = 'password';
-    const directoryFixture = { failure: false };
+    const directoryFixture = { failure: false, release: () => {} };
     const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
@@ -155,7 +155,13 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             if (directoryFixture.failure) throw { message: 'Permission denied: directory requires read and search access', action: '检查远端目标目录和文件权限。' };
             return { parent: args.parent, items: ['/srv/project', '/srv/services', '/srv/tools'], truncated: false };
           }
-          if (command === 'create_remote_directory') return null;
+          if (command === 'create_remote_directory') {
+            if (directoryMode?.startsWith('receipt-')) {
+              await new Promise(resolve => { directoryFixture.release = resolve; });
+              throw { code: 'remote_unknown', message: '远端可能已执行；结果尚未确认。', action: '核查原路径后再操作。', remote: { outcome: 'unknown' } };
+            }
+            return null;
+          }
           if (command === 'save_remote_project') { const saved = { ...args.project, id: args.project.id || 'remote-created', updatedAt: Date.now() }; remoteProjects.splice(0, remoteProjects.length, ...remoteProjects.filter((item) => item.id !== saved.id), saved); return saved; }
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -253,7 +259,7 @@ if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
-  for (const directoryMode of ['key', 'password', 'permission', 'loading']) {
+  for (const directoryMode of ['key', 'password', 'permission', 'loading', 'receipt-unknown', 'receipt-inspected']) {
     await shot(`workbench-t5-directory-${directoryMode}-${theme}-${width}`, theme, width, async page => {
       await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
       const dialog = page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') });
@@ -265,6 +271,19 @@ for (const width of widths) {
         await dialog.getByRole('status').filter({ hasText: 'Permission denied' }).waitFor();
       }
       if (directoryMode === 'loading') await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation') }).waitFor();
+      if (directoryMode.startsWith('receipt-')) {
+        await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).click();
+        await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('创建期间修改后保留的项目名称');
+        await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation'), exact: true }).click();
+        await page.evaluate(() => window.__directoryFixture.release());
+        const receipt = dialog.getByRole('region', { name: copy('目录创建结果', 'Directory creation results'), exact: true });
+        await receipt.getByRole('status').filter({ hasText: copy('结果不确定', 'Outcome unknown') }).waitFor();
+        if (directoryMode === 'receipt-inspected') {
+          await receipt.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
+          await receipt.getByRole('status').filter({ hasText: copy('原路径当前是目录', 'The original path is currently a directory') }).waitFor();
+        }
+        await receipt.scrollIntoViewIfNeeded();
+      }
       if (directoryMode === 'key' || directoryMode === 'password') await dialog.getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).scrollIntoViewIfNeeded();
     }, true, 'connected', null, directoryMode);
   }

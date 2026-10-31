@@ -38,6 +38,15 @@ export default {
     panelDetail: '可以关联本机目录，并用选定的 CLI 在外部终端启动。',
   },
   remote: {
+    receiptTitle: '目录创建结果',
+    receiptOutcome: { pending: '正在创建原路径…', created: '远端目录已创建。', failed: '创建失败。', unknown: '结果不确定，远端可能已经创建目录；请先核查原路径，不要直接重复创建。' },
+    receiptInspect: '核查原路径',
+    receiptChecking: '正在核查原路径…',
+    receiptExists: '原路径当前是目录；仅确认当前状态，不能证明由本次创建。',
+    receiptMissing: '原路径当前不存在；本次创建结果仍以原回执为准，可确认后重新操作。',
+    receiptIdentityChanged: '原主机连接信息已变化或已移除，无法使用当前连接核查原路径。请核对原主机。',
+    receiptLimit: '待核查的目录创建结果过多，请先核查已有结果。',
+
     invalidDirectoryResponse: '目录响应无效，请刷新后重试。',
     parentDirectory: '浏览目录',
     cancelOperation: '取消当前操作',
