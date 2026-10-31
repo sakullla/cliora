@@ -33,8 +33,8 @@ impl CliAdapter for Grok {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
         super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".grok/config.toml", format: "toml", table: "mcp_servers", nested: false }), skill_root: Some(".grok/skills"), agent_root: Some(".grok/agents"), agent_extension: Some("md") }
     }
-    fn remote_skill_directories(&self) -> &'static [super::RemoteSkillDirectory] {
-        &[super::RemoteSkillDirectory { relative: ".grok/skills", read_only: false, detail: "远程主机目录" }]
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
+        vec![super::RemoteSkillDirectory { relative: ".grok/skills", read_only: false, detail: "远程主机目录" }, super::RemoteSkillDirectory { relative: ".grok/bundled/skills", read_only: true, detail: "Grok 捆绑 Skill，只读" }]
     }
 
     fn supports_mcp(&self) -> bool { true }

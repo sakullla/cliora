@@ -30,14 +30,17 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
-function remoteSkillPackages(toolIds: string[], stores: unknown[]): SkillPackage[] {
+type LibrarySkill = SkillPackage & { remoteReadOnly?: boolean };
+
+function remoteSkillPackages(toolIds: string[], stores: unknown[]): LibrarySkill[] {
   return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
     const toolId = toolIds[index];
-    return { id: entry.packageId ?? `remote:${toolId}:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true };
+    return { id: entry.packageId ?? `remote:${toolId}:${entry.path}`, name: entry.name, description: entry.detail, compatibility: null, source: entry.path, digest: entry.digest ?? '', fileCount: 1, updatedAt: 0, inLibrary: true, remoteReadOnly: entry.source === 'read_only' || entry.state === 'read_only' };
   }));
 }
 
 async function readRemoteSkillStores(targetId: string, toolIds: string[], reader = native, fresh = false) {
+  if (!toolIds.length) return [];
   const bundle = await reader.listRemoteResourceStores(targetId, toolIds, 'skills', { fresh });
   return toolIds.map(toolId => bundle.stores?.[toolId] ?? { entries: [] });
 }
@@ -46,13 +49,15 @@ async function readRemoteSkillStores(targetId: string, toolIds: string[], reader
 export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels(!!remoteTargetId);
-  const remoteTools = tools.filter(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
+  const remoteTools = tools.filter(tool => tool.remoteSkillDirectories ? tool.remoteSkillDirectories.length > 0 : tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
+  const remoteWritableTools = remoteTools.filter(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
   const remoteToolId = remoteTools[0]?.id ?? '';
   const remoteToolIds = remoteTools.map(tool => tool.id);
   const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
+  const packageWritable = (item: SkillPackage) => !remoteTargetId || (!(item as LibrarySkill).remoteReadOnly && remoteWritableTools.some(tool => tool.id === remoteToolFor(item.id)));
   const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
   const native = remoteReads.native;
-  const [packages, setPackages] = useState<SkillPackage[]>([]);
+  const [packages, setPackages] = useState<LibrarySkill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [busy, setBusy] = useState(false);
   // Page results float as toasts so the card grid never jumps.
@@ -98,7 +103,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   useEffect(() => {
     if (createSignal === handledCreate.current) return;
     handledCreate.current = createSignal;
-    if (!busy) { setDialogError(''); setSkillOpen(true); }
+    if (!busy && (!remoteTargetId || remoteWritableTools.length > 0)) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
 
   const reloadSequence = useRef(0);
@@ -181,7 +186,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       if (typeof source !== 'string') return;
       setBusy(true); setDialogError('');
       if (remoteTargetId) {
-        const toolIds = installTools.length ? installTools : [remoteToolId];
+        const toolIds = installTools.length ? installTools.filter(id => remoteWritableTools.some(tool => tool.id === id)) : remoteWritableTools.slice(0, 1).map(tool => tool.id);
+        if (!toolIds.length) throw new Error(t('library.page.remoteUnavailable'));
         for (const toolId of toolIds) await native.importRemoteSkillDirectory(remoteTargetId, toolId, source);
         await reloadSkills();
         closeSkill();
@@ -230,6 +236,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function removePackage(item: SkillPackage) {
+    if (!packageWritable(item)) return;
     remoteReads.beginWriteAction();
     const placed = installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
@@ -251,6 +258,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    if (!packageWritable(item) || (remoteTargetId && !remoteWritableTools.some(tool => tool.id === toolId))) return;
     remoteReads.beginWriteAction();
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
@@ -300,13 +308,13 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardBar}>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+            {packageWritable(item) && <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
-            }} />
-            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
+            }} />}
+            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
         </Card>;
       }) : needle
@@ -319,7 +327,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           <section className={styles.skillSection}>
             <h3>{t('library.resources.installAfterImport')}</h3>
             <p>{t('library.resources.installAfterHint')}</p>
-            <CliTargetGrid tools={tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
+            <CliTargetGrid tools={remoteTargetId ? remoteWritableTools : tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
           </section>
           <section className={styles.skillSection}>
             <h3>{t('library.resources.importFrom')}</h3>

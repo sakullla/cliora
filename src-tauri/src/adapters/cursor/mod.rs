@@ -34,7 +34,7 @@ const CONNECTION_DENIED: &str = "Cursor 不提供供应商、请求地址、登�
 
 impl CliAdapter for Cursor {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".cursor/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".cursor/agents"), agent_extension: Some("md") }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".cursor/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".cursor/skills"), agent_root: Some(".cursor/agents"), agent_extension: Some("md") }
     }
 
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
@@ -109,6 +109,15 @@ impl CliAdapter for Cursor {
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会从当前范围的 mcp.json 移除该条目；受保护的环境变量和请求头留在本机凭据库，再次启用时写回，不进入页面或资料库")
+    }
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
+        vec![
+            super::RemoteSkillDirectory { relative: ".cursor/skills", read_only: false, detail: "远程主机目录" },
+            super::RemoteSkillDirectory { relative: ".cursor/skills-cursor", read_only: true, detail: "Cursor 内置 Skill，只读" },
+            super::RemoteSkillDirectory { relative: ".claude/skills", read_only: true, detail: "兼容目录，只读" },
+            super::RemoteSkillDirectory { relative: ".codex/skills", read_only: true, detail: "兼容目录，只读" },
+            super::RemoteSkillDirectory { relative: ".agents/skills", read_only: true, detail: "兼容目录，只读" },
+        ]
     }
     fn supports_skills(&self) -> bool {
         true

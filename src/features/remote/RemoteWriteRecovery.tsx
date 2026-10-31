@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { GuideDialog } from '../../components/GuideDialog';
-import { Button } from '../../components/ui';
+import { Button, Card, Toolbar } from '../../components/ui';
 import { StatusBanner } from '../../components/StatusBanner';
 import { confirmAction } from '../../lib/confirm';
 import type { RemoteTarget, RemoteWriteReceipt } from '../../types/remote';
 import { beginWriteReceiptInspection, captureWriteReceiptVersions, clearWriteFault, rememberListedWriteReceipt, rememberWriteReceipt, unresolvedWrite, useWriteFaults, useWriteReceipts } from './writeReceipts';
-import styles from './RemoteWriteRecovery.module.css';
 
 const text = (error: unknown) => error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
 
@@ -84,26 +83,26 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
   }
   if (!target) return null;
   return <GuideDialog open={open} title={t('common.remoteWrite.title')} hint={t('common.remoteWrite.hint')} wide onClose={() => setOpen(false)}>
-      <div className={styles.body}>
+      <>
         <p>{target.name} · {target.user}@{target.host}:{target.port}</p>
         {error && <StatusBanner tone="error">{error}</StatusBanner>}
-        <Button size="sm" disabled={busy} onClick={() => void load()}>{t('common.remoteWrite.refresh')}</Button>
+        <Toolbar actions={<Button size="sm" disabled={busy} onClick={() => void load()}>{t('common.remoteWrite.refresh')}</Button>} />
         {!current.length && <p>{t('common.remoteWrite.empty')}</p>}
-        {current.map(receipt => <article className={styles.receipt} key={receipt.id} data-write-receipt={receipt.id}>
-          <strong>{t(`common.remoteWrite.outcomes.${receipt.outcome}`, { defaultValue: receipt.outcome })}</strong>
+        {current.map(receipt => <Card padding="compact" key={receipt.id} data-write-receipt={receipt.id}>
+          <StatusBanner tone={unresolvedWrite(receipt) ? 'warning' : 'success'}>{t(`common.remoteWrite.outcomes.${receipt.outcome}`, { defaultValue: receipt.outcome })}</StatusBanner>
           <code>{receipt.id}</code>
           <p>{t('common.remoteWrite.revision', { revision: receipt.targetRevision })}</p>
-          {receipt.items.map(item => <div className={styles.item} key={item.path}>
-            <code>{item.path}</code>
+          {receipt.items.map(item => <p key={item.path}>
+            <code>{item.path}</code><br />
             <span>{t(`common.remoteWrite.states.${item.state}`, { defaultValue: item.state })}{item.observed && ` · ${t(`common.remoteWrite.observed.${item.observed}`)}`}</span>
-          </div>)}
+          </p>)}
           {!unresolvedWrite(receipt) && receipt.items.some(item => item.observed === 'conflict') && <p>{t('common.remoteWrite.historicalChange')}</p>}
-          <div className={styles.actions}>
+          <Toolbar actions={<>
             <Button size="sm" disabled={busy || target.updatedAt !== receipt.targetRevision} onClick={() => void inspect(receipt, false)}>{t('common.remoteWrite.inspect')}</Button>
             <Button size="sm" disabled={busy || target.updatedAt !== receipt.targetRevision || receipt.items.some(item => !item.observed) || (!unresolvedWrite(receipt) && (receipt.outcome !== 'committed' || receipt.items.some(item => item.observed === 'conflict')))} onClick={() => void inspect(receipt, true)}>{t('common.remoteWrite.restore')}</Button>
-          </div>
+          </>} />
           {target.updatedAt !== receipt.targetRevision && <p>{t('common.remoteWrite.identityChanged')}</p>}
-        </article>)}
-      </div>
+        </Card>)}
+      </>
     </GuideDialog>;
 }

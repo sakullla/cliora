@@ -93,7 +93,7 @@ pub(crate) fn existing_data_dir(home: &Path) -> Option<PathBuf> {
 
 impl CliAdapter for MiniMaxCode {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".minimax-code/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".minimax/agents"), agent_extension: Some("md") }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".minimax-code/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".minimax/skills"), agent_root: Some(".minimax/agents"), agent_extension: Some("md") }
     }
 
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
@@ -215,6 +215,12 @@ impl CliAdapter for MiniMaxCode {
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会写入 enabled: false，原生条目保留")
+    }
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
+        vec![
+            super::RemoteSkillDirectory { relative: ".minimax/skills", read_only: false, detail: "远程主机目录" },
+            super::RemoteSkillDirectory { relative: ".minimax/.builtin-skills", read_only: true, detail: "MiniMax Code 内置 Skill，只读" },
+        ]
     }
     fn supports_skills(&self) -> bool {
         true

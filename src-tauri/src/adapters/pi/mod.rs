@@ -66,7 +66,7 @@ mod compatibility_tests {
 
 impl CliAdapter for Pi {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".pi/agent/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: None, agent_extension: None }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".pi/agent/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".pi/agent/skills"), agent_root: None, agent_extension: None }
     }
 
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }

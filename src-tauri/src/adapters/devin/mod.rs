@@ -103,7 +103,7 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 
 impl CliAdapter for Devin {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".devin/mcp_config.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".devin/agents"), agent_extension: Some("md") }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".devin/mcp_config.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".config/devin/skills"), agent_root: Some(".devin/agents"), agent_extension: Some("md") }
     }
 
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {

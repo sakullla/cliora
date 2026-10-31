@@ -99,3 +99,5 @@ export type RemoteResourceLayout = {
   agentRoot: string | null;
   agentExtension: string | null;
 };
+
+export type RemoteSkillDirectory = { relative: string; readOnly: boolean; detail: string };

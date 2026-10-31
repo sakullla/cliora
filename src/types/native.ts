@@ -107,6 +107,7 @@ export type AdapterDescriptor = {
   remote?: RemoteCapabilities;
   remoteNativeFiles?: RemoteNativeDocument[];
   remoteResources?: import('./remote').RemoteResourceLayout;
+  remoteSkillDirectories?: import('./remote').RemoteSkillDirectory[];
 };
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];

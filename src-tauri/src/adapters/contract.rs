@@ -320,7 +320,8 @@ pub struct RemoteMcpLayout {
 
 /// Login-home relative skill directory scanned on a remote host.
 /// Read-only roots are bundled or observed directories, same as the local scan.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteSkillDirectory {
     pub relative: &'static str,
     pub read_only: bool,
@@ -1292,10 +1293,13 @@ pub trait CliAdapter: Sync {
     ) -> Vec<SkillObservation> {
         Vec::new()
     }
-    /// Remote inventory uses these paths under the login home. Empty keeps the
-    /// historical single-root fallback in the remote resource store.
-    fn remote_skill_directories(&self) -> &'static [RemoteSkillDirectory] {
-        &[]
+    /// Remote POSIX inventory under the login home. The adapter's writable root
+    /// is scanned by default; adapters add bundled/observed roots explicitly.
+    /// Empty means unavailable and never substitutes another CLI's directory.
+    fn remote_skill_directories(&self) -> Vec<RemoteSkillDirectory> {
+        self.remote_resource_layout().skill_root.map(|relative| vec![RemoteSkillDirectory {
+            relative, read_only: false, detail: "远程主机目录",
+        }]).unwrap_or_default()
     }
     /// Public MCP views omit literal secrets. Removing the entry keeps those
     /// values in the credential store until the next enable writes them back.
@@ -1558,6 +1562,7 @@ pub struct PublishedDescriptor {
     pub association: Option<Facet>,
     /// Native files this CLI lets a remote host read and write directly.
     pub remote_resources: RemoteResourceLayout,
+    pub remote_skill_directories: Vec<RemoteSkillDirectory>,
     #[serde(default, skip_serializing_if = "remote_native_files_empty")]
     pub remote_native_files: &'static [RemoteNativeDocument],
 }
@@ -1573,6 +1578,7 @@ impl PublishedDescriptor {
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
             remote_resources: adapter.remote_resource_layout(),
+            remote_skill_directories: adapter.remote_skill_directories(),
             remote_native_files: adapter.remote_native_documents(),
         }
     }

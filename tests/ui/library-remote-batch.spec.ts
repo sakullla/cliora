@@ -17,12 +17,14 @@ const host = {
 
 const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', cursor: 'Cursor' };
 
-async function installRemoteLibrary(page: Page, largeSkills = false) {
-  await page.addInitScript(({ host, names, largeSkills }) => {
+async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 'builtin' | 'read-only' | 'unsupported' | 'mixed' = 'builtin') {
+  await page.addInitScript(({ host, names, largeSkills, skillMode }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
+    const roots: Record<string, string> = { codex: '.codex/skills', claude_code: '.claude/skills', grok: '.grok/skills', cursor: '.cursor/skills' };
     const registered = Object.entries(names).map(([id, name]) => ({
-      remoteResources: { mcp: { relative: '.fixture/config.json', format: 'json', table: 'servers', nested: false }, skillRoot: ['codex', 'grok'].includes(id) ? '.fixture/skills' : null, agentRoot: null, agentExtension: null },
+      remoteResources: { mcp: { relative: '.fixture/config.json', format: 'json', table: 'servers', nested: false }, skillRoot: skillMode === 'builtin' || (skillMode === 'mixed' && ['codex', 'cursor'].includes(id)) ? roots[id] : null, agentRoot: null, agentExtension: null },
+      remoteSkillDirectories: skillMode === 'unsupported' || (skillMode === 'mixed' && id === 'grok') ? [] : [{ relative: roots[id], readOnly: skillMode === 'read-only' || (skillMode === 'mixed' && id === 'claude_code'), detail: 'fixture' }],
       id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal',
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
     }));
@@ -40,6 +42,11 @@ async function installRemoteLibrary(page: Page, largeSkills = false) {
       }));
       skillStores[cli] = { entries, documents };
     }
+    if (!largeSkills) {
+      const entries = Array.from({ length: 40 }, (_, n) => ({ name: `perf-skill-${n}`, path: `/home/fixture/.claude/skills/perf-skill-${n}/SKILL.md`, state: skillMode === 'read-only' || skillMode === 'mixed' ? 'read_only' : 'external', source: skillMode === 'read-only' || skillMode === 'mixed' ? 'read_only' : 'writable', detail: 'fixture' }));
+      skillStores.claude_code = { entries, documents: Object.fromEntries(entries.map(entry => [entry.path, '# fixture'])) };
+    }
+    if (skillMode === 'mixed') skillStores.codex = { entries: [{ name: 'writable-fixture', path: '/home/fixture/.codex/skills/writable-fixture/SKILL.md', source: 'writable', state: 'external', detail: 'fixture' }], documents: {} };
     let release = () => {};
     Object.assign(window, {
       isTauri: true,
@@ -53,7 +60,8 @@ async function installRemoteLibrary(page: Page, largeSkills = false) {
           if (command === 'list_cli_adapters') return { registered, managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host, { ...host, id: 'host-2', name: '另一台主机', host: '203.0.113.22' }];
           if (largeSkills && command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
-          if (largeSkills && ['list_remote_resource_stores', 'get_remote_resource_store'].includes(command) && args.kind === 'skills') {
+          if (['list_remote_resource_stores', 'get_remote_resource_store'].includes(command) && args.kind === 'skills') {
+            calls.push({ command, kind: args.kind, toolIds: args.toolIds, toolId: args.toolId });
             snapshots.set(args.operation.requestId, { ...versions });
             return command === 'list_remote_resource_stores' ? { stores: skillStores } : skillStores[args.toolId];
           }
@@ -86,7 +94,7 @@ async function installRemoteLibrary(page: Page, largeSkills = false) {
         },
       },
     });
-  }, { host, names, largeSkills });
+  }, { host, names, largeSkills, skillMode });
 }
 
 test('a library single-Skill removal carries both full 128-Skill baselines and reaches the write IPC', async ({ page }) => {
@@ -201,4 +209,51 @@ test('a successful library query does not inherit another query freshness failur
   await search.fill('good');
   await expect(page.getByRole('button', { name: 'fresh-good-row', exact: true })).toBeVisible();
   await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toHaveCount(0);
+});
+
+
+test('remote library reads all forty Claude Skills using the published adapter capability', async ({ page }) => {
+  await installRemoteLibrary(page); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.kind === 'skills'));
+  expect(calls[0].toolIds).toEqual(['codex', 'claude_code', 'grok', 'cursor']);
+  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toBeVisible();
+});
+
+test('read-only remote Skills stay readable without import or delete actions', async ({ page }) => {
+  await installRemoteLibrary(page, false, 'read-only'); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'perf-skill-0 的更多操作', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: '删除', exact: true })).toBeDisabled();
+});
+
+test('an explicitly unavailable remote Skills capability neither reads nor offers an import', async ({ page }) => {
+  await installRemoteLibrary(page, false, 'unsupported'); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.kind === 'skills'))).toEqual([]);
+});
+
+
+test('mixed remote Skills show write controls only for writable CLI targets', async ({ page }) => {
+  await installRemoteLibrary(page, false, 'mixed'); await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  const card = page.locator('[data-card]').filter({ has: page.getByRole('button', { name: 'writable-fixture', exact: true }) });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole('button', { name: /^Codex ·/ })).toBeVisible();
+  await expect(card.getByRole('button', { name: /^Cursor ·/ })).toBeVisible();
+  await expect(card.getByRole('button', { name: /^(Claude Code|Grok) ·/ })).toHaveCount(0);
+  await page.getByRole('button', { name: '添加 Skill', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '添加 Skill', exact: true });
+  await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: 'Cursor', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: /Claude Code|Grok/ })).toHaveCount(0);
 });

@@ -100,6 +100,7 @@ fn load_resource_stores_uncached(target: &RemoteTarget, tool_ids: &[String], kin
         if !valid_resource_token(tool_id, 120) {
             return Err(RemoteError::InvalidPath);
         }
+        if kind == "skills" { validate_remote_skills(skill_adapter(tool_id)?)?; }
         if !accepted.iter().any(|existing: &String| existing == tool_id) {
             accepted.push(tool_id.clone());
         }
@@ -137,18 +138,30 @@ fn safe_home_relative(relative: &str) -> bool {
         && relative.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-'))
 }
 
-fn remote_skill_roots(tool_id: &str) -> Vec<SkillScanRoot> {
-    if let Some(cli) = crate::adapters::Registry::builtins().get(tool_id) {
-        let declared = cli.remote_skill_directories();
-        if !declared.is_empty() {
-            return declared
-                .iter()
-                .filter(|item| safe_home_relative(item.relative))
-                .map(|item| SkillScanRoot { relative: item.relative.to_owned(), read_only: item.read_only, detail: item.detail.to_owned() })
-                .collect();
+fn skill_adapter(tool_id: &str) -> Result<&'static dyn crate::adapters::CliAdapter, RemoteError> {
+    crate::adapters::Registry::builtins().get(tool_id)
+        .ok_or_else(|| RemoteError::Storage("适配器未注册".into()))
+}
+
+fn validate_remote_skills(adapter: &dyn crate::adapters::CliAdapter) -> Result<(), RemoteError> {
+    let roots = adapter.remote_skill_directories();
+    if roots.is_empty() { return Err(RemoteError::Storage("此适配器不支持远程 Skills 读取".into())); }
+    if roots.iter().any(|root| !safe_home_relative(root.relative)) { return Err(RemoteError::InvalidPath); }
+    if let Some(write) = adapter.remote_resource_layout().skill_root {
+        if !safe_home_relative(write) || !roots.iter().any(|root| root.relative == write && !root.read_only) {
+            return Err(RemoteError::Storage("远程 Skills 写入目录未声明为可写读取目录".into()));
         }
     }
-    Vec::new()
+    Ok(())
+}
+
+fn adapter_skill_roots(adapter: &dyn crate::adapters::CliAdapter) -> Vec<SkillScanRoot> {
+    adapter.remote_skill_directories().iter().filter(|root| safe_home_relative(root.relative))
+        .map(|root| SkillScanRoot { relative: root.relative.into(), read_only: root.read_only, detail: root.detail.into() }).collect()
+}
+
+fn remote_skill_roots(tool_id: &str) -> Vec<SkillScanRoot> {
+    skill_adapter(tool_id).map(adapter_skill_roots).unwrap_or_default()
 }
 
 /// The longest declared root wins, so `.codex/skills/.system` stays bundled
@@ -164,10 +177,13 @@ fn skill_root_index(path: &str, roots: &[SkillScanRoot]) -> usize {
 }
 
 fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &BTreeMap<String, String>) -> serde_json::Value {
-    let roots = remote_skill_roots(tool_id);
-    if roots.is_empty() {
-        return serde_json::json!({"entries": [], "documents": {}});
-    }
+    let Ok(adapter) = skill_adapter(tool_id) else { return empty_resource_store("skills"); };
+    assemble_adapter_skill_store(adapter, located, contents)
+}
+
+fn assemble_adapter_skill_store(adapter: &dyn crate::adapters::CliAdapter, located: &[(usize, String)], contents: &BTreeMap<String, String>) -> serde_json::Value {
+    let roots = adapter_skill_roots(adapter);
+    if roots.is_empty() { return empty_resource_store("skills"); }
     let mut documents = serde_json::Map::new();
     let entries = located.iter().take(128).map(|(index, path)| {
         let name = path.strip_suffix("/SKILL.md").and_then(|value| value.rsplit('/').next()).unwrap_or(path.as_str());
@@ -177,7 +193,7 @@ fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &B
         if let Some(text) = text {
             // Materialization uses this canonical key too. An absolute scan
             // path and its HOME alias must not consume two baseline entries.
-            if let Ok((canonical, _)) = skill_document_path(tool_id, path) {
+            if let Ok((canonical, _)) = adapter_skill_document_path(adapter, path) {
                 transactions::observe(&canonical, Some(text.as_bytes()));
             }
             documents.insert(path.clone(), serde_json::Value::String(text.clone()));
@@ -514,19 +530,25 @@ fn resource_bundle_script(tool_ids: &[String], kind: &str) -> String {
         } else if kind == "skills" {
             script.push_str("printf '%s\\n' __CLIORA_SKILLS__; ");
             for (index, root) in remote_skill_roots(tool_id).iter().enumerate() {
-                let dir = format!("$HOME/{}", root.relative);
-                script.push_str("if [ -d ");
-                script.push_str(&dir);
-                script.push_str(" ]; then find ");
-                script.push_str(&dir);
-                script.push_str(" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print | while IFS= read -r file; do printf '%s\\n' __CLIORA_FILE__ ");
-                script.push_str(&index.to_string());
-                script.push_str(" \"$file\"; base64 < \"$file\" | tr -d '\\n'; printf '\\n'; done; fi; ");
+                append_skill_scan(&mut script, root, index);
             }
             script.push_str("printf '%s\\n' __CLIORA_SKILLS_END__; ");
         }
     }
     script
+}
+
+fn append_skill_scan(script: &mut String, root: &SkillScanRoot, index: usize) {
+    let dir = format!("$HOME/{}", root.relative);
+    // Check traversed parents too: an inaccessible parent must not look missing.
+    script.push_str("parent=\"$HOME\"; ");
+    for part in root.relative.split('/') {
+        script.push_str(&format!("if [ -d \"$parent\" ]; then [ -r \"$parent\" ] && [ -x \"$parent\" ] || exit 46; parent=\"$parent/{part}\"; fi; "));
+    }
+    script.push_str(&format!("if [ -e \"{dir}\" ] || [ -L \"{dir}\" ]; then [ -d \"{dir}\" ] && [ -r \"{dir}\" ] && [ -x \"{dir}\" ] || exit 46; find \"{dir}\" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -exec sh -c "));
+    let body = format!("for file do encoded=$(base64 < \"$file\") || exit 46; printf '%s\\n' __CLIORA_FILE__ {index} \"$file\"; printf %s \"$encoded\" | tr -d '\\n'; printf '\\n'; done");
+    script.push_str(&shell_quote(&body));
+    script.push_str(" sh {} + || exit 46; fi; ");
 }
 
 fn observe_encoded(path: &str, encoded: &str) {
@@ -624,12 +646,15 @@ fn resource_layout(tool_id: &str) -> crate::adapters::RemoteResourceLayout {
     crate::adapters::Registry::builtins().get(tool_id).map(|a| a.remote_resource_layout()).unwrap_or_default()
 }
 
-fn skill_write_root(tool_id: &str) -> Result<String, RemoteError> {
-    let relative = resource_layout(tool_id).skill_root.ok_or_else(|| RemoteError::Storage("此适配器未声明远程 Skills 写入能力".into()))?;
-    if !safe_home_relative(relative) { return Err(RemoteError::InvalidPath); }
+fn adapter_skill_write_root(adapter: &dyn crate::adapters::CliAdapter) -> Result<String, RemoteError> {
+    validate_remote_skills(adapter)?;
+    let relative = adapter.remote_resource_layout().skill_root.ok_or_else(|| RemoteError::Storage("此适配器未声明远程 Skills 写入能力".into()))?;
     Ok(format!("$HOME/{relative}"))
 }
 
+fn skill_write_root(tool_id: &str) -> Result<String, RemoteError> {
+    adapter_skill_write_root(skill_adapter(tool_id)?)
+}
 
 // Native documents and their hashes always come from the same actual scan.
 // Management JSON contributes membership only; it cannot replace current bytes.
@@ -650,41 +675,64 @@ fn reconcile_skill_metadata(tool_id: &str, stored: Option<&serde_json::Value>, m
 }
 
 fn skill_document_path(tool_id: &str, path: &str) -> Result<(String, bool), RemoteError> {
-    let roots = remote_skill_roots(tool_id);
+    adapter_skill_document_path(skill_adapter(tool_id)?, path)
+}
+
+fn adapter_skill_document_path(adapter: &dyn crate::adapters::CliAdapter, path: &str) -> Result<(String, bool), RemoteError> {
+    validate_remote_skills(adapter)?;
+    let roots = adapter_skill_roots(adapter);
     let found = roots.iter().filter_map(|root| {
         let marker = format!("/{}/", root.relative);
-        path.split_once(&marker).map(|(_, relative)| (root, relative))
+        let relative = if path.starts_with('/') || path.starts_with("$HOME/") {
+            path.split_once(&marker).map(|(_, relative)| relative)
+        } else { path.strip_prefix(&format!("{}/", root.relative)) };
+        relative.map(|relative| (root, relative))
     }).max_by_key(|(root, _)| root.relative.len());
     let (root, relative, read_only) = if let Some((root, relative)) = found {
         (format!("$HOME/{}", root.relative), relative, root.read_only)
     } else {
         if path.starts_with('/') || path.starts_with('$') { return Err(RemoteError::InvalidPath); }
-        (skill_write_root(tool_id)?, path, false)
+        (adapter_skill_write_root(adapter)?, path, false)
     };
     if !relative_allowed(relative) { return Err(RemoteError::InvalidPath); }
     Ok((format!("{root}/{relative}"), read_only))
 }
 
-fn materialize_remote_skills(_target: &RemoteTarget, tool_id: &str, previous: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
+fn canonical_skill_documents<'a>(adapter: &dyn crate::adapters::CliAdapter, value: &'a serde_json::Value) -> Result<BTreeMap<String, (bool, &'a str)>, RemoteError> {
     let documents = value.get("documents").and_then(serde_json::Value::as_object).ok_or_else(|| RemoteError::Storage("Skills 文档格式无效".into()))?;
-    let old = previous.and_then(|item| item.get("documents")).and_then(serde_json::Value::as_object);
-    let mut upload = prepare_upload(&[], &[])?;
-    if let Some(old) = old {
-        for path in old.keys().filter(|path| !documents.contains_key(*path)) {
-            let (destination, read_only) = skill_document_path(tool_id, path)?;
-            if read_only { return Err(RemoteError::Storage("只读 Skills 目录不能删除".into())); }
-            upload.removes.push(destination);
-        }
-    }
+    let mut canonical = BTreeMap::new();
     for (path, body) in documents {
         let text = body.as_str().ok_or(RemoteError::InvalidPath)?;
-        let (destination, read_only) = skill_document_path(tool_id, path)?;
-        if read_only {
-            if old.and_then(|old| old.get(path)) != Some(body) { return Err(RemoteError::Storage("只读 Skills 目录不能修改".into())); }
-            continue;
-        }
         if text.len() > 1_000_000 { return Err(RemoteError::InvalidPath); }
-        upload.files.push((destination, text.as_bytes().to_vec()));
+        let (destination, read_only) = adapter_skill_document_path(adapter, path)?;
+        if let Some(previous) = canonical.insert(destination, (read_only, text)) {
+            if previous != (read_only, text) { return Err(RemoteError::Storage("同一 Skills 文件的路径别名内容冲突".into())); }
+        }
+    }
+    Ok(canonical)
+}
+
+fn materialize_remote_skills(_target: &RemoteTarget, tool_id: &str, previous: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
+    materialize_adapter_skills(skill_adapter(tool_id)?, previous, value)
+}
+
+fn materialize_adapter_skills(adapter: &dyn crate::adapters::CliAdapter, previous: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
+    validate_remote_skills(adapter)?;
+    let documents = canonical_skill_documents(adapter, value)?;
+    let old = previous.map(|value| canonical_skill_documents(adapter, value)).transpose()?.unwrap_or_default();
+    let mut upload = prepare_upload(&[], &[])?;
+    for (path, (read_only, _)) in &old {
+        if !documents.contains_key(path) {
+            if *read_only { return Err(RemoteError::Storage("只读 Skills 目录不能删除".into())); }
+            upload.removes.push(path.clone());
+        }
+    }
+    for (destination, (read_only, text)) in documents {
+        if read_only {
+            if old.get(&destination) != Some(&(true, text)) { return Err(RemoteError::Storage("只读 Skills 目录不能修改".into())); }
+        } else {
+            upload.files.push((destination, text.as_bytes().to_vec()));
+        }
     }
     Ok(upload)
 }
@@ -3208,3 +3256,7 @@ mod tests {
         assert_eq!(parsed.texts["$HOME/.codex/AGENTS.md"], body);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/remote-skills.rs"]
+mod remote_skill_tests;

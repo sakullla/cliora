@@ -457,7 +457,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['skill', 'package', 'Skill'],
   ];
   return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><RemoteReadStatus state={remoteReads} /><ToastScope toasts={toasts}>
-    <Toolbar className={styles.libraryBar} role="group" primary={<Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
+    <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
           <span className={styles.tabIcon} aria-hidden="true"><Icon name={icon} size={15} /></span>

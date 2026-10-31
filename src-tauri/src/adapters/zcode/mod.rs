@@ -58,7 +58,7 @@ fn models_path(home: &Path) -> PathBuf {
 
 impl CliAdapter for ZCode {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".zcode/cli/config.json", format: "json", table: "servers", nested: true }), skill_root: None, agent_root: None, agent_extension: None }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".zcode/cli/config.json", format: "json", table: "servers", nested: true }), skill_root: Some(".zcode/skills"), agent_root: None, agent_extension: None }
     }
 
     fn agents(&self) -> Option<&dyn crate::adapters::agents::AgentAdapter> {

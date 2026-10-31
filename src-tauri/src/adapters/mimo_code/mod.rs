@@ -181,7 +181,7 @@ fn wrap_batch_command(command: Vec<String>, directories: &[PathBuf]) -> Vec<Stri
 
 impl CliAdapter for MiMoCode {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: None, skill_root: None, agent_root: Some(".mimo/agents"), agent_extension: Some("md") }
+        super::RemoteResourceLayout { mcp: None, skill_root: Some(".config/mimocode/skills"), agent_root: Some(".mimo/agents"), agent_extension: Some("md") }
     }
 
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> {

@@ -77,7 +77,7 @@ fn model_alias(provider: &str, model: &str) -> String {
 
 impl CliAdapter for KimiCode {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: None, skill_root: None, agent_root: Some(".kimi-code/agents"), agent_extension: Some("md") }
+        super::RemoteResourceLayout { mcp: None, skill_root: Some(".kimi-code/skills"), agent_root: Some(".kimi-code/agents"), agent_extension: Some("md") }
     }
 
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }

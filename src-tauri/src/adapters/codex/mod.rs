@@ -346,10 +346,10 @@ impl CliAdapter for Codex {
             })
             .collect()
     }
-    fn remote_skill_directories(&self) -> &'static [super::RemoteSkillDirectory] {
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
         use super::RemoteSkillDirectory;
         const BUNDLED: &str = "Codex 捆绑 Skill，只读";
-        &[
+        vec![
             RemoteSkillDirectory { relative: ".codex/skills", read_only: false, detail: "远程主机目录" },
             RemoteSkillDirectory { relative: ".codex/skills/.system", read_only: true, detail: BUNDLED },
             RemoteSkillDirectory { relative: ".agents/skills", read_only: false, detail: "远程主机目录" },

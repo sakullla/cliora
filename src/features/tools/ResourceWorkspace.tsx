@@ -82,7 +82,7 @@ function loadKind(entry: NativeSkillEntry, enabledByPackage: Record<string, bool
   return enabledByPackage[entry.packageId] === false ? 'not_loaded' : 'will_load';
 }
 
-export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, focusPath = null }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; remoteTargetId?: string | null; onDirtyChange?: (dirty: boolean) => void; focusPath?: { path: string; token: number } | null }) {
+export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, remoteWritable = true, onDirtyChange, focusPath = null }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; remoteTargetId?: string | null; remoteWritable?: boolean; onDirtyChange?: (dirty: boolean) => void; focusPath?: { path: string; token: number } | null }) {
   const { t } = useTranslation();
   const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), true);
   const native = remoteReads.native;
@@ -539,7 +539,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const subject = external ?? openedEntry;
   const origin = subject ? skillOrigin(subject) : selected ? 'writable' as const : null;
   const needsProject = scope === 'project' && !project;
-  const canEditSkill = origin === 'writable' && subject?.state !== 'unreadable';
+  const canEditSkill = (!remoteTargetId || remoteWritable) && origin === 'writable' && subject?.state !== 'unreadable';
   const documentOpen = adding || !!subject || !!selected || !!skillDoc || skillLoading || !!archiveSelection || !!pendingImport || !!pendingTarget;
   useEffect(() => {
     if (documentOpen) return;
@@ -574,7 +574,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     return () => { live = false; };
   }, [readingDraft, skillName]);
   const skillPath = subject?.path || skillDoc?.path || '';
-  const showLibrary = !!external && origin !== 'plugin';
+  const showLibrary = !remoteTargetId && !!external && origin !== 'plugin';
   const showRemove = !!selected && !!installed && origin !== 'plugin';
   const showUpdate = !!selected && installed?.state === 'update_available' && origin !== 'plugin';
   const documentNote = subject?.state === 'unreadable' ? subject.detail
@@ -583,7 +583,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     : '';
 
   async function openAdding() {
-    if (adding) return;
+    if (adding || (remoteTargetId && !remoteWritable)) return;
     if (!(await confirmLeave())) return;
     skillRequest.current += 1;
     setAdding(true);
@@ -763,7 +763,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   return <DocumentWorkspace documentKey={adding ? 'new' : selectedId} label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} onKeyDown={onEditorKey}
     heading={needsProject ? undefined : t('tools.workspace.view.skills')}
     count={needsProject || !entries.length ? undefined : t('tools.skills.count', { filtered: visible.length, total: entries.length })}
-    actions={needsProject ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}
+    actions={needsProject || (remoteTargetId && !remoteWritable) ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}
     search={needsProject || !entries.length ? undefined : <SearchField type="search" label={t('tools.skills.searchLabel')} placeholder={t('tools.skills.searchPlaceholder')} value={query} onChange={setQuery} />}
     filters={needsProject || !entries.length ? undefined : <>
       <FilterSelect className={styles.filterSelect} label={t('tools.skills.sourceFilter')} value={source} triggerDetail={false} options={[
@@ -792,7 +792,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         : scanError && !entries.length
           ? null
           : !entries.length
-            ? <EmptyState icon="sparkle" title={t('tools.skills.emptyTitle')} detail={t('tools.skills.emptyDetail')} action={!adding ? <Button variant="primary" disabled={busy} onClick={() => void openAdding()}><Icon name="plus" size={14} />{t('tools.skills.add')}</Button> : undefined} />
+            ? <EmptyState icon="sparkle" title={t('tools.skills.emptyTitle')} detail={t('tools.skills.emptyDetail')} action={!adding && (!remoteTargetId || remoteWritable) ? <Button variant="primary" disabled={busy} onClick={() => void openAdding()}><Icon name="plus" size={14} />{t('tools.skills.add')}</Button> : undefined} />
             : filtering && !visible.length
               ? <div className={doc.noMatch}><Icon name="search" size={18} /><p>{needle ? t('tools.skills.noMatchQuery', { query: query.trim() }) : t('tools.skills.noMatch')}</p><button type="button" onClick={clearFilters}>{t('tools.skills.clearFilters')}</button></div>
               : <nav className={doc.rows} aria-label={t('tools.skills.listLabel')}>{visible.map(entryButton)}</nav>}

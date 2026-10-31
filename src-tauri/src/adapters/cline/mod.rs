@@ -97,6 +97,9 @@ pub(crate) fn sessions_db(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for Cline {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { skill_root: Some(".cline/skills"), ..Default::default() }
+    }
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }

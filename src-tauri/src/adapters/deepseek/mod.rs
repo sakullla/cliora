@@ -49,6 +49,9 @@ pub(crate) fn dsh_home(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for DeepSeek {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { skill_root: Some(".dsh/skills"), ..Default::default() }
+    }
     fn plugins(&self) -> Option<&dyn crate::adapters::plugins::PluginAdapter> { Some(self) }
     fn supports_mcp(&self) -> bool {
         true

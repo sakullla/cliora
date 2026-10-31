@@ -77,7 +77,7 @@ pub(crate) const CREDENTIAL_ENV_NAME: &str = "COMMAND_CODE_API_KEY";
 
 impl CliAdapter for CommandCode {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".commandcode/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: None, agent_extension: None }
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".commandcode/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".commandcode/skills"), agent_root: None, agent_extension: None }
     }
 
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
