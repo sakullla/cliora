@@ -23,13 +23,15 @@ export const nativeAvailable = isTauri();
 
 function readError(error: unknown): RemoteApiError {
   if (typeof error === 'string') {
-    return { code: 'native_error', message: error, action: i18n.t('common.nativeError.checkAndRetry') };
+    return { code: 'native_error', message: error.trim() ? error : i18n.t('common.nativeError.operationFailed'), action: i18n.t('common.nativeError.checkAndRetry') };
   }
   if (typeof error === 'object' && error !== null && 'message' in error) {
     const value = error as Partial<RemoteApiError>;
     return {
       code: typeof value.code === 'string' ? value.code : 'native_error',
-      message: typeof value.message === 'string' ? value.message : i18n.t('common.nativeError.operationFailed'),
+      message: typeof value.message === 'string' && value.message.trim() ? value.message
+        : typeof value.remote?.message === 'string' && value.remote.message.trim() ? value.remote.message
+          : i18n.t('common.nativeError.operationFailed'),
       action: typeof value.action === 'string' ? value.action : i18n.t('common.nativeError.retry'),
       data_directory: typeof value.data_directory === 'string' ? value.data_directory : null,
       ...(value.remote ? { remote: value.remote, action: value.remote.action } : {}),

@@ -17,8 +17,8 @@ const host = {
 
 const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', cursor: 'Cursor' };
 
-async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 'builtin' | 'read-only' | 'unsupported' | 'mixed' = 'builtin') {
-  await page.addInitScript(({ host, names, largeSkills, skillMode }) => {
+async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 'builtin' | 'read-only' | 'unsupported' | 'mixed' = 'builtin', initialSkillFailure = 'none') {
+  await page.addInitScript(({ host, names, largeSkills, skillMode, initialSkillFailure }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
     const roots: Record<string, string> = { codex: '.codex/skills', claude_code: '.claude/skills', grok: '.grok/skills', cursor: '.cursor/skills' };
@@ -29,7 +29,7 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
     }));
     const calls: Array<Record<string, unknown>> = [];
-    const state = { fail: false, delay: false, name: 'node_repl' };
+    const state = { fail: false, delay: false, name: 'node_repl', skillFailure: initialSkillFailure };
     const versions: Record<string, string> = {};
     const snapshots = new Map<string, Record<string, string>>();
     const skillStores: Record<string, any> = {};
@@ -67,7 +67,15 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
           if (command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
           if (['list_remote_resource_stores', 'get_remote_resource_store'].includes(command) && args.kind === 'skills') {
             calls.push({ command, kind: args.kind, toolIds: args.toolIds, toolId: args.toolId });
-            if (state.fail) throw { message: 'fixture Skill parent is not a directory' };
+            if (state.fail || state.skillFailure !== 'none') {
+              const detail = state.skillFailure === 'blank' ? '' : 'fixture Skill parent is not a directory';
+              // Native exit46 failures originally have blank messages at both levels.
+              throw { code: 'remote_error', message: state.skillFailure === 'nested' ? ' \n ' : detail, action: '请按远程操作建议处理。', remote: {
+                code: 'remote_remote_command', stage: 'remote_command', reason: 'remote_command', message: detail,
+                action: '检查网络与远端状态后重试。', requestId: args.operation.requestId, targetId: host.id,
+                targetRevision: null, outcome: 'failed', retryable: false, exitCode: 46,
+              } };
+            }
             snapshots.set(args.operation.requestId, { ...versions });
             return command === 'list_remote_resource_stores' ? { stores: skillStores } : skillStores[args.toolId];
           }
@@ -100,7 +108,7 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
         },
       },
     });
-  }, { host, names, largeSkills, skillMode });
+  }, { host, names, largeSkills, skillMode, initialSkillFailure });
 }
 
 test('a library single-Skill removal carries both full 128-Skill baselines and reaches the write IPC', async ({ page }) => {
@@ -317,13 +325,25 @@ test('a failed fresh remote Skill scan retains the previous list as stale and re
     await page.getByRole('menuitem', { name: '删除', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: '删除', exact: true }).click();
   };
-  await page.evaluate(() => { (window as any).__resourceState.fail = true; });
+  await page.evaluate(() => { (window as any).__resourceState.skillFailure = 'blank'; });
   await remove();
   await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toBeVisible();
+  await expect(page.getByRole('alert').getByText('操作失败', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
-  await page.evaluate(() => { (window as any).__resourceState.fail = false; });
+  await page.evaluate(() => { (window as any).__resourceState.skillFailure = 'none'; });
   await remove();
   await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toHaveCount(0);
   await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
 });
+
+for (const [mode, message] of [['blank', '操作失败'], ['nested', 'fixture Skill parent is not a directory'], ['nonblank', 'fixture Skill parent is not a directory']]) {
+  test(`an initial remote Skill ${mode} failure shows a visible error`, async ({ page }) => {
+    await installRemoteLibrary(page, false, 'builtin', mode); await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+    await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.kind === 'skills').length)).toBeGreaterThan(0);
+    await expect(page.getByRole('alert').getByText(message, { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toHaveCount(0);
+  });
+}

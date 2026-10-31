@@ -229,7 +229,9 @@ impl Context {
         RemoteError::Operation(Failure {
             code: if uncertain { "remote_unknown".into() } else { format!("remote_{stage}") },
             stage: if matches!(stage, "cancelled" | "timeout") { self.effective_phase().into() } else { stage.into() },
-            reason: stage.into(), message: message.chars().take(500).collect(), action: action.into(),
+            reason: stage.into(),
+            message: if message.trim().is_empty() { "远程操作失败，远端未返回错误详情。".into() } else { message.chars().take(500).collect() },
+            action: action.into(),
             request_id: self.request_identity().map(|r| r.request_id.clone()),
             target_id: self.request_identity().map(|r| r.target_id.clone()),
             target_revision: self.request_identity().and_then(|r| r.target_revision),

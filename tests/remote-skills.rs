@@ -155,25 +155,39 @@ fn skill_scan_distinguishes_missing_directories_from_invalid_parents() {
     };
     let missing = run(&script);
     assert!(missing.status.success());
+    assert!(missing.stderr.is_empty());
     assert_eq!(String::from_utf8(missing.stdout).unwrap(), "__SCAN_SUCCEEDED__");
     std::fs::write(fixture.path().join(".claude"), "ordinary file").unwrap();
     let file_parent = run(&script);
     assert_eq!(file_parent.status.code(), Some(46), "ordinary parent file became empty success");
+    let check_failure = |output: std::process::Output, detail: &str| {
+        assert_eq!(output.status.code(), Some(46));
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        assert!(diagnostic.contains(detail), "missing meaningful scan diagnostic: {diagnostic}");
+        assert_eq!(classify_ssh_failure(&diagnostic, output.status.code()), "directory_access");
+        let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
+        let error = context.failure_with_exit("directory_access", diagnostic.trim(), output.status.code());
+        let api = crate::commands::native_error(error.to_string());
+        assert_eq!(api.message, diagnostic.trim());
+        assert_eq!(api.remote.unwrap().exit_code, Some(46));
+    };
+    check_failure(file_parent, "Skills 父路径");
     std::fs::remove_file(fixture.path().join(".claude")).unwrap();
     // Make the dangling link in the POSIX shell so this also works on Windows without native symlink privileges.
     assert!(run(&format!("ln -s {} {}", shell_quote(&format!("{home}/absent")), shell_quote(&format!("{home}/.claude")))).status.success());
     assert!(run(&format!("[ -L {} ]", shell_quote(&format!("{home}/.claude")))).status.success());
-    assert_eq!(run(&script).status.code(), Some(46), "dangling parent link became empty success");
+    check_failure(run(&script), "Skills 父路径");
     assert!(run(&format!("rm {}", shell_quote(&format!("{home}/.claude")))).status.success());
     std::fs::create_dir(fixture.path().join(".claude")).unwrap();
     assert!(run(&script).status.success(), "genuinely missing leaf is empty");
     std::fs::write(fixture.path().join(".claude/skills"), "ordinary file").unwrap();
-    assert_eq!(run(&script).status.code(), Some(46), "ordinary root file became empty success");
+    check_failure(run(&script), "Skills 根路径");
     std::fs::remove_file(fixture.path().join(".claude/skills")).unwrap();
     std::fs::create_dir_all(fixture.path().join(".claude/skills/owned")).unwrap();
     std::fs::write(fixture.path().join(".claude/skills/owned/SKILL.md"), "full Skill body\n").unwrap();
     let valid = run(&script);
     assert!(valid.status.success(), "{}", String::from_utf8_lossy(&valid.stderr));
+    assert!(valid.stderr.is_empty());
     let stdout = String::from_utf8(valid.stdout).unwrap();
     assert!(stdout.contains("__CLIORA_FILE__\n0\n"));
     assert!(stdout.contains(&base64::engine::general_purpose::STANDARD.encode("full Skill body\n")));
@@ -181,7 +195,7 @@ fn skill_scan_distinguishes_missing_directories_from_invalid_parents() {
     std::fs::rename(fixture.path().join(".claude/skills"), fixture.path().join("actual-skills")).unwrap();
     assert!(run(&format!("ln -s {} {}", shell_quote(&format!("{home}/actual-skills")), shell_quote(&format!("{home}/.claude/skills")))).status.success());
     assert!(run(&format!("[ -L {} ]", shell_quote(&format!("{home}/.claude/skills")))).status.success());
-    assert_eq!(run(&script).status.code(), Some(46), "root directory link became empty success");
+    check_failure(run(&script), "Skills 扫描根目录是符号链接");
     assert!(run(&format!("rm {}", shell_quote(&format!("{home}/.claude/skills")))).status.success());
     std::fs::rename(fixture.path().join("actual-skills"), fixture.path().join(".claude/skills")).unwrap();
     std::fs::rename(fixture.path().join(".claude"), fixture.path().join("actual-parent")).unwrap();
@@ -189,4 +203,23 @@ fn skill_scan_distinguishes_missing_directories_from_invalid_parents() {
     let parent_link = run(&script);
     assert!(parent_link.status.success(), "valid traversable parent link must remain readable");
     assert!(String::from_utf8(parent_link.stdout).unwrap().contains(&base64::engine::general_purpose::STANDARD.encode("full Skill body\n")));
+}
+
+#[test]
+fn blank_remote_failure_messages_are_nonempty_at_the_api_boundary_without_losing_metadata() {
+    let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
+    let reference = crate::commands::native_error(context.failure_with_exit("remote_command", "original", Some(46)).to_string());
+    for input in ["", " \n\t", " Original diagnostic \n"] {
+        let api = crate::commands::native_error(context.failure_with_exit("remote_command", input, Some(46)).to_string());
+        assert!(!api.message.trim().is_empty());
+        if !input.trim().is_empty() { assert_eq!(api.message, input); }
+        let remote = api.remote.unwrap();
+        assert_eq!(remote.message, api.message);
+        assert_eq!(remote.stage, "remote_command");
+        assert_eq!(remote.reason, "remote_command");
+        assert_eq!(remote.outcome, "failed");
+        assert_eq!(remote.exit_code, Some(46));
+        assert!(!remote.retryable);
+        assert_eq!(remote.action, reference.remote.as_ref().unwrap().action);
+    }
 }

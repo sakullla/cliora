@@ -543,11 +543,11 @@ fn append_skill_scan(script: &mut String, root: &SkillScanRoot, index: usize) {
     // Check traversed parents too: an inaccessible parent must not look missing.
     script.push_str("parent=\"$HOME\"; ");
     for part in root.relative.split('/') {
-        script.push_str(&format!("if [ -e \"$parent\" ] || [ -L \"$parent\" ]; then [ -d \"$parent\" ] && [ -r \"$parent\" ] && [ -x \"$parent\" ] || exit 46; fi; parent=\"$parent/{part}\"; "));
+        script.push_str(&format!("if [ -e \"$parent\" ] || [ -L \"$parent\" ]; then [ -d \"$parent\" ] && [ -r \"$parent\" ] && [ -x \"$parent\" ] || {{ printf '%s\\n' 'cliora:directory-access: Skills 父路径不是可读取和访问的目录，请检查文件类型、链接目标和权限。' >&2; exit 46; }}; fi; parent=\"$parent/{part}\"; "));
     }
     // find does not follow a command-line directory symlink by default. Reject
     // that root explicitly instead of reporting an empty successful inventory.
-    script.push_str(&format!("if [ -e \"{dir}\" ] || [ -L \"{dir}\" ]; then [ ! -L \"{dir}\" ] && [ -d \"{dir}\" ] && [ -r \"{dir}\" ] && [ -x \"{dir}\" ] || exit 46; find \"{dir}\" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -exec sh -c "));
+    script.push_str(&format!("if [ -e \"{dir}\" ] || [ -L \"{dir}\" ]; then if [ -L \"{dir}\" ]; then printf '%s\\n' 'cliora:directory-access: Skills 扫描根目录是符号链接，暂不支持读取。' >&2; exit 46; fi; [ -d \"{dir}\" ] && [ -r \"{dir}\" ] && [ -x \"{dir}\" ] || {{ printf '%s\\n' 'cliora:directory-access: Skills 根路径不是可读取和访问的目录，请检查文件类型和权限。' >&2; exit 46; }}; find \"{dir}\" -mindepth 2 -maxdepth 2 -type f -name SKILL.md -exec sh -c "));
     let body = format!("for file do encoded=$(base64 < \"$file\") || exit 46; printf '%s\\n' __CLIORA_FILE__ {index} \"$file\"; printf %s \"$encoded\" | tr -d '\\n'; printf '\\n'; done");
     script.push_str(&shell_quote(&body));
     script.push_str(" sh {} + || exit 46; fi; ");

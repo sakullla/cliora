@@ -20,6 +20,32 @@ async function loadNative() {
   return import(moduleUrl(code));
 }
 
+test('native error normalization supplies nonblank detail without losing remote advice or original messages', async () => {
+  const action = 'Check the remote directory permissions';
+  const remote = { code: 'remote_remote_command', stage: 'remote_command', reason: 'remote_command', message: '', action, outcome: 'failed', retryable: false, exitCode: 46 };
+  const originalInvoke = globalThis.__targetIdentityInvoke;
+  const { native } = await loadNative();
+  try {
+    for (const [index, error, message] of [
+      [0, { code: 'remote_error', message: '', remote }, 'common.nativeError.operationFailed'],
+      [1, { code: 'remote_error', message: ' \n ', remote: { ...remote, message: 'Nested diagnostic' } }, 'Nested diagnostic'],
+      [2, { code: 'remote_error', message: ' Original diagnostic \n', remote: { ...remote, message: 'Nested diagnostic' } }, ' Original diagnostic \n'],
+      [3, { code: 'remote_error', message: '\t', remote: { ...remote, message: ' \n ' } }, 'common.nativeError.operationFailed'],
+    ]) {
+      globalThis.__targetIdentityInvoke = async () => { throw error; };
+      await assert.rejects(native.getRemoteResourceStore(`error-normalization-${index}`, 'codex', 'skills'), actual => {
+        assert.equal(actual.message, message);
+        assert.equal(actual.code, 'remote_error');
+        assert.equal(actual.action, action);
+        assert.equal(actual.remote, error.remote);
+        return true;
+      });
+    }
+    globalThis.__targetIdentityInvoke = async () => { throw ' \n '; };
+    await assert.rejects(native.getRemoteResourceStore('empty-string-error', 'codex', 'skills'), { message: 'common.nativeError.operationFailed' });
+  } finally { globalThis.__targetIdentityInvoke = originalInvoke; }
+});
+
 test('a local unresolved write exposes recovery with the original receipt and makes no native submission', async () => {
   const receipt = { id: 'receipt', targetId: 'local-blocked', targetRevision: 7, outcome: 'recovering', items: [] };
   const calls = [];
