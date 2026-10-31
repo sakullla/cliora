@@ -5,6 +5,25 @@ const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// A never-committed receipt is complete without a rollback. Observation alone
+// is insufficient: independently read every before hash and the case baseline.
+export async function recoverTransactionBefore(receipt, { inspect, read, expectedVersions }) {
+  const confirmedBefore = value => ['rolled_back', 'prepare_failed', 'conflict_before_commit'].includes(value?.outcome)
+    && Array.isArray(value.items) && value.items.length > 0 && value.items.every(item => item.observed === 'before');
+  const settled = confirmedBefore(receipt) ? receipt : await inspect(receipt.id, true);
+  assert(confirmedBefore(settled), 'Fixture recovery remains incomplete; preserve protected backup.');
+  assert(settled.id === receipt.id && settled.items.length === receipt.items.length
+    && new Set(settled.items.map(item => item.path)).size === receipt.items.length
+    && receipt.items.every(item => settled.items.some(value => value.path === item.path && value.before === item.before)),
+  'Recovery receipt no longer matches the submitted transaction.');
+  const actual = await read();
+  assert(settled.items.every(item => actual.versions[item.path] === item.before), 'Independent read does not confirm every receipt before hash.');
+  assert(expectedVersions && Object.keys(expectedVersions).length > 0
+    && Object.entries(expectedVersions).every(([path, version]) => actual.versions[path] === version),
+  'Independent read does not match the transaction baseline.');
+  return settled;
+}
+
 /** Error payloads may include CLI output or configuration text. Persist only
  * protocol labels, known product messages and hash-only receipt metadata. */
 export function transactionOutcomeDiagnostic(result) {
@@ -76,6 +95,7 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
   const installedTools = new Set();
   const createdReceipts = new Set();
   const settledReceipts = new Set();
+  const receiptBaselines = new Map();
   const originalReceipts = new Set();
   let savedTarget;
   let nativePath;
@@ -157,16 +177,15 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
       const added = current.filter(item => !originalReceipts.has(item.id) && !createdReceipts.has(item.id));
       assert(added.length === 1, 'Exactly one durable transaction must correspond to the submission.');
       const receipt = added[0]; createdReceipts.add(receipt.id);
+      receiptBaselines.set(receipt.id, baseline.versions);
       check(`${fault}: management and native per-file receipt`, receipt.items.length === 2);
       check(`${fault}: receipt exposes hashes without snapshots`, receipt.items.every(item => /^[a-f0-9]{64}$|^missing$/.test(item.before) && /^[a-f0-9]{64}$|^missing$/.test(item.after) && !('contents' in item)));
       if (fault === 'rollback-failure') check('real rollback failure remains recoverable', receipt.items[0]?.before !== 'missing' && receipt.outcome === 'recovery_required' && receipt.items[0]?.state === 'rollback_failed');
       await mode('off');
       const inspected = await inspect(receipt.id, false);
       check(`${fault}: each actual version was inspected`, inspected.items.every(item => ['before', 'after'].includes(item.observed)));
-      const restored = await inspect(receipt.id, true);
-      check(`${fault}: explicit recovery restores original versions`, restored.outcome === 'rolled_back' && restored.items.every(item => item.observed === 'before'));
-      const after = await read();
-      check(`${fault}: independent post-recovery versions match`, Object.entries(baseline.versions).every(([file, version]) => after.versions[file] === version));
+      await recoverTransactionBefore(inspected, { inspect, read, expectedVersions: baseline.versions });
+      check(`${fault}: restored or never-committed versions independently match baseline`, true);
       settledReceipts.add(receipt.id);
     }
     // Completed history must remain completed while newer legitimate writes
@@ -191,10 +210,11 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
       const added = (await receipts()).filter(item => !originalReceipts.has(item.id) && !createdReceipts.has(item.id));
       assert(added.length === 1, 'Exactly one journal must correspond to each history submission.');
       createdReceipts.add(added[0].id); history.push(added[0]);
+      receiptBaselines.set(added[0].id, baseline.versions);
     }
     for (const receipt of history.reverse()) {
-      const restored = await inspect(receipt.id, true);
-      check('restore consecutive owned history in reverse order', restored.outcome === 'rolled_back' && restored.items.every(item => item.observed === 'before'));
+      await recoverTransactionBefore(receipt, { inspect, read, expectedVersions: receiptBaselines.get(receipt.id) });
+      check('restore consecutive owned history in reverse order with independent baseline check', true);
       settledReceipts.add(receipt.id);
     }
     // A stale user draft is rejected before any managed/native mutation. The
@@ -228,10 +248,9 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
         // snapshot over the files belonging to a later transaction.
         for (const id of [...createdReceipts].reverse().filter(id => !settledReceipts.has(id))) {
           const receipt = await inspect(id, false);
-          if (receipt.outcome !== 'rolled_back') {
-            const restored = await inspect(id, true);
-            assert(restored.outcome === 'rolled_back', 'Fixture recovery remains incomplete; preserve protected backup.');
-          }
+          await recoverTransactionBefore(receipt, { inspect, read,
+            expectedVersions: receiptBaselines.get(id) ?? Object.fromEntries(receipt.items.map(item => [item.path, item.before])),
+          });
         }
         const nativeFinal = (await observe(`sha256sum -- ${quote(nativePath)} | cut -d ' ' -f 1`)).trim();
         const managementFinal = (await observe(`sha256sum -- ${quote(managementPath)} | cut -d ' ' -f 1`)).trim();
