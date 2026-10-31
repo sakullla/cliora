@@ -119,6 +119,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const readerRef = useRef<HTMLDivElement | null>(null);
   const scrollMemory = useRef(new Map<string, number>());
   const skillRequest = useRef(0);
+  remoteReads.bindWriteDraft(skillDoc?.path ?? (adding ? 'new' : null));
   const skillDirty = !!skillDoc && skillDoc.draft !== skillDoc.baseline;
   const formDirty = !!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty;
   const formDirtyRef = useRef(false);
@@ -164,6 +165,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const nativeReadSequence = useRef(0);
   useEffect(() => () => { nativeReadSequence.current++; skillRequest.current++; }, [remoteTargetId, toolId, scope, project]);
   async function loadNativeSkills() {
+    remoteReads.rebaseWriteAction();
     const sequence = ++nativeReadSequence.current;
     try {
       const entries = remoteTargetId
@@ -245,6 +247,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   }
 
   async function local() {
+    remoteReads.beginWriteAction();
     try {
       const source = await open({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
@@ -459,6 +462,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     finally { setBusy(false); }
   }
   async function change(remove: boolean) {
+    remoteReads.beginWriteAction();
     if (!selected) return;
     if (scope === 'project' && !project) { setError(t('tools.skills.pickProjectFirst')); return; }
     if (!remove && selected.compatibility && !dependencyChecked) { setError(t('tools.skills.dependencyFirst')); return; }
@@ -490,6 +494,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     finally { setBusy(false); }
   }
   async function toggleSkill(next: boolean) {
+    remoteReads.beginWriteAction();
     if (!selected) return;
     const remembered = nativeEntries.find(item => item.packageId === selected.id) ?? retained.find(item => item.packageId === selected.id) ?? null;
     setBusy(true); setError('');

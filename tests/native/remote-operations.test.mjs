@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const source = readFileSync(new URL('../../src/lib/remoteOperations.ts', import.meta.url), 'utf8');
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { RemoteOperations } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+const { RemoteOperations, RemoteDraftVersions } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 
 test('freshness follows the full cached resource across subscriptions and recovers only after revalidation', async () => {
   let fail = false;
@@ -201,4 +201,73 @@ test('expired reads revalidate and a cancelled final subscriber never populates 
   await new Promise(resolve => setTimeout(resolve, 3));
   await f.operations.start('read', {}, 'host', 'read', { shareKey: 'rows', cacheTtlMs: 1 }).promise;
   assert.equal(f.calls.filter(call => call.name === 'read').length, 3);
+});
+
+
+test('an edited draft keeps its observed versions while inventory and another editor refresh', () => {
+  const draft = new RemoteDraftVersions();
+  const other = new RemoteDraftVersions();
+  draft.observe({ '/config': 'old', '/store': 'old-store' });
+  draft.bind('editor:one');
+  other.observe({ '/config': 'external', '/store': 'new-store' });
+  draft.observe({ '/config': 'external', '/store': 'new-store' });
+  assert.deepEqual(draft.expected(), { '/config': 'old', '/store': 'old-store' });
+  assert.equal(other.expected()['/config'], 'external');
+  // An explicit close/reload/reopen creates a new draft with the new versions.
+  draft.bind(null);
+  draft.bind('editor:two');
+  assert.deepEqual(draft.expected(), { '/config': 'external', '/store': 'new-store' });
+  draft.committed({ '/config': 'confirmed' });
+  assert.deepEqual(draft.expected(), { '/config': 'confirmed', '/store': 'new-store' });
+});
+
+test('action pre-save reads cannot silently rebase a failed submission', () => {
+  const draft = new RemoteDraftVersions();
+  draft.observe({ '/config': 'old' });
+  draft.beginAction();
+  draft.bind(null); // a busy-state React render must not thaw the action
+  draft.observe({ '/config': 'external' });
+  draft.beginAction();
+  assert.equal(draft.expected()['/config'], 'old');
+  draft.rebaseAction(); // explicit inventory reload before a new action
+  draft.beginAction();
+  assert.equal(draft.expected()['/config'], 'external');
+});
+
+test('shared and cached reads preserve corresponding version snapshots without subscriber mutation', async () => {
+  let calls = 0;
+  const snapshots = new Map();
+  const operations = new RemoteOperations(async (name, args) => {
+    if (name === 'get_remote_write_snapshot') return snapshots.get(args.requestId);
+    calls++;
+    snapshots.set(args.operation.requestId, { '/config': 'observed' });
+    return { value: 'original' };
+  });
+  const options = { targetRevision: 1, shareKey: 'resource', captureVersions: true };
+  const first = [];
+  await operations.start('read', {}, 'host', 'read', { ...options, onVersions: value => { first.push({ ...value }); value['/config'] = 'mutated'; } }).promise;
+  const second = [];
+  await operations.start('read', {}, 'host', 'read', { ...options, onVersions: value => second.push(value) }).promise;
+  assert.equal(calls, 1);
+  assert.deepEqual(first, [{ '/config': 'observed' }]);
+  assert.deepEqual(second, [{ '/config': 'observed' }]);
+});
+
+test('writes freeze expected versions and publish only confirmed commit versions', async () => {
+  const expectedFiles = { '/config': 'before' };
+  const observed = [];
+  let request;
+  let finish;
+  const operations = new RemoteOperations(async (name, args) => {
+    if (name === 'get_remote_write_snapshot') return { '/config': 'after' };
+    request = args.operation;
+    await new Promise(resolve => { finish = resolve; });
+    return null;
+  });
+  const handle = operations.start('save', {}, 'host', 'write', { expectedFiles, captureVersions: true, onVersions: value => observed.push(value) });
+  expectedFiles['/config'] = 'external';
+  assert.deepEqual(request.expectedFiles, { '/config': 'before' });
+  assert.deepEqual(observed, []);
+  finish(); await handle.promise;
+  assert.deepEqual(observed, [{ '/config': 'after' }]);
 });

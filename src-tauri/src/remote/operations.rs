@@ -32,6 +32,8 @@ pub struct Request {
     pub deadline_unix_ms: u64,
     #[serde(default)]
     pub refresh: bool,
+    #[serde(default)]
+    pub expected_files: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,6 +50,8 @@ pub struct Failure {
     pub outcome: String,
     pub retryable: bool,
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<super::transactions::Receipt>,
 }
 
 impl std::fmt::Display for Failure {
@@ -60,6 +64,7 @@ impl std::fmt::Display for Failure {
 
 pub struct Context {
     request: Option<Request>,
+    files: Mutex<BTreeMap<String, String>>,
     pub kind: Kind,
     priority: Priority,
     refresh_reads: bool,
@@ -89,7 +94,7 @@ pub fn scoped<T>(context: Arc<Context>, operation: impl FnOnce() -> T) -> T {
 
 impl Context {
     pub fn local(kind: Kind, timeout: Duration) -> Arc<Self> {
-        Arc::new(Self { request: None, kind, priority: Priority::Interactive, refresh_reads: false, parent: None,
+        Arc::new(Self { files: Mutex::new(BTreeMap::new()), request: None, kind, priority: Priority::Interactive, refresh_reads: false, parent: None,
             deadline: Instant::now() + timeout, cancelled: AtomicBool::new(false),
             dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), observations: Mutex::new(Vec::new()), parent_observation: Mutex::new(None) })
     }
@@ -109,6 +114,11 @@ impl Context {
     pub fn accept_persistent_launch(&self) { self.accepted.store(true, Ordering::Release); }
     pub fn accepted_persistent_launch(&self) -> bool { self.accepted.load(Ordering::Acquire) }
 
+    pub fn request_id(&self) -> Option<String> { self.request.as_ref().map(|r| r.request_id.clone()) }
+    pub fn record_file(&self, path: &str, version: String) { self.files.lock().unwrap_or_else(|e| e.into_inner()).insert(path.into(), version); }
+    pub fn file_versions(&self) -> BTreeMap<String, String> { self.files.lock().unwrap_or_else(|e| e.into_inner()).clone() }
+    pub fn merge_files(&self, versions: BTreeMap<String, String>) { self.files.lock().unwrap_or_else(|e| e.into_inner()).extend(versions); }
+    pub fn expected_files(&self) -> BTreeMap<String, String> { self.request.as_ref().map(|r| r.expected_files.clone()).unwrap_or_default() }
     pub fn refresh(&self) -> bool { self.refresh_reads }
     pub fn cancel(&self) { self.cancelled.store(true, Ordering::Release); }
     pub fn bound_target_id(&self) -> Option<String> { self.target_id.lock().unwrap_or_else(|e| e.into_inner()).clone() }
@@ -219,6 +229,7 @@ impl Context {
             target_id: self.request_identity().map(|r| r.target_id.clone()),
             target_revision: self.request_identity().and_then(|r| r.target_revision),
             outcome: if uncertain { "unknown" } else { "failed" }.into(),
+            receipt: None,
             exit_code: None,
             retryable: !uncertain && self.kind == Kind::Read && stage == "connect",
         })
@@ -256,7 +267,9 @@ impl Drop for Context {
 /// Secret-free identity suitable for cache keys. Authentication saves advance
 /// updated_at, including saves made within the same wall-clock second.
 pub fn target_identity(target: &RemoteTarget) -> String {
-    format!("{:x}", Sha256::digest(serde_json::to_vec(target).unwrap_or_default()))
+    let mut identity = target.clone();
+    identity.name.clear(); // Display labels never change the connection or recovery authority.
+    format!("{:x}", Sha256::digest(serde_json::to_vec(&identity).unwrap_or_default()))
 }
 
 struct Registration { owner: String, token: String, context: Arc<Context> }
@@ -274,14 +287,15 @@ impl Drop for Lease {
 pub fn register(owner: &str, request: Request, kind: Kind) -> Result<Lease, RemoteError> {
     let invalid = || Context::local(kind, Duration::from_secs(40)).failure("identity", "无效或重复的远程请求身份");
     if uuid::Uuid::parse_str(&request.request_id).is_err() || uuid::Uuid::parse_str(&request.cancel_token).is_err()
-        || request.kind != kind || request.target_id.len() > 256 { return Err(invalid()); }
+        || request.kind != kind || request.target_id.len() > 256
+        || request.expected_files.len() > 512 || request.expected_files.iter().any(|(path, hash)| !super::transactions::valid_path(path) || !super::transactions::valid_hash(hash)) { return Err(invalid()); }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let remaining = request.deadline_unix_ms.saturating_sub(now).min(120_000);
     let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
     registry.cancelled.retain(|_, at| at.elapsed() < Duration::from_secs(120));
     if registry.active.contains_key(&request.request_id) || registry.active.len() >= 1024 { return Err(invalid()); }
     let cancelled = registry.cancelled.remove(&(owner.into(), request.request_id.clone(), request.cancel_token.clone())).is_some();
-    let context = Arc::new(Context { priority: request.priority, refresh_reads: request.refresh, parent: None, kind, deadline: Instant::now() + Duration::from_millis(remaining),
+    let context = Arc::new(Context { files: Mutex::new(BTreeMap::new()), priority: request.priority, refresh_reads: request.refresh, parent: None, kind, deadline: Instant::now() + Duration::from_millis(remaining),
         cancelled: AtomicBool::new(cancelled), dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), observations: Mutex::new(Vec::new()), parent_observation: Mutex::new(None), request: Some(request.clone()) });
     registry.active.insert(request.request_id.clone(), Registration { owner: owner.into(), token: request.cancel_token, context: context.clone() });
     Ok(Lease { id: request.request_id, context })
@@ -390,6 +404,7 @@ mod tests {
 
     fn request(kind: Kind, timeout: u64) -> Request {
         Request {
+            expected_files: BTreeMap::new(),
             request_id: uuid::Uuid::new_v4().to_string(), cancel_token: uuid::Uuid::new_v4().to_string(),
             target_id: "fixture".into(), target_revision: Some(7), kind, priority: Priority::Interactive, refresh: false,
             deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + timeout,

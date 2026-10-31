@@ -30,6 +30,13 @@ const REMOTE_NATIVE_DOCUMENTS: &[RemoteNativeDocument] = &[
 ];
 
 impl CliAdapter for Grok {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".grok/config.toml", format: "toml", table: "mcp_servers", nested: false }), skill_root: Some(".grok/skills"), agent_root: Some(".grok/agents"), agent_extension: Some("md") }
+    }
+    fn remote_skill_directories(&self) -> &'static [super::RemoteSkillDirectory] {
+        &[super::RemoteSkillDirectory { relative: ".grok/skills", read_only: false, detail: "远程主机目录" }]
+    }
+
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn official_usage(&self) -> Option<&dyn crate::adapters::official::OfficialUsageAdapter> {

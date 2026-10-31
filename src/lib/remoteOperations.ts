@@ -3,6 +3,9 @@ import type { RemoteFailure, RemoteOperationKind, RemoteOperationRequest, Remote
 export type RemoteFreshness = { stale: boolean; at: number };
 
 export type RemoteOperationOptions = {
+  expectedFiles?: Record<string, string>;
+  captureVersions?: boolean;
+  onVersions?: (versions: Record<string, string>) => void;
   signal?: AbortSignal;
   targetId?: string;
   timeoutMs?: number;
@@ -28,6 +31,7 @@ type Flight = {
   promise: Promise<unknown>;
   subscribers: number;
   settled: boolean;
+  versions?: Record<string, string>;
   invalidated?: boolean;
 };
 
@@ -40,13 +44,40 @@ export function remoteFailure(stage: string, request: RemoteOperationRequest): R
   };
 }
 
+/** A draft freezes the versions the user saw. Other reads may update inventory
+ * without rebasing that draft; closing/reloading it explicitly starts a new one. */
+export class RemoteDraftVersions {
+  private latest: Record<string, string> = {};
+  private draft: Record<string, string> | null = null;
+  private token: string | null = null;
+  private action: Record<string, string> | null = null;
+  observe(versions: Record<string, string>) {
+    this.latest = { ...this.latest, ...versions };
+    if (this.draft) this.draft = { ...versions, ...this.draft };
+    if (this.action) this.action = { ...versions, ...this.action };
+  }
+  bind(token: string | null) {
+    if (token === this.token) return;
+    this.token = token;
+    this.draft = token === null ? null : { ...this.latest };
+  }
+  beginAction() { if (this.action === null) this.action = { ...this.latest }; }
+  rebaseAction() { this.action = null; }
+  committed(versions: Record<string, string>) {
+    this.observe(versions);
+    if (this.draft) this.draft = { ...this.draft, ...versions };
+    this.action = null;
+  }
+  expected() { return { ...(this.draft ?? this.action ?? this.latest) }; }
+}
+
 /** Each subscription has its own cancellation/deadline. The native operation
  * is cancelled only after its final reader leaves. Cached values are cloned
  * so editable drafts cannot mutate other subscribers or cached data. */
 export class RemoteOperations {
   private readonly flights = new Map<string, Flight>();
 
-  private readonly cache = new Map<string, { targetId: string; at: number; value: unknown; bytes: number; stale: boolean }>();
+  private readonly cache = new Map<string, { targetId: string; at: number; value: unknown; bytes: number; stale: boolean; versions: Record<string, string> }>();
   private cacheBytes = 0;
 
   constructor(private readonly transport: Transport) {}
@@ -63,13 +94,13 @@ export class RemoteOperations {
     }
   }
 
-  private remember(key: string, targetId: string, value: unknown) {
+  private remember(key: string, targetId: string, value: unknown, versions: Record<string, string>) {
     const bytes = new TextEncoder().encode(JSON.stringify(value)).length;
     if (bytes > 8 * 1024 * 1024) return;
     const old = this.cache.get(key);
     if (old) this.cacheBytes -= old.bytes;
     this.cache.delete(key);
-    this.cache.set(key, { targetId, at: Date.now(), value: structuredClone(value), bytes, stale: false });
+    this.cache.set(key, { targetId, at: Date.now(), value: structuredClone(value), bytes, stale: false, versions });
     this.cacheBytes += bytes;
     while (this.cache.size > 96 || this.cacheBytes > 24 * 1024 * 1024) {
       const first = this.cache.entries().next().value!;
@@ -96,6 +127,7 @@ export class RemoteOperations {
           if (done) return;
           done = true;
           options.signal?.removeEventListener('abort', cancel);
+          options.onVersions?.({ ...cached.versions });
           options.onFreshness?.({ stale: cached.stale, at: cached.at });
           resolve(structuredClone(cached.value) as T);
         });
@@ -110,6 +142,7 @@ export class RemoteOperations {
         requestId: crypto.randomUUID(), cancelToken: crypto.randomUUID(), targetId,
         targetRevision: options.targetRevision ?? null, kind,
         refresh: options.fresh ?? false,
+        expectedFiles: kind === 'write' ? structuredClone(options.expectedFiles ?? {}) : undefined,
         priority: options.priority ?? 'interactive',
         // Shared work has a hard cap; each subscriber still enforces its own
         // deadline below and the last departed reader cancels the process.
@@ -120,9 +153,13 @@ export class RemoteOperations {
       created.promise = options.signal?.aborted
         ? Promise.reject(remoteFailure('cancelled', request))
         : this.transport<T>(name, { ...args, operation: request });
-      created.promise = created.promise.then(value => {
+      created.promise = created.promise.then(async value => {
+        if (options.captureVersions) {
+          const versions = await this.transport<Record<string, string>>('get_remote_write_snapshot', { requestId: request.requestId });
+          if (versions && typeof versions === 'object' && !Array.isArray(versions)) created.versions = versions;
+        }
         if (created.invalidated) throw remoteFailure('identity', request);
-        if (key && created.subscribers > 0 && (options.cacheTtlMs ?? 30_000) > 0) this.remember(key, targetId, value);
+        if (key && created.subscribers > 0 && (options.cacheTtlMs ?? 30_000) > 0) this.remember(key, targetId, value, created.versions ?? {});
         return value;
       }).catch(error => {
         const previous = key ? this.cache.get(key) : undefined;
@@ -172,7 +209,7 @@ export class RemoteOperations {
       options.signal?.addEventListener('abort', abort, { once: true });
       timer = setTimeout(() => stop('timeout'), Math.max(0, deadline - Date.now()));
       subscribed.promise.then(
-        value => { if (release()) { options.onFreshness?.({ stale: false, at: Date.now() }); resolve(structuredClone(value) as T); } },
+        value => { if (release()) { options.onVersions?.({ ...subscribed.versions }); options.onFreshness?.({ stale: false, at: Date.now() }); resolve(structuredClone(value) as T); } },
         error => { if (release()) {
           const previous = key ? this.cache.get(key) : undefined;
           options.onFreshness?.({ stale: true, at: previous?.at ?? 0 });

@@ -22,6 +22,7 @@ async function installRemoteLibrary(page: Page) {
     localStorage.setItem('cliora:remote-target', host.id);
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
     const registered = Object.entries(names).map(([id, name]) => ({
+      remoteResources: { mcp: { relative: '.fixture/config.json', format: 'json', table: 'servers', nested: false }, skillRoot: ['codex', 'grok'].includes(id) ? '.fixture/skills' : null, agentRoot: null, agentExtension: null },
       id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal',
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
     }));

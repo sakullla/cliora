@@ -2,6 +2,7 @@
  * No IPC is mocked. The create/resume phases deliberately span an app restart.
  * A missing environment or an unfinished phase is never reported as acceptance.
  */
+import { runTransactionAcceptance } from './remote-transaction-fixtures.mjs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -28,9 +29,11 @@ const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const remoteInspect = async command => {
   // This is an independent observer, never a substitute for product IPC. Use
   // exactly the explicitly configured key/config and strict host verification.
-  const result = await execFileAsync('ssh', ['-T', '-F', config.target.sshConfig, '-i', config.target.identityFile,
-    '-p', String(config.target.port), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'ConnectTimeout=10', `${config.target.user}@${config.target.host}`,
+  const observer = phase === 'transactions' ? config.transactions?.observerTarget : config.target;
+  requireThat(observer?.authMethod === 'key' && observer.sshConfig && observer.identityFile && !observer.password && !observer.privateKey, 'Supply an independent strict key observer for transactions.');
+  const result = await execFileAsync('ssh', ['-T', '-F', observer.sshConfig, '-i', observer.identityFile,
+    '-p', String(observer.port), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    '-o', 'ConnectTimeout=10', `${observer.user}@${observer.host}`,
     `export PATH="$HOME/.local/bin:$HOME/bin:$PATH"; ${command}`], { timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024 });
   return result.stdout;
 };
@@ -147,7 +150,7 @@ const showWorkbench = async id => {
 };
 
 try {
-  requireThat(['preflight', 'create', 'resume', 'measure', 'directories', 'cleanup'].includes(phase), 'Unknown phase.');
+  requireThat(['preflight', 'create', 'resume', 'measure', 'directories', 'transactions', 'cleanup'].includes(phase), 'Unknown phase.');
   requireThat(configPath, 'Set CLIORA_REMOTE_TEST_CONFIG or --config to an explicitly isolated test configuration.');
   config = JSON.parse(await readFile(path.resolve(configPath), 'utf8'));
   requireThat(config.isolated === true, 'Configuration must acknowledge an isolated app and remote test directory.');
@@ -189,6 +192,10 @@ try {
     check('registered CLI capability', tools.registered.some(item => item.id === config.toolId && item.launch?.state !== 'unsupported'));
     report.status = 'preflight_passed';
     report.limitations.push('Preflight verifies connectivity only, not independent sessions or application restart.');
+  } else if (phase === 'transactions') {
+    await invoke('set_remote_ssh_enabled', { enabled: true });
+    if (!(await invoke('list_remote_targets')).some(item => item.id === targetId)) await invoke('save_remote_target', { target: { ...config.target, id: targetId, name: 'Isolated SSH acceptance', enabled: true, createdAt: 0, updatedAt: 0, defaultPath: config.testDirectory }, password: null });
+    await runTransactionAcceptance({ config, targetId, invoke, evaluate, observe: remoteInspect, report, check });
   } else if (phase === 'create') {
     requireThat(config.inputProbe?.input && config.inputProbe?.expected, 'Provide a harmless explicit inputProbe for the CLI fixture; no inference prompt is generated automatically.');
     requireThat(typeof config.readyOutput === 'string' && config.readyOutput.length > 0, 'Supply readyOutput from the actual CLI startup screen.');

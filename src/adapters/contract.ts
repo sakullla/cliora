@@ -36,6 +36,7 @@ export type ToolUiAdapter = {
   configuration?: {
     Editor: ComponentType<ConfigurationContentProps>;
   };
+  remoteAgent?: { root: string; extension: 'md' | 'toml' };
   primaryRole?: string;
   plugins?: { installLabel?: string; projectTrust?: boolean; projectUpdate?: boolean };
   officialUsage?: { accountRequired: boolean; automaticRefresh: boolean };

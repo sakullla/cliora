@@ -136,6 +136,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
     return () => window.clearTimeout(timer);
   }, [copiedId, toasts.notice]);
+  remoteReads.bindWriteDraft(draft ? `${draft.id ?? 'new'}:${draft.expectedVersion ?? ''}` : null);
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active, busy]);
   const mounted = useRef(true);
@@ -267,6 +268,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const refreshSequence = useRef(0);
   useEffect(() => () => { refreshSequence.current++; }, [remoteTargetId, kind, search, active]);
   async function refresh(nextKind = kind) {
+    remoteReads.rebaseWriteAction();
     const sequence = ++refreshSequence.current;
     const items = await (remoteTargetId === 'local' ? native.listLibraryItems(nextKind, null, search) : native.listRemoteLibraryItems(remoteTargetId, nextKind, search, { fresh: true }));
     if (sequence === refreshSequence.current && mounted.current) setItems(items);
@@ -338,6 +340,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     } catch (value) { showDialogError(ruleFailure(value)); return false; }
   }
   async function toggleRule(item: LibraryItem, toolId: string, scope: Scope, projectPath: string | null) {
+    remoteReads.beginWriteAction();
     if (busy || !bindingsKnown) return;
     const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];

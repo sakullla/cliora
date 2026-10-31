@@ -298,6 +298,26 @@ pub struct SkillObservation {
     pub detail: &'static str,
 }
 
+/// Adapter-owned remote resource mappings. Absence is an unsupported capability;
+/// shared transports never substitute another CLI's native directory.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteResourceLayout {
+    pub mcp: Option<RemoteMcpLayout>,
+    pub skill_root: Option<&'static str>,
+    pub agent_root: Option<&'static str>,
+    pub agent_extension: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMcpLayout {
+    pub relative: &'static str,
+    pub format: &'static str,
+    pub table: &'static str,
+    pub nested: bool,
+}
+
 /// Login-home relative skill directory scanned on a remote host.
 /// Read-only roots are bundled or observed directories, same as the local scan.
 #[derive(Clone, Copy, Debug)]
@@ -1027,6 +1047,15 @@ pub trait CliAdapter: Sync {
     }
     /// Login-home or project-relative native documents a remote host can edit
     /// in place. Empty means this CLI has not declared a remote native file.
+    fn parse_remote_mcp(&self, text: &str) -> Result<Value, String> {
+        let layout = self.remote_resource_layout().mcp.ok_or("适配器未声明远程 MCP 能力")?;
+        super::remote_resources::parse(layout, text)
+    }
+    fn render_remote_mcp(&self, text: &str, value: &Value) -> Result<Vec<u8>, String> {
+        let layout = self.remote_resource_layout().mcp.ok_or("适配器未声明远程 MCP 能力")?;
+        super::remote_resources::render(layout, text, value)
+    }
+    fn remote_resource_layout(&self) -> RemoteResourceLayout { RemoteResourceLayout::default() }
     fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
         &[]
     }
@@ -1528,6 +1557,7 @@ pub struct PublishedDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub association: Option<Facet>,
     /// Native files this CLI lets a remote host read and write directly.
+    pub remote_resources: RemoteResourceLayout,
     #[serde(default, skip_serializing_if = "remote_native_files_empty")]
     pub remote_native_files: &'static [RemoteNativeDocument],
 }
@@ -1542,6 +1572,7 @@ impl PublishedDescriptor {
             resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
+            remote_resources: adapter.remote_resource_layout(),
             remote_native_files: adapter.remote_native_documents(),
         }
     }
@@ -1603,6 +1634,15 @@ mod association_facet_tests {
     struct AssociationCli(AssociationCase);
 
     impl CliAdapter for AssociationCli {
+        fn remote_resource_layout(&self) -> RemoteResourceLayout {
+            match self.0 {
+                AssociationCase::Declared => RemoteResourceLayout {
+                    mcp: Some(RemoteMcpLayout { relative: ".fixture/native.json", format: "json", table: "serviceTable", nested: true }),
+                    ..RemoteResourceLayout::default()
+                },
+                _ => RemoteResourceLayout::default(),
+            }
+        }
         fn id(&self) -> &'static str {
             match self.0 {
                 AssociationCase::Undeclared => "association_undeclared",
@@ -1689,6 +1729,23 @@ mod association_facet_tests {
                 }),
             }
         }
+    }
+
+    #[test]
+    fn a_registered_extension_owns_remote_paths_and_mcp_codec_without_service_switches() {
+        static FIXTURE: AssociationCli = AssociationCli(AssociationCase::Declared);
+        let registry = super::super::Registry::with_adapters(vec![&FIXTURE]).unwrap();
+        let adapter = registry.get("association_declared").unwrap();
+        assert_eq!(PublishedDescriptor::from_adapter(adapter).remote_resources.mcp.unwrap().relative, ".fixture/native.json");
+        let original = r#"{"model":"keep","mcp":{"unrelated":true,"serviceTable":{}}}"#;
+        let rendered = adapter.render_remote_mcp(original, &serde_json::json!({"entries":[{"name":"fixture","command":"fixture-command","args":["--safe"]}]})).unwrap();
+        let text = String::from_utf8(rendered).unwrap();
+        let document: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(document["model"], "keep");
+        assert_eq!(document["mcp"]["unrelated"], true);
+        assert_eq!(adapter.parse_remote_mcp(&text).unwrap()["entries"][0]["name"], "fixture");
+        assert!(super::super::Registry::builtins().get("unknown").is_none());
+        assert!(AssociationCli(AssociationCase::Undeclared).render_remote_mcp("{}", &Value::Null).is_err());
     }
 
     #[test]

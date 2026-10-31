@@ -28,9 +28,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts'].includes(arg));
-const captureMode=process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery'].includes(arg));
+const captureMode=process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -47,6 +47,9 @@ async function mock(initialTheme){
  const versions={codex:'0.160.0',claude_code:'2.1.287',grok:'1.0.46',pi:'1.0.0',open_code:'1.18.34'};
  const connectionPolicy=(id,scope)=>({apiKey:{state:scope==='project'&&id!=='claude_code'?'scope_denied':'writable',reason:scope==='project'&&id!=='claude_code'?names[id]+' 项目层不能写入供应商密钥；请使用全局配置':''},providerAddress:{state:'configurable',reason:''},projection:id==='pi'||id==='open_code'?'provider_models':id==='codex'?'current_model':'single_connection'});
  const captureHosts=typeof initialTheme==='object'&&initialTheme.remoteHosts;
+ const captureWrites=typeof initialTheme==='object'&&initialTheme.writeRecovery;
+ const writeReceipt={id:'6754f794-3c8a-4cb3-aec1-5f5dcb197b36',targetId:'capture-host',targetRevision:1,identity:'synthetic-host-hash',outcome:'committing',items:[{path:'$HOME/.cliora/registered-tools/codex.json',before:'a'.repeat(64),after:'b'.repeat(64),state:'committed',observed:null},{path:'$HOME/.codex/config.toml',before:'c'.repeat(64),after:'d'.repeat(64),state:'applying',observed:null}]};
+ if(captureWrites){window.__writeFixture=writeReceipt;localStorage.setItem('cliora:remote-target','capture-host');localStorage.setItem('cliora:remote-writes:v1',JSON.stringify([writeReceipt]));}
  const hostFixture={hold:false,failure:false};
  if(captureHosts)window.__hostCapture=hostFixture;
  const captureRules=typeof initialTheme==='object'&&initialTheme.rules;
@@ -116,6 +119,9 @@ async function mock(initialTheme){
   if(command==='scan_native_agents')return {target:args.target,capability:{version:versions[args.target.toolId],supported:true,format:'markdown',template:agentEntry.content,detail:'下一次委派读取定义'},entries:[agentEntry,{...agentEntry,id:'plugin-reviewer',name:'plugin-reviewer',owner:'插件：code-review@official',readOnly:true}],baseline:'capture-agents',detail:'合成原生定义，插件所属定义只读'};
   if(captureHosts&&['list_remote_projects','list_remote_sessions','probe_remote_clis'].includes(command))return [];
   if(captureHosts&&command==='list_remote_targets')return [{id:'capture-host',name:'开发环境 · 远程 SSH',host:'fixture.invalid',port:2222,user:'developer',authMethod:'password',defaultPath:'/srv/projects/long-project-directory',enabled:true,createdAt:1,updatedAt:1}];
+  if(command==='get_remote_write_snapshot')return {};
+  if(captureWrites&&command==='list_remote_write_receipts')return [window.__writeFixture];
+  if(captureWrites&&command==='inspect_remote_write'){const r=window.__writeFixture;r.outcome='recovery_required';r.items[0].observed='after';r.items[1].observed='before';if(args.rollback){r.items[0].state='rollback_failed';r.items[1].state='rolled_back';}return structuredClone(r);}
   if(captureHosts&&command==='list_remote_saved_passwords')return ['capture-host'];
   if(captureHosts&&command==='test_remote_target'){if(hostFixture.hold)await new Promise(()=>{});if(hostFixture.failure)throw {message:'Permission denied (publickey,password).',action:'检查所选主机的凭据或密钥后重试。'};return {reachable:true,system:'Linux fixture'};}
   if(captureRules&&command==='list_remote_targets')return [{id:'capture-rule-host',name:'规则测试主机',host:'fixture.invalid',port:22,user:'fixture',authMethod:'key',enabled:true,createdAt:1,updatedAt:1}];
@@ -619,7 +625,7 @@ async function capturePluginScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -627,6 +633,19 @@ for(const width of widths)for(const theme of themes){
  // Navigation is inside the try so a boot timeout under load is recorded instead of crashing the run.
  try{
  await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ if(process.argv.includes('--write-recovery')){
+  await page.getByText('存在未确认的远程写入，请先核查回执，保留草稿并勿直接重试。',{exact:true}).waitFor();
+  await capture('write-unknown');
+  await page.getByRole('button',{name:'写入恢复',exact:true}).click();
+  const recovery=page.getByRole('dialog',{name:'远程写入与恢复',exact:true});
+  await recovery.getByRole('button',{name:'核查实际结果',exact:true}).click();
+  await recovery.getByText('实际为提交后版本',{exact:false}).waitFor();
+  await capture('write-inspected-partial');
+  await page.evaluate(()=>{const r=structuredClone(window.__writeFixture);r.items[0].state='rollback_failed';r.items[1].state='conflict';r.items[1].observed='conflict';window.dispatchEvent(new CustomEvent('cliora:remote-write',{detail:{targetId:'capture-host',error:{message:'合成恢复失败，备份已保留；外部修改未覆盖。',remote:{receipt:r}}}}));});
+  await recovery.getByText('恢复失败，备份保留',{exact:false}).waitFor();
+  await capture('write-rollback-failure-conflict');
+  await page.close();continue;
+ }
  if(process.argv.includes('--remote-hosts')){
   await nav.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('button',{name:'管理主机',exact:true}).click();

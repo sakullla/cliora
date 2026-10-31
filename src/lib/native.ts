@@ -1,3 +1,4 @@
+import { getWriteReceipts, rememberWriteReceipt, unresolvedWrite } from '../features/remote/writeReceipts';
 import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
 import type { RemoteApiError } from '../types/native';
 import type { MaintenanceResult } from '../types/native';
@@ -15,7 +16,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, Remote
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
-import type { RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore } from '../types/remote';
+import type { RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore, RemoteWriteReceipt } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
@@ -54,6 +55,10 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 }
 
 const remoteOperations = new RemoteOperations(command);
+const draftBaselines = new Map<string, Record<string, string>>();
+const transactionalWrites = new Set(['save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
+const versionedReads = new Set(['get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_library_items', 'list_remote_rule_placements', 'begin_configuration_draft']);
+
 const remoteIdentityListeners = new Set<() => void>();
 export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentityListeners.add(listener); return () => { remoteIdentityListeners.delete(listener); }; };
 const remoteViewIdentities = new Map<string, number>();
@@ -80,13 +85,19 @@ function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 're
   const cacheable = kind === 'read' && cachedRemoteReads.has(name);
   // Refresh is request policy, never part of the resource identity.
   const identityArgs = (name === 'list_remote_native_history' || name === 'list_remote_native_history_snapshot') ? { ...args, refresh: false } : args;
+  if (kind === 'write' && transactionalWrites.has(name) && getWriteReceipts().some(item => item.targetId === targetId && unresolvedWrite(item))) return Promise.reject({ message: i18n.t('common.remoteWrite.unknown'), action: i18n.t('common.remoteWrite.open') });
   if (kind === 'write') remoteOperations.invalidate(targetId);
   const result = remoteOperations.start<T>(name, identityArgs, targetId, kind, {
     targetRevision: target?.updatedAt ?? remoteRevisions.get(targetId),
+    ...(kind === 'write' ? { expectedFiles: {} } : {}),
+    captureVersions: versionedReads.has(name) || transactionalWrites.has(name),
     ...(cacheable ? { shareKey: name, cacheTtlMs: 30_000 } : {}),
     ...options, fresh: options?.fresh || args.refresh === true,
+    onVersions: versions => {
+      options?.onVersions?.(versions);
+    },
   }).promise;
-  return kind === 'write' ? result.finally(() => remoteOperations.invalidate(targetId)) : result;
+  return kind === 'write' ? result.then(value => { remoteOperations.invalidate(targetId); return value; }).catch(error => { if (error?.remote?.receipt) rememberWriteReceipt(error.remote.receipt); window.dispatchEvent(new CustomEvent('cliora:remote-write', { detail: { targetId, error } })); throw error; }) : result;
 }
 
 // Share only overlapping reads. Settled workspace data is always read again so
@@ -278,6 +289,8 @@ export const native = {
   probeRemoteCli: (targetId: string, toolId: string, options?: RemoteOperationOptions) => remoteCommand<RemoteCliProbe>('probe_remote_cli', { targetId, toolId }, 'read', options),
   probeRemoteClis: (targetId: string, toolIds: string[], options?: RemoteOperationOptions) => remoteCommand<RemoteCliProbe[]>('probe_remote_clis', { targetId, toolIds }, 'read', options),
   getRemoteToolStore: (targetId: string, toolId: string, scope?: string | null, projectPath?: string | null, options?: RemoteOperationOptions) => remoteCommand<RemoteToolStore>('get_remote_tool_store', { targetId, toolId, scope: scope ?? null, projectPath: projectPath ?? null }, 'read', options),
+  listRemoteWriteReceipts: (targetId: string, options?: RemoteOperationOptions) => remoteCommand<RemoteWriteReceipt[]>('list_remote_write_receipts', { targetId }, 'read', options),
+  inspectRemoteWrite: (targetId: string, receiptId: string, rollback: boolean, options?: RemoteOperationOptions, receipt?: RemoteWriteReceipt) => remoteCommand<RemoteWriteReceipt>('inspect_remote_write', { targetId, receiptId, rollback, receipt }, rollback ? 'write' : 'read', options),
   saveRemoteToolStore: (targetId: string, toolId: string, store: RemoteToolStore, scope?: string | null, projectPath?: string | null, options?: RemoteOperationOptions) => remoteCommand<void>('save_remote_tool_store', { targetId, toolId, store, scope: scope ?? null, projectPath: projectPath ?? null }, 'write', options),
   deleteRemoteToolProfile: (targetId: string, toolId: string, profileId: string, options?: RemoteOperationOptions) => remoteCommand<void>('delete_remote_tool_profile', { targetId, toolId, profileId }, 'write', options),
   getRemoteResourceStore: (targetId: string, toolId: string, kind: string, options?: RemoteOperationOptions) => remoteCommand<unknown>('get_remote_resource_store', { targetId, toolId, kind }, 'read', options),
@@ -407,12 +420,12 @@ export const replaceConfigurationText = (draft: ConfigurationDraft, files: Recor
 
 // Workspace drafts retain their source/baseline in Rust. Profile/common saves are DB only.
 export const beginConfigurationDraft = (request: import('../types/configuration').ConfigurationBeginRequest, options?: RemoteOperationOptions) => request.remoteTargetId
-  ? remoteCommand<ConfigurationDraft>('begin_configuration_draft', { request, targetId: request.remoteTargetId }, 'read', { ...options, fresh: true }).catch(error => { void command('cancel_configuration_draft', { sessionId: request.sessionId }).catch(() => {}); throw error; })
+  ? remoteCommand<ConfigurationDraft>('begin_configuration_draft', { request, targetId: request.remoteTargetId }, 'read', { ...options, fresh: true, onVersions: versions => { draftBaselines.set(request.sessionId, versions); options?.onVersions?.(versions); } }).catch(error => { void command('cancel_configuration_draft', { sessionId: request.sessionId }).catch(() => {}); throw error; })
   : command<ConfigurationDraft>('begin_configuration_draft', { request });
 export const updateConfigurationDraft = (draft: ConfigurationDraft, profile: RegisteredProfile) => command<ConfigurationDraft>('update_configuration_draft', { draft, profile });
 export const selectConfigurationCredential = (draft: ConfigurationDraft, credential: import('../types/configuration').ConfigurationCredential) => command<ConfigurationDraft>('select_configuration_credential', { draft, credential });
 export const setConfigurationDraftSecret = (draft: ConfigurationDraft, secret: string) => command<ConfigurationDraft>('set_configuration_draft_secret', { draft, secret });
-export const cancelConfigurationDraft = (sessionId: string) => command<void>('cancel_configuration_draft', { sessionId });
+export const cancelConfigurationDraft = (sessionId: string) => { draftBaselines.delete(sessionId); return command<void>('cancel_configuration_draft', { sessionId }); };
 export const cancelConfigurationRequests = (draft: ConfigurationDraft) => command<ConfigurationDraft>('cancel_configuration_requests', { draft });
 export const addConfigurationModels = (draft: ConfigurationDraft, ids: string[]) => command<ConfigurationDraft>('add_configuration_models', { draft, ids });
 export const listConfigurationModels = (draft: ConfigurationDraft, force = false, query = '') => command<import('../types/configuration').ConfigurationDirectoryResult>('list_configuration_models', { draft, force, query });
@@ -420,7 +433,7 @@ export const checkConfigurationConnection = (draft: ConfigurationDraft, allowMod
   ? remoteCommand<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest, targetId: draft.remoteTargetId }, 'read', options)
   : command<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest });
 export const saveConfigurationDraft = (draft: ConfigurationDraft, options?: RemoteOperationOptions) => draft.remoteTargetId
-  ? remoteCommand<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft, targetId: draft.remoteTargetId }, 'write', options)
+  ? remoteCommand<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft, targetId: draft.remoteTargetId }, 'write', { ...options, expectedFiles: draftBaselines.get(draft.sessionId) ?? {} }).then(value => { draftBaselines.delete(draft.sessionId); return value; })
   : command<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft });
 export const commonInfluence = (toolId: string) => command<import('../types/configuration').CommonInfluence>('common_influence', { toolId });
 export const applyCommonConfiguration = (common: RegisteredCommon, targets: import('../types/configuration').CommonInfluenceTarget[]) => command<import('../types/configuration').CommonApplicationResult[]>('apply_common_configuration', { common, targets });

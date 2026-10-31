@@ -761,7 +761,7 @@ fn database_v22_native_usage_migration_preserves_legacy_tokens_and_json() {
     let db = Database::open(&path).unwrap();
     let id = store_events(&db, "codex", "legacy", Some("gpt-5"), vec![event("legacy-request", Some("gpt-5"), FIXTURE_DAY, (10, 2, None, None), false)]);
     db.with_connection(|conn| {
-        conn.execute_batch("ALTER TABLE history_usage DROP COLUMN native_usage_json; PRAGMA user_version = 22;").map_err(|error| error.to_string())?;
+        conn.execute_batch("ALTER TABLE history_usage DROP COLUMN native_usage_json; DROP TABLE remote_session_index; PRAGMA user_version = 22;").map_err(|error| error.to_string())?;
         // Old payloads have no optional nativeUsage field.
         conn.execute("UPDATE history_sessions SET usage_json = json_remove(usage_json, '$[0].nativeUsage')", []).map_err(|error| error.to_string())?;
         Ok(())
@@ -1895,7 +1895,7 @@ fn v17_history_upgrade_rereads_unchanged_sources_and_preserves_associations() {
     db.with_connection(|conn| {
         conn.execute_batch("ALTER TABLE history_usage DROP COLUMN request_count;
             UPDATE history_sessions SET project_id='linked-project', usage_json='[]';
-            PRAGMA user_version = 17;").map_err(|error| error.to_string())
+            DROP TABLE remote_session_index; PRAGMA user_version = 17;").map_err(|error| error.to_string())
     }).unwrap();
     drop(db);
     let db = Database::open(&db_path).unwrap();
@@ -2195,7 +2195,7 @@ fn legacy_rows_without_association_fields_are_unknown_and_have_no_jump() {
     db.with_connection(|conn| {
         let usage: String = conn.query_row("SELECT usage_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
         assert!(!usage.contains("attributions"), "{usage}");
-        conn.execute_batch("ALTER TABLE history_sessions DROP COLUMN children_json; PRAGMA user_version = 23;").map_err(|error| error.to_string())?;
+        conn.execute_batch("ALTER TABLE history_sessions DROP COLUMN children_json; DROP TABLE remote_session_index; PRAGMA user_version = 23;").map_err(|error| error.to_string())?;
         Ok(())
     }).unwrap();
     drop(db);

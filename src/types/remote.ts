@@ -66,6 +66,7 @@ export type RemoteOperationRequest = {
   priority: RemotePriority;
   deadlineUnixMs: number;
   refresh?: boolean;
+  expectedFiles?: Record<string, string>;
 };
 export type RemoteFailure = {
   code: string;
@@ -79,4 +80,20 @@ export type RemoteFailure = {
   outcome: 'failed' | 'unknown';
   retryable: boolean;
   exitCode: number | null;
+  receipt?: RemoteWriteReceipt;
+};
+
+export type RemoteWriteReceipt = {
+  id: string;
+  targetId: string;
+  targetRevision: number;
+  identity: string;
+  outcome: string;
+  items: { path: string; state: string; before: string; after: string; observed: 'before' | 'after' | 'conflict' | null }[];
+};
+export type RemoteResourceLayout = {
+  mcp: { relative: string; format: string; table: string; nested: boolean } | null;
+  skillRoot: string | null;
+  agentRoot: string | null;
+  agentExtension: string | null;
 };

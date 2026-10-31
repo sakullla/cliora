@@ -24,6 +24,7 @@ use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 pub mod password;
 pub mod operations;
 pub mod read_cache;
+pub mod transactions;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,8 +54,8 @@ fn load_resource_store_uncached(target: &RemoteTarget, tool_id: &str, kind: &str
     // MCP shown as "当前生效" is whatever the CLI config contains. The Cliora
     // JSON file can remember library membership, but a stale copy must not
     // invent servers the native file does not have.
-    if kind == "mcp" {
-        let bundle = load_resource_stores(target, &[tool_id.to_owned()], "mcp")?;
+    if matches!(kind, "mcp" | "skills") {
+        let bundle = load_resource_stores(target, &[tool_id.to_owned()], kind)?;
         return bundle
             .get("stores")
             .and_then(|stores| stores.get(tool_id))
@@ -62,12 +63,10 @@ fn load_resource_store_uncached(target: &RemoteTarget, tool_id: &str, kind: &str
             .ok_or_else(|| RemoteError::Storage("远程 MCP 读取结果无效".into()));
     }
     let path = format!("$HOME/.cliora/resources/{tool_id}/{kind}.json");
-    let result = run_command(target, &format!("if [ -f {path} ]; then cat {path}; else printf '%s' '{{}}'; fi"))?;
-    let stored: serde_json::Value = serde_json::from_str(&result.stdout).map_err(|error| RemoteError::Storage(format!("远程资源格式无效：{error}")))?;
-    if stored != serde_json::json!({}) { return Ok(stored); }
-    if kind == "skills" {
-        return seed_remote_skills(target, tool_id);
-    }
+    let result = run_command(target, &format!("if [ -f {path} ]; then base64 -w0 -- {path}; else printf %s __MISSING__; fi"))?;
+    observe_encoded(&path, result.stdout.trim());
+    let raw = decode_b64_text(result.stdout.trim()).unwrap_or_else(|| "{}".into());
+    let stored: serde_json::Value = serde_json::from_str(&raw).map_err(|error| RemoteError::Storage(format!("远程资源格式无效：{error}")))?;
     if kind == "agents" {
         return seed_remote_agents(target, tool_id);
     }
@@ -149,8 +148,7 @@ fn remote_skill_roots(tool_id: &str) -> Vec<SkillScanRoot> {
                 .collect();
         }
     }
-    let relative = if tool_id == "grok" { ".grok/skills" } else { ".codex/skills" };
-    vec![SkillScanRoot { relative: relative.into(), read_only: true, detail: "远程主机目录".into() }]
+    Vec::new()
 }
 
 /// The longest declared root wins, so `.codex/skills/.system` stays bundled
@@ -165,49 +163,6 @@ fn skill_root_index(path: &str, roots: &[SkillScanRoot]) -> usize {
         .unwrap_or(0)
 }
 
-fn seed_remote_skills(target: &RemoteTarget, tool_id: &str) -> Result<serde_json::Value, RemoteError> {
-    let roots = remote_skill_roots(tool_id);
-    if roots.is_empty() {
-        return Ok(serde_json::json!({"entries": [], "documents": {}}));
-    }
-    let mut script = String::new();
-    for (index, root) in roots.iter().enumerate() {
-        let dir = format!("$HOME/{}", root.relative);
-        script.push_str(&format!("if [ -d {dir} ]; then find {dir} -mindepth 2 -maxdepth 2 -type f -name SKILL.md -print | while IFS= read -r file; do printf '%s\\n' '__CLIORA_ROOT_{index}' \"$file\"; done; fi; "));
-    }
-    let found = if script.is_empty() { String::new() } else { run_command(target, &script)?.stdout };
-    let mut located = Vec::new();
-    let mut lines = found.lines().map(str::trim).filter(|line| !line.is_empty());
-    while let Some(marker) = lines.next() {
-        let Some(path) = lines.next() else { break; };
-        if !path.starts_with('/') || path.contains("..") || !path.ends_with("/SKILL.md") { continue; }
-        let index = marker.strip_prefix("__CLIORA_ROOT_").and_then(|value| value.parse::<usize>().ok()).unwrap_or(0);
-        located.push((index, path.to_owned()));
-        if located.len() >= 128 { break; }
-    }
-    let mut read_script = String::new();
-    for (index, (_, path)) in located.iter().enumerate() {
-        read_script.push_str("printf '%s\\n' ");
-        read_script.push_str(&shell_quote(&format!("__CLIORA_SKILL__{index}")));
-        read_script.push_str("; base64 < ");
-        read_script.push_str(&shell_quote(path));
-        read_script.push_str(" | tr -d '\\n'; printf '\\n'; ");
-    }
-    let encoded = if read_script.is_empty() { String::new() } else { run_command(target, &read_script)?.stdout };
-    let mut encoded_lines = encoded.lines();
-    let mut contents = BTreeMap::new();
-    for index in 0..located.len() {
-        let marker = format!("__CLIORA_SKILL__{index}");
-        if encoded_lines.next() != Some(marker.as_str()) { continue; }
-        if let Some(value) = encoded_lines.next() {
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(value.trim()) {
-                if let Ok(text) = String::from_utf8(bytes) { contents.insert(located[index].1.clone(), text); }
-            }
-        }
-    }
-    Ok(assemble_skill_store(tool_id, &located, &contents))
-}
-
 fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &BTreeMap<String, String>) -> serde_json::Value {
     let roots = remote_skill_roots(tool_id);
     if roots.is_empty() {
@@ -219,7 +174,13 @@ fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &B
         let index = if roots.get(*index).is_some() { *index } else { skill_root_index(path, &roots) };
         let root = roots.get(index).unwrap_or(&roots[0]);
         let text = contents.get(path);
-        if let Some(text) = text { documents.insert(path.clone(), serde_json::Value::String(text.clone())); }
+        if let Some(text) = text {
+            transactions::observe(path, Some(text.as_bytes()));
+            if let Some((_, suffix)) = path.split_once(&format!("/{}/", root.relative)) {
+                transactions::observe(&format!("$HOME/{}/{suffix}", root.relative), Some(text.as_bytes()));
+            }
+            documents.insert(path.clone(), serde_json::Value::String(text.clone()));
+        }
         let manifest = text.map(|value| crate::resources::skill_manifest::analyze(value, name));
         let issues = manifest.as_ref().map(|manifest| manifest.issue_codes()).unwrap_or_default();
         let description = manifest.map(|manifest| manifest.description).unwrap_or_default();
@@ -234,10 +195,11 @@ fn assemble_skill_store(tool_id: &str, located: &[(usize, String)], contents: &B
 }
 
 fn seed_remote_agents(target: &RemoteTarget, tool_id: &str) -> Result<serde_json::Value, RemoteError> {
-    let capability = match crate::adapters::agents::capability(tool_id) {
+    let mut capability = match crate::adapters::agents::capability(tool_id) {
         Ok(capability) => capability,
         Err(_) => return Ok(serde_json::json!({})),
     };
+    if resource_layout(tool_id).agent_root.is_none() { capability.supported = false; capability.detail = "此适配器未声明远程 Agent 目录和格式"; }
     let extension = if capability.format == "toml" { "toml" } else { "md" };
     let mut detail = "来自当前主机的原生定义".to_owned();
     let mut files = Vec::new();
@@ -265,9 +227,14 @@ fn seed_remote_agents(target: &RemoteTarget, tool_id: &str) -> Result<serde_json
         read_script.push_str(&shell_quote(path));
         read_script.push_str(" | tr -d '[:space:]'); if [ \"$size\" -le 262144 ]; then base64 < ");
         read_script.push_str(&shell_quote(path));
-        read_script.push_str(" | tr -d '\\n'; fi; printf '\\n'; ");
+        read_script.push_str(" | tr -d '\\n'; else printf %s __MISSING__; fi; printf '\\n'; ");
     }
     let encoded = if read_script.is_empty() { String::new() } else { run_command(target, &read_script)?.stdout };
+    Ok(assemble_remote_agents(tool_id, &files, &encoded, capability, detail))
+}
+
+fn assemble_remote_agents(tool_id: &str, files: &[String], encoded: &str, capability: crate::adapters::agents::AgentCapability, detail: String) -> serde_json::Value {
+    let extension = resource_layout(tool_id).agent_extension.unwrap_or("md");
     let mut lines = encoded.lines();
     let mut entries = Vec::new();
     for (index, path) in files.iter().enumerate() {
@@ -276,6 +243,11 @@ fn seed_remote_agents(target: &RemoteTarget, tool_id: &str) -> Result<serde_json
         let Some(value) = lines.next() else { continue; };
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(value.trim()) else { continue; };
         let Ok(content) = String::from_utf8(bytes) else { continue; };
+        transactions::observe(path, Some(content.as_bytes()));
+        if let Some(root) = remote_agent_root(tool_id, "global", None) {
+            let disabled = format!("{}/.cliora-disabled-agents/agents", root.trim_end_matches("/agents"));
+            if let Some(canonical) = canonical_agent_path(path, &root).or_else(|| canonical_agent_path(path, &disabled)) { transactions::observe(&canonical, Some(content.as_bytes())); }
+        }
         let stem = Path::new(path).file_stem().and_then(|stem| stem.to_str()).unwrap_or("agent");
         let enabled = !path.contains("/.cliora-disabled-agents/");
         let format = if extension == "toml" { "toml" } else { "markdown" };
@@ -288,7 +260,7 @@ fn seed_remote_agents(target: &RemoteTarget, tool_id: &str) -> Result<serde_json
         baseline: "remote".into(),
         detail,
     };
-    Ok(serde_json::json!({ "snapshot": snapshot }))
+    serde_json::json!({ "snapshot": snapshot })
 }
 
 fn seed_remote_plugins(target: &RemoteTarget, tool_id: &str) -> Result<serde_json::Value, RemoteError> {
@@ -388,24 +360,19 @@ pub fn save_resource_store(target: &RemoteTarget, tool_id: &str, kind: &str, val
     if !valid_text(tool_id, 120) || !valid_text(kind, 80) || !tool_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) || !kind.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
         return Err(RemoteError::InvalidPath);
     }
-    let previous = if matches!(kind, "agents" | "skills") { load_resource_store(target, tool_id, kind).ok() } else { None };
+    let previous = if matches!(kind, "agents" | "skills") { Some(load_resource_store(target, tool_id, kind)?) } else { None };
     let json = serde_json::to_vec_pretty(value).map_err(|error| RemoteError::Storage(error.to_string()))?;
     if json.len() > 8_000_000 { return Err(RemoteError::Storage("远程资源过大".into())); }
     let path = format!("$HOME/.cliora/resources/{tool_id}/{kind}.json");
-    apply_upload(target, &prepare_upload(&[], &[(path, json)])?)?;
-
-    // The resource cache is also the transport for the remote UI, but the
-    // selected CLI must see the same changes on its next launch. Materialize
-    // the two formats we can safely map without depending on a local CLI
-    // installation: Codex/Grok MCP TOML and Codex/Grok SKILL.md files.
-    if kind == "mcp" {
-        materialize_remote_mcp(target, tool_id, value)?;
+    let mut upload = if kind == "mcp" {
+        materialize_remote_mcp(target, tool_id, value)?
     } else if kind == "skills" {
-        materialize_remote_skills(target, tool_id, previous.as_ref(), value)?;
+        materialize_remote_skills(target, tool_id, previous.as_ref(), value)?
     } else if kind == "agents" {
-        materialize_remote_agents(target, tool_id, previous.as_ref(), value)?;
-    }
-    Ok(())
+        materialize_remote_agents(target, tool_id, previous.as_ref(), value)?
+    } else { prepare_upload(&[], &[])? };
+    upload.files.push((path, json));
+    apply_upload(target, &upload)
 }
 
 /// Upload one local Skills directory to the selected host. The local path is
@@ -417,7 +384,7 @@ pub fn import_skill_directory(target: &RemoteTarget, tool_id: &str, source: &str
     let mut value = load_resource_store(target, tool_id, "skills")?;
     let mut entries = value.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut stored = value.get("documents").and_then(serde_json::Value::as_object).cloned().unwrap_or_default();
-    let root = if tool_id == "grok" { "$HOME/.grok/skills" } else { "$HOME/.codex/skills" };
+    let root = skill_write_root(tool_id)?;
     entries.retain(|entry| entry.get("name").and_then(serde_json::Value::as_str) != Some(name.as_str()));
     let issues = documents.get("SKILL.md").map(|text| crate::resources::skill_manifest::analyze(text, &name).issue_codes()).unwrap_or_default();
     for (path, text) in documents {
@@ -428,14 +395,14 @@ pub fn import_skill_directory(target: &RemoteTarget, tool_id: &str, source: &str
     save_resource_store(target, tool_id, "skills", &value)
 }
 
-fn materialize_remote_mcp(target: &RemoteTarget, tool_id: &str, value: &serde_json::Value) -> Result<(), RemoteError> {
-    if let Some((config_path, root, nested)) = json_mcp_path(tool_id) {
-        return materialize_remote_json_mcp(target, value, config_path, root, nested);
-    }
-    let Some(config_path) = native_config_path(tool_id) else { return Ok(()); };
-    let raw = run_command(target, &format!("if [ -f {config_path} ]; then cat {config_path}; fi"))?;
-    let text = render_toml_mcp(&raw.stdout, value)?;
-    apply_upload(target, &prepare_upload(&[], &[(config_path.to_owned(), text)])?)
+fn materialize_remote_mcp(target: &RemoteTarget, tool_id: &str, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
+    let registry = crate::adapters::Registry::builtins();
+    let adapter = registry.get(tool_id).ok_or_else(|| RemoteError::Storage("适配器未注册".into()))?;
+    let path = mcp_seed_path(tool_id).ok_or_else(|| RemoteError::Storage("适配器未声明远程 MCP 能力".into()))?;
+    let expr = remote_path_expr(&path);
+    let raw = run_command(target, &format!("if [ -f {expr} ]; then cat {expr}; fi"))?;
+    let text = adapter.render_remote_mcp(&raw.stdout, value).map_err(RemoteError::Storage)?;
+    prepare_upload(&[], &[(path, text)])
 }
 
 /// Merge MCP servers into an existing TOML document.
@@ -443,52 +410,12 @@ fn materialize_remote_mcp(target: &RemoteTarget, tool_id: &str, value: &serde_js
 /// `str::parse::<toml::Value>()` reads one value, not a document. A failed
 /// parse used to be replaced with an empty table, so saving MCP could erase
 /// the model and the API key. `toml_edit` replaces only `mcp_servers`.
-fn render_toml_mcp(config_text: &str, value: &serde_json::Value) -> Result<Vec<u8>, RemoteError> {
-    let mut document: toml_edit::DocumentMut = if config_text.trim().is_empty() {
-        toml_edit::DocumentMut::new()
-    } else {
-        config_text.parse().map_err(|error| RemoteError::Storage(format!("远程配置不是 TOML 表：{error}")))?
-    };
-    let mut servers = toml_edit::Table::new();
-    let mut count = 0usize;
-    for item in value.get("entries").and_then(serde_json::Value::as_array).into_iter().flatten() {
-        let Some(name) = item.get("name").and_then(serde_json::Value::as_str).filter(|name| valid_text(name, 160)) else { continue; };
-        let mut server = toml_edit::Table::new();
-        let transport = item.get("transport").and_then(serde_json::Value::as_str).unwrap_or("stdio");
-        if transport == "http" {
-            if let Some(url) = item.get("url").and_then(serde_json::Value::as_str).filter(|url| !url.trim().is_empty()) {
-                server.insert("url", toml_edit::value(url));
-            }
-        } else if let Some(command) = item.get("command").and_then(serde_json::Value::as_str).filter(|command| !command.trim().is_empty()) {
-            server.insert("command", toml_edit::value(command));
-        }
-        if transport != "http" {
-            if let Some(args) = item.get("args").and_then(serde_json::Value::as_array) {
-                let mut array = toml_edit::Array::new();
-                for arg in args.iter().filter_map(serde_json::Value::as_str) { array.push(arg); }
-                if !array.is_empty() { server.insert("args", toml_edit::Item::Value(toml_edit::Value::Array(array))); }
-            }
-            if let Some(env) = toml_string_table(item.get("env")) { server.insert("env", toml_edit::Item::Table(env)); }
-        } else if let Some(headers) = toml_string_table(item.get("headers")) {
-            server.insert("headers", toml_edit::Item::Table(headers));
-        }
-        if item.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) { server.insert("enabled", toml_edit::value(false)); }
-        servers.insert(name, toml_edit::Item::Table(server));
-        count += 1;
-    }
-    if count == 0 { document.remove("mcp_servers"); } else { document.insert("mcp_servers", toml_edit::Item::Table(servers)); }
-    Ok(document.to_string().into_bytes())
-}
+#[cfg(test)]
+fn render_toml_mcp(config_text: &str, value: &serde_json::Value) -> Result<Vec<u8>, RemoteError> { crate::adapters::remote_resources::render_toml_mcp_table(config_text, value, "mcp_servers").map_err(RemoteError::Storage) }
 
-fn toml_string_table(value: Option<&serde_json::Value>) -> Option<toml_edit::Table> {
-    let object = value?.as_object()?;
-    let mut table = toml_edit::Table::new();
-    for (key, item) in object {
-        let Some(text) = item.as_str().filter(|_| valid_text(key, 160)) else { continue; };
-        table.insert(key, toml_edit::value(text));
-    }
-    (!table.is_empty()).then_some(table)
-}
+
+
+
 
 fn valid_resource_token(value: &str, max: usize) -> bool {
     valid_text(value, max) && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
@@ -503,57 +430,20 @@ fn empty_resource_store(kind: &str) -> serde_json::Value {
 }
 
 fn mcp_seed_path(tool_id: &str) -> Option<String> {
-    native_config_path(tool_id).or_else(|| json_mcp_path(tool_id).map(|(path, _, _)| path.to_owned()))
+    resource_layout(tool_id).mcp.filter(|layout| safe_home_relative(layout.relative)).map(|layout| format!("$HOME/{}", layout.relative))
 }
 
-fn mcp_entries_from_toml(document: &toml::Value) -> Vec<serde_json::Value> {
-    let Some(servers) = document.get("mcp_servers").and_then(toml::Value::as_table) else { return Vec::new(); };
-    servers.iter().map(|(name, value)| {
-        let table = value.as_table();
-        let command = table.and_then(|item| item.get("command")).and_then(toml::Value::as_str).unwrap_or_default();
-        let args = table.and_then(|item| item.get("args")).and_then(toml::Value::as_array).map(|items| items.iter().filter_map(toml::Value::as_str).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
-        let url = table.and_then(|item| item.get("url")).and_then(toml::Value::as_str).unwrap_or_default();
-        let transport = if url.is_empty() { "stdio" } else { "http" };
-        let enabled = table.and_then(|item| item.get("enabled")).and_then(toml::Value::as_bool).unwrap_or(true);
-        let env = toml_string_map(table.and_then(|item| item.get("env")));
-        let headers = toml_string_map(table.and_then(|item| item.get("headers")));
-        serde_json::json!({"name": name, "transport": transport, "command": command, "args": args, "url": url, "env": env, "headers": headers, "inLibrary": false, "enabled": enabled, "protectedValues": false})
-    }).collect()
-}
 
-fn mcp_entries_from_json(document: &serde_json::Value, root: &str, nested: bool) -> Vec<serde_json::Value> {
-    let servers = if nested { document.get("mcp").and_then(|value| value.get(root)) } else { document.get(root) };
-    servers.and_then(serde_json::Value::as_object).into_iter().flatten().map(|(name, server)| {
-        let transport = if server.get("url").and_then(serde_json::Value::as_str).is_some() { "http" } else { "stdio" };
-        serde_json::json!({
-            "name": name,
-            "transport": transport,
-            "command": server.get("command").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "args": server.get("args").cloned().unwrap_or_else(|| serde_json::json!([])),
-            "url": server.get("url").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "env": server.get("env").cloned().unwrap_or_else(|| serde_json::json!({})),
-            "headers": server.get("headers").cloned().unwrap_or_else(|| serde_json::json!({})),
-            "inLibrary": false,
-            "enabled": server.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true),
-            "protectedValues": false
-        })
-    }).collect()
-}
 
-fn toml_string_map(value: Option<&toml::Value>) -> serde_json::Value {
-    let Some(table) = value.and_then(toml::Value::as_table) else { return serde_json::json!({}); };
-    let mut map = serde_json::Map::new();
-    for (key, item) in table {
-        if let Some(text) = item.as_str() { map.insert(key.clone(), serde_json::Value::String(text.to_owned())); }
-    }
-    serde_json::Value::Object(map)
-}
+
+
+
 
 /// Native config decides which MCP servers are effective. Library metadata in
 /// the Cliora store is kept only for names the CLI file still contains.
 fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &str) -> serde_json::Value {
     if mcp_seed_path(tool_id).is_none() {
-        return if stored == &serde_json::json!({}) { empty_resource_store("mcp") } else { stored.clone() };
+        return empty_resource_store("mcp");
     }
     let native = mcp_store_from_config_text(tool_id, config_text).unwrap_or_else(|| empty_resource_store("mcp"));
     let native_entries = native.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
@@ -579,16 +469,7 @@ fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &
 }
 
 fn mcp_store_from_config_text(tool_id: &str, config_text: &str) -> Option<serde_json::Value> {
-    if config_text.trim().is_empty() { return None; }
-    if matches!(tool_id, "codex" | "grok") {
-        // toml::Value's FromStr parses one value, not a config document.
-        // Dotted tables such as [mcp_servers.demo] only survive the document parser.
-        let document: toml::Value = toml::from_str(config_text).ok()?;
-        return Some(serde_json::json!({"entries": mcp_entries_from_toml(&document), "definitions": []}));
-    }
-    let (_, root, nested) = json_mcp_path(tool_id)?;
-    let document = serde_json::from_str::<serde_json::Value>(config_text).ok()?;
-    Some(serde_json::json!({"entries": mcp_entries_from_json(&document, root, nested), "definitions": []}))
+    crate::adapters::Registry::builtins().get(tool_id)?.parse_remote_mcp(config_text).ok()
 }
 
 fn bundle_groups(tool_ids: &[String], kind: &str) -> Vec<Vec<String>> {
@@ -627,15 +508,11 @@ fn resource_bundle_script(tool_ids: &[String], kind: &str) -> String {
                 script.push_str(&path);
                 script.push_str(" ]; then base64 < ");
                 script.push_str(&path);
-                script.push_str(" | tr -d '\\n'; fi; ");
+                script.push_str(" | tr -d '\\n'; else printf %s __MISSING__; fi; ");
             }
             script.push_str("printf '\\n'; ");
         } else if kind == "skills" {
-            script.push_str("printf '%s\\n' __CLIORA_SKILLS__; scan=1; if [ -f ");
-            script.push_str(&store);
-            script.push_str(" ]; then stripped=$(tr -d '[:space:]' < ");
-            script.push_str(&store);
-            script.push_str("); if [ \"$stripped\" != '{}' ]; then scan=0; fi; fi; if [ \"$scan\" = 1 ]; then ");
+            script.push_str("printf '%s\\n' __CLIORA_SKILLS__; ");
             for (index, root) in remote_skill_roots(tool_id).iter().enumerate() {
                 let dir = format!("$HOME/{}", root.relative);
                 script.push_str("if [ -d ");
@@ -646,10 +523,15 @@ fn resource_bundle_script(tool_ids: &[String], kind: &str) -> String {
                 script.push_str(&index.to_string());
                 script.push_str(" \"$file\"; base64 < \"$file\" | tr -d '\\n'; printf '\\n'; done; fi; ");
             }
-            script.push_str("fi; printf '%s\\n' __CLIORA_SKILLS_END__; ");
+            script.push_str("printf '%s\\n' __CLIORA_SKILLS_END__; ");
         }
     }
     script
+}
+
+fn observe_encoded(path: &str, encoded: &str) {
+    if encoded == "__MISSING__" { transactions::observe(path, None); }
+    else if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) { transactions::observe(path, Some(&bytes)); }
 }
 
 fn decode_b64_text(value: &str) -> Option<String> {
@@ -706,19 +588,17 @@ fn parse_resource_bundle(kind: &str, tool_ids: &[String], stdout: &str) -> serde
         let tool_id = tool_line.trim();
         if !tool_ids.iter().any(|id| id == tool_id) { continue; }
         let store_b64 = skip_marked_line(&mut lines, "__CLIORA_STORE__").unwrap_or_default();
+        observe_encoded(&format!("$HOME/.cliora/resources/{tool_id}/{kind}.json"), &store_b64);
         let stored = decode_b64_text(&store_b64).and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
         let value = if kind == "mcp" {
             let config = skip_marked_line(&mut lines, "__CLIORA_CONFIG__").unwrap_or_default();
+            if let Some(path) = mcp_seed_path(tool_id) { observe_encoded(&path, &config); }
             let config_text = decode_b64_text(&config).unwrap_or_default();
             reconcile_mcp_store(tool_id, stored.as_ref().unwrap_or(&serde_json::json!({})), &config_text)
-        } else if let Some(stored) = stored.filter(|item| item != &serde_json::json!({})) {
-            if kind == "skills" { let _ = read_skill_section(&mut lines); }
-            stored
         } else if kind == "skills" {
-            skill_store_from_files(tool_id, &read_skill_section(&mut lines))
-        } else {
-            empty_resource_store(kind)
-        };
+            let live = skill_store_from_files(tool_id, &read_skill_section(&mut lines));
+            reconcile_skill_metadata(tool_id, stored.as_ref(), live)
+        } else { stored.unwrap_or_else(|| empty_resource_store(kind)) };
         stores.insert(tool_id.to_owned(), value);
     }
     for tool_id in tool_ids {
@@ -728,140 +608,96 @@ fn parse_resource_bundle(kind: &str, tool_ids: &[String], stdout: &str) -> serde
 }
 
 struct PreparedUpload {
-    command: String,
-    stdin: Vec<u8>,
+    removes: Vec<String>,
+    files: Vec<(String, Vec<u8>)>,
 }
 
-/// Remote writes send file bytes on stdin. Putting a seeded SKILL.md on the
-/// SSH argument list crosses the command limit and used to surface as
-/// "远程路径无效".
 fn prepare_upload(removes: &[String], files: &[(String, Vec<u8>)]) -> Result<PreparedUpload, RemoteError> {
-    if removes.is_empty() && files.is_empty() {
-        return Ok(PreparedUpload { command: String::new(), stdin: Vec::new() });
-    }
-    let mut command = String::from("umask 077; ");
-    for path in removes {
-        command.push_str("rm -f ");
-        command.push_str(&remote_path_expr(path));
-        command.push_str("; ");
-    }
-    if !files.is_empty() {
-        command.push_str("write_blob() { IFS= read -r size || exit 43; mkdir -p \"$(dirname \"$1\")\"; head -c \"$size\" | base64 -d > \"$1\" || exit 44; IFS= read -r _; }; ");
-    }
-    let mut stdin = Vec::new();
-    for (path, bytes) in files {
-        command.push_str("write_blob ");
-        command.push_str(&remote_path_expr(path));
-        command.push_str("; ");
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        stdin.extend(encoded.len().to_string().into_bytes());
-        stdin.push(b'\n');
-        stdin.extend(encoded.into_bytes());
-        stdin.push(b'\n');
-    }
-    ensure_remote_command(&command)?;
-    Ok(PreparedUpload { command, stdin })
+    Ok(PreparedUpload { removes: removes.to_vec(), files: files.to_vec() })
 }
 
 fn apply_upload(target: &RemoteTarget, upload: &PreparedUpload) -> Result<(), RemoteError> {
-    if upload.command.is_empty() { return Ok(()); }
-    if upload.stdin.is_empty() {
-        run_command(target, &upload.command).map(|_| ())
-    } else {
-        run_command_with_stdin(target, &upload.command, &upload.stdin).map(|_| ())
-    }
+    transactions::commit(target, &upload.removes, &upload.files)
 }
 
-fn json_mcp_path(tool_id: &str) -> Option<(&'static str, &'static str, bool)> {
-    match tool_id {
-        "claude_code" => Some(("$HOME/.claude.json", "mcpServers", false)),
-        "cursor" => Some(("$HOME/.cursor/mcp.json", "mcpServers", false)),
-        "codebuddy" => Some(("$HOME/.codebuddy/mcp.json", "mcpServers", false)),
-        "command_code" => Some(("$HOME/.commandcode/mcp.json", "mcpServers", false)),
-        "devin" => Some(("$HOME/.devin/mcp_config.json", "mcpServers", false)),
-        "kiro" => Some(("$HOME/.kiro/settings/mcp.json", "mcpServers", false)),
-        "qoder_cn" => Some(("$HOME/.qoder/settings.json", "mcpServers", false)),
-        "pi" => Some(("$HOME/.pi/agent/mcp.json", "mcpServers", false)),
-        "minimax_code" => Some(("$HOME/.minimax-code/mcp.json", "mcpServers", false)),
-        "zcode" => Some(("$HOME/.zcode/cli/config.json", "servers", true)),
-        "opencode" => Some(("$HOME/.config/opencode/opencode.json", "mcp", false)),
-        _ => None,
-    }
+fn resource_layout(tool_id: &str) -> crate::adapters::RemoteResourceLayout {
+    crate::adapters::Registry::builtins().get(tool_id).map(|a| a.remote_resource_layout()).unwrap_or_default()
 }
 
-fn materialize_remote_json_mcp(
-    target: &RemoteTarget,
-    value: &serde_json::Value,
-    path: &str,
-    root: &str,
-    nested: bool,
-) -> Result<(), RemoteError> {
-    let raw = run_command(target, &format!("if [ -f {path} ]; then cat {path}; fi"))?;
-    let mut document = if raw.stdout.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str::<serde_json::Value>(&raw.stdout).map_err(|error| RemoteError::Storage(format!("远程配置不是 JSON 对象：{error}")))?
-    };
-    let entries = value.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-    let mut servers = serde_json::Map::new();
-    for item in entries {
-        let Some(name) = item.get("name").and_then(serde_json::Value::as_str).filter(|name| valid_text(name, 160)) else { continue; };
-        let mut server = serde_json::Map::new();
-        if item.get("transport").and_then(serde_json::Value::as_str) == Some("http") {
-            if let Some(url) = item.get("url").and_then(serde_json::Value::as_str) { server.insert("url".into(), serde_json::Value::String(url.into())); }
-            if let Some(headers) = item.get("headers").and_then(serde_json::Value::as_object) { server.insert("headers".into(), serde_json::Value::Object(headers.clone())); }
-        } else {
-            if let Some(command) = item.get("command").and_then(serde_json::Value::as_str) { server.insert("command".into(), serde_json::Value::String(command.into())); }
-            if let Some(args) = item.get("args").and_then(serde_json::Value::as_array) { server.insert("args".into(), serde_json::Value::Array(args.clone())); }
-            if let Some(env) = item.get("env").and_then(serde_json::Value::as_object) { server.insert("env".into(), serde_json::Value::Object(env.clone())); }
-        }
-        if item.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) { server.insert("enabled".into(), serde_json::Value::Bool(false)); }
-        servers.insert(name.into(), serde_json::Value::Object(server));
-    }
-    let target_value = if nested {
-        let object = document.as_object_mut().ok_or_else(|| RemoteError::Storage("远程配置不是 JSON 对象".into()))?;
-        let child = object.entry("mcp").or_insert_with(|| serde_json::json!({}));
-        child.as_object_mut().ok_or_else(|| RemoteError::Storage("远程 MCP 配置格式无效".into()))?.insert(root.into(), serde_json::Value::Object(servers));
-        document
-    } else {
-        let object = document.as_object_mut().ok_or_else(|| RemoteError::Storage("远程配置不是 JSON 对象".into()))?;
-        object.insert(root.into(), serde_json::Value::Object(servers));
-        document
-    };
-    let text = serde_json::to_vec_pretty(&target_value).map_err(|error| RemoteError::Storage(error.to_string()))?;
-    apply_upload(target, &prepare_upload(&[], &[(path.to_owned(), text)])?)
+fn skill_write_root(tool_id: &str) -> Result<String, RemoteError> {
+    let relative = resource_layout(tool_id).skill_root.ok_or_else(|| RemoteError::Storage("此适配器未声明远程 Skills 写入能力".into()))?;
+    if !safe_home_relative(relative) { return Err(RemoteError::InvalidPath); }
+    Ok(format!("$HOME/{relative}"))
 }
 
-fn materialize_remote_skills(target: &RemoteTarget, tool_id: &str, previous: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<(), RemoteError> {
-    let root = if tool_id == "grok" { "$HOME/.grok/skills" } else { "$HOME/.codex/skills" };
-    let Some(documents) = value.get("documents").and_then(serde_json::Value::as_object) else { return Ok(()); };
-    let mut removes = Vec::new();
-    if let Some(old) = previous.and_then(|item| item.get("documents")).and_then(serde_json::Value::as_object) {
-        for path in old.keys() {
-            let relative = path.split("/skills/").nth(1).unwrap_or(path.trim_start_matches('/'));
-            if relative.is_empty() || relative.contains("..") || relative.starts_with('/') { continue; }
-            if !documents.contains_key(path) { removes.push(format!("{root}/{relative}")); }
+
+// Native documents and their hashes always come from the same actual scan.
+// Management JSON contributes membership only; it cannot replace current bytes.
+fn reconcile_skill_metadata(tool_id: &str, stored: Option<&serde_json::Value>, mut live: serde_json::Value) -> serde_json::Value {
+    let previous = stored.and_then(|value| value.get("entries")).and_then(serde_json::Value::as_array);
+    if let Some(entries) = live.get_mut("entries").and_then(serde_json::Value::as_array_mut) {
+        for entry in entries {
+            let path = entry.get("path").and_then(serde_json::Value::as_str).and_then(|path| skill_document_path(tool_id, path).ok()).map(|value| value.0);
+            let prior = previous.into_iter().flatten().find(|old| old.get("path").and_then(serde_json::Value::as_str).and_then(|path| skill_document_path(tool_id, path).ok()).map(|value| value.0) == path);
+            if let (Some(prior), Some(object)) = (prior, entry.as_object_mut()) {
+                for key in ["packageId", "inLibrary", "digest"] {
+                    if let Some(value) = prior.get(key) { object.insert(key.into(), value.clone()); }
+                }
+            }
         }
     }
-    let mut files = Vec::new();
+    live
+}
+
+fn skill_document_path(tool_id: &str, path: &str) -> Result<(String, bool), RemoteError> {
+    let roots = remote_skill_roots(tool_id);
+    let found = roots.iter().filter_map(|root| {
+        let marker = format!("/{}/", root.relative);
+        path.split_once(&marker).map(|(_, relative)| (root, relative))
+    }).max_by_key(|(root, _)| root.relative.len());
+    let (root, relative, read_only) = if let Some((root, relative)) = found {
+        (format!("$HOME/{}", root.relative), relative, root.read_only)
+    } else {
+        if path.starts_with('/') || path.starts_with('$') { return Err(RemoteError::InvalidPath); }
+        (skill_write_root(tool_id)?, path, false)
+    };
+    if !relative_allowed(relative) { return Err(RemoteError::InvalidPath); }
+    Ok((format!("{root}/{relative}"), read_only))
+}
+
+fn materialize_remote_skills(_target: &RemoteTarget, tool_id: &str, previous: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
+    let documents = value.get("documents").and_then(serde_json::Value::as_object).ok_or_else(|| RemoteError::Storage("Skills 文档格式无效".into()))?;
+    let old = previous.and_then(|item| item.get("documents")).and_then(serde_json::Value::as_object);
+    let mut upload = prepare_upload(&[], &[])?;
+    if let Some(old) = old {
+        for path in old.keys().filter(|path| !documents.contains_key(*path)) {
+            let (destination, read_only) = skill_document_path(tool_id, path)?;
+            if read_only { return Err(RemoteError::Storage("只读 Skills 目录不能删除".into())); }
+            upload.removes.push(destination);
+        }
+    }
     for (path, body) in documents {
-        let Some(text) = body.as_str() else { continue; };
-        let relative = path.split("/skills/").nth(1).unwrap_or(path.trim_start_matches('/'));
-        if relative.is_empty() || relative.contains("..") || relative.contains('\0') || relative.starts_with('/') { continue; }
-        files.push((format!("{root}/{relative}"), text.as_bytes().to_vec()));
+        let text = body.as_str().ok_or(RemoteError::InvalidPath)?;
+        let (destination, read_only) = skill_document_path(tool_id, path)?;
+        if read_only {
+            if old.and_then(|old| old.get(path)) != Some(body) { return Err(RemoteError::Storage("只读 Skills 目录不能修改".into())); }
+            continue;
+        }
+        if text.len() > 1_000_000 { return Err(RemoteError::InvalidPath); }
+        upload.files.push((destination, text.as_bytes().to_vec()));
     }
-    apply_upload(target, &prepare_upload(&removes, &files)?)
+    Ok(upload)
 }
 
 /// Write remote agent definitions into the selected CLI's native directory.
 /// The JSON resource file is only the transport/cache; keeping the native file
 /// in place is what makes a newly started remote CLI actually load the agent.
 fn materialize_remote_agents(
-    target: &RemoteTarget,
+    _target: &RemoteTarget,
     tool_id: &str,
     previous: Option<&serde_json::Value>,
     value: &serde_json::Value,
-) -> Result<(), RemoteError> {
+) -> Result<PreparedUpload, RemoteError> {
     let snapshot = value.get("snapshot").unwrap_or(value);
     let entries = snapshot.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let previous_entries = previous
@@ -873,24 +709,32 @@ fn materialize_remote_agents(
     let scope = snapshot.pointer("/target/scope").and_then(serde_json::Value::as_str).unwrap_or("global");
     let project = snapshot.pointer("/target/projectPath").and_then(serde_json::Value::as_str);
     let root = remote_agent_root(tool_id, scope, project).ok_or(RemoteError::InvalidPath)?;
+    let disabled = format!("{}/.cliora-disabled-agents/agents", root.trim_end_matches("/agents"));
     let mut removes = Vec::new();
-    for old in previous_entries {
-        if let Some(path) = old.get("path").and_then(serde_json::Value::as_str).filter(|path| remote_agent_path_allowed(path, &root)) {
-            removes.push(path.to_owned());
+    for old in &previous_entries {
+        if old.get("readOnly").and_then(serde_json::Value::as_bool) == Some(true) { continue; }
+        if let Some(path) = old.get("path").and_then(serde_json::Value::as_str).and_then(|path| canonical_agent_path(path, &root).or_else(|| canonical_agent_path(path, &disabled))) {
+            removes.push(path);
         }
     }
     let mut files = Vec::new();
     for entry in entries {
+        if entry.get("readOnly").and_then(serde_json::Value::as_bool) == Some(true) {
+            if !previous_entries.contains(&entry) { return Err(RemoteError::Storage("只读 Agent 定义不能修改".into())); }
+            continue;
+        }
         let Some(content) = entry.get("content").and_then(serde_json::Value::as_str) else { continue; };
         if content.len() > 256 * 1024 { return Err(RemoteError::InvalidPath); }
         let name = entry.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
         if !valid_agent_name(name) { return Err(RemoteError::InvalidPath); }
-        let extension = if tool_id == "codex" { "toml" } else { "md" };
-        let generated = format!("{root}/{name}.{extension}");
-        let path = entry.get("path").and_then(serde_json::Value::as_str).filter(|path| remote_agent_path_allowed(path, &root)).unwrap_or(&generated);
-        files.push((path.to_owned(), content.as_bytes().to_vec()));
+        let extension = resource_layout(tool_id).agent_extension.ok_or_else(|| RemoteError::Storage("此适配器未声明远程 Agent 格式".into()))?;
+        let enabled = entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
+        let destination = if enabled { &root } else { &disabled };
+        let generated = format!("{destination}/{name}.{extension}");
+        let path = entry.get("path").and_then(serde_json::Value::as_str).and_then(|path| canonical_agent_path(path, destination)).unwrap_or(generated);
+        files.push((path, content.as_bytes().to_vec()));
     }
-    apply_upload(target, &prepare_upload(&removes, &files)?)
+    prepare_upload(&removes, &files)
 }
 
 fn valid_agent_name(name: &str) -> bool {
@@ -898,26 +742,23 @@ fn valid_agent_name(name: &str) -> bool {
 }
 
 fn remote_agent_root(tool_id: &str, scope: &str, project: Option<&str>) -> Option<String> {
-    let dir = match tool_id {
-        "codex" => ".codex",
-        "grok" => ".grok",
-        "claude_code" => ".claude",
-        "cursor" => ".cursor",
-        "kimi_code" => ".kimi-code",
-        "codebuddy" => ".codebuddy",
-        "devin" => ".devin",
-        "minimax_code" => ".minimax",
-        "mimo_code" => ".mimo",
-        "opencode" => ".config/opencode",
-        _ => return None,
-    };
+    let dir = resource_layout(tool_id).agent_root?;
+    if !safe_home_relative(dir) { return None; }
     if scope == "project" {
         let project = project?.trim();
         if !valid_text(project, 4096) || project.starts_with('~') || project.contains('\0') { return None; }
-        Some(format!("{project}/{dir}/agents"))
+        Some(format!("{project}/{dir}"))
     } else {
-        Some(format!("$HOME/{dir}/agents"))
+        Some(format!("$HOME/{dir}"))
     }
+}
+
+fn canonical_agent_path(path: &str, root: &str) -> Option<String> {
+    if remote_agent_path_allowed(path, root) { return Some(path.to_owned()); }
+    let relative_root = root.strip_prefix("$HOME/")?;
+    let (_, suffix) = path.split_once(&format!("/{relative_root}/"))?;
+    let normalized = format!("{root}/{suffix}");
+    remote_agent_path_allowed(&normalized, root).then_some(normalized)
 }
 
 fn remote_agent_path_allowed(path: &str, root: &str) -> bool {
@@ -1042,6 +883,7 @@ fn read_scope_native_uncached(target: &RemoteTarget, tool_id: &str, scope: &str,
     let result = run_command(target, &script)?;
     let roles: Vec<&str> = documents.iter().map(|document| document.role).collect();
     let mut files = parse_native_read(&roles, &result.stdout)?;
+    for document in &documents { transactions::observe(&document.path, files.get(document.role).map(|v| v.as_bytes())); }
     for document in &documents {
         if let Some(text) = files.get_mut(document.role) {
             if text.is_empty() && matches!(document.format, "json" | "jsonc") {
@@ -1052,16 +894,20 @@ fn read_scope_native_uncached(target: &RemoteTarget, tool_id: &str, scope: &str,
     Ok(files)
 }
 
-pub fn write_scope_native(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>, files: &BTreeMap<String, String>) -> Result<(), RemoteError> {
+fn prepare_scope_native(tool_id: &str, scope: &str, project: Option<&str>, files: &BTreeMap<String, String>) -> Result<PreparedUpload, RemoteError> {
     let documents = resolved_native_documents(tool_id, scope, project)?;
     let mut payload = Vec::new();
+    if files.keys().any(|role| !documents.iter().any(|document| document.role == role)) { return Err(RemoteError::Storage("适配器未声明此远程原生文档；没有写入任何文件".into())); }
     for document in documents {
         let Some(text) = files.get(document.role) else { continue; };
         if text.len() > 1_000_000 { return Err(RemoteError::Storage("远程原生配置过大".into())); }
         payload.push((document.path, text.as_bytes().to_vec()));
     }
-    if payload.is_empty() { return Ok(()); }
-    apply_upload(target, &prepare_upload(&[], &payload)?)
+    prepare_upload(&[], &payload)
+}
+
+pub fn write_scope_native(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>, files: &BTreeMap<String, String>) -> Result<(), RemoteError> {
+    apply_upload(target, &prepare_scope_native(tool_id, scope, project, files)?)
 }
 
 fn remote_store_path(tool_id: &str) -> Result<String, RemoteError> {
@@ -1080,9 +926,10 @@ pub fn load_tool_store(target: &RemoteTarget, tool_id: &str) -> Result<RemoteToo
 
 fn load_tool_store_uncached(target: &RemoteTarget, tool_id: &str) -> Result<RemoteToolStore, RemoteError> {
     let path = remote_store_path(tool_id)?;
-    let result = run_command(target, &format!("if [ -f {path} ]; then base64 -w0 -- {path}; fi"))?;
+    let result = run_command(target, &format!("if [ -f {path} ]; then base64 -w0 -- {path}; else printf %s __MISSING__; fi"))?;
     let text = result.stdout.trim();
-    let mut store = if text.is_empty() { RemoteToolStore::default() } else {
+    observe_encoded(&path, text);
+    let mut store = if text == "__MISSING__" || text.is_empty() { RemoteToolStore::default() } else {
         let bytes = base64::engine::general_purpose::STANDARD.decode(text).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程配置文件编码无效".into() })?;
         serde_json::from_slice(&bytes).map_err(|_| RemoteError::Transport { stage: "remote_config", detail: "远程配置文件格式无效".into() })?
     };
@@ -1101,11 +948,9 @@ pub fn save_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolS
 fn write_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolStore, write_native: bool) -> Result<(), RemoteError> {
     let path = remote_store_path(tool_id)?;
     let bytes = serde_json::to_vec_pretty(store).map_err(|error| RemoteError::Transport { stage: "remote_config", detail: error.to_string() })?;
-    apply_upload(target, &prepare_upload(&[], &[(path, bytes)])?)?;
-    if write_native {
-        write_scope_native(target, tool_id, "global", None, &store.current_files)?;
-    }
-    Ok(())
+    let mut upload = if write_native { prepare_scope_native(tool_id, "global", None, &store.current_files)? } else { prepare_upload(&[], &[])? };
+    upload.files.push((path, bytes));
+    apply_upload(target, &upload)
 }
 
 pub fn load_scoped_tool_store(target: &RemoteTarget, tool_id: &str, scope: &str, project: Option<&str>) -> Result<RemoteToolStore, RemoteError> {
@@ -1128,11 +973,13 @@ fn load_scoped_tool_store_uncached(target: &RemoteTarget, tool_id: &str, scope: 
 /// Project application writes the project files and keeps the global file in use.
 pub fn save_scoped_tool_store(target: &RemoteTarget, tool_id: &str, store: &RemoteToolStore, scope: &str, project: Option<&str>) -> Result<(), RemoteError> {
     if scope == "project" {
-        write_scope_native(target, tool_id, "project", project, &store.current_files)?;
+        let mut upload = prepare_scope_native(tool_id, "project", project, &store.current_files)?;
         let mut persisted = load_tool_store(target, tool_id)?;
         persisted.profiles = store.profiles.clone();
         persisted.common = store.common.clone();
-        return write_tool_store(target, tool_id, &persisted, false);
+        let bytes = serde_json::to_vec_pretty(&persisted).map_err(|e| RemoteError::Storage(e.to_string()))?;
+        upload.files.push((remote_store_path(tool_id)?, bytes));
+        return apply_upload(target, &upload);
     }
     save_tool_store(target, tool_id, store)
 }
@@ -1597,8 +1444,10 @@ fn library_json(target: &RemoteTarget) -> Result<Vec<crate::library::LibraryItem
 }
 
 fn library_json_uncached(target: &RemoteTarget) -> Result<Vec<crate::library::LibraryItem>, RemoteError> {
-    let result = run_command(target, "if [ -f \"$HOME/.cliora/library.json\" ]; then cat \"$HOME/.cliora/library.json\"; else printf '%s' '[]'; fi")?;
-    serde_json::from_str(&result.stdout).map_err(|error| RemoteError::Storage(format!("远程资料库格式无效：{error}")))
+    let result = run_command(target, "if [ -f \"$HOME/.cliora/library.json\" ]; then base64 -w0 -- \"$HOME/.cliora/library.json\"; else printf %s __MISSING__; fi")?;
+    observe_encoded("$HOME/.cliora/library.json", result.stdout.trim());
+    let text = decode_b64_text(result.stdout.trim()).unwrap_or_else(|| "[]".into());
+    serde_json::from_str(&text).map_err(|error| RemoteError::Storage(format!("远程资料库格式无效：{error}")))
 }
 
 fn write_library_json(target: &RemoteTarget, items: &[crate::library::LibraryItem]) -> Result<(), RemoteError> {
@@ -1766,7 +1615,7 @@ fn rule_path_allowed(path: &str) -> bool {
 fn rule_read_script(paths: &[String], include_library: bool) -> Result<String, RemoteError> {
     let mut script = String::new();
     if include_library {
-        script.push_str("printf '%s\\n' __CLIORA_LIBRARY__; if [ -f \"$HOME/.cliora/library.json\" ]; then base64 < \"$HOME/.cliora/library.json\" | tr -d '\\n'; fi; printf '\\n'; printf '%s\\n' __CLIORA_RULE_STATE__; if [ -f \"$HOME/.cliora/rule-state.json\" ]; then base64 < \"$HOME/.cliora/rule-state.json\" | tr -d '\\n'; fi; printf '\\n'; ");
+        script.push_str("printf '%s\\n' __CLIORA_LIBRARY__; if [ -f \"$HOME/.cliora/library.json\" ]; then base64 < \"$HOME/.cliora/library.json\" | tr -d '\\n'; else printf %s __MISSING__; fi; printf '\\n'; printf '%s\\n' __CLIORA_RULE_STATE__; if [ -f \"$HOME/.cliora/rule-state.json\" ]; then base64 < \"$HOME/.cliora/rule-state.json\" | tr -d '\\n'; else printf %s __MISSING__; fi; printf '\\n'; ");
     }
     for path in paths {
         if !rule_path_allowed(path) {
@@ -1779,7 +1628,7 @@ fn rule_read_script(paths: &[String], include_library: bool) -> Result<String, R
         script.push_str(&expr);
         script.push_str(" ]; then base64 < ");
         script.push_str(&expr);
-        script.push_str(" | tr -d '\\n'; fi; printf '\\n'; ");
+        script.push_str(" | tr -d '\\n'; else printf %s __MISSING__; fi; printf '\\n'; ");
     }
     ensure_remote_command(&script)?;
     Ok(script)
@@ -1791,12 +1640,16 @@ fn parse_rule_texts(stdout: &str, expect_library: bool) -> Result<RuleTexts, Rem
         if lines.next().map(|line| line.trim() != "__CLIORA_LIBRARY__").unwrap_or(true) {
             return Err(RemoteError::Storage("远程资料库格式无效".into()));
         }
-        let library_text = decode_b64_text(lines.next().unwrap_or("")).unwrap_or_else(|| "[]".into());
+        let library_encoded = lines.next().unwrap_or("");
+        observe_encoded("$HOME/.cliora/library.json", library_encoded);
+        let library_text = decode_b64_text(library_encoded).unwrap_or_else(|| "[]".into());
         let items = serde_json::from_str(&library_text).map_err(|error| RemoteError::Storage(format!("远程资料库格式无效：{error}")))?;
         if lines.next().map(|line| line.trim() != "__CLIORA_RULE_STATE__").unwrap_or(true) {
             return Err(RemoteError::Storage("远程规则记录格式无效".into()));
         }
-        let state = match decode_b64_text(lines.next().unwrap_or("")) {
+        let state_encoded = lines.next().unwrap_or("");
+        observe_encoded("$HOME/.cliora/rule-state.json", state_encoded);
+        let state = match decode_b64_text(state_encoded) {
             None => crate::resources::rules::RuleHostState::default(),
             Some(text) => serde_json::from_str(&text).map_err(|error| RemoteError::Storage(format!("远程规则记录格式无效：{error}")))?,
         };
@@ -1809,7 +1662,9 @@ fn parse_rule_texts(stdout: &str, expect_library: bool) -> Result<RuleTexts, Rem
         if marker.trim().is_empty() { continue; }
         if marker.trim() != "__CLIORA_RULE_FILE__" { continue; }
         let path = lines.next().unwrap_or("").trim().to_owned();
-        let existing = decode_b64_text(lines.next().unwrap_or("")).unwrap_or_default();
+        let encoded = lines.next().unwrap_or("");
+        observe_encoded(&path, encoded);
+        let existing = decode_b64_text(encoded).unwrap_or_default();
         if rule_path_allowed(&path) {
             texts.insert(path, existing);
         }
@@ -1870,19 +1725,28 @@ fn write_rule_materials(
     apply_upload(target, &prepare_upload(&[], &files)?)
 }
 
-pub fn save_target(db: &Database, mut target: RemoteTarget) -> Result<RemoteTarget, RemoteError> {
+pub fn save_target(db: &Database, target: RemoteTarget) -> Result<RemoteTarget, RemoteError> {
+    save_target_with_auth_change(db, target, false)
+}
+
+pub fn save_target_with_auth_change(db: &Database, mut target: RemoteTarget, auth_changed: bool) -> Result<RemoteTarget, RemoteError> {
     validate_target(&target)?;
     if target.id.trim().is_empty() {
         target.id = Uuid::new_v4().to_string();
     }
     let timestamp = now();
+    let previous = list_targets(db)?.into_iter().find(|value| value.id == target.id);
+    let rename_revision = previous.filter(|value| {
+        let mut comparison = target.clone(); comparison.name = value.name.clone(); comparison.created_at = value.created_at; comparison.updated_at = value.updated_at;
+        !auth_changed && value.name != target.name && comparison == *value
+    }).map(|value| value.updated_at);
     db.with_connection(|conn| {
         let existing: Option<i64> = conn
             .query_row("SELECT MAX(created_at,updated_at) FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0))
             .optional()
             .map_err(|error| error.to_string())?;
         target.created_at = if let Some(_) = existing { conn.query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0)).map_err(|error| error.to_string())? } else { timestamp };
-        target.updated_at = existing.map(|previous| timestamp.max(previous.saturating_add(1))).unwrap_or(timestamp);
+        target.updated_at = rename_revision.filter(|revision| Some(*revision) == existing).unwrap_or_else(|| existing.map(|previous| timestamp.max(previous.saturating_add(1))).unwrap_or(timestamp));
         conn.execute(
             "INSERT INTO remote_targets (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
@@ -2689,6 +2553,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let counter = directory.path().join("pids");
         let request = operations::Request {
+            expected_files: BTreeMap::new(),
             refresh: false,
             request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(),
             target_id: "cancel-tree.invalid".into(), target_revision: None, kind: operations::Kind::Read,
@@ -2833,17 +2698,8 @@ mod tests {
         let body = marker.repeat(1500);
         assert!(body.len() > 32_000);
         let upload = prepare_upload(&[], &[("$HOME/.codex/skills/demo/SKILL.md".into(), body.as_bytes().to_vec())]).unwrap();
-        assert!(!upload.command.contains(marker), "{}", upload.command);
-        assert!(upload.command.len() < 4_000, "{}", upload.command.len());
-        assert!(upload.command.contains("base64 -d"));
-        let text = String::from_utf8(upload.stdin).unwrap();
-        let mut lines = text.lines();
-        let size: usize = lines.next().unwrap().parse().unwrap();
-        let payload = lines.next().unwrap();
-        assert_eq!(payload.len(), size);
-        let decoded = base64::engine::general_purpose::STANDARD.decode(payload).unwrap();
-        assert_eq!(decoded, body.as_bytes());
-        assert!(lines.next().is_none());
+        assert_eq!(upload.files[0].1, body.as_bytes());
+        assert!(upload.removes.is_empty());
     }
 
     #[test]
@@ -2857,6 +2713,51 @@ mod tests {
             RemoteError::InvalidPath => panic!("a long command was reported as an invalid path"),
             other => panic!("unexpected {other}"),
         }
+    }
+
+    #[test]
+    fn managed_skill_metadata_never_replaces_actual_document_bytes_or_versions() {
+        use base64::Engine;
+        let path = "/root/.codex/skills/owned/SKILL.md";
+        let old = "---\nname: owned\ndescription: old\n---\nold body";
+        let fresh = "---\nname: owned\ndescription: external\n---\nexternal body";
+        let stored = serde_json::json!({"entries":[{"path":path,"packageId":"managed-package","inLibrary":true}],"documents":{path:old}});
+        let stdout = format!("__CLIORA_TOOL__\ncodex\n__CLIORA_STORE__\n{}\n__CLIORA_SKILLS__\n__CLIORA_FILE__\n0\n{path}\n{}\n__CLIORA_SKILLS_END__\n", base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&stored).unwrap()), base64::engine::general_purpose::STANDARD.encode(fresh));
+        let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
+        let actual = operations::scoped(context.clone(), || parse_resource_bundle("skills", &["codex".into()], &stdout));
+        assert_eq!(actual["stores"]["codex"]["documents"][path], fresh);
+        assert_eq!(actual["stores"]["codex"]["entries"][0]["packageId"], "managed-package");
+        assert_eq!(context.file_versions()["$HOME/.codex/skills/owned/SKILL.md"], transactions::digest(fresh.as_bytes()));
+        assert!(!resource_bundle_script(&["codex".into()], "skills").contains("scan=0"));
+    }
+
+    #[test]
+    fn actual_agent_paths_share_one_canonical_destination_for_save_disable_and_delete() {
+        let target = RemoteTarget { id: "fixture".into(), name: "fixture".into(), host: "fixture.invalid".into(), port: 22, user: "root".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 };
+        let entry = serde_json::json!({"id":"owned","name":"owned","path":"/root/.codex/agents/owned.toml","content":"name = \"owned\"","enabled":true});
+        let previous = serde_json::json!({"snapshot":{"entries":[entry],"target":{"scope":"global"}}});
+        let saved = materialize_remote_agents(&target, "codex", Some(&previous), &previous).unwrap();
+        assert_eq!(saved.removes, vec!["$HOME/.codex/agents/owned.toml"]);
+        assert_eq!(saved.files[0].0, saved.removes[0]);
+        let deleted = materialize_remote_agents(&target, "codex", Some(&previous), &serde_json::json!({"snapshot":{"entries":[]}})).unwrap();
+        assert_eq!(deleted.removes, saved.removes);
+        let mut disabled = previous.clone(); disabled["snapshot"]["entries"][0]["enabled"] = false.into();
+        let disabled = materialize_remote_agents(&target, "codex", Some(&previous), &disabled).unwrap();
+        assert_eq!(disabled.files[0].0, "$HOME/.codex/.cliora-disabled-agents/agents/owned.toml");
+        assert_ne!(disabled.files[0].0, disabled.removes[0]);
+    }
+
+    #[test]
+    fn agent_reload_uses_actual_native_content_and_matching_version() {
+        use base64::Engine;
+        let path = "/root/.codex/agents/owned.toml".to_owned();
+        let fresh = "name = \"owned\"\ndescription = \"external\"\ndeveloper_instructions = \"external body\"\n";
+        let encoded = format!("__CLIORA_AGENT__0\n{}\n", base64::engine::general_purpose::STANDARD.encode(fresh));
+        let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
+        let actual = operations::scoped(context.clone(), || assemble_remote_agents("codex", &[path.clone()], &encoded, crate::adapters::agents::capability("codex").unwrap(), "actual native reload".into()));
+        assert_eq!(actual["snapshot"]["entries"][0]["content"], fresh);
+        assert_eq!(context.file_versions()[&path], transactions::digest(fresh.as_bytes()));
+        assert_eq!(context.file_versions()["$HOME/.codex/agents/owned.toml"], transactions::digest(fresh.as_bytes()));
     }
 
     #[test]
@@ -2969,6 +2870,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(list_projects(&db, Some(&target.id)).unwrap(), vec![project]);
+        let mut renamed = target.clone(); renamed.name = "renamed only".into();
+        let renamed = save_target(&db, renamed).unwrap();
+        assert_eq!(renamed.updated_at, target.updated_at);
+        assert_eq!(operations::target_identity(&renamed), operations::target_identity(&target));
+        let changed_auth = save_target_with_auth_change(&db, renamed.clone(), true).unwrap();
+        assert!(changed_auth.updated_at > renamed.updated_at);
         let saved_again = save_target(&db, target.clone()).unwrap();
         assert_eq!(saved_again.created_at, target.created_at);
         assert!(saved_again.updated_at > target.updated_at, "authentication/configuration saves must advance identity even within one second");
@@ -3189,10 +3096,7 @@ mod tests {
         assert!(!script.contains(marker));
         let body = format!("# Keep\n\n{marker}\n");
         let upload = prepare_upload(&[], &[("$HOME/.codex/AGENTS.md".into(), body.as_bytes().to_vec()), ("$HOME/.cliora/rule-state.json".into(), b"{}".to_vec())]).unwrap();
-        assert!(!upload.command.contains(marker), "{}", upload.command);
-        let text = String::from_utf8(upload.stdin).unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD.decode(text.lines().nth(1).unwrap()).unwrap();
-        assert_eq!(decoded, body.as_bytes());
+        assert_eq!(upload.files[0].1, body.as_bytes());
         let library = r#"[{"id":"rule-1","kind":"rule","title":"Keep","body":"stay remote","category":"","projectId":null,"version":1,"updatedAt":1}]"#;
         let state = r#"{"placements":[{"ruleId":"rule-1","toolId":"codex","scopeKey":"global","position":1}],"files":[]}"#;
         let stdout = format!("__CLIORA_LIBRARY__\n{}\n__CLIORA_RULE_STATE__\n{}\n__CLIORA_RULE_FILE__\n$HOME/.codex/AGENTS.md\n{}\n", b64(library), b64(state), b64(&body));

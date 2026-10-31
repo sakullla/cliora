@@ -61,6 +61,10 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for CodeBuddy {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".codebuddy/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".codebuddy/agents"), agent_extension: Some("md") }
+    }
+
     fn native_credential_target(&self, scope: Scope) -> Option<super::contract::NativeCredentialTarget> {
         Some(super::contract::NativeCredentialTarget {
             identity: format!("codebuddy:{scope:?}:env-key"),

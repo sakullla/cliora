@@ -2,7 +2,8 @@ import icon from '../../assets/tools/opencode.svg';
 import type { ToolUiAdapter } from '../contract';
 import { OpenCodeConfigurationEditor } from './ConfigurationEditor';
 import i18n from '../../i18n';
-export const opencodeUiAdapter: ToolUiAdapter = { id: 'open_code',
+export const opencodeUiAdapter: ToolUiAdapter = {
+  remoteAgent: { root: '.config/opencode/agents', extension: 'md' }, id: 'open_code',
   accounts: {
     get description() { return i18n.t('tools.adapters.opencode.accounts.description'); },
     get nativeDescription() { return i18n.t('tools.adapters.opencode.accounts.nativeDescription'); },

@@ -134,7 +134,13 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   // workspace surface; do not hide tabs while the remote probe is still
   // loading (or because a local adapter omitted a management flag).
   const supported = isRemote
-    ? { config: true, accounts: true, mcp: true, skills: true, agents: true, plugins: true, memory: true }
+    ? { config: true,
+      accounts: descriptor?.remote ? descriptor.remote.accounts.state === 'supported' : management?.accounts === true,
+      mcp: descriptor?.remoteResources ? !!descriptor.remoteResources.mcp : management?.mcp === true,
+      skills: descriptor?.remoteResources ? !!descriptor.remoteResources.skillRoot : management?.skills === true,
+      agents: descriptor?.remoteResources ? !!descriptor.remoteResources.agentRoot : management?.agents === true,
+      plugins: (management?.plugins ?? false),
+      memory: !!management?.memory || !!management?.memoryReason }
     : { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory || !!management?.memoryReason };
   useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
   useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
@@ -173,6 +179,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const remoteLoad = useRef<AbortController | null>(null);
   useEffect(() => () => remoteLoad.current?.abort(), []);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
+    if (fresh) remoteReads.rebaseWriteAction();
     if (remoteTargetId !== 'local') {
       if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
       const previous = remoteLoad.current;
@@ -392,6 +399,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     discard();
   }, [discardSignal]);
   async function apply(profile: RegisteredProfile) {
+    remoteReads.beginWriteAction();
     if (!await mayLeave()) return;
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
     try {
@@ -420,7 +428,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     finally { if (identity === currentContext.current) setBusy(false); }
   }
   async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += t('tools.workspace.copySuffix'); await openFrame('profile', copy, true, t('tools.workspace.frameCopy', { name: profile.name })); }
-  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { if (isRemote) await native.deleteRemoteToolProfile(remoteTargetId, toolId, profile.id); else await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
+  async function remove(profile: RegisteredProfile) {
+    remoteReads.beginWriteAction(); const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { if (isRemote) await native.deleteRemoteToolProfile(remoteTargetId, toolId, profile.id); else await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
   function cancelMaintenance() {

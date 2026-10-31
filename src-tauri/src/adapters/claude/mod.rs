@@ -54,6 +54,10 @@ const SESSION_ENV_MARKERS: &[&str] = &[
 ];
 
 impl CliAdapter for Claude {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".claude.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".claude/agents"), agent_extension: Some("md") }
+    }
+
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
         Some(self)
     }

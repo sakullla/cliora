@@ -26,6 +26,7 @@ test('a late target list cannot roll back saved identity, notify consumers, or i
     if (line.includes("'@tauri-apps/api/core'")) return 'const invoke = (...args) => globalThis.__targetIdentityInvoke(...args); const isTauri = () => true;';
     if (line.includes("'./onboarding'")) return 'const markOnboardingLaunched = () => {};';
     if (line.includes("'../i18n'")) return 'const i18n = { t: key => key }; const bindLanguagePersist = () => {};';
+    if (line.includes("remote/writeReceipts")) return "const getWriteReceipts = () => []; const rememberWriteReceipt = () => {}; const unresolvedWrite = () => false;";
     throw new Error(`Unexpected runtime dependency: ${line}`);
   });
   try {

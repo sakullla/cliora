@@ -103,6 +103,10 @@ fn resolve_config_root(home: &Path, directory: &str, explicit: Option<&Path>, cl
 }
 
 impl CliAdapter for QoderAdapter {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".qoder/settings.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: None, agent_extension: None }
+    }
+
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { Some(self) }
     fn validate_draft(&self, _role: &str, parsed: &Value) -> Result<(), String> {
         configuration::validate_public_settings(parsed)

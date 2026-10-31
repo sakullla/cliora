@@ -74,6 +74,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; loadSequence.current++; }; }, []);
 
   const currentFingerprint = JSON.stringify([draft, envRows, headerRows, enabled, syncLibrary]);
+  remoteReads.bindWriteDraft(composing || batchItems ? `mcp:${formKey}` : null);
   const dirty = composing && currentFingerprint !== savedFingerprint;
   useLayoutEffect(() => { onDirtyChange?.(dirty || !!batchItems); }, [dirty, batchItems, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
@@ -89,6 +90,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   }, [notice]);
 
   const refreshNative = useCallback(async (fresh = true) => {
+    remoteReads.rebaseWriteAction();
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setListLoading(false); return; }
     const request = ++loadSequence.current;
     setListLoading(true);
@@ -223,6 +225,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     return true;
   }
   async function removeNative(item: NativeMcpEntry) {
+    remoteReads.beginWriteAction();
     const found = definitions.find(definition => definition.name === item.name);
     const inLibrary = found?.inLibrary === true;
     const message = inLibrary ? t('tools.mcp.confirmRemoveLibrary', { name: item.name }) : t('tools.mcp.confirmRemove', { name: item.name });

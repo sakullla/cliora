@@ -828,7 +828,7 @@ fn workspace_binding_metadata_cas_and_db20_migration_keep_unknown_old_rows() {
         let registry = Registry::builtins();
         let p = profile::save_registered_profile(&db, &registry, fixture(), None).unwrap();
         db.with_connection(|conn|conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES('global','open_code',?1,1,'{}')",[p.id]).map(|_|()).map_err(|error|error.to_string())).unwrap();
-        db.with_connection(|conn|conn.execute_batch("ALTER TABLE applied_bindings DROP COLUMN common_version;ALTER TABLE applied_bindings DROP COLUMN common_revision;ALTER TABLE applied_bindings DROP COLUMN applied_profile;PRAGMA user_version=19;").map_err(|error|error.to_string())).unwrap();
+        db.with_connection(|conn|conn.execute_batch("ALTER TABLE applied_bindings DROP COLUMN common_version;ALTER TABLE applied_bindings DROP COLUMN common_revision;ALTER TABLE applied_bindings DROP COLUMN applied_profile;DROP TABLE remote_session_index; PRAGMA user_version =19;").map_err(|error|error.to_string())).unwrap();
     }
     let db = Database::open(&path).unwrap();
     let old = super::super::apply::get_registered_binding(&db, "open_code", "global")
@@ -1207,7 +1207,7 @@ fn workspace_legacy_oauth_migration_opens_saved_draft_and_recovers_only_on_expli
         let p = profile::save_registered_profile(&db, &registry, p, None).unwrap();
         db.with_connection(|conn| {
             conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed,context_id) VALUES('global','codex',?1,?2,'{}',?3)", rusqlite::params![p.id, p.version as i64, context.id]).map_err(|error|error.to_string())?;
-            conn.execute_batch("ALTER TABLE applied_bindings DROP COLUMN common_version;ALTER TABLE applied_bindings DROP COLUMN common_revision;ALTER TABLE applied_bindings DROP COLUMN applied_profile;PRAGMA user_version=19;").map_err(|error|error.to_string())
+            conn.execute_batch("ALTER TABLE applied_bindings DROP COLUMN common_version;ALTER TABLE applied_bindings DROP COLUMN common_revision;ALTER TABLE applied_bindings DROP COLUMN applied_profile;DROP TABLE remote_session_index; PRAGMA user_version =19;").map_err(|error|error.to_string())
         }).unwrap();
         (p, context)
     };

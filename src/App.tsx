@@ -1,3 +1,4 @@
+import { RemoteWriteRecovery } from './features/remote/RemoteWriteRecovery';
 import { useRemoteIdentity } from './lib/remoteReads';
 import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -639,6 +640,7 @@ export default function App() {
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       {page !== 'sessions' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
+      {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}

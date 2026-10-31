@@ -156,6 +156,10 @@ pub(crate) fn data_root(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for Kiro {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".kiro/settings/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: None, agent_extension: None }
+    }
+
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }

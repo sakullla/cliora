@@ -895,6 +895,7 @@ async fn remote_blocking<T: Send + 'static>(
         operations::scoped(context.clone(), || {
             context.check().map_err(|error| native_error(error.to_string()))?;
             let result = operation();
+            crate::remote::transactions::retain_snapshot(&context);
             if context.kind == crate::remote::operations::Kind::Write {
                 if let Some(target_id) = context.bound_target_id() { crate::remote::read_cache::invalidate(&target_id); }
             }
@@ -4555,7 +4556,7 @@ pub fn save_remote_target(
     password: Option<String>,
 ) -> Result<crate::remote::RemoteTarget, ApiError> {
     let saved = state.with_database(&app, |database| {
-        crate::remote::save_target(database, target)
+        crate::remote::save_target_with_auth_change(database, target, password.is_some())
             .map_err(|error| native_error(error.to_string()))
     })?;
     crate::remote::read_cache::invalidate(&saved.id);
@@ -4789,6 +4790,38 @@ pub async fn probe_remote_clis(
         let registry = adapters::Registry::builtins();
         let tools = tool_ids.into_iter().filter_map(|tool_id| registry.get(&tool_id).map(|adapter| (tool_id, adapter.command().to_owned()))).collect::<Vec<_>>();
         crate::remote::probe_clis(&target, &tools).map_err(|error| native_error(error.to_string()))
+    }).await
+}
+
+#[tauri::command]
+pub fn get_remote_write_snapshot(request_id: String) -> crate::remote::transactions::Versions {
+    crate::remote::transactions::snapshot(&request_id)
+}
+
+#[tauri::command]
+pub async fn list_remote_write_receipts(window: tauri::WebviewWindow, operation: Option<crate::remote::operations::Request>, app: AppHandle, target_id: String) -> Result<Vec<crate::remote::transactions::Receipt>, ApiError> {
+    remote_blocking(window, operation, crate::remote::operations::Kind::Read, move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|e| native_error(e.to_string()))?;
+            let target = crate::remote::target(db, &target_id).map_err(|e| native_error(e.to_string()))?;
+            if !target.enabled { return Err(native_error("远程主机已停用".into())); }
+            bind_remote_target(&target)?;
+            crate::remote::transactions::list(&target).map_err(|e| native_error(e.to_string()))
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn inspect_remote_write(window: tauri::WebviewWindow, operation: Option<crate::remote::operations::Request>, app: AppHandle, target_id: String, receipt_id: String, rollback: bool, receipt: Option<crate::remote::transactions::Receipt>) -> Result<crate::remote::transactions::Receipt, ApiError> {
+    let kind = if rollback { crate::remote::operations::Kind::Write } else { crate::remote::operations::Kind::Read };
+    remote_blocking(window, operation, kind, move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::remote::ensure_enabled(db).map_err(|e| native_error(e.to_string()))?;
+            let target = crate::remote::target(db, &target_id).map_err(|e| native_error(e.to_string()))?;
+            if !target.enabled { return Err(native_error("远程主机已停用".into())); }
+            bind_remote_target(&target)?;
+            crate::remote::transactions::inspect(&target, &receipt_id, rollback, receipt).map_err(|e| native_error(e.to_string()))
+        })
     }).await
 }
 

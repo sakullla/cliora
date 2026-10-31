@@ -214,6 +214,10 @@ fn config_base(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for OpenCode {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".config/opencode/opencode.json", format: "json", table: "mcp", nested: false }), skill_root: None, agent_root: Some(".config/opencode/agents"), agent_extension: Some("md") }
+    }
+
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }

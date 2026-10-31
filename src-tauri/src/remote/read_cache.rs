@@ -12,7 +12,7 @@ const ENTRY_LIMIT: usize = 96;
 const BYTE_LIMIT: usize = 48 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(30);
 
-struct Entry { target: String, at: Instant, value: Value, bytes: usize }
+struct Entry { target: String, at: Instant, value: Value, bytes: usize, versions: super::transactions::Versions }
 struct Flight {
     target: String,
     context: Arc<Context>,
@@ -62,6 +62,7 @@ where T: Serialize + Clone + Send + Sync + 'static {
     let mut cache = state().lock().unwrap_or_else(|e| e.into_inner());
     if !refresh && !caller.refresh() {
         if let Some(entry) = cache.entries.get(&key).filter(|entry| entry.at.elapsed() < TTL) {
+            caller.merge_files(entry.versions.clone());
             return entry.value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into()));
         }
     }
@@ -98,7 +99,7 @@ where T: Serialize + Clone + Send + Sync + 'static {
                             let oldest = cache.entries.iter().min_by_key(|(_, entry)| entry.at).map(|(key, _)| key.clone()).unwrap();
                             if let Some(old) = cache.entries.remove(&oldest) { cache.bytes -= old.bytes; }
                         }
-                        cache.entries.insert(worker_key.clone(), Entry { target: target.id, at: Instant::now(), value: value.clone(), bytes });
+                        cache.entries.insert(worker_key.clone(), Entry { target: target.id, at: Instant::now(), value: value.clone(), bytes, versions: worker.context.file_versions() });
                         cache.bytes += bytes;
                     }
                 }
@@ -129,6 +130,7 @@ where T: Serialize + Clone + Send + Sync + 'static {
         caller.check()?;
         if flight.invalidated.load(Ordering::Acquire) { return Err(caller.failure("identity", "远程读取期间目标或内容已变化，请刷新")); }
         if let Some(result) = result.as_ref() {
+            caller.merge_files(flight.context.file_versions());
             return result.clone().and_then(|value| value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into()))).map_err(|error| caller.subscriber_error(error));
         }
         result = flight.ready.wait_timeout(result, Duration::from_millis(15)).unwrap_or_else(|e| e.into_inner()).0;
@@ -150,7 +152,7 @@ mod tests {
     fn subscriber(target: &RemoteTarget, timeout: u64) -> (operations::Lease, String) {
         let id = uuid::Uuid::new_v4().to_string();
         let lease = operations::register("cache-test", operations::Request {
-            request_id: id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(),
+            expected_files: std::collections::BTreeMap::new(), request_id: id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(),
             target_id: target.id.clone(), target_revision: Some(target.updated_at), kind: Kind::Read,
             priority: operations::Priority::Interactive, deadline_unix_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + timeout, refresh: true,
@@ -193,6 +195,29 @@ mod tests {
             assert_eq!(permission.reason, "permission"); assert_eq!(permission.stage, "permission");
             assert_eq!(permission.request_id, Some(b_id)); assert_eq!(permission.target_id, Some(target.id)); assert_eq!(permission.target_revision, Some(1));
         }
+    }
+
+    #[test]
+    fn cache_returns_the_version_snapshot_of_its_value_and_isolates_revisions() {
+        let target = target();
+        let first = operations::Context::local(Kind::Read, Duration::from_secs(3));
+        operations::scoped(first.clone(), || read(&target, "versions", false, || {
+            operations::current().unwrap().record_file("$HOME/config", "old".into());
+            Ok(vec!["original".to_owned()])
+        })).unwrap();
+        assert_eq!(first.file_versions()["$HOME/config"], "old");
+        let cached = operations::Context::local(Kind::Read, Duration::from_secs(3));
+        let value = operations::scoped(cached.clone(), || read(&target, "versions", false, || -> Result<Vec<String>, _> { panic!("warm cache") })).unwrap();
+        assert_eq!(value, vec!["original"]);
+        assert_eq!(cached.file_versions()["$HOME/config"], "old");
+        let mut changed = target.clone(); changed.updated_at += 1;
+        let revised = operations::Context::local(Kind::Read, Duration::from_secs(3));
+        operations::scoped(revised.clone(), || read(&changed, "versions", false, || {
+            operations::current().unwrap().record_file("$HOME/config", "external".into());
+            Ok(vec!["new".to_owned()])
+        })).unwrap();
+        assert_eq!(revised.file_versions()["$HOME/config"], "external");
+        assert_eq!(first.file_versions()["$HOME/config"], "old");
     }
 
     #[test]

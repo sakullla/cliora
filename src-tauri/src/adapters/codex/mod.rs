@@ -89,6 +89,10 @@ fn skill_path_matches(item: &Value, skill_path: &Path) -> bool {
 }
 
 impl CliAdapter for Codex {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".codex/config.toml", format: "toml", table: "mcp_servers", nested: false }), skill_root: Some(".codex/skills"), agent_root: Some(".codex/agents"), agent_extension: Some("toml") }
+    }
+
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
         Some(self)
     }

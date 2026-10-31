@@ -46,8 +46,9 @@ async function readRemoteSkillStores(targetId: string, toolIds: string[], reader
 export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels(!!remoteTargetId);
-  const remoteToolId = tools[0]?.id ?? 'codex';
-  const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
+  const remoteTools = tools.filter(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
+  const remoteToolId = remoteTools[0]?.id ?? '';
+  const remoteToolIds = remoteTools.map(tool => tool.id);
   const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
   const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
   const native = remoteReads.native;
@@ -103,6 +104,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const reloadSequence = useRef(0);
   useEffect(() => () => { reloadSequence.current++; }, [remoteTargetId, active]);
   async function reloadSkills() {
+    remoteReads.rebaseWriteAction();
     const sequence = ++reloadSequence.current;
     if (remoteTargetId) {
       const values = await readRemoteSkillStores(remoteTargetId, remoteToolIds, native, true);
@@ -173,6 +175,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function addFolder() {
+    remoteReads.beginWriteAction();
     try {
       const source = await pickPath({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
@@ -227,6 +230,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function removePackage(item: SkillPackage) {
+    remoteReads.beginWriteAction();
     const placed = installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
@@ -247,6 +251,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    remoteReads.beginWriteAction();
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';

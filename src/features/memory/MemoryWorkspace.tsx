@@ -216,6 +216,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [publishDocs, t, remoteTargetId, native]);
 
   const reload = useCallback(async (fresh = true): Promise<MemoryAggregate | null> => {
+    if (fresh) remoteReads.rebaseWriteAction();
     const epoch = ++loadEpoch.current;
     ++readEpoch.current;
     setReading(false);
@@ -321,6 +322,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const currentParsed = useMemo(() => current && currentDoc ? parseMemory(current.entry.id, currentDoc.text) : current?.parsed ?? null, [current?.entry.id, currentDoc?.text, current?.parsed]);
   const editing = mode === 'edit' && !!opened && opened.key === selected && can('edit');
   const draftDirty = !!opened && opened.key === selected && can('edit') && draft !== opened.text;
+  remoteReads.bindWriteDraft(opened?.key ?? (compose ? 'new' : null));
   const dirty = draftDirty || (!!compose && (compose.id.trim() !== '' || compose.text !== compose.template));
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => {
@@ -564,6 +566,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   async function remove(row: Row, baseline: string) {
+    remoteReads.beginWriteAction();
     ++loadEpoch.current; ++readEpoch.current;
     setReading(false);
     setBusy(true);
@@ -625,6 +628,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   async function setEnabled(enabled: boolean, target: MemoryTarget, id?: string) {
+    remoteReads.beginWriteAction();
     ++loadEpoch.current; ++readEpoch.current;
     setReading(false);
     setBusy(true);
@@ -649,6 +653,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   async function setGroupEnabled(groupId: string, enabled: boolean) {
+    remoteReads.beginWriteAction();
     ++loadEpoch.current; ++readEpoch.current;
     setBusy(true);
     try {

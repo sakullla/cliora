@@ -394,7 +394,7 @@ mod tests {
         for reason in ["authentication", "permission"] {
             let request_id = uuid::Uuid::new_v4().to_string();
             let lease = operations::register("source-test", Request {
-                request_id: request_id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(), target_id: target.id.clone(),
+                expected_files: std::collections::BTreeMap::new(), request_id: request_id.clone(), cancel_token: uuid::Uuid::new_v4().to_string(), target_id: target.id.clone(),
                 target_revision: Some(17), kind: Kind::Read, priority: Priority::Interactive, refresh: true,
                 deadline_unix_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 3000,
             }, Kind::Read).unwrap();

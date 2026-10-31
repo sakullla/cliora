@@ -92,6 +92,10 @@ pub(crate) fn existing_data_dir(home: &Path) -> Option<PathBuf> {
 }
 
 impl CliAdapter for MiniMaxCode {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".minimax-code/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".minimax/agents"), agent_extension: Some("md") }
+    }
+
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }

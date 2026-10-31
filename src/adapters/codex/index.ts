@@ -18,6 +18,7 @@ export function readReasoningEffort(text: string): string | null {
 }
 
 export const codexUiAdapter: ToolUiAdapter = {
+  remoteAgent: { root: '.codex/agents', extension: 'toml' },
   icon: { light: icon, tile: 'light', source: 'OpenAI.Codex 26.924.2738.0 / webview/assets/codex-new-f14177b03534.svg' },
   id: 'codex',
   accounts: {

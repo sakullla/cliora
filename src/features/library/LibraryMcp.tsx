@@ -39,8 +39,9 @@ const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, st
 export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels(!!remoteTargetId);
-  const remoteToolId = tools[0]?.id ?? 'codex';
-  const remoteToolIds = tools.length ? tools.map(tool => tool.id) : [remoteToolId];
+  const remoteTools = tools.filter(tool => tool.remoteResources ? !!tool.remoteResources.mcp : tool.management?.mcp === true);
+  const remoteToolId = remoteTools[0]?.id ?? '';
+  const remoteToolIds = remoteTools.map(tool => tool.id);
   const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
   const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
   const native = remoteReads.native;
@@ -71,6 +72,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [writeConflict, setWriteConflict] = useState<{ definitionId: string; name: string; target: McpTargetRequest; result: McpTargetResult } | null>(null);
 
   async function reload(fresh = true) {
+    remoteReads.rebaseWriteAction();
     const request = ++loadRequest.current;
     setLoading(true);
     setError('');
@@ -112,6 +114,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }, [definitions, onCountChange]);
 
   const current: EditorState | null = draft ? { draft, envRows, headerRows } : null;
+  remoteReads.bindWriteDraft(draft || batchItems ? `mcp:${formKey}` : null);
   const dirty = !!current && fingerprint(current) !== baseline;
 
   function editMcp(item?: McpDefinition, paste = false) {
@@ -183,6 +186,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }
 
   async function remove(item: McpDefinition) {
+    remoteReads.beginWriteAction();
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
@@ -198,6 +202,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }
 
   async function duplicateMcp(item: McpDefinition) {
+    remoteReads.beginWriteAction();
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
@@ -312,6 +317,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }
 
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    remoteReads.beginWriteAction();
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';

@@ -55,7 +55,7 @@ async function mockSkills(page: Page, options: { remote?: boolean } = {}) {
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         calls.push(command);
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], remoteResources: { mcp: null, skillRoot: '.codex/skills', agentRoot: '.codex/agents', agentExtension: 'toml' }, nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null }, profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null };
         if (command === 'scan_native_skills') return entries.map(entry => ({ ...entry }));
         if (command === 'read_native_skill') return { name: String(args.directory).split('/').pop(), path: args.directory, content: documents[args.directory] ?? '' };
@@ -94,25 +94,28 @@ async function mockSkills(page: Page, options: { remote?: boolean } = {}) {
 }
 
 /** A remote host whose Codex skills store holds one document; records every call. */
-async function mockRemoteSkills(page: Page) {
-  await page.addInitScript(({ crud, fixed, crudManifest, fixedManifest }) => {
+async function mockRemoteSkills(page: Page, versions = false) {
+  await page.addInitScript(({ crud, fixed, crudManifest, fixedManifest, versions }) => {
     const host = { id: 'host-1', name: '测试远程主机', host: '203.0.113.9', port: 22, user: 'root', authMethod: 'key', identityFile: '', sshConfig: null, defaultPath: '/srv/project', enabled: true, createdAt: 1, updatedAt: 1 };
     localStorage.setItem('cliora:remote-target', host.id);
     const path = '/root/.codex/skills/crud-page/SKILL.md';
     let store: Record<string, any> = { entries: [{ name: 'crud-page', path, digest: null, state: 'external', detail: '', packageId: null, source: 'writable', pluginName: null, pluginEnabled: null, issues: ['name_mismatch', 'description_missing'] }], documents: { [path]: crud } };
     const calls: Array<{ command: string; args: Record<string, any> }> = [];
+    const state = { body: crud, version: 'old', attempts: [] as string[], saves: 0 };
+    const snapshots = new Map<string, Record<string, string>>();
     Object.assign(window, {
       isTauri: true,
-      __remoteCalls: calls,
+      __remoteCalls: calls, __remoteSkillState: state,
       __TAURI_INTERNALS__: { transformCallback: () => 1, invoke: async (command: string, args: Record<string, any> = {}) => {
         calls.push({ command, args });
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], remoteResources: { mcp: null, skillRoot: '.codex/skills', agentRoot: '.codex/agents', agentExtension: 'toml' }, nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_remote_targets') return [host];
         if (command === 'probe_remote_cli') return { targetId: host.id, toolId: 'codex', executable: '/usr/bin/codex', installed: true, version: null, detail: null };
         if (command === 'get_remote_tool_store') return { profiles: [], common: null, currentFiles: {} };
-        if (command === 'get_remote_resource_store') return JSON.parse(JSON.stringify(store));
-        if (command === 'save_remote_resource_store') { store = JSON.parse(JSON.stringify(args.value ?? args.store ?? args.data ?? {})); return null; }
+        if (command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
+        if (command === 'get_remote_resource_store') { if (versions) { store.documents[path] = state.body; snapshots.set(args.operation.requestId, { [path]: state.version }); } return JSON.parse(JSON.stringify(store)); }
+        if (command === 'save_remote_resource_store') { if (versions) { const expected = args.operation.expectedFiles[path]; state.attempts.push(expected); if (expected !== state.version) throw { message: 'fixture skill version conflict' }; } store = JSON.parse(JSON.stringify(args.value ?? args.store ?? args.data ?? {})); state.body = store.documents[path]; state.version = `saved-${++state.saves}`; snapshots.set(args.operation.requestId, { [path]: state.version }); return null; }
         if (command === 'analyze_skill_document') return args.content === fixed ? fixedManifest : crudManifest;
         if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
         if (command === 'get_tray_status') return { available: false, error: null };
@@ -120,7 +123,7 @@ async function mockRemoteSkills(page: Page) {
         return null;
       } },
     });
-  }, { crud: CRUD, fixed: CRUD_FIXED, crudManifest: manifest({ name: 'other-name', bodyLine: 4, issues: [issue('name_mismatch'), issue('description_missing')] }), fixedManifest: manifest({ name: 'crud-page', description: 'Builds CRUD pages.', bodyLine: 4 }) });
+  }, { versions, crud: CRUD, fixed: CRUD_FIXED, crudManifest: manifest({ name: 'other-name', bodyLine: 4, issues: [issue('name_mismatch'), issue('description_missing')] }), fixedManifest: manifest({ name: 'crud-page', description: 'Builds CRUD pages.', bodyLine: 4 }) });
 }
 
 async function openSkills(page: Page) {
@@ -312,4 +315,33 @@ test('library cards mark packages with specification notes', async ({ page }) =>
   await expect(library.getByText('Has notes')).toBeVisible();
   await expect(library.getByText('All good')).toBeVisible();
   await expect(library.getByText('规范提示')).toHaveCount(1);
+});
+
+
+test('a saved remote skill preserves a stale draft conflict and accepts actual bytes only after close and reload', async ({ page }) => {
+  await mockRemoteSkills(page, true);
+  const list = await openSkills(page);
+  await list.getByRole('button', { name: /crud-page/ }).click();
+  const article = page.getByRole('article');
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'SKILL.md', exact: true });
+  await editor.fill(CRUD_FIXED);
+  await article.getByRole('button', { name: '保存', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__remoteSkillState.saves)).toBe(1);
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor.fill(`${CRUD_FIXED}user draft\n`);
+  await page.evaluate(() => { const state = (window as any).__remoteSkillState; state.body += 'external body\n'; state.version = 'external'; });
+  await article.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('fixture skill version conflict')).toBeVisible();
+  await expect(editor).toContainText('user draft');
+  await page.setViewportSize({ width: 640, height: 900 });
+  await page.getByRole('button', { name: '返回列表', exact: true }).click();
+  await page.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await list.getByRole('button', { name: /crud-page/ }).click();
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(editor).toContainText('external body');
+  await editor.fill(`${CRUD_FIXED}external body\naccepted edit\n`);
+  await article.getByRole('button', { name: '保存', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__remoteSkillState.saves)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__remoteSkillState.attempts)).toEqual(['old', 'saved-1', 'external']);
 });

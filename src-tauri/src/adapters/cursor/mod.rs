@@ -33,6 +33,10 @@ pub struct Cursor;
 const CONNECTION_DENIED: &str = "Cursor 不提供供应商、请求地址、登录或模型连接";
 
 impl CliAdapter for Cursor {
+    fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
+        super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".cursor/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: None, agent_root: Some(".cursor/agents"), agent_extension: Some("md") }
+    }
+
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
