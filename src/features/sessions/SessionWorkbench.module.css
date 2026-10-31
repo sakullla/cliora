@@ -970,6 +970,7 @@
 .terminalHost :global(.xterm) { height: 100%; padding: 0; }
 .terminalHost :global(.xterm:focus),
 .terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; }
+.terminalHost :global(.xterm .xterm-viewport),
 .terminalHost :global(.xterm-scrollable-element) { background: var(--term-bg); }
 .terminalHost :global(.xterm-scrollable-element > .scrollbar) { display: none; }
 /* The IME composition sits on the input cell as a floating chip, always readable over output. */
