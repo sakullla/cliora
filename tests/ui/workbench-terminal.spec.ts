@@ -10,6 +10,9 @@ function scrollState(node: Element) {
 }
 const readScroll = (viewport: Locator) => viewport.evaluate(scrollState);
 test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } });
+// These real terminal renderers share the software GPU. Keep this file on one
+// worker so competing contexts cannot starve its rendering assertions.
+test.describe.configure({ mode: 'default' });
 
 test.describe('product WebGL input integration', () => {
   test('composition retains its text and anchor while the real renderer receives output', async ({ page }) => {
@@ -123,6 +126,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             writes.push(text);
             writeBytes.push([...raw]);
             writeLog.push({ sessionId: args.sessionId, text });
+            const beforeWrite = (window as unknown as { __beforeWrite?: (sessionId: string, text: string) => Promise<void> }).__beforeWrite;
+            if (beforeWrite) await beforeWrite(args.sessionId, text);
             return null;
           }
           if (command === 'resize_workbench_session') { resizes.push({ sessionId: args.sessionId, cols: args.cols, rows: args.rows }); return null; }
@@ -173,6 +178,57 @@ async function openWorkbench(page: Page, english = false) {
 const writes = (page: Page) => page.evaluate(() => (window as unknown as { __writes: string[] }).__writes.slice());
 const resetWrites = (page: Page) => page.evaluate(() => { (window as unknown as { __writes: string[] }).__writes.length = 0; });
 const openedUrls = (page: Page) => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened.slice());
+
+test('terminal and quick input preserve session order while another session stays independent', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  const input = await openWorkbench(page);
+  await page.evaluate(() => {
+    let release = () => {};
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0;
+    Object.assign(window, {
+      __releaseWrite: release,
+      __beforeWrite: async (id: string, text: string) => { if (id === 's1' && text === 'b') await ready; },
+    });
+  });
+  await input.press('b');
+  await input.press('Enter');
+  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = page.getByRole('region', { name: '多行输入与提示词投递' });
+  await composer.locator('textarea').fill('quick-command');
+  await composer.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.locator('.xterm-helper-textarea:visible').press('x');
+  await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }, { sessionId: 's2', text: 'x' }]);
+  await page.evaluate(() => (window as unknown as { __releaseWrite: () => void }).__releaseWrite());
+  await expect.poll(() => writeLog(page)).toEqual([
+    { sessionId: 's1', text: 'b' }, { sessionId: 's2', text: 'x' },
+    { sessionId: 's1', text: '\r' }, { sessionId: 's1', text: 'quick-command\r' },
+  ]);
+});
+
+test('a failed input reports its error and releases queued and later input', async ({ page }) => {
+  const input = await openWorkbench(page);
+  await page.evaluate(() => {
+    let reject = (_error: Error) => {};
+    const ready = new Promise<void>((_resolve, fail) => { reject = fail; });
+    (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0;
+    Object.assign(window, {
+      __rejectWrite: () => reject(new Error('input-write-failed')),
+      __beforeWrite: async (_id: string, text: string) => { if (text === 'b') await ready; },
+    });
+  });
+  await input.press('b');
+  await input.press('Enter');
+  expect(await writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }]);
+  await page.evaluate(() => (window as unknown as { __rejectWrite: () => void }).__rejectWrite());
+  await expect(page.getByRole('alert')).toContainText('input-write-failed');
+  await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's1', text: 'b' }, { sessionId: 's1', text: '\r' }]);
+  await input.press('z');
+  await expect.poll(() => writeLog(page)).toEqual([
+    { sessionId: 's1', text: 'b' }, { sessionId: 's1', text: '\r' }, { sessionId: 's1', text: 'z' },
+  ]);
+});
 
 async function pointForTerminalText(page: Page, text: string, last = false) {
   const locate = () => page.evaluate(({ text, last }) => {

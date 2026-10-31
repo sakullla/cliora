@@ -56,6 +56,21 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
   }
 }
 
+const workbenchWrites = new Map<string, Promise<void>>();
+function writeWorkbenchSession(sessionId: string, dataBase64: string): Promise<void> {
+  const write = () => command<void>('write_workbench_session', { sessionId, dataBase64 });
+  const previous = workbenchWrites.get(sessionId);
+  // Submit the first key immediately. Later input, including quick input and
+  // protocol replies, must wait for this session's preceding native write.
+  const pending = previous ? previous.then(write, write) : write();
+  workbenchWrites.set(sessionId, pending);
+  const release = () => {
+    if (workbenchWrites.get(sessionId) === pending) workbenchWrites.delete(sessionId);
+  };
+  void pending.then(release, release);
+  return pending;
+}
+
 const remoteOperations = new RemoteOperations(command);
 const draftBaselines = new Map<string, Record<string, string>>();
 const transactionalWrites = new Set(['save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
@@ -356,7 +371,7 @@ export const native = {
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
   setWorkbenchDirectory: (sessionId: string, directory: string) => command<string>('set_workbench_directory', { sessionId, directory }),
-  writeWorkbenchSession: (sessionId: string, dataBase64: string) => command<void>('write_workbench_session', { sessionId, dataBase64 }),
+  writeWorkbenchSession,
   resizeWorkbenchSession: (sessionId: string, cols: number, rows: number) => command<void>('resize_workbench_session', { sessionId, cols, rows }),
   closeWorkbenchSession: async (sessionId: string, options?: RemoteOperationOptions) => {
     const sessions = await command<WorkbenchSession[]>('list_workbench_sessions');
