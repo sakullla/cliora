@@ -345,3 +345,35 @@ test('a saved remote skill preserves a stale draft conflict and accepts actual b
   await expect.poll(() => page.evaluate(() => (window as any).__remoteSkillState.saves)).toBe(2);
   expect(await page.evaluate(() => (window as any).__remoteSkillState.attempts)).toEqual(['old', 'saved-1', 'external']);
 });
+
+for (const afterWrite of [false, true]) test(`remote Skill read failure preserves the list and ${afterWrite ? 'the saved document' : 'an unsaved draft'}`, async ({ page }) => {
+  await mockRemoteSkills(page, true);
+  const list = await openSkills(page);
+  await list.getByRole('button', { name: /crud-page/ }).click();
+  const article = page.getByRole('article');
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'SKILL.md', exact: true });
+  const draft = `${CRUD_FIXED}preserved remote content\n`;
+  await editor.fill(draft);
+  await page.evaluate((afterWrite) => {
+    const win = window as any;
+    const original = win.__TAURI_INTERNALS__.invoke;
+    let fail = !afterWrite;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'get_remote_resource_store' && fail) throw { message: 'remote skills unavailable' };
+      const result = await original(command, args);
+      if (command === 'save_remote_resource_store') fail = true;
+      return result;
+    };
+  }, afterWrite);
+  await article.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('remote skills unavailable', { exact: true })).toBeVisible();
+  await expect(page.getByText(/刷新失败，当前显示的是上次成功读取的内容/)).toBeVisible();
+  await expect(list.getByRole('button', { name: /crud-page/ })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__remoteSkillState.saves)).toBe(afterWrite ? 1 : 0);
+  if (afterWrite) {
+    await expect(page.getByRole('region', { name: 'SKILL.md 预览' })).toContainText('preserved remote content');
+    await article.getByRole('button', { name: '编辑', exact: true }).click();
+  }
+  await expect(editor).toHaveText(draft, { useInnerText: true });
+});

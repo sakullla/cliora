@@ -176,7 +176,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       setScanError('');
       return entries;
     } catch (value) {
-      if (sequence === nativeReadSequence.current) setScanError(errorText(value));
+      if (sequence === nativeReadSequence.current) {
+        // Local scans are authoritative; only remote refreshes retain stale content.
+        if (!remoteTargetId) { setNativeEntries([]); setRetained([]); }
+        setScanError(errorText(value));
+      }
       throw value;
     }
   }
@@ -189,7 +193,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     void (remoteTargetId
       ? native.getRemoteResourceStore(remoteTargetId, toolId, 'skills').then(value => (value as { entries?: NativeSkillEntry[] }).entries ?? []).then(entries => entries.map(entry => entry.packageId ? entry : { ...entry, packageId: `remote:${entry.path}` }))
       : native.scanNativeSkills(toolId, scope, project)).then((entries) => { if (live) setNativeEntries(entries); })
-      .catch((value) => { if (live) { setScanError(errorText(value)); } })
+      .catch((value) => { if (live) { if (!remoteTargetId) { setNativeEntries([]); setRetained([]); } setScanError(errorText(value)); } })
       .finally(() => { if (live) setListLoading(false); });
     return () => { live = false; };
   }, [toolId, scope, project, remoteTargetId, remoteReads.active]);

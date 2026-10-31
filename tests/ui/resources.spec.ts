@@ -1767,6 +1767,53 @@ test('Skill scan failure replaces an existing list instead of keeping it as comp
   await expect(page.getByRole('button', { name: /kept/ })).toHaveCount(0);
 });
 
+for (const retained of [false, true]) test(`local Skill scan failure clears ${retained ? 'a retained disabled row' : 'the previous list on page reactivation'}`, async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    const entry = { name: 'remembered', path: '/tmp/skills/remembered', digest: 'old', state: 'managed', detail: '', packageId: 'pkg-local', source: 'writable', pluginName: null, pluginEnabled: null };
+    win.__resourceSkillPackages.push({ id: 'pkg-local', name: 'remembered', description: 'Managed copy', fileCount: 1, digest: 'old', source: 'library', compatibility: null, inLibrary: true });
+    const state = { enabled: true, fail: false, scans: 0 };
+    win.__localScanState = state;
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'scan_native_skills') {
+        state.scans += 1;
+        if (state.fail) throw { message: 'local scan unavailable' };
+        return state.enabled ? [entry] : [];
+      }
+      if (command === 'set_skill_enabled') { state.enabled = args.enabled; return null; }
+      if (command === 'get_skill_enabled') return state.enabled;
+      if (command === 'list_skill_installations') return [{ packageId: 'pkg-local', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: entry.path, state: state.enabled ? 'current' : 'disabled', digest: 'old' }];
+      if (command === 'read_native_skill') return { name: entry.name, path: entry.path, content: '# remembered' };
+      return original(command, args);
+    };
+  });
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  const row = page.getByRole('button', { name: /remembered/ });
+  await expect(row).toBeVisible();
+  if (retained) {
+    await row.click();
+    await page.getByRole('switch', { name: '启用 Skill' }).click();
+    await expect(page.getByRole('switch', { name: '启用 Skill' })).not.toBeChecked();
+    await expect.poll(() => page.evaluate(() => (window as any).__localScanState.scans)).toBe(2);
+    await expect(row).toBeVisible();
+  }
+  await page.evaluate(() => { (window as any).__localScanState.fail = true; });
+  if (retained) await page.getByRole('switch', { name: '启用 Skill' }).click();
+  else {
+    await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+    await navigation.getByRole('button', { name: '工具与连接' }).click();
+  }
+  await expect(page.getByText('Skill 列表加载失败：local scan unavailable', { exact: true })).toBeVisible();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__localScanState.scans)).toBe(retained ? 3 : 2);
+});
+
 test('Skill page without a project only asks for a project', async ({ page }) => {
   await mockResources(page);
   await page.addInitScript(() => {
