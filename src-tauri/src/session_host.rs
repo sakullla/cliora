@@ -47,6 +47,83 @@ pub(crate) mod process_tree {
         SetInformationJobObject, TerminateJobObject, QueryInformationJobObject, JobObjectBasicAccountingInformation, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     };
 
+    mod thread_snapshot {
+        use super::*;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::{Foundation::ERROR_NO_MORE_ITEMS, System::{
+            Diagnostics::ProcessSnapshotting::*,
+            Threading::{GetCurrentProcess, GetProcessIdOfThread, OpenThread, THREAD_QUERY_LIMITED_INFORMATION, THREAD_SUSPEND_RESUME},
+        }};
+
+        #[derive(Clone, Copy)]
+        pub(super) struct Api {
+            pub capture: unsafe extern "system" fn(HANDLE, PSS_CAPTURE_FLAGS, u32, *mut HPSS) -> u32,
+            pub marker: unsafe extern "system" fn(*const PSS_ALLOCATOR, *mut HPSSWALK) -> u32,
+            pub walk: unsafe extern "system" fn(HPSS, PSS_WALK_INFORMATION_CLASS, HPSSWALK, *mut c_void, u32) -> u32,
+            pub free_marker: unsafe extern "system" fn(HPSSWALK) -> u32,
+            pub free_snapshot: unsafe extern "system" fn(HANDLE, HPSS) -> u32,
+        }
+
+        pub(super) const API: Api = Api { capture: PssCaptureSnapshot, marker: PssWalkMarkerCreate, walk: PssWalkSnapshot, free_marker: PssWalkMarkerFree, free_snapshot: PssFreeSnapshot };
+
+        struct Lookup<'a> { api: &'a Api, snapshot: HPSS, marker: HPSSWALK }
+        impl Lookup<'_> {
+            fn release(&mut self) -> bool {
+                // Local capture descriptors belong to this process, not the child.
+                // Disarm before freeing: a reported error must not cause a second
+                // free of a descriptor with uncertain lifetime.
+                let marker = std::mem::replace(&mut self.marker, std::ptr::null_mut());
+                let snapshot = std::mem::replace(&mut self.snapshot, std::ptr::null_mut());
+                let marker_ok = marker.is_null() || unsafe { (self.api.free_marker)(marker) == 0 };
+                let snapshot_ok = snapshot.is_null() || unsafe { (self.api.free_snapshot)(GetCurrentProcess(), snapshot) == 0 };
+                marker_ok && snapshot_ok
+            }
+
+            fn finish(mut self, result: Result<OwnedHandle, &'static str>) -> Result<OwnedHandle, &'static str> {
+                if !self.release() {
+                    return Err("无法确认挂起线程核查资源已释放，远程进程未恢复");
+                }
+                result
+            }
+        }
+        impl Drop for Lookup<'_> { fn drop(&mut self) { let _ = self.release(); } }
+
+        pub(super) fn primary_thread(child: HANDLE, pid: u32, api: &Api) -> Result<OwnedHandle, &'static str> {
+            let mut lookup = Lookup { api, snapshot: std::ptr::null_mut(), marker: std::ptr::null_mut() };
+            let result = (|| unsafe {
+                let mut snapshot = std::ptr::null_mut();
+                // IDs only; never clone memory, capture handles or thread contexts.
+                if (api.capture)(child, PSS_CAPTURE_THREADS, 0, &mut snapshot) != 0 {
+                    return Err("无法捕获远程挂起进程的线程快照");
+                }
+                lookup.snapshot = snapshot;
+                let mut marker = std::ptr::null_mut();
+                if (api.marker)(std::ptr::null(), &mut marker) != 0 {
+                    return Err("无法建立远程挂起线程的核查游标");
+                }
+                lookup.marker = marker;
+                let mut found = None;
+                loop {
+                    let mut entry: PSS_THREAD_ENTRY = std::mem::zeroed();
+                    let code = (api.walk)(snapshot, PSS_WALK_THREADS, marker, &mut entry as *mut _ as *mut c_void, std::mem::size_of_val(&entry) as u32);
+                    if code == ERROR_NO_MORE_ITEMS { break; }
+                    if code != 0 { return Err("无法完整核查远程挂起进程的线程"); }
+                    if entry.ProcessId != pid { return Err("远程挂起线程快照不属于本次请求"); }
+                    if found.replace(entry.ThreadId).is_some() { return Err("远程挂起进程的主线程身份不唯一"); }
+                }
+                let id = found.ok_or("无法核查远程进程的挂起主线程")?;
+                let raw = OpenThread(THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION, 0, id);
+                if raw.is_null() { return Err("无法访问远程进程的挂起主线程"); }
+                let thread = OwnedHandle::from_raw_handle(raw);
+                if GetProcessIdOfThread(thread.as_raw_handle()) != pid { return Err("远程挂起主线程不属于本次请求"); }
+                Ok(thread)
+            })();
+            // Free failures are observable before ResumeThread, while the Job
+            // still owns a suspended process. Drop is only an unwind fallback.
+            lookup.finish(result)
+        }
+    }
+
     pub struct Job(HANDLE);
 
     // Ownership is exclusive; a job handle may be closed from any thread.
@@ -113,43 +190,16 @@ pub(crate) mod process_tree {
         }
 
         fn assign_suspended_with(child: HANDLE, pid: u32, assign: impl FnOnce(HANDLE) -> Option<Job>, resume: impl FnOnce(HANDLE) -> u32) -> Result<Job, &'static str> {
-            use windows_sys::Win32::{
-                Foundation::INVALID_HANDLE_VALUE,
-                System::{Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD},
-                    Threading::{OpenThread, GetProcessIdOfThread, THREAD_SUSPEND_RESUME, THREAD_QUERY_LIMITED_INFORMATION}},
-            };
+            Self::assign_suspended_snapshot_with(child, pid, assign, resume, &thread_snapshot::API)
+        }
+
+        fn assign_suspended_snapshot_with(child: HANDLE, pid: u32, assign: impl FnOnce(HANDLE) -> Option<Job>, resume: impl FnOnce(HANDLE) -> u32, api: &thread_snapshot::Api) -> Result<Job, &'static str> {
+            use std::os::windows::io::AsRawHandle;
             let job = assign(child).ok_or("无法建立远程进程清理边界")?;
-            let result = unsafe {
-                let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-                if snapshot == INVALID_HANDLE_VALUE {
-                    Err("无法核查远程进程的挂起主线程")
-                } else {
-                    let mut entry: THREADENTRY32 = std::mem::zeroed();
-                    entry.dwSize = std::mem::size_of_val(&entry) as u32;
-                    let mut found = Vec::new();
-                    let mut present = Thread32First(snapshot, &mut entry);
-                    while present != 0 {
-                        if entry.th32OwnerProcessID == pid { found.push(entry.th32ThreadID); }
-                        present = Thread32Next(snapshot, &mut entry);
-                    }
-                    CloseHandle(snapshot);
-                    if found.len() != 1 {
-                        Err("远程挂起进程的主线程身份不唯一")
-                    } else {
-                        let thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION, 0, found[0]);
-                        if thread.is_null() {
-                            Err("无法访问远程进程的挂起主线程")
-                        } else {
-                            let valid = GetProcessIdOfThread(thread) == pid;
-                            let resumed = if valid { resume(thread) } else { u32::MAX };
-                            CloseHandle(thread);
-                            if !valid { Err("远程挂起主线程不属于本次请求") }
-                            else if resumed != 1 { Err("无法安全恢复远程进程的挂起主线程") }
-                            else { Ok(()) }
-                        }
-                    }
-                }
-            };
+            let result = thread_snapshot::primary_thread(child, pid, api).and_then(|thread| {
+                if resume(thread.as_raw_handle()) != 1 { return Err("无法安全恢复远程进程的挂起主线程"); }
+                Ok(())
+            });
             if let Err(error) = result {
                 if !job.terminate_and_wait() { return Err("挂起进程启动失败，无法确认清理完成"); }
                 return Err(error);
@@ -190,7 +240,89 @@ pub(crate) mod process_tree {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::os::windows::process::CommandExt;
+        use std::os::windows::{process::CommandExt, io::AsRawHandle};
+        use windows_sys::Win32::{Foundation::{ERROR_NO_MORE_ITEMS, HANDLE}, System::{
+            Diagnostics::ProcessSnapshotting::*, Threading::{GetCurrentProcess, GetCurrentThreadId, ResumeThread},
+        }};
+
+        #[derive(Default)]
+        struct SnapshotProbe {
+            fault: &'static str,
+            captures: usize,
+            markers: usize,
+            snapshot_frees: usize,
+            marker_frees: usize,
+            actual_free_errors: usize,
+            invalid_parameters: bool,
+            walk_calls: usize,
+            first: Option<PSS_THREAD_ENTRY>,
+            resumes: usize,
+        }
+        thread_local! { static SNAPSHOT_PROBE: std::cell::RefCell<SnapshotProbe> = std::cell::RefCell::new(SnapshotProbe::default()); }
+
+        unsafe extern "system" fn capture_probe(process: HANDLE, flags: PSS_CAPTURE_FLAGS, context: u32, snapshot: *mut HPSS) -> u32 {
+            let fault = SNAPSHOT_PROBE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.invalid_parameters |= flags != PSS_CAPTURE_THREADS || context != 0;
+                s.fault
+            });
+            let code = PssCaptureSnapshot(if fault == "capture" { std::ptr::null_mut() } else { process }, flags, context, snapshot);
+            if code == 0 { SNAPSHOT_PROBE.with(|s| s.borrow_mut().captures += 1); }
+            code
+        }
+
+        unsafe extern "system" fn failed_marker_allocate(_: *mut c_void, _: u32) -> *mut c_void { std::ptr::null_mut() }
+        unsafe extern "system" fn failed_marker_free(_: *mut c_void, _: *mut c_void) {}
+
+        unsafe extern "system" fn marker_probe(allocator: *const PSS_ALLOCATOR, marker: *mut HPSSWALK) -> u32 {
+            let failed = PSS_ALLOCATOR { Context: std::ptr::null_mut(), AllocRoutine: failed_marker_allocate as *const () as isize, FreeRoutine: failed_marker_free as *const () as isize };
+            let fault = SNAPSHOT_PROBE.with(|s| s.borrow().fault);
+            let code = PssWalkMarkerCreate(if fault == "marker" { &failed } else { allocator }, marker);
+            if code == 0 { SNAPSHOT_PROBE.with(|s| s.borrow_mut().markers += 1); }
+            code
+        }
+
+        unsafe extern "system" fn walk_probe(snapshot: HPSS, class: PSS_WALK_INFORMATION_CLASS, marker: HPSSWALK, buffer: *mut c_void, size: u32) -> u32 {
+            let (fault, call, first) = SNAPSHOT_PROBE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.walk_calls += 1;
+                (s.fault, s.walk_calls, s.first)
+            });
+            if fault == "zero" { return ERROR_NO_MORE_ITEMS; }
+            if fault == "many" && call == 2 {
+                if let Some(first) = first { *(buffer as *mut PSS_THREAD_ENTRY) = first; return 0; }
+            }
+            let code = PssWalkSnapshot(snapshot, class, marker, buffer, if fault == "walk" { 0 } else { size });
+            if code == 0 {
+                let entry = &mut *(buffer as *mut PSS_THREAD_ENTRY);
+                if fault == "pid" { entry.ProcessId = u32::MAX; }
+                if fault == "open" { entry.ThreadId = u32::MAX; }
+                if fault == "owner" { entry.ThreadId = GetCurrentThreadId(); }
+                SNAPSHOT_PROBE.with(|s| s.borrow_mut().first = Some(*entry));
+            }
+            code
+        }
+
+        unsafe extern "system" fn free_marker_probe(marker: HPSSWALK) -> u32 {
+            let code = PssWalkMarkerFree(marker);
+            SNAPSHOT_PROBE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.marker_frees += 1;
+                if code != 0 { s.actual_free_errors += 1; }
+                if s.fault == "free_marker" { 5 } else { code }
+            })
+        }
+
+        unsafe extern "system" fn free_snapshot_probe(process: HANDLE, snapshot: HPSS) -> u32 {
+            let code = PssFreeSnapshot(process, snapshot);
+            SNAPSHOT_PROBE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.snapshot_frees += 1;
+                s.invalid_parameters |= process != GetCurrentProcess();
+                if code != 0 { s.actual_free_errors += 1; }
+                if s.fault == "free_snapshot" { 5 } else { code }
+            })
+        }
 
         #[test]
         fn suspended_fixture_child() {
@@ -217,6 +349,63 @@ pub(crate) mod process_tree {
                 assert!(child.try_wait().unwrap().is_some(), "{failure} left a suspended process");
                 assert!(!marker.exists(), "{failure} executed before the containment boundary");
             }
+        }
+
+        #[test]
+        fn process_snapshot_failures_release_descriptors_before_refusing_resume() {
+            let directory = tempfile::tempdir().unwrap();
+            let api = thread_snapshot::Api { capture: capture_probe, marker: marker_probe, walk: walk_probe, free_marker: free_marker_probe, free_snapshot: free_snapshot_probe };
+            for fault in ["capture", "marker", "walk", "zero", "many", "pid", "open", "owner", "free_marker", "free_snapshot"] {
+                SNAPSHOT_PROBE.with(|s| *s.borrow_mut() = SnapshotProbe { fault, ..Default::default() });
+                let marker = directory.path().join(fault);
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "session_host::process_tree::tests::suspended_fixture_child"])
+                    .env("CLIORA_SUSPENDED_CHILD_MARKER", &marker)
+                    .creation_flags(0x0800_0004).spawn().unwrap();
+                let result = Job::assign_suspended_snapshot_with(child.as_raw_handle(), child.id(), Job::assign,
+                    |_| { SNAPSHOT_PROBE.with(|s| s.borrow_mut().resumes += 1); u32::MAX }, &api);
+                assert!(result.is_err(), "{fault}");
+                if fault.starts_with("free_") { assert!(result.err().unwrap().contains("资源已释放"), "{fault}"); }
+                assert!(child.try_wait().unwrap().is_some(), "{fault} left the child suspended");
+                assert!(!marker.exists(), "{fault} executed before validation/descriptor cleanup");
+                SNAPSHOT_PROBE.with(|s| {
+                    let s = s.borrow();
+                    assert_eq!(s.resumes, 0, "{fault}");
+                    assert_eq!(s.captures, s.snapshot_frees, "{fault}");
+                    assert_eq!(s.markers, s.marker_frees, "{fault}");
+                    assert_eq!(s.actual_free_errors, 0, "{fault}");
+                    assert!(!s.invalid_parameters, "{fault}");
+                });
+            }
+        }
+
+        #[test]
+        fn process_snapshot_releases_resources_then_resumes_the_owned_thread_once() {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("validated");
+            SNAPSHOT_PROBE.with(|s| *s.borrow_mut() = SnapshotProbe::default());
+            let api = thread_snapshot::Api { capture: capture_probe, marker: marker_probe, walk: walk_probe, free_marker: free_marker_probe, free_snapshot: free_snapshot_probe };
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "session_host::process_tree::tests::suspended_fixture_child"])
+                .env("CLIORA_SUSPENDED_CHILD_MARKER", &marker)
+                .creation_flags(0x0800_0004).spawn().unwrap();
+            let job = Job::assign_suspended_snapshot_with(child.as_raw_handle(), child.id(), Job::assign, |thread| {
+                SNAPSHOT_PROBE.with(|s| {
+                    let mut s = s.borrow_mut();
+                    assert_eq!((s.captures, s.markers, s.snapshot_frees, s.marker_frees), (1, 1, 1, 1));
+                    assert_eq!(s.actual_free_errors, 0);
+                    assert!(!s.invalid_parameters);
+                    s.resumes += 1;
+                });
+                unsafe { ResumeThread(thread) }
+            }, &api).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !marker.exists() && std::time::Instant::now() < deadline { std::thread::sleep(std::time::Duration::from_millis(10)); }
+            let executed = marker.exists();
+            assert!(job.terminate_and_wait());
+            assert!(child.try_wait().unwrap().is_some());
+            assert!(executed);
+            SNAPSHOT_PROBE.with(|s| assert_eq!(s.borrow().resumes, 1));
         }
     }
 }

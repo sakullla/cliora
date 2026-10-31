@@ -1393,12 +1393,16 @@ fn control_path(target: &RemoteTarget) -> Option<String> {
 
 fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
     let detail = stderr.to_ascii_lowercase();
+    // OpenSSH forwards remote statuses 1..=254; 255 is a transport failure.
+    // Windows also returns 0xffffffff (-1) on a lost connection. Abnormal or
+    // absent process statuses cannot confirm that a remote mutation failed.
+    let remote_exit = matches!(exit_code, Some(1..=254));
     if detail.contains("remote host identification has changed")
         || detail.contains("host key verification failed")
         || detail.contains("no matching host key")
     {
         "host_key"
-    } else if exit_code == Some(255) && !detail.contains("__cliora_remote_started__") && (detail.contains("permission denied")
+    } else if !remote_exit && !detail.contains("__cliora_remote_started__") && (detail.contains("permission denied")
         || detail.contains("could not authenticate")
         || detail.contains("too many authentication failures"))
     {
@@ -1415,7 +1419,7 @@ fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
         "permission"
     } else if exit_code == Some(127) || detail.contains("cliora:missing-") {
         "dependency"
-    } else if exit_code.is_some() && exit_code != Some(255) {
+    } else if remote_exit {
         "remote_command"
     } else {
         "connect"
@@ -2184,7 +2188,7 @@ fn acquire_ssh_slot_within(target: &RemoteTarget, wait: Duration) -> Result<oper
 }
 
 fn retryable_ssh_failure(stderr: &str, exit_code: Option<i32>) -> bool {
-    if matches!(exit_code, Some(code) if code != 255) {
+    if matches!(exit_code, Some(0..=254)) {
         return false;
     }
     let detail = stderr.to_ascii_lowercase();
@@ -2503,6 +2507,50 @@ mod tests {
     }
 
     #[test]
+    fn ssh_abnormal_exit_keeps_dispatched_writes_uncertain() {
+        for exit_code in [Some(-1), None, Some(255), Some(256), Some(i32::MIN)] {
+            let stage = classify_ssh_failure("Connection to fixture closed by remote host.", exit_code);
+            assert_eq!(stage, "connect", "exit {exit_code:?} is not a confirmed remote command status");
+            for kind in [operations::Kind::Read, operations::Kind::Write] {
+                let context = operations::Context::local(kind, Duration::from_secs(1));
+                context.dispatched();
+                let RemoteError::Operation(failure) = context.failure_with_exit(stage, "Connection closed", exit_code) else { panic!("missing typed failure") };
+                assert_eq!(failure.reason, "connect");
+                assert_eq!(failure.exit_code, exit_code);
+                assert_eq!(failure.outcome, if kind == operations::Kind::Write { "unknown" } else { "failed" });
+                assert!(!failure.message.trim().is_empty());
+                assert!(retryable_ssh_failure("Connection closed by fixture", exit_code));
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_abnormal_exit_preserves_confirmed_failure_boundaries() {
+        for (detail, exit_code, expected) in [
+            ("Permission denied (publickey).", Some(-1), "authentication"),
+            ("Permission denied (publickey).", None, "authentication"),
+            ("Host key verification failed.", Some(-1), "host_key"),
+            ("__CLIORA_REMOTE_STARTED__\ncat: Permission denied", Some(-1), "permission"),
+            ("cliora:directory-missing", Some(-1), "directory_missing"),
+            ("cliora:directory-type", None, "directory_type"),
+            ("cliora:directory-access", Some(46), "directory_access"),
+            ("cliora:missing-tmux", Some(-1), "dependency"),
+            ("command not found", Some(127), "dependency"),
+            ("remote tool rejected input", Some(1), "remote_command"),
+            ("remote tool rejected input", Some(254), "remote_command"),
+        ] {
+            let stage = classify_ssh_failure(detail, exit_code);
+            assert_eq!(stage, expected, "{detail}, exit {exit_code:?}");
+            let context = operations::Context::local(operations::Kind::Write, Duration::from_secs(1));
+            context.dispatched();
+            let RemoteError::Operation(failure) = context.failure_with_exit(stage, detail, exit_code) else { panic!("missing typed failure") };
+            assert_eq!(failure.outcome, "failed");
+            assert_eq!(failure.exit_code, exit_code);
+            assert!(!retryable_ssh_failure(detail, exit_code));
+        }
+    }
+
+    #[test]
     fn directory_errors_preserve_path_type_permission_and_authentication() {
         for (detail, code, stage) in [
             ("cliora:directory-missing: Directory does not exist", 44, "directory_missing"),
@@ -2619,6 +2667,7 @@ mod tests {
         drop(file);
         match mode.as_str() {
             "closed" | "write_drop" => { eprintln!("Connection closed by fixture"); std::process::exit(255); }
+            "write_drop_windows" => { eprintln!("Connection closed by fixture"); std::process::exit(-1); }
             "permission" => { eprintln!("cat: fixture: Permission denied"); std::process::exit(1); }
             "authentication" => { eprintln!("Permission denied (publickey)."); std::process::exit(255); }
             "tree" => {
@@ -2645,7 +2694,7 @@ mod tests {
     #[test]
     fn process_faults_keep_permission_and_authentication_distinct_and_never_replay_writes() {
         let directory = tempfile::tempdir().unwrap();
-        for (mode, expected, outcome) in [("write_drop", "connect", "unknown"), ("permission", "permission", "failed"), ("authentication", "authentication", "failed")] {
+        for (mode, expected, outcome) in [("write_drop", "connect", "unknown"), ("write_drop_windows", "connect", "unknown"), ("permission", "permission", "failed"), ("authentication", "authentication", "failed")] {
             let counter = directory.path().join(mode);
             let context = operations::Context::local(operations::Kind::Write, Duration::from_secs(3));
             let target = gate_target(&format!("{mode}.invalid"));
@@ -2655,6 +2704,8 @@ mod tests {
             let RemoteError::Operation(failure) = error else { panic!("missing typed failure") };
             assert_eq!(failure.stage, expected);
             assert_eq!(failure.outcome, outcome);
+            #[cfg(windows)]
+            if mode == "write_drop_windows" { assert_eq!(failure.exit_code, Some(-1)); }
             assert_eq!(child_count(&counter), 1, "a mutation must never replay");
         }
     }

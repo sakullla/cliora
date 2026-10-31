@@ -182,6 +182,117 @@ fn run_posix_shell(shell: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+/// Exercise the generated control command with deterministic read replies.
+/// Probe counters use one temporary file because command substitutions have
+/// separate shell state; fd 3 keeps test observations out of mux diagnostics.
+fn run_remote_end_shell(scenario: &str) -> std::process::Output {
+    let scenario = remote_shell_quote(scenario);
+    let command = remote_end_command("cliora-fixture");
+    run_posix_shell(&format!(r#"
+scenario={scenario}
+task_root=$(mktemp -d /tmp/cliora-end-contract-XXXXXX) || exit 80
+trap 'rm -- "$task_root/list-count"; rmdir -- "$task_root"' EXIT
+printf '0\n' > "$task_root/list-count"
+exec 3>&2
+killed=0
+tmux() {{
+    [ "$1" = -u ] || return 90
+    shift
+    case "$1" in
+        list-sessions)
+            read -r count < "$task_root/list-count"
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$task_root/list-count"
+            printf 'READ:%s\n' "$count" >&3
+            case "$scenario" in
+                screen_*) printf 'cliora-sibling\n'; return 0 ;;
+                loader) echo 'tmux: controlled shared library: No such file or directory' >&2; return 127 ;;
+                misleading) echo 'permission denied: No such file or directory' >&2; return 1 ;;
+                mixed_diagnostic) printf 'no server running on /tmp/controlled/default\npermission denied\n' >&2; return 1 ;;
+                wrong_status) echo 'no server running on /tmp/controlled/default' >&2; return 127 ;;
+                initial_unknown) echo 'controlled probe unavailable' >&2; return 1 ;;
+                missing_socket) echo 'error connecting to /tmp/controlled/default (No such file or directory)' >&2; return 1 ;;
+                no_server) echo 'no server running on /tmp/controlled/default' >&2; return 1 ;;
+                no_sessions) echo 'no sessions' >&2; return 1 ;;
+            esac
+            if [ "$killed" = 0 ]; then printf 'cliora-fixture\n'; return 0; fi
+            case "$scenario" in
+                transient) if [ "$count" = 2 ]; then echo 'controlled probe unavailable' >&2; return 1; fi ;;
+                post_loader) echo 'tmux: controlled shared library: No such file or directory' >&2; return 127 ;;
+                unknown) echo 'controlled probe unavailable' >&2; return 1 ;;
+                present) printf 'cliora-fixture\n'; return 0 ;;
+            esac
+            echo 'no server running on /tmp/controlled/default' >&2; return 1 ;;
+        kill-session)
+            [ "$#" = 3 ] && [ "$2" = -t ] && [ "$3" = =cliora-fixture ] || return 91
+            killed=1; printf 'KILL:tmux\n' >&3; [ "$scenario" != kill_failed ] ;;
+        *) return 92 ;;
+    esac
+}}
+screen() {{
+    case "$1" in
+        -ls)
+            case "$scenario" in
+                screen_loader) echo 'No Sockets found in controlled dependency error' >&2; return 127 ;;
+                screen_misleading) echo 'permission denied: No Sockets found' >&2; return 1 ;;
+                screen_mixed_diagnostic) printf 'No Sockets found in /run/screen/S-fixture.\npermission denied\n' >&2; return 1 ;;
+                screen_presence_error) printf '123.cliora-fixture (Detached)\n'; return 127 ;;
+                screen_*)
+                    if [ "$killed" = 0 ] || [ "$scenario" = screen_present ]; then printf '123.cliora-fixture (Detached)\n'; return 0; fi
+                    read -r count < "$task_root/list-count"
+                    if [ "$scenario" = screen_unknown ] || {{ [ "$scenario" = screen_transient ] && [ "$count" = 2 ]; }}; then echo 'controlled screen probe unavailable' >&2; return 1; fi ;;
+            esac
+            echo 'No Sockets found in /run/screen/S-fixture.'; return 1 ;;
+        -S)
+            [ "$#" = 4 ] && [ "$2" = cliora-fixture ] && [ "$3" = -X ] && [ "$4" = quit ] || return 93
+            killed=1; printf 'KILL:screen\n' >&3 ;;
+        *) return 94 ;;
+    esac
+}}
+sleep() {{ [ "$1" = 1 ] || return 95; printf 'WAIT\n' >&3; }}
+{command}
+"#))
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_end_recovers_read_only_unknown_within_original_budget_without_repeating_kill() {
+    for (scenario, exit, reads, waits, kills) in [
+        ("transient", 0, 3, 1, 1), ("screen_transient", 0, 3, 1, 1),
+        ("unknown", 46, 6, 5, 1), ("screen_unknown", 46, 6, 5, 1),
+        ("post_loader", 46, 6, 5, 1),
+        ("present", 47, 6, 5, 1), ("screen_present", 47, 6, 5, 1),
+        ("initial_unknown", 46, 1, 0, 0),
+        ("kill_failed", 47, 1, 0, 1),
+    ] {
+        let output = run_remote_end_shell(scenario);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(exit), "{scenario}: {stdout}: {stderr}");
+        assert_eq!(stdout.contains("CLIORA_REMOTE_ABSENT:cliora-fixture"), exit == 0, "{scenario}: {stdout}");
+        assert_eq!(stderr.matches("READ:").count(), reads, "{scenario}: {stderr}");
+        assert_eq!(stderr.matches("WAIT").count(), waits, "{scenario}: {stderr}");
+        assert_eq!(stderr.matches("KILL:").count(), kills, "{scenario}: {stderr}");
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_end_requires_expected_status_and_specific_absence_diagnostics() {
+    for (scenario, exit) in [
+        ("loader", 46), ("misleading", 46), ("wrong_status", 46), ("mixed_diagnostic", 46),
+        ("screen_loader", 46), ("screen_misleading", 46), ("screen_presence_error", 46), ("screen_mixed_diagnostic", 46),
+        ("missing_socket", 0), ("no_server", 0), ("no_sessions", 0),
+    ] {
+        let output = run_remote_end_shell(scenario);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(exit), "{scenario}: {stdout}: {stderr}");
+        assert_eq!(stdout.contains("CLIORA_REMOTE_ABSENT:cliora-fixture"), exit == 0, "{scenario}: {stdout}");
+        assert!(!stderr.contains("KILL:"), "{scenario}: must not kill on an initial absent/unknown reply: {stderr}");
+    }
+}
+
 #[test]
 #[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
 fn remote_tmux_mouse_setup_is_exact_and_precedes_ready_on_new_and_reattach() {

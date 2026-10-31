@@ -396,17 +396,21 @@ fn remote_state_signal(session: &str, state: &str) -> String {
 
 /// An exact identity probe. An SSH/mux error must never count as confirmed absence.
 /// All session names originate in the validated durable index or our UUID generator.
+/// Absence diagnostics must have the mux's expected exit status and complete,
+/// single-line shape; a loader/permission error containing a phrase is unknown.
 pub(crate) fn remote_mux_probe(session: &str) -> String {
     let session_q = remote_shell_quote(session);
     format!(
-        "{}; cliora_probe() {{ cliora_known=0; cliora_unknown=0; if command -v tmux >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C tmux -u list-sessions -F '#{{session_name}}' 2>&1); cliora_rc=$?; if [ \"$cliora_rc\" -eq 0 ]; then if printf '%s\\n' \"$cliora_list\" | grep -Fxq -- {session_q}; then cliora_mux=tmux; return 0; fi; else case \"$cliora_list\" in *'no server running'*|*'no sessions'*|*'No such file or directory'*) ;; *) cliora_unknown=1 ;; esac; fi; fi; if command -v screen >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C screen -ls 2>&1); cliora_rc=$?; if printf '%s\\n' \"$cliora_list\" | grep -Eq '[.]{session}[[:space:]]'; then cliora_mux=screen; return 0; fi; if [ \"$cliora_rc\" -ne 0 ]; then case \"$cliora_list\" in *'No Sockets found'*) ;; *) cliora_unknown=1 ;; esac; fi; fi; if [ \"$cliora_known\" -eq 0 ] || [ \"$cliora_unknown\" -ne 0 ]; then return 2; fi; return 1; }}",
+        "{}; cliora_probe() {{ cliora_known=0; cliora_unknown=0; if command -v tmux >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C tmux -u list-sessions -F '#{{session_name}}' 2>&1); cliora_rc=$?; if [ \"$cliora_rc\" -eq 0 ]; then if printf '%s\\n' \"$cliora_list\" | grep -Fxq -- {session_q}; then cliora_mux=tmux; return 0; fi; elif [ \"$cliora_rc\" -eq 1 ]; then case \"$cliora_list\" in *[[:cntrl:]]*) cliora_unknown=1 ;; 'no server running on '?*|'no sessions'|'error connecting to '?*' (No such file or directory)') ;; *) cliora_unknown=1 ;; esac; else cliora_unknown=1; fi; fi; if command -v screen >/dev/null 2>&1; then cliora_known=1; cliora_list=$(LC_ALL=C screen -ls 2>&1); cliora_rc=$?; if [ \"$cliora_rc\" -eq 0 ]; then if printf '%s\\n' \"$cliora_list\" | grep -Eq '[.]{session}[[:space:]]'; then cliora_mux=screen; return 0; fi; elif [ \"$cliora_rc\" -eq 1 ]; then case \"$cliora_list\" in *[[:cntrl:]]*) cliora_unknown=1 ;; 'No Sockets found'|'No Sockets found in '?*) ;; *) cliora_unknown=1 ;; esac; else cliora_unknown=1; fi; fi; if [ \"$cliora_known\" -eq 0 ] || [ \"$cliora_unknown\" -ne 0 ]; then return 2; fi; return 1; }}",
         crate::remote::REMOTE_USER_PATH
     )
 }
 
 pub(crate) fn remote_end_command(session: &str) -> String {
+    // Never replay the kill. Use the existing five read-only confirmations for
+    // transient unknowns too; only an explicit absence observation is success.
     format!(
-        "{}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 0 ]; then if [ \"$cliora_mux\" = tmux ]; then tmux -u kill-session -t '={session}' || exit 47; else screen -S {} -X quit || exit 47; fi; elif [ \"$cliora_status\" -ne 1 ]; then exit 46; fi; cliora_attempt=0; while [ \"$cliora_attempt\" -lt 5 ]; do cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then printf '%s\\n' 'CLIORA_REMOTE_ABSENT:{session}'; exit 0; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; cliora_attempt=$((cliora_attempt + 1)); sleep 1; done; exit 47",
+        "{}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 0 ]; then if [ \"$cliora_mux\" = tmux ]; then tmux -u kill-session -t '={session}' || exit 47; else screen -S {} -X quit || exit 47; fi; elif [ \"$cliora_status\" -ne 1 ]; then exit 46; fi; cliora_attempt=0; while [ \"$cliora_attempt\" -lt 5 ]; do cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then printf '%s\\n' 'CLIORA_REMOTE_ABSENT:{session}'; exit 0; fi; cliora_attempt=$((cliora_attempt + 1)); sleep 1; done; if [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; exit 47",
         remote_mux_probe(session), remote_shell_quote(session)
     )
 }
