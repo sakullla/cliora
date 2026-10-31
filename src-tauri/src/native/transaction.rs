@@ -363,11 +363,21 @@ fn integrity_key_checked(
         })
         .map_err(IntegrityKeyError::Data)?;
     let encoded = if registered {
-        credentials.get(INTEGRITY_KEY_ID).map_err(|_| {
-            IntegrityKeyError::CredentialUnavailable(
-                "原生摘要密钥已丢失；请修复系统凭据库，原文件未修改".into(),
-            )
-        })?
+        match credentials.lookup(INTEGRITY_KEY_ID) {
+            Ok(Some(encoded)) => encoded,
+            Ok(None) => {
+                return Err(IntegrityKeyError::CredentialUnavailable(
+                    "原生摘要密钥已丢失；请修复系统凭据库，原文件未修改".into(),
+                ));
+            }
+            // Authorization and other store failures are not loss. Replacing
+            // the key would accept a different native file as previously managed.
+            Err(error) => {
+                return Err(IntegrityKeyError::CredentialUnavailable(format!(
+                    "{error}；原文件未修改"
+                )));
+            }
+        }
     } else {
         let encoded = match credentials.get(INTEGRITY_KEY_ID) {
             Ok(existing) => existing,
@@ -1615,6 +1625,18 @@ mod tests {
         .unwrap();
         store.delete(INTEGRITY_KEY_ID).unwrap();
         assert!(integrity_key(&db, &store).unwrap_err().contains("已丢失"));
+    }
+
+    #[test]
+    fn registered_integrity_key_keeps_credential_errors_distinct_from_loss() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        integrity_key(&db, &store).unwrap();
+        let error = integrity_key(&db, &LockedStore).unwrap_err();
+        assert!(error.contains("locked"), "{error}");
+        assert!(!error.contains("已丢失"), "{error}");
+        assert!(error.contains("原文件未修改"), "{error}");
     }
 
     #[test]

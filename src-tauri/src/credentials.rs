@@ -101,6 +101,8 @@ mod macos {
     use super::{CredentialStore, SystemCredentialStore, SERVICE};
 
     const NOT_FOUND: i32 = -25300;
+    const AUTH_FAILED: i32 = -25293;
+    const USER_CANCELED: i32 = -128;
     const INTERACTION_NOT_ALLOWED: i32 = -25308;
     const SECURITY_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -130,11 +132,30 @@ mod macos {
         )
     }
 
+    fn authorization_denied(action: &str) -> String {
+        format!(
+            "无法{action}；登录钥匙串还没有允许当前 Cliora 访问这条密钥。请在系统提示中选择允许；如果没有出现提示，请打开“钥匙串访问”搜索 {SERVICE}，允许当前应用后再试。"
+        )
+    }
+
+    /// A rebuilt or relocated app is absent from the item's trusted list. With
+    /// interaction disabled, Security reports authorization failure rather than
+    /// a missing item. Retrying after interaction is enabled lets the system
+    /// prompt; the secret itself is still there.
+    fn needs_user_authorization(code: i32) -> bool {
+        code == INTERACTION_NOT_ALLOWED || code == AUTH_FAILED
+    }
+
     fn map_failure(action: &str, failure: Failure) -> String {
         match failure {
             Failure::NotFound => missing_secret(action),
             Failure::InvalidSecret => format!("无法{action}；登录钥匙串中的值不是文本"),
             Failure::Message(message) => message,
+            Failure::Os(error)
+                if needs_user_authorization(error.code()) || error.code() == USER_CANCELED =>
+            {
+                authorization_denied(action)
+            }
             Failure::Os(error) => operation_error(action, &describe(error)),
         }
     }
@@ -330,7 +351,7 @@ mod macos {
         let first = operation(&keychain);
         drop(interaction);
         match first {
-            Err(Failure::Os(error)) if error.code() == INTERACTION_NOT_ALLOWED => {
+            Err(Failure::Os(error)) if needs_user_authorization(error.code()) => {
                 operation(&keychain)
             }
             other => other,
@@ -534,6 +555,49 @@ mod tests {
         assert_eq!(store.lookup(&store_id).unwrap(), None);
         assert!(store.get(&store_id).is_err());
         assert_eq!(macos::current_default_keychain(), before);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn authorization_failure_is_not_reported_as_a_missing_secret() {
+        let _interaction =
+            security_framework::os::macos::keychain::SecKeychain::disable_user_interaction();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cliora-auth.keychain-db");
+        let mut keychain = security_framework::os::macos::keychain::CreateOptions::new()
+            .password("test-only")
+            .create(&path)
+            .unwrap();
+        keychain
+            .set_settings(&security_framework::os::macos::keychain::KeychainSettings::new())
+            .unwrap();
+        let id = format!("cliora-auth-{}", std::process::id());
+        let unlock = std::process::Command::new("/usr/bin/security")
+            .args(["unlock-keychain", "-p", "test-only"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(unlock.status.success(), "{}", String::from_utf8_lossy(&unlock.stderr));
+        let added = std::process::Command::new("/usr/bin/security")
+            .args([
+                "add-generic-password",
+                "-a",
+                &id,
+                "-s",
+                "com.cliora.desktop",
+                "-w",
+                "probe-secret-value",
+                "-T",
+                "/usr/bin/true",
+            ])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
+        let error = macos::read_for_test(&keychain, &id).unwrap_err();
+        assert!(error.contains("还没有允许当前 Cliora"), "{error}");
+        assert!(!error.contains("没有这个密钥"), "{error}");
+        drop(_interaction);
     }
 
     #[cfg(target_os = "macos")]
