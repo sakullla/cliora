@@ -75,9 +75,10 @@ export function RemoteWriteRecovery({ target }: { target: RemoteTarget | null })
             <code>{item.path}</code>
             <span>{t(`common.remoteWrite.states.${item.state}`, { defaultValue: item.state })}{item.observed && ` · ${t(`common.remoteWrite.observed.${item.observed}`)}`}</span>
           </div>)}
+          {!unresolvedWrite(receipt) && receipt.items.some(item => item.observed === 'conflict') && <p>{t('common.remoteWrite.historicalChange')}</p>}
           <div className={styles.actions}>
             <Button size="sm" disabled={busy || target.updatedAt !== receipt.targetRevision} onClick={() => void inspect(receipt, false)}>{t('common.remoteWrite.inspect')}</Button>
-            <Button size="sm" disabled={busy || target.updatedAt !== receipt.targetRevision || receipt.items.some(item => !item.observed)} onClick={() => void inspect(receipt, true)}>{t('common.remoteWrite.restore')}</Button>
+            <Button size="sm" disabled={busy || target.updatedAt !== receipt.targetRevision || receipt.items.some(item => !item.observed) || (!unresolvedWrite(receipt) && (receipt.outcome !== 'committed' || receipt.items.some(item => item.observed === 'conflict')))} onClick={() => void inspect(receipt, true)}>{t('common.remoteWrite.restore')}</Button>
           </div>
           {target.updatedAt !== receipt.targetRevision && <p>{t('common.remoteWrite.identityChanged')}</p>}
         </article>)}

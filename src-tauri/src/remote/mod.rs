@@ -2390,7 +2390,7 @@ mod tests {
         assert!(local_homes().lock().unwrap().insert(identity, home.clone()).is_none());
         run(&home);
     }
-    fn write_with_versions(target: &RemoteTarget, versions: transactions::Versions, run: impl FnOnce()) {
+    pub(super) fn write_with_versions(target: &RemoteTarget, versions: transactions::Versions, run: impl FnOnce()) {
         let request = operations::Request {
             request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(), target_id: target.id.clone(),
             target_revision: Some(target.updated_at), kind: operations::Kind::Write, priority: operations::Priority::Interactive,

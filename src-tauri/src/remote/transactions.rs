@@ -66,8 +66,25 @@ fingerprint() {
   elif [ -e "$1" ]; then printf '%s' unsafe
   else printf '%s' missing; fi
 }
+owned_restore() {
+  [ ! -L "$1" ] && [ -f "$1" ] &&
+    [ "$(stat -c '%u:%h' -- "$1")" = "$(id -u):1" ] &&
+    [ "$(fingerprint "$1")" = "$2" ]
+}
+restore_before() {
+  destination=$1; backup=$2; staging=$3; before=$4; after=$5
+  [ "$(fingerprint "$backup")" = "$before" ] || return 1
+  if [ -e "$staging" ] || [ -L "$staging" ]; then
+    owned_restore "$staging" "$before" || return 1
+  else
+    (set -C; cat "$backup" > "$staging") || return 1
+  fi
+  owned_restore "$staging" "$before" && chmod 600 "$staging" || return 1
+  [ "$(fingerprint "$destination")" = "$after" ] || return 1
+  mv -f -- "$staging" "$destination"
+}
 protect() {
-  command -v sha256sum >/dev/null && command -v flock >/dev/null || exit 70
+  command -v sha256sum >/dev/null && command -v flock >/dev/null && command -v stat >/dev/null && command -v id >/dev/null || exit 70
   [ ! -L "$HOME/.cliora" ] && [ ! -L "$HOME/.cliora/transactions" ] || exit 71
   mkdir -p "$HOME/.cliora/transactions" || exit 72
   chmod 700 "$HOME/.cliora" "$HOME/.cliora/transactions" || exit 73
@@ -107,7 +124,9 @@ fn journal(receipt: &Receipt) -> String {
     script
 }
 fn rollback_script(receipt: &Receipt) -> String {
-    let mut script = String::from("rollback() { outcome=rolled_back\n");
+    // A restore is a new side effect even when the original commit completed.
+    // Persist the in-progress barrier before changing its first destination.
+    let mut script = String::from("rollback() { outcome=recovering; journal || exit 79\n");
     for (n, item) in receipt.items.iter().enumerate().rev() {
         script.push_str(&format!(r#"
 case "$s{n}" in committed|applying|rollback_failed|conflict)
@@ -116,7 +135,7 @@ case "$s{n}" in committed|applying|rollback_failed|conflict)
   elif [ "$current" != {after} ]; then s{n}=conflict; outcome=recovery_required
   else
     if [ {before} = missing ]; then rm -f -- "$p" && s{n}=rolled_back || {{ s{n}=rollback_failed; outcome=recovery_required; }}
-    elif [ "$(fingerprint "$tx/{n}.backup")" = {before} ] && cp -- "$tx/{n}.backup" "$tx/{n}.restore" && chmod 600 "$tx/{n}.restore" && (set -C; cat "$tx/{n}.restore" > "$p.cliora-$id-restore") && chmod 600 "$p.cliora-$id-restore" && mv -f -- "$p.cliora-$id-restore" "$p"; then s{n}=rolled_back
+    elif restore_before "$p" "$tx/{n}.backup" "$p.cliora-$id-restore" {before} {after}; then s{n}=rolled_back
     else s{n}=rollback_failed; outcome=recovery_required; fi
   fi
   journal || exit 79;;
@@ -124,9 +143,10 @@ esac
 "#, path=remote_path_expr(&item.path), before=shell_quote(&item.before), after=shell_quote(&item.after)));
     }
     for (n, item) in receipt.items.iter().enumerate() {
-        script.push_str(&format!("rm -f -- {}\n", remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id))));
+        let path = remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id));
+        script.push_str(&format!("if owned_restore {path} {}; then rm -f -- {path}; fi\n", shell_quote(&item.after)));
     }
-    script.push_str("journal || exit 79\ncat \"$tx/receipt\"\n}\n");
+    script.push_str("[ \"$outcome\" != recovering ] || outcome=rolled_back\njournal || exit 79\ncat \"$tx/receipt\"\n}\n");
     script
 }
 
@@ -200,7 +220,10 @@ fn commit_script(receipt: &Receipt, changes: &BTreeMap<String, Option<&[u8]>>) -
     for n in 0..receipt.items.len() { script.push_str(&format!("s{n}=untouched\n")); }
     script.push_str(&journal(receipt));
     script.push_str("cleanup_staging() { case \"$outcome\" in committed|rolled_back|prepare_failed|conflict_before_commit)\n");
-    for (n, item) in receipt.items.iter().enumerate() { script.push_str(&format!("rm -f -- {}\n", remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id)))); }
+    for (n, item) in receipt.items.iter().enumerate() {
+        let path = remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id));
+        script.push_str(&format!("if owned_restore {path} {}; then rm -f -- {path}; fi\n", shell_quote(&item.after)));
+    }
     script.push_str(";; esac; }\ntrap cleanup_staging EXIT\n");
     script.push_str(&rollback_script(receipt));
     script.push_str("journal || exit 79\n");
@@ -258,20 +281,42 @@ pub fn inspect(target: &RemoteTarget, id: &str, rollback: bool, fallback: Option
 }
 
 fn inspection_script(receipt: &Receipt, expected: &str, rollback: bool) -> String {
+    let terminal = matches!(receipt.outcome.as_str(), "committed" | "rolled_back" | "prepare_failed" | "conflict_before_commit");
     let mut script = String::from(HELPERS);
     script.push_str(&format!("protect\nid={}\ntx=\"$HOME/.cliora/transactions/$id\"\n[ ! -L \"$tx\" ] || exit 80\n[ \"$(fingerprint \"$tx/receipt\")\" = {} ] || exit 80\nmkdir -p \"$tx\" && chmod 700 \"$tx\" || exit 80\noutcome={}\n", shell_quote(&receipt.id), shell_quote(expected), shell_quote(&receipt.outcome)));
     for (n, item) in receipt.items.iter().enumerate() { script.push_str(&format!("s{n}={}\n", shell_quote(&item.state))); }
     script.push_str(&journal(&receipt));
-    if rollback {
-        script.push_str(&rollback_script(&receipt)); script.push_str("rollback > /dev/null\n");
+    script.push_str("restore_started=0\n");
+    if rollback && (!terminal || receipt.outcome == "committed") {
+        script.push_str(&rollback_script(&receipt));
+        if terminal {
+            // A completed historical transaction must not undo a later write,
+            // nor partially restore its other files before detecting drift.
+            script.push_str("may_restore=1\n");
+            for item in &receipt.items {
+                script.push_str(&format!("current=$(fingerprint {}) || exit 80\n[ \"$current\" = {} ] || [ \"$current\" = {} ] || may_restore=0\n", remote_path_expr(&item.path), shell_quote(&item.before), shell_quote(&item.after)));
+            }
+            script.push_str("if [ \"$may_restore\" = 1 ]; then restore_started=1; rollback > /dev/null; fi\n");
+        } else { script.push_str("restore_started=1; rollback > /dev/null\n"); }
     }
     script.push_str("all_before=1; all_after=1\n");
     for (n, item) in receipt.items.iter().enumerate() {
-        script.push_str(&format!("v{n}=$(fingerprint {})\n[ \"$v{n}\" = {} ] || all_before=0\n[ \"$v{n}\" = {} ] || all_after=0\n", remote_path_expr(&item.path), shell_quote(&item.before), shell_quote(&item.after)));
+        script.push_str(&format!("v{n}=$(fingerprint {}) || exit 80\n[ \"$v{n}\" = {} ] || all_before=0\n[ \"$v{n}\" = {} ] || all_after=0\n", remote_path_expr(&item.path), shell_quote(&item.before), shell_quote(&item.after)));
     }
-    script.push_str("if [ \"$all_after\" = 1 ]; then outcome=committed; elif [ \"$all_before\" = 1 ]; then outcome=rolled_back; else outcome=recovery_required; fi\njournal || exit 79\ncat \"$tx/receipt\"\nprintf '%s\\n' __CLIORA_OBSERVED__\n");
+    if terminal { script.push_str("if [ \"$restore_started\" = 1 ]; then\n"); }
+    script.push_str("if [ \"$all_after\" = 1 ]; then outcome=committed\n");
+    for n in 0..receipt.items.len() { script.push_str(&format!("s{n}=committed\n")); }
+    script.push_str("elif [ \"$all_before\" = 1 ]; then outcome=rolled_back\n");
+    for n in 0..receipt.items.len() { script.push_str(&format!("s{n}=rolled_back\n")); }
+    script.push_str("else outcome=recovery_required; fi\n");
+    if terminal { script.push_str("fi\n"); }
+    script.push_str("journal || exit 79\ncat \"$tx/receipt\"\nprintf '%s\\n' __CLIORA_OBSERVED__\n");
     script.push_str("case \"$outcome\" in committed|rolled_back)\n");
-    for (n, item) in receipt.items.iter().enumerate() { script.push_str(&format!("rm -f -- {}\n", remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id)))); }
+    for (n, item) in receipt.items.iter().enumerate() {
+        let restore = remote_path_expr(&format!("{}.cliora-{}-restore", item.path, receipt.id));
+        let staging = remote_path_expr(&format!("{}.cliora-{}-{n}.tmp", item.path, receipt.id));
+        script.push_str(&format!("if owned_restore {staging} {}; then rm -f -- {staging}; fi\nif owned_restore {restore} {}; then rm -f -- {restore}; fi\n", shell_quote(&item.after), shell_quote(&item.before)));
+    }
     script.push_str(";; esac\n");
     for n in 0..receipt.items.len() { script.push_str(&format!("printf '%s\\n' \"$v{n}\"\n")); }
     script
@@ -285,6 +330,168 @@ mod tests {
 
     fn fixture() -> RemoteTarget {
         RemoteTarget { id: "transaction-fixture".into(), name: "synthetic".into(), host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 7 }
+    }
+    fn local_fixture(run: impl FnOnce(&RemoteTarget)) {
+        let target = RemoteTarget { id: uuid::Uuid::new_v4().to_string(), ..fixture() };
+        super::super::tests::with_local_transport(&target, |_| run(&target));
+    }
+    fn submit(target: &RemoteTarget, files: &[(&str, &[u8])]) -> Result<(), RemoteError> {
+        let files: Vec<_> = files.iter().map(|(path, bytes)| ((*path).to_owned(), bytes.to_vec())).collect();
+        let expected = versions(target, &files.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>()).unwrap();
+        let mut result = Ok(());
+        super::super::tests::write_with_versions(target, expected, || result = commit(target, &[], &files));
+        result
+    }
+    fn install_fixture_script(target: &RemoteTarget, name: &str, text: &str) {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+        run_command(target, &format!("mkdir -p \"$HOME/bin\"; printf '%s' {} | base64 -d > \"$HOME/bin/{name}\"; chmod 700 \"$HOME/bin/{name}\"", shell_quote(&encoded))).unwrap();
+    }
+    fn interrupted_restore(target: &RemoteTarget) -> Receipt {
+        run_command(target, "printf old-a > \"$HOME/a\"; printf old-b > \"$HOME/b\"; : > \"$HOME/fault\"").unwrap();
+        install_fixture_script(target, "mv", r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    *.tmp)
+      count=$(cat "$HOME/count" 2>/dev/null || printf 0); count=$((count+1)); printf %s "$count" > "$HOME/count"
+      if [ "$count" = 2 ] && [ -f "$HOME/fault" ]; then exit 52; fi;;
+    *-restore) [ ! -f "$HOME/fault" ] || exit 54;;
+  esac
+done
+exec /usr/bin/mv "$@"
+"#);
+        assert!(submit(target, &[("$HOME/a", b"new-a"), ("$HOME/b", b"new-b")]).is_err());
+        let receipts = list(target).unwrap();
+        assert_eq!(receipts.len(), 1);
+        let receipt = receipts.into_iter().next().unwrap();
+        assert_eq!(receipt.outcome, "recovery_required");
+        assert_eq!(receipt.items[0].state, "rollback_failed");
+        receipt
+    }
+
+    #[test]
+    fn failed_restore_can_retry_through_public_inspection_after_the_fault_is_removed() {
+        local_fixture(|target| {
+            let receipt = interrupted_restore(target);
+            let staging = format!("$HOME/a.cliora-{}-restore", receipt.id);
+            assert_eq!(versions(target, &[staging.clone()]).unwrap()[&staging], digest(b"old-a"));
+            let first = inspect(target, &receipt.id, true, None).unwrap();
+            assert_eq!(first.outcome, "recovery_required");
+            assert_eq!(first.items[0].state, "rollback_failed");
+            assert!(submit(target, &[("$HOME/c", b"blocked")]).is_err(), "unfinished restoration still blocks new writes");
+            run_command(target, "rm -f -- \"$HOME/fault\"").unwrap();
+            let restored = inspect(target, &receipt.id, true, None).unwrap();
+            assert_eq!(restored.outcome, "rolled_back");
+            assert!(restored.items.iter().all(|item| item.state == "rolled_back" && item.observed.as_deref() == Some("before")));
+            assert_eq!(versions(target, &[staging.clone()]).unwrap()[&staging], "missing");
+            submit(target, &[("$HOME/a", b"next-write")]).unwrap();
+        });
+    }
+
+    #[test]
+    fn terminal_history_inspection_and_conflicting_explicit_restore_do_not_reblock_or_undo_later_writes() {
+        for rolled_back in [false, true] {
+            local_fixture(|target| {
+                run_command(target, "printf base-a > \"$HOME/a\"; printf base-b > \"$HOME/b\"").unwrap();
+                submit(target, &[("$HOME/a", b"A-a"), ("$HOME/b", b"A-b")]).unwrap();
+                let mut a = list(target).unwrap().pop().unwrap();
+                if rolled_back { a = inspect(target, &a.id, true, None).unwrap(); }
+                let b_before = versions(target, &["$HOME/b".into()]).unwrap();
+                submit(target, &[("$HOME/a", b"later-B")]).unwrap();
+                for restore in [false, true] {
+                    let observed = inspect(target, &a.id, restore, None).unwrap();
+                    assert_eq!(observed.outcome, a.outcome);
+                    assert_eq!(observed.items[0].state, a.items[0].state);
+                    assert_eq!(observed.items[0].observed.as_deref(), Some("conflict"));
+                    assert_eq!(versions(target, &["$HOME/a".into()]).unwrap()["$HOME/a"], digest(b"later-B"));
+                    assert_eq!(versions(target, &["$HOME/b".into()]).unwrap(), b_before, "no partial historical restore before discovering another file's drift");
+                    assert_eq!(list(target).unwrap().into_iter().find(|item| item.id == a.id).unwrap().outcome, a.outcome);
+                }
+                submit(target, &[("$HOME/a", b"next-C")]).unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn restore_rejects_wrong_staging_hash_symlink_hardlink_and_destination_changes_without_overwrite() {
+        for fault in ["wrong-hash", "symlink", "hardlink", "destination", "during-restore"] {
+            local_fixture(|target| {
+                let receipt = interrupted_restore(target);
+                let staging = format!("$HOME/a.cliora-{}-restore", receipt.id);
+                run_command(target, "rm -f -- \"$HOME/fault\"; printf old-a > \"$HOME/external\"").unwrap();
+                let stage_expr = remote_path_expr(&staging);
+                let change = match fault {
+                    "wrong-hash" => format!("printf foreign > {stage_expr}"),
+                    "symlink" => format!("rm -f -- {stage_expr}; ln -s \"$HOME/external\" {stage_expr}"),
+                    "hardlink" => format!("rm -f -- {stage_expr}; ln \"$HOME/external\" {stage_expr}"),
+                    "destination" => "printf external > \"$HOME/a\"".into(),
+                    _ => String::new(),
+                };
+                if !change.is_empty() { run_command(target, &change).unwrap(); }
+                if fault == "during-restore" {
+                    install_fixture_script(target, "sha256sum", r#"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "$HOME/a" ]; then
+    count=$(cat "$HOME/hash-count" 2>/dev/null || printf 0); count=$((count+1)); printf %s "$count" > "$HOME/hash-count"
+    [ "$count" != 2 ] || printf external > "$HOME/a"
+  fi
+done
+exec /usr/bin/sha256sum "$@"
+"#);
+                }
+                let result = inspect(target, &receipt.id, true, None).unwrap();
+                assert_eq!(result.outcome, "recovery_required", "{fault}");
+                let expected = if ["destination", "during-restore"].contains(&fault) { digest(b"external") } else { digest(b"new-a") };
+                assert_eq!(versions(target, &["$HOME/a".into()]).unwrap()["$HOME/a"], expected, "{fault}");
+                assert_eq!(run_command(target, "cat \"$HOME/external\"").unwrap().stdout, "old-a");
+                if fault == "wrong-hash" { assert_eq!(run_command(target, &format!("cat {stage_expr}")).unwrap().stdout, "foreign"); }
+                if fault == "symlink" { run_command(target, &format!("[ -L {stage_expr} ]")).unwrap(); }
+                if fault == "hardlink" { assert_eq!(run_command(target, &format!("stat -c %h {stage_expr}")).unwrap().stdout.trim(), "2"); }
+                assert!(submit(target, &[("$HOME/c", b"blocked")]).is_err());
+            });
+        }
+    }
+
+    #[test]
+    fn a_restore_that_cannot_persist_its_start_barrier_does_not_modify_files_or_the_terminal_receipt() {
+        local_fixture(|target| {
+            run_command(target, "printf base > \"$HOME/a\"").unwrap();
+            submit(target, &[("$HOME/a", b"committed")]).unwrap();
+            let receipt = list(target).unwrap().pop().unwrap();
+            install_fixture_script(target, "mv", "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in */receipt.next) exit 55;; esac; done\nexec /usr/bin/mv \"$@\"\n");
+            assert!(inspect(target, &receipt.id, true, None).is_err());
+            assert_eq!(versions(target, &["$HOME/a".into()]).unwrap()["$HOME/a"], digest(b"committed"));
+            assert_eq!(list(target).unwrap()[0].outcome, "committed");
+            run_command(target, "rm -f -- \"$HOME/bin/mv\"").unwrap();
+            assert_eq!(inspect(target, &receipt.id, true, None).unwrap().outcome, "rolled_back");
+        });
+    }
+    #[test]
+    fn interrupted_partial_restore_keeps_a_durable_barrier_between_files_and_can_finish_later() {
+        local_fixture(|target| {
+            run_command(target, "printf base-a > \"$HOME/a\"; printf base-b > \"$HOME/b\"").unwrap();
+            submit(target, &[("$HOME/a", b"A-a"), ("$HOME/b", b"A-b")]).unwrap();
+            let receipt = list(target).unwrap().pop().unwrap();
+            install_fixture_script(target, "mv", r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in *-restore)
+    count=$(cat "$HOME/restore-count" 2>/dev/null || printf 0); count=$((count+1)); printf %s "$count" > "$HOME/restore-count"
+    if [ "$count" = 2 ]; then kill -KILL "$PPID"; exit 99; fi;;
+  esac
+done
+exec /usr/bin/mv "$@"
+"#);
+            assert!(inspect(target, &receipt.id, true, None).is_err());
+            let interrupted = list(target).unwrap().pop().unwrap();
+            assert_eq!(interrupted.outcome, "recovering");
+            assert_eq!(versions(target, &["$HOME/a".into()]).unwrap()["$HOME/a"], digest(b"A-a"));
+            assert_eq!(versions(target, &["$HOME/b".into()]).unwrap()["$HOME/b"], digest(b"base-b"));
+            assert!(submit(target, &[("$HOME/c", b"blocked")]).is_err());
+            run_command(target, "rm -f -- \"$HOME/bin/mv\"").unwrap();
+            let restored = inspect(target, &receipt.id, true, None).unwrap();
+            assert_eq!(restored.outcome, "rolled_back");
+            assert!(restored.items.iter().all(|item| item.observed.as_deref() == Some("before")));
+            submit(target, &[("$HOME/c", b"allowed")]).unwrap();
+        });
     }
     #[test]
     fn versions_entry_frames_existing_empty_missing_and_mixed_files_and_rejects_hash_failure() {

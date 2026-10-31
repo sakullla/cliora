@@ -75,10 +75,13 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
   let installed = false;
   const installedTools = new Set();
   const createdReceipts = new Set();
+  const settledReceipts = new Set();
   const originalReceipts = new Set();
   let savedTarget;
   let nativePath;
   let nativeOriginalHash;
+  let managementPath;
+  let managementOriginalHash;
   let externalHash;
   const op = (kind, expectedFiles = {}) => ({ requestId: randomUUID(), cancelToken: randomUUID(), targetId, targetRevision: savedTarget.updatedAt, kind, priority: 'interactive', deadlineUnixMs: Date.now() + 120000, refresh: true, expectedFiles });
   const outcome = (name, args) => evaluate(`(async()=>{try{return {ok:true,value:await window.__TAURI_INTERNALS__.invoke(${JSON.stringify(name)},${JSON.stringify(args)})};}catch(error){return {ok:false,error};}})()`);
@@ -114,6 +117,9 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
     assert(nativeOriginalHash && nativeOriginalHash !== 'missing', 'The fixed fixture must contain a native document.');
     const management = Object.keys(initial.versions).filter(path => path.startsWith('$HOME/.cliora/registered-tools/'));
     assert(management.length === 1 && initial.versions[management[0]] !== 'missing', 'The rollback-failure fixture requires an existing isolated management document as well as the native document. Seed and fingerprint both externally; restore both original states after this runner.');
+    managementPath = `${home}/${management[0].slice('$HOME/'.length)}`;
+    managementOriginalHash = initial.versions[management[0]];
+    report.transactionOriginalVersions = { native: nativeOriginalHash, management: managementOriginalHash };
     for (const receipt of await receipts()) {
       originalReceipts.add(receipt.id);
       assert(['committed', 'rolled_back', 'prepare_failed', 'conflict_before_commit'].includes(receipt.outcome), 'Existing unresolved transaction must be inspected before this fixture.');
@@ -161,6 +167,35 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
       check(`${fault}: explicit recovery restores original versions`, restored.outcome === 'rolled_back' && restored.items.every(item => item.observed === 'before'));
       const after = await read();
       check(`${fault}: independent post-recovery versions match`, Object.entries(baseline.versions).every(([file, version]) => after.versions[file] === version));
+      settledReceipts.add(receipt.id);
+    }
+    // Completed history must remain completed while newer legitimate writes
+    // own the current versions. Explicit old-backup restore must be a no-op.
+    await mode('off');
+    const history = [];
+    for (const suffix of ['A', 'B', 'C']) {
+      const baseline = await read();
+      if (suffix === 'C') {
+        const old = await inspect(history[0].id, false);
+        check('historical inspection preserves completed outcome after a later write', old.outcome === 'committed' && old.items.some(item => item.observed === 'conflict'));
+        const refused = await inspect(history[0].id, true);
+        check('historical restore preserves newer files and completed outcome', refused.outcome === 'committed' && refused.items.some(item => item.observed === 'conflict'));
+        const unchanged = await read();
+        check('historical restore changes no newer file', Object.entries(baseline.versions).every(([path, version]) => unchanged.versions[path] === version));
+      }
+      const candidate = structuredClone(baseline.value);
+      candidate.currentFiles.settings += `\n# isolated-history-${config.testRunId}-${suffix}\n`;
+      const result = await outcome('save_remote_tool_store', { targetId, toolId: config.toolId, store: candidate, scope: 'global', projectPath: null, operation: op('write', baseline.versions) });
+      (report.transactionOutcomes ??= []).push({ fault: `history-${suffix}`, ...transactionOutcomeDiagnostic(result) });
+      check(`history-${suffix}: normal save reaches actual commit`, result.ok);
+      const added = (await receipts()).filter(item => !originalReceipts.has(item.id) && !createdReceipts.has(item.id));
+      assert(added.length === 1, 'Exactly one journal must correspond to each history submission.');
+      createdReceipts.add(added[0].id); history.push(added[0]);
+    }
+    for (const receipt of history.reverse()) {
+      const restored = await inspect(receipt.id, true);
+      check('restore consecutive owned history in reverse order', restored.outcome === 'rolled_back' && restored.items.every(item => item.observed === 'before'));
+      settledReceipts.add(receipt.id);
     }
     // A stale user draft is rejected before any managed/native mutation. The
     // observer removes only its own precisely fingerprinted appended comment.
@@ -188,14 +223,21 @@ export async function runTransactionAcceptance({ config, targetId, invoke, evalu
         await observe(`: > ${quote(control + '/release')}`);
         if (externalHash && nativePath) await observe(`[ "$(sha256sum -- ${quote(nativePath)} | cut -d ' ' -f 1)" = ${quote(externalHash)} ] && /usr/bin/cp -- ${quote(control + '/native.before')} ${quote(nativePath)}`).catch(() => { process.exitCode = 1; });
         for (const receipt of await receipts()) if (!originalReceipts.has(receipt.id)) createdReceipts.add(receipt.id);
-        for (const id of createdReceipts) {
+        // Earlier completed cases were already independently checked. Recover
+        // only this run's outstanding work, newest first, never an older
+        // snapshot over the files belonging to a later transaction.
+        for (const id of [...createdReceipts].reverse().filter(id => !settledReceipts.has(id))) {
           const receipt = await inspect(id, false);
           if (receipt.outcome !== 'rolled_back') {
             const restored = await inspect(id, true);
             assert(restored.outcome === 'rolled_back', 'Fixture recovery remains incomplete; preserve protected backup.');
           }
         }
-        check('finally restored actual native original hash', (await observe(`sha256sum -- ${quote(nativePath)} | cut -d ' ' -f 1`)).trim() === nativeOriginalHash);
+        const nativeFinal = (await observe(`sha256sum -- ${quote(nativePath)} | cut -d ' ' -f 1`)).trim();
+        const managementFinal = (await observe(`sha256sum -- ${quote(managementPath)} | cut -d ' ' -f 1`)).trim();
+        report.transactionFinalVersions = { native: nativeFinal, management: managementFinal };
+        check('finally restored actual native original hash', nativeFinal === nativeOriginalHash);
+        check('finally restored actual management original hash', managementFinal === managementOriginalHash);
         recovered = true;
       } finally {
         for (const tool of installedTools) await observe(`[ "$(sha256sum -- "$HOME/bin/${tool}" | cut -d ' ' -f 1)" = ${quote(wrapperHashes[tool])} ] && rm -f -- "$HOME/bin/${tool}"`);

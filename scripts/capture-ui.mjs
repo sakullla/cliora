@@ -644,6 +644,15 @@ for(const width of widths)for(const theme of themes){
   await page.evaluate(()=>{const r=structuredClone(window.__writeFixture);r.items[0].state='rollback_failed';r.items[1].state='conflict';r.items[1].observed='conflict';window.dispatchEvent(new CustomEvent('cliora:remote-write',{detail:{targetId:'capture-host',error:{message:'合成恢复失败，备份已保留；外部修改未覆盖。',remote:{receipt:r}}}}));});
   await recovery.getByText('恢复失败，备份保留',{exact:false}).waitFor();
   await capture('write-rollback-failure-conflict');
+  await page.evaluate(()=>{const r=window.__writeFixture;r.outcome='recovering';r.items[0].state='rolled_back';r.items[0].observed='before';r.items[1].state='committed';r.items[1].observed='after';});
+  await recovery.getByRole('button',{name:'刷新回执',exact:true}).click();
+  await recovery.getByText('恢复中或结果未知',{exact:true}).waitFor();
+  await capture('write-interrupted-restore');
+  await page.evaluate(()=>{const r=window.__writeFixture;r.outcome='committed';for(const item of r.items){item.state='committed';item.observed='conflict';}});
+  await recovery.getByRole('button',{name:'刷新回执',exact:true}).click();
+  await recovery.getByText('当前文件已被后续修改。此回执的完成状态保留，历史备份不能覆盖这些修改。',{exact:true}).waitFor();
+  await expect(recovery.getByRole('button',{name:'恢复写入前备份',exact:true})).toBeDisabled();
+  await capture('write-historical-drift');
   await page.close();continue;
  }
  if(process.argv.includes('--remote-hosts')){
