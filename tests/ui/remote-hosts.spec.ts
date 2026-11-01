@@ -146,6 +146,71 @@ test('the picker browses folders with breadcrumbs, filter, keyboard and a typed 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
+test('the picker context menus open, choose, copy and favorite folders, and history walks back and forward', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await install(page); await page.goto('/');
+  const dialog = await directory(page);
+  const row = folders(dialog).getByRole('option', { name: 'child' });
+  await expect(row).toBeVisible();
+  // Right-click on a folder selects it and offers its actions; Escape closes the menu, not the dialog.
+  await row.click({ button: 'right' });
+  const menu = dialog.getByRole('menu', { name: 'child 的操作' });
+  await expect(menu).toBeVisible();
+  await expect(row).toHaveAttribute('aria-selected', 'true');
+  await expect(menu.getByRole('menuitem', { name: /打开/ })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  // Copy path writes the clipboard and reports it inside the dialog.
+  await row.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: /复制路径/ }).click();
+  await expect(dialog.getByRole('status').filter({ hasText: '已复制路径 /fixture/key/child' })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('/fixture/key/child');
+  // Favorite: the folder appears under 收藏 and stays after reopening.
+  await row.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: '收藏到侧栏' }).click();
+  const pins = dialog.getByRole('group', { name: '收藏' });
+  await expect(pins.getByRole('button', { name: /child/ })).toBeVisible();
+  // Open from the menu, then back / forward walk the history; going up selects the folder you came from.
+  await row.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: /打开/ }).click();
+  await expect(dialog.locator('footer code')).toHaveText('/fixture/key/child');
+  await dialog.getByRole('button', { name: '后退' }).click();
+  // The folder you came from is marked, not selected: the footer still means the folder you went to.
+  await expect(row).toHaveAttribute('data-came-from', 'true');
+  await expect(dialog.locator('footer code')).toHaveText('/fixture/key');
+  await folders(dialog).focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect(dialog.getByRole('navigation', { name: '当前位置' }).getByRole('button', { name: 'child' })).toHaveAttribute('aria-current', 'location');
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect(dialog.getByRole('navigation', { name: '当前位置' }).getByRole('button', { name: 'key' })).toHaveAttribute('aria-current', 'location');
+  // Blank space has the folder's own menu: show hidden is a checkbox item.
+  await folders(dialog).click({ button: 'right', position: { x: 20, y: 200 } });
+  const blank = dialog.getByRole('menu', { name: '当前文件夹的操作' });
+  await expect(blank.getByRole('menuitemcheckbox', { name: '显示隐藏文件夹' })).toBeVisible();
+  await blank.getByRole('menuitem', { name: /新建文件夹/ }).click();
+  await expect(dialog.getByLabel('新文件夹名称', { exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: '取消新建文件夹' }).click();
+  // Keyboard: Shift+F10 opens the row menu; Ctrl+Enter chooses the selected folder.
+  await folders(dialog).focus();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Shift+F10');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(folders(dialog)).toBeFocused();
+  // Choose from the menu without opening the folder.
+  await row.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: /选择此文件夹/ }).click();
+  await expect(dialog).toHaveCount(0);
+  const session = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(session.getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', 'child · /fixture/key/child');
+  const reopened = await directory(page);
+  await expect(reopened.getByRole('group', { name: '收藏' }).getByRole('button', { name: /child/ })).toBeVisible();
+  await reopened.getByRole('group', { name: '收藏' }).getByRole('button', { name: /child/ }).click({ button: 'right' });
+  await reopened.getByRole('menu').getByRole('menuitem', { name: '取消收藏' }).click();
+  await expect(reopened.getByRole('group', { name: '收藏' })).toHaveCount(0);
+});
+
 test('a picked folder becomes a saved project only when the session starts, and a save failure keeps the dialog', async ({ page }) => {
   await install(page); await page.goto('/');
   const dialog = await directory(page);
