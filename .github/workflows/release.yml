@@ -129,7 +129,7 @@ jobs:
             platform: windows
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
-            args: --target x86_64-pc-windows-msvc --verbose
+            args: --target x86_64-pc-windows-msvc --verbose -- --locked
           - os: macos-latest
             platform: macos
             target: aarch64-apple-darwin
@@ -139,7 +139,7 @@ jobs:
             platform: linux
             target: x86_64-unknown-linux-gnu
             rust-targets: x86_64-unknown-linux-gnu
-            args: --target x86_64-unknown-linux-gnu --verbose
+            args: --target x86_64-unknown-linux-gnu --verbose -- --locked
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -170,10 +170,12 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
+          # main CI seeds this release-profile cache before the gate opens.
+          shared-key: release-v1-${{ matrix.target }}
           workspaces: src-tauri -> target
-          cache-workspace-crates: true
           cache-bin: false
-          cache-on-failure: true
+          # Tag-scoped caches cannot be reused by the next version tag.
+          save-if: false
 
       - name: Install frontend dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
