@@ -38,7 +38,8 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
   const today = iso(new Date());
   function show(origin?: HTMLElement | null) {
     trigger.current = origin ?? document.activeElement as HTMLElement | null;
-    const initial = customFrom || today;
+    // `today` belongs to the last render. The visible month has to follow the clock at the moment the dialog opens.
+    const initial = customFrom || iso(new Date());
     setFrom(customFrom); setTo(customTo); setMonth(parse(initial)); setFocused(initial); setEdge('from'); setOpen(true);
   }
   function close() { setOpen(false); requestAnimationFrame(() => trigger.current?.focus()); }
