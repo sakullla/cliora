@@ -1182,6 +1182,13 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     let registry = Registry::builtins()
         .with_fixture_installation("pi", "1.0.0")
         .with_fixture_installation("codex", "0.160.0");
+    // Relativize the export against a fake source home so the snapshot does
+    // not depend on the system temp directory's relationship to the real
+    // user home (on Windows %TEMP% lives under the home directory).
+    set_restore_roots_for_test(Some((
+        temp.path().join("source-home"),
+        temp.path().join("source-base"),
+    )));
     let bundle = temp.path().join("full.cliora");
     let exported = export_bundle(
         &source,

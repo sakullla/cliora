@@ -433,7 +433,10 @@ fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver(
     let local = crate::native::profile::get_registered_profile(&target, "synced-profile").unwrap();
     assert_eq!(new_store.get(local.connection.unwrap().secret_ref.as_deref().unwrap()).unwrap(), "synthetic-api-key");
     let project = crate::projects::get(&target, "demo").unwrap();
-    assert_eq!(project.path.as_deref(), target_home.join("projects/demo").to_str());
+    assert_eq!(
+        project.path.as_deref().map(std::path::Path::new),
+        Some(target_home.join("projects/demo").as_path())
+    );
     let native = std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap();
     assert!(native.contains("mcp_servers.runner"), "{native}");
     assert!(native.contains("npx"));

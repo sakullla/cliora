@@ -227,16 +227,16 @@ mod tests {
             root.path().join("data"),
         )));
         assert_eq!(
-            decode(r"C:\Users\source-user\projects\demo").unwrap(),
-            project.to_string_lossy()
+            Path::new(&decode(r"C:\Users\source-user\projects\demo").unwrap()),
+            project.as_path()
         );
         assert_eq!(
             decode(r"C:\Users\source-user\missing-project").unwrap(),
             r"C:\Users\source-user\missing-project"
         );
         assert_eq!(
-            decode("cliora-home:/projects/demo").unwrap(),
-            project.to_string_lossy()
+            Path::new(&decode("cliora-home:/projects/demo").unwrap()),
+            project.as_path()
         );
     }
 }
