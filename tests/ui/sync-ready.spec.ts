@@ -231,7 +231,7 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
   await dialog.getByLabel('配置包口令').fill('123456789012');
   await dialog.getByRole('button', { name: '解锁并恢复' }).click();
   await expect(page.getByText('冲突项仍保留本机，请选择版本；其它资料可以使用。')).toBeVisible();
-  await expect(page.getByRole('region', { name: 'WebDAV 同步' }).getByRole('button', { name: '选择冲突版本' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'WebDAV 同步' }).getByRole('button', { name: '选择版本' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const state = (window as unknown as { __syncReady: { previewCalls: number; applyCalls: number; lastApply: { selected: string[]; projectLinks: unknown[]; applyTargets: unknown[] } | null } }).__syncReady;
     return { previewCalls: state.previewCalls, applyCalls: state.applyCalls, apply: state.lastApply };
@@ -444,7 +444,7 @@ test('one missing directory, install, sign-in, or conflict leaves everything els
   await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(1);
   await expect(webdav.getByRole('button', { name: '安装 CLI', exact: true })).toBeVisible();
   await expect(webdav.getByRole('button', { name: '重新登录', exact: true })).toBeVisible();
-  await expect(webdav.getByRole('button', { name: '选择冲突版本', exact: true })).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '选择版本', exact: true })).toBeVisible();
   await expect(webdav.getByText('重新绑定')).toHaveCount(0);
   await expect(webdav.getByText('稍后应用')).toHaveCount(0);
 
@@ -452,10 +452,16 @@ test('one missing directory, install, sign-in, or conflict leaves everything els
   await expect(webdav.getByText('请安装 Codex 活动配置 后重试。未发现可执行文件')).toBeVisible();
   await webdav.getByRole('button', { name: '重新登录', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastLogin: { id: string; expectedVersion: number; method: string } | null } }).__syncReady.lastLogin)).toEqual({ id: 'a1', expectedVersion: 4, method: 'browser' });
-  await webdav.getByRole('button', { name: '选择冲突版本', exact: true }).click();
-  await expect(webdav.getByRole('button', { name: '保留本机', exact: true })).toBeVisible();
-  await webdav.getByRole('button', { name: '保留本机', exact: true }).click();
-  await expect(webdav.getByRole('button', { name: '选择冲突版本', exact: true })).toHaveCount(0);
+  await webdav.getByRole('button', { name: '选择版本', exact: true }).click();
+  const center = page.getByRole('dialog');
+  await expect(center.getByRole('button', { name: '使用所选版本', exact: true })).toBeDisabled();
+  await center.getByRole('radio', { name: /^本机/ }).click();
+  await expect(center.getByRole('button', { name: '保留本机版本', exact: true })).toBeEnabled();
+  await center.getByRole('button', { name: '保留本机版本', exact: true }).click();
+  await expect(webdav.getByRole('button', { name: '选择版本', exact: true })).toHaveCount(0);
+  await expect(center.getByText('全部处理完成')).toBeVisible();
+  await center.getByRole('button', { name: '完成', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await webdav.getByRole('button', { name: '选择目录', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRelink: { projectId: string; projectPath: string } | null } }).__syncReady.lastRelink)).toEqual({ projectId: 'p-missing', projectPath: 'C:/work' });
   await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(0);

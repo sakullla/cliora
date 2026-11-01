@@ -1435,6 +1435,7 @@ fn retain_bundle_conflicts(
             local_key: local.filter(|local| local.key() != *key).map(PortableEntity::key),
             version_id: format!("bundle:{digest}"),
             digest,
+            at: sync::now(),
             entity,
             secret_ids,
         });

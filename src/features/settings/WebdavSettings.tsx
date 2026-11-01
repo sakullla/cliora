@@ -6,10 +6,11 @@ import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon, type IconName } from '../../components/Icon';
-import type { ConflictPreview, RestoreBlocker, SyncProgress, SyncStatus, SyncTransfer, WebdavSetup } from '../../types/portable';
+import type { RestoreBlocker, SyncProgress, SyncStatus, SyncTransfer, WebdavSetup } from '../../types/portable';
 import type { Project } from '../../types/launch';
 import { Badge, Button, Card, StatusBadge, Switch } from '../../components/ui';
 import styles from './Sync.module.css';
+import { ConflictCenter } from './ConflictCenter';
 import { MIN_PASSPHRASE, Metric, Notice, PassphraseField, TextField, TransferList, endpointHost, relativeTime, useKindLabel } from './syncParts';
 
 const PREVIEW_LIMIT = 4;
@@ -91,12 +92,11 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [setup, setSetup] = useState<WebdavSetup>(emptySetup());
   const [busy, setBusy] = useState(false);
-  const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
+  const [center, setCenter] = useState<{ open: boolean; focusKey: string | null }>({ open: false, focusKey: null });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [run, setRun] = useState<SyncRun | null>(null);
   const [receiptOpen, setReceiptOpen] = useState(false);
-  const latest = useRef(''); latest.current = JSON.stringify([status, previews, active]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -157,7 +157,6 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
       const next = await native.syncWebdavNow();
       if (!mounted.current) return next;
       setStatus(next);
-      setPreviews({});
       setRun((current) => {
         if (!current || current.dismissed) return null;
         return { ...current, running: false, result: next, phase: 'done' };
@@ -188,23 +187,17 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     });
   }
 
-  async function resolve(key: string, versionId: string | null, deleted: boolean) {
-    if (busy) return;
-    const started = latest.current;
-    if (versionId && !await confirmAction(deleted ? t('settings.webdav.confirmDelete') : t('settings.webdav.confirmReplace'), () => mounted.current && latest.current === started, { title: deleted ? t('settings.webdav.confirmDeleteTitle') : t('settings.webdav.confirmReplaceTitle'), confirmLabel: deleted ? t('settings.webdav.deleteLocal') : t('settings.webdav.replaceLocal'), destructive: deleted })) return;
+  async function resolve(key: string, versionId: string | null, deleted: boolean, options: { announce?: boolean } = {}): Promise<boolean> {
+    if (busy) return false;
+    if (deleted && !await confirmAction(t('settings.webdav.confirmDelete'), () => mounted.current, { title: t('settings.webdav.confirmDeleteTitle'), confirmLabel: t('settings.webdav.deleteLocal'), destructive: true })) return false;
+    const label = status?.conflicts.find(item => item.key === key)?.label ?? '';
     setBusy(true); setError(''); setMessage('');
-    try { setStatus(await native.resolveWebdavConflict(key, versionId));
-      setPreviews((old) => { const next = { ...old }; delete next[key]; return next; });
-      setMessage(t('settings.webdav.resolved')); }
-    catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.resolveFailed')); }
-    finally { setBusy(false); }
-  }
-
-  async function previewConflict(key: string) {
-    if (busy) return;
-    setBusy(true); setError('');
-    try { const next = await native.previewWebdavConflict(key); setPreviews((old) => ({ ...old, [key]: next })); }
-    catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.previewFailed')); }
+    try {
+      setStatus(await native.resolveWebdavConflict(key, versionId));
+      if (options.announce !== false) setMessage(deleted ? t('settings.webdav.acceptedDelete', { label }) : versionId ? t('settings.webdav.usedRemote', { label }) : t('settings.webdav.keptLocal', { label }));
+      return true;
+    }
+    catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.resolveFailed')); return false; }
     finally { setBusy(false); }
   }
 
@@ -415,8 +408,14 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     return true;
   });
   const conflicts = status?.conflicts ?? [];
-  const issueCount = missingProjects.length + blockers.length + conflicts.length;
+  const applyCount = missingProjects.length + blockers.length;
+  const issueCount = applyCount + conflicts.length;
   const itemIssues = issueCount > 0;
+  const issueWhy = conflicts.length && applyCount
+    ? t('settings.webdav.issueWhyBoth', { conflicts: conflicts.length, apply: applyCount })
+    : conflicts.length
+      ? t('settings.webdav.issueWhyConflicts', { count: conflicts.length })
+      : t('settings.webdav.issueWhyApply', { count: applyCount });
   const passwordShort = setup.authPassword.length < MIN_PASSPHRASE;
   const canSave = nativeAvailable && !busy && !!setup.endpoint && !!setup.username && !passwordShort;
   const last = status?.lastSuccess ? relativeTime(status.lastSuccess, i18n.language) : null;
@@ -491,44 +490,45 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     {itemIssues && <Card className={styles.card} data-tone="warning">
       <header className={styles.cardHead}>
         <span className={styles.cardIcon} data-tone="warning" aria-hidden="true"><Icon name="alert" size={16} /></span>
-        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><Badge tone="warning">{issueCount}</Badge></h3><p>{t('settings.webdav.actionsHint')}</p></div>
+        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><Badge tone="warning">{issueCount}</Badge></h3><p>{issueWhy}</p></div>
       </header>
-      <ul className={styles.issues}>
-        {missingProjects.map((project) => <li className={styles.issue} key={project.id}>
-          <span className={styles.issueIcon} aria-hidden="true"><Icon name="folder" size={16} /></span>
-          <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{project.name}</strong><Badge>{t('settings.webdav.tagDirectory')}</Badge></span><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small></span>
-          <Button disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</Button>
-        </li>)}
-        {blockers.map((blocker) => {
-          const chosen = !!selectedDirectory(blocker.detail);
-          return <li className={styles.issue} key={blocker.key}>
-            <span className={styles.issueIcon} aria-hidden="true"><Icon name={itemIcon(blocker.action, chosen)} size={16} /></span>
-            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{blocker.label}</strong><Badge>{blockerTag(blocker.action, chosen)}</Badge></span><small>{blockerDetail(blocker.detail)}</small></span>
-            <Button disabled={busy} onClick={() => void runBlocker(blocker)}>{chosen ? t('settings.webdav.writeChosenDirectory') : blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</Button>
-          </li>;
-        })}
-        {conflicts.map((conflict) => {
-          const preview = previews[conflict.key];
-          return <li className={styles.issue} key={conflict.key} data-open={preview ? '' : undefined}>
+      {!!conflicts.length && <section className={styles.issueGroup}>
+        <h4><span>{t('settings.webdav.sectionConflicts')}</span><Badge>{conflicts.length}</Badge></h4>
+        <ul className={styles.issues}>
+          {conflicts.map((conflict) => <li className={styles.issue} data-kind="conflict" key={conflict.key}>
             <span className={styles.issueIcon} data-tone="conflict" aria-hidden="true"><Icon name="copy" size={16} /></span>
-            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{conflict.label}</strong><Badge tone="warning">{t('settings.webdav.tagConflict')}</Badge></span><small>{t('settings.webdav.conflictsHint')} {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small></span>
-            {!preview && <Button disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.chooseConflict')}</Button>}
-            {preview && <div className={styles.compare}>
-              <div className={styles.version} data-side="local">
-                <span className={styles.versionHead}><Icon name="monitor" size={14} />{t('settings.webdav.local')}</span>
-                <pre>{preview.localSummary}</pre>
-                <Button disabled={busy} onClick={() => void resolve(conflict.key, null, false)}>{t('settings.webdav.keepLocal')}</Button>
-              </div>
-              {preview.versions.map((version) => <div className={styles.version} data-side="remote" data-deleted={version.deleted || undefined} key={version.id}>
-                <span className={styles.versionHead}><Icon name="cloud" size={14} />{t('settings.webdav.remoteVersion', { id: version.id.slice(0, 8) })}</span>
-                <pre>{version.summary}</pre>
-                <Button disabled={busy} onClick={() => void resolve(conflict.key, version.id, version.deleted)}>{version.deleted ? t('settings.webdav.acceptDelete') : t('settings.webdav.useRemote')}</Button>
-              </div>)}
-            </div>}
-          </li>;
-        })}
-      </ul>
+            <span className={styles.issueBody}>
+              <span className={styles.issueTitle}><strong>{conflict.label}</strong><Badge tone="warning">{kindLabel(conflict.key.split(':')[0])}</Badge>{conflict.remoteDeleted && <Badge tone="danger">{t('settings.webdav.remoteDeletedBadge')}</Badge>}</span>
+              <small>{t('settings.webdav.conflictRowHint', { count: Math.max(conflict.remoteVersions, conflict.versions.length) })}</small>
+            </span>
+            <Button disabled={busy} onClick={() => setCenter({ open: true, focusKey: conflict.key })}>{t('settings.webdav.openConflictCenter')}</Button>
+          </li>)}
+        </ul>
+      </section>}
+      {applyCount > 0 && <section className={styles.issueGroup}>
+        <h4><span>{t('settings.webdav.sectionApply')}</span><Badge>{applyCount}</Badge></h4>
+        <ul className={styles.issues}>
+          {missingProjects.map((project) => <li className={styles.issue} key={project.id}>
+            <span className={styles.issueIcon} aria-hidden="true"><Icon name="folder" size={16} /></span>
+            <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{project.name}</strong><Badge>{t('settings.webdav.tagDirectory')}</Badge></span><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small></span>
+            <Button disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</Button>
+          </li>)}
+          {blockers.map((blocker) => {
+            const chosen = !!selectedDirectory(blocker.detail);
+            return <li className={styles.issue} key={blocker.key}>
+              <span className={styles.issueIcon} aria-hidden="true"><Icon name={itemIcon(blocker.action, chosen)} size={16} /></span>
+              <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{blocker.label}</strong><Badge>{blockerTag(blocker.action, chosen)}</Badge></span><small>{blockerDetail(blocker.detail)}</small></span>
+              <Button disabled={busy} onClick={() => void runBlocker(blocker)}>{chosen ? t('settings.webdav.writeChosenDirectory') : blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</Button>
+            </li>;
+          })}
+        </ul>
+      </section>}
     </Card>}
+
+    <ConflictCenter open={center.open} conflicts={conflicts} focusKey={center.focusKey}
+      onClose={() => setCenter((current) => ({ ...current, open: false }))}
+      onResolve={(key, versionId, deleted, options) => resolve(key, versionId, deleted, options)}
+      onBulkDone={(count) => setMessage(t('settings.webdav.keepAllLocalDone', { count }))} />
 
     {status?.configured && <Card className={styles.card}>
       <header className={styles.cardHead}>

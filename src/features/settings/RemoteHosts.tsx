@@ -6,6 +6,8 @@ import { confirmAction } from '../../lib/confirm';
 import { native, nativeAvailable } from '../../lib/native';
 import type { RemoteTarget } from '../../types/remote';
 import { Badge, Button, IconButton, Segmented } from '../../components/ui';
+import { GuideDialog } from '../../components/GuideDialog';
+import { StatusBanner } from '../../components/StatusBanner';
 import styles from './RemoteHosts.module.css';
 
 type AuthMethod = RemoteTarget['authMethod'];
@@ -39,6 +41,7 @@ export function RemoteHosts() {
   const [loaded, setLoaded] = useState(!nativeAvailable);
   const [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);
+  const [notice, setNotice] = useState('');
   const [tests, setTests] = useState<Record<string, TestState>>({});
   const testRequests = useRef(new Map<string, AbortController>());
   const mounted = useRef(true);
@@ -117,8 +120,8 @@ export function RemoteHosts() {
       <div><h2 id="remote-hosts-title">{t('settings.remoteSsh.hostsTitle')}</h2><p>{t('settings.remoteSsh.hostsDescription')}</p></div>
       {targets.length > 0 && !adding && <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => setEditing({ ...emptyDraft })}>{t('settings.remoteSsh.addHost')}</Button>}
     </header>
+    {notice && <StatusBanner tone="success" autoDismissMs={5000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
     {loadError && <p className={styles.error} role="alert">{loadError}</p>}
-    {adding && <HostEditor draft={editing} passwordSaved={false} onCancel={() => setEditing(null)} onSaved={onSaved} />}
     {loaded && !targets.length && !adding && <div className={styles.empty}>
       <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="server" size={22} /></span>
       <strong>{t('settings.remoteSsh.emptyTitle')}</strong>
@@ -127,7 +130,6 @@ export function RemoteHosts() {
     </div>}
     {targets.length > 0 && <ul className={styles.list} aria-label={t('settings.remoteSsh.hostsTitle')}>
       {targets.map((target) => {
-        if (editing?.id === target.id) return <li key={target.id}><HostEditor draft={editing} passwordSaved={saved.has(target.id)} onCancel={() => setEditing(null)} onSaved={onSaved} /></li>;
         const status = tests[target.id];
         const passwordKnown = saved.has(target.id);
         return <li key={target.id} className={styles.host}>
@@ -150,6 +152,13 @@ export function RemoteHosts() {
         </li>;
       })}
     </ul>}
+    <GuideDialog wide open={editing !== null}
+      title={editing ? (editing.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')) : t('settings.remoteSsh.newHost')}
+      hint={t('settings.remoteSsh.hostDialogHint')} onClose={() => setEditing(null)}>
+      {editing && <HostEditor draft={editing} passwordSaved={editing.id ? saved.has(editing.id) : false}
+        onCancel={() => setEditing(null)}
+        onSaved={(target, passwordSaved) => { onSaved(target, passwordSaved); setNotice(t('settings.remoteSsh.saved')); }} />}
+    </GuideDialog>
   </section>;
 }
 
@@ -232,9 +241,10 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
   }
 
   const field = (name: keyof typeof errors) => submitted && errors[name] ? errors[name] : '';
+  const previewHost = draft.host.trim();
+  const preview = previewHost ? address({ user: draft.user.trim() || '…', host: previewHost, port }) : '';
   return <form className={styles.editor} aria-label={draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} onSubmit={(event) => void save(event)} noValidate onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); close(); } }}>
     <fieldset className={styles.fields} disabled={busy === 'save'}>
-    <div className={styles.editorTitle}><Icon name="server" size={16} /><strong>{draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')}</strong></div>
     <div className={styles.grid}>
       <label className={styles.field} data-span="host">
         <span>{t('settings.remoteSsh.address')}</span>
@@ -271,6 +281,7 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
         </span>
       </label>}
     </div>
+    {preview && <p className={styles.preview}><Icon name="terminal" size={13} /><span>{t('settings.remoteSsh.connectAs')}</span><code>{preview}</code></p>}
     <div className={styles.more}>
       <Button variant="ghost" size="sm" className={styles.moreToggle} aria-expanded={moreOpen} icon={<Icon name="chevronRight" size={13} />} onClick={() => setMoreOpen((value) => !value)}>{t('settings.remoteSsh.more')}</Button>
       {moreOpen && <div className={styles.grid}>

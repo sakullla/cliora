@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { compareText, type DiffPiece, type FieldChange } from '../../lib/textDiff';
+import { Badge, Button } from '../ui';
 import type { CodeFormat } from '../CodeEditor';
 import styles from './ConflictCompare.module.css';
 
-/** What changed, in words, then only the changed lines.
+/** What changed, in words, then only the changed lines as evidence.
  *  Multi-file views pass `banner` on the first file so the warning stays singular. */
 export function ConflictCompare({ title, banner, status, currentContent, nextContent, format = 'text', busy, actions = true, onUseNext, onKeepCurrent }: {
   title?: string;
@@ -28,7 +29,7 @@ export function ConflictCompare({ title, banner, status, currentContent, nextCon
       : places > 0
         ? t('common.conflict.fieldSummary', { places, removed: compared.removed, added: compared.added })
         : t('common.conflict.summary', { removed: compared.removed, added: compared.added });
-  const diff = compared.rows.length > 0 && <div className={styles.diffBlock}>
+  const diff = compared.rows.length > 0 && <div className={styles.diffWrap}>
     <p className={styles.legend}>
       <span data-side="current">− {t('common.conflict.current')}</span>
       <span data-side="next">+ {t('common.conflict.next')}</span>
@@ -44,16 +45,17 @@ export function ConflictCompare({ title, banner, status, currentContent, nextCon
   </div>;
   return <section className={styles.compare} aria-label={title ?? t('common.conflict.label')}>
     {banner && <p className={styles.banner} data-banner="conflict">{banner}</p>}
-    <div className={styles.head}>
+    <header className={styles.head}>
       <div className={styles.titleRow}>
-        {title && <strong className={styles.title}>{title}{status ? ` · ${status}` : ''}</strong>}
-        {!compared.same && !compared.whitespaceOnly && <p className={styles.stats} aria-hidden="true">
-          <span className={styles.statRemove}>−{compared.removed}</span>
-          <span className={styles.statAdd}>+{compared.added}</span>
-        </p>}
+        {title && <strong className={styles.title}>{title}</strong>}
+        {status && <Badge tone="accent">{status}</Badge>}
+        {!compared.same && !compared.whitespaceOnly && <span className={styles.stats} aria-hidden="true">
+          <span className={styles.stat} data-kind="removed">−{compared.removed}</span>
+          <span className={styles.stat} data-kind="added">+{compared.added}</span>
+        </span>}
       </div>
       <p className={styles.counts}>{summary}</p>
-    </div>
+    </header>
     {compared.changes.length > 0 && <div className={styles.what}>
       <h3>{t('common.conflict.changes')}</h3>
       <ul aria-label={t('common.conflict.changes')}>
@@ -77,10 +79,10 @@ export function ConflictCompare({ title, banner, status, currentContent, nextCon
     {diff && (places > 0 && compared.rows.length > 4
       ? <details className={styles.raw}><summary>{t('common.conflict.rawDiff')}</summary>{diff}</details>
       : diff)}
-    {actions && <div className={styles.actions}>
-      <button type="button" disabled={busy} onClick={onKeepCurrent}>{t('common.conflict.keepCurrent')}</button>
-      <button type="button" disabled={busy} onClick={onUseNext}>{t('common.conflict.useNext')}</button>
-    </div>}
+    {actions && <footer className={styles.actions}>
+      <Button disabled={busy} onClick={onKeepCurrent}>{t('common.conflict.keepCurrent')}</Button>
+      <Button variant="primary" disabled={busy} onClick={onUseNext}>{t('common.conflict.useNext')}</Button>
+    </footer>}
   </section>;
 }
 

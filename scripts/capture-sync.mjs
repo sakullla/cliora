@@ -34,7 +34,10 @@ const scenarios = {
       { key: 'binding:codex', label: 'Codex 活动配置', action: 'install', detail: '未发现可执行文件' },
       { key: 'account:a1', label: '工作账号', action: 'relogin', detail: '登录被拒绝，材料已保留' },
     ],
-    conflicts: [{ key: 'profile:9', label: 'Codex · 日常开发', localPresent: true, localDigest: 'aa', remoteVersions: 1, remoteDeleted: false, versions: [{ id: 'v1abcdef12', digest: 'bb', deleted: false }] }],
+    conflicts: [
+      { key: 'profile:9', label: 'Codex · 日常开发', localPresent: true, localDigest: 'aa', remoteVersions: 1, remoteDeleted: false, versions: [{ id: 'v1abcdef12', digest: 'bb', deleted: false }] },
+      { key: 'binding:pi', label: 'pi 活动配置', localPresent: true, localDigest: 'cc', remoteVersions: 2, remoteDeleted: false, versions: [{ id: 'f94d8215', digest: 'dd', deleted: false }, { id: 'f2cf7555', digest: 'ee', deleted: false }] },
+    ],
   },
   failing: { configured: true, lastSuccess: now - 86400 * 3, lastError: 'WebDAV 无法连接：connection refused (sync.example.com:443)' },
   paused: { configured: true, enabled: false, lastSuccess: now - 86400 },
@@ -62,7 +65,7 @@ function installMock(seed) {
       if (command === 'get_tray_status') return { available: true, error: null };
       if (command === 'list_portable_items') return items;
       if (command === 'get_webdav_status' || command === 'set_webdav_enabled') return status();
-      if (command === 'preview_webdav_conflict') return { key: args.key, localSummary: 'model = "gpt-6-astra"\nreasoning = "medium"', versions: [{ id: 'v1abcdef12', summary: 'model = "gpt-6-sol"\nreasoning = "high"', deleted: false }] };
+      if (command === 'preview_webdav_conflict') { const stamp = Math.floor(Date.now() / 1000); return { key: args.key, localSummary: 'model = "gpt-6-astra"\nreasoning = "medium"', versions: [{ id: 'f94d8215', summary: 'model = "gpt-6-sol"\nreasoning = "high"', deleted: false, at: stamp - 3600 }, { id: 'f2cf7555', summary: 'model = "gpt-6"\nreasoning = "low"', deleted: false, at: stamp - 86400 }] }; }
       if (command === 'sync_webdav_now') {
         if (control.hang) await new Promise(() => {});
         control.receipt = { at: Math.floor(Date.now() / 1000), compared: 42, uploaded: 3, downloaded: 3, transfers: control.sampleTransfers ?? [] };
@@ -142,8 +145,11 @@ for (const theme of themes) for (const width of widths) {
           await page.keyboard.press('Escape');
         }
         if (name === 'attention') {
-          const choose = page.getByRole('button', { name: '选择冲突版本' });
-          if (await choose.count()) { await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-open'); }
+          const choose = page.getByRole('button', { name: '选择版本' });
+          if (await choose.count()) {
+            await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-center');
+            await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+          }
         }
         if (name === 'healthy') {
           await page.evaluate(() => { window.__sync.hang = true; });

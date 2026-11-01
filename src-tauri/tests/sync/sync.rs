@@ -272,7 +272,7 @@ fn equal_named_mcp_ids_merge_without_losing_targets_or_syncing_forever() {
     let (_, key) = read_space(&dav, &store.get(&config.space_secret_id).unwrap()).unwrap().unwrap();
     let (mut manifest, etag) = read_manifest(&dav, &config.space_id, &key).unwrap().unwrap();
     let entity = collect_snapshot(&b, &store, &registry).unwrap().entities.into_iter().find(|item| item.kind() == "mcp").unwrap();
-    let version = Version { id: Uuid::new_v4().to_string(), parents: vec![], digest: entity.digest().unwrap(), deleted: false };
+    let version = Version { id: Uuid::new_v4().to_string(), parents: vec![], digest: entity.digest().unwrap(), deleted: false, at: now() };
     write_version(&dav, &key, &config.space_id, &entity.key(), &version, Some(entity.clone())).unwrap();
     manifest.heads.insert(entity.key(), vec![version.clone()]);
     assert!(save_manifest(&dav, &manifest, &key, Some(&etag)).unwrap());
@@ -967,18 +967,21 @@ fn merge_keeps_concurrent_heads_and_replaces_only_known_parent() {
         parents: vec![],
         digest: "a".repeat(64),
         deleted: false,
+        at: 1,
     };
     let other = Version {
         id: Uuid::new_v4().to_string(),
         parents: vec![],
         digest: "b".repeat(64),
         deleted: false,
+        at: 2,
     };
     let next = Version {
         id: Uuid::new_v4().to_string(),
         parents: vec![first.id.clone()],
         digest: "c".repeat(64),
         deleted: false,
+        at: 3,
     };
     let mut heads = vec![first, other.clone()];
     merge_head(&mut heads, next).unwrap();

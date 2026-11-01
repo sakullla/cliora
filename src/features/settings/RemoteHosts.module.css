@@ -14,7 +14,6 @@
 /* Host list */
 .list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .list > li + li { border-top: 1px solid var(--line); }
-.list > li > .editor { margin: var(--space-2_5); }
 .host { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: calc(var(--row-h) + var(--space-5)); padding: var(--space-3) var(--space-4); transition: background-color var(--fast) var(--ease); }
 .host:hover { background: var(--surface-2); }
 .hostGlyph { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--info); }
@@ -31,10 +30,11 @@
 .result[data-tone="ok"] { color: var(--success); }
 .result[data-tone="failed"] { color: var(--danger); }
 
-/* Editor */
-.editor { display: grid; gap: var(--space-4); padding: var(--space-4) var(--space-5); border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); animation: reveal var(--medium) var(--ease); }
-.editorTitle { display: flex; align-items: center; gap: var(--space-2); color: var(--accent); }
-.editorTitle strong { color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); }
+/* Editor (rendered inside a dialog) */
+.editor { display: grid; gap: var(--space-4); }
+.preview { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-control); }
+.preview > svg { flex: none; color: var(--text-3); }
+.preview code { padding: 0; background: none; color: var(--text); font-size: var(--fs-control); }
 .grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); }
 .field { display: grid; align-content: start; gap: var(--space-1_5); min-width: 0; }
 .field > span:first-child { color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-medium); }

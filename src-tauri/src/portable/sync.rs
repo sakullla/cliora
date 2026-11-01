@@ -92,6 +92,9 @@ pub struct SyncConflictVersion {
     pub id: String,
     pub digest: String,
     pub deleted: bool,
+    /// Creation time (unix seconds); zero when unknown.
+    #[serde(default)]
+    pub at: i64,
     /// Incoming bundle body. Omitted from status responses so secrets stay out of IPC.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity: Option<PortableEntity>,
@@ -103,6 +106,9 @@ pub struct ConflictVersionPreview {
     pub id: String,
     pub summary: String,
     pub deleted: bool,
+    /// Creation time (unix seconds); zero when unknown (versions from old manifests or bundles).
+    #[serde(default)]
+    pub at: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -180,6 +186,9 @@ struct Version {
     parents: Vec<String>,
     digest: String,
     deleted: bool,
+    /// Creation time (unix seconds). Zero for manifests written before timestamps existed.
+    #[serde(default)]
+    at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -207,7 +216,7 @@ struct LocalState {
     deleted: bool,
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |time| time.as_secs() as i64)
@@ -541,6 +550,9 @@ pub(crate) struct BundleHold {
     pub local_key: Option<String>,
     pub version_id: String,
     pub digest: String,
+    /// When the hold was recorded (unix seconds); zero for holds from older versions.
+    #[serde(default)]
+    pub at: i64,
     pub entity: PortableEntity,
     pub secret_ids: Vec<String>,
 }
@@ -669,6 +681,7 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
             id: hold.version_id,
             digest: hold.digest,
             deleted: false,
+            at: hold.at,
             entity: None,
         };
         if let Some(existing) = conflicts.iter_mut().find(|item| item.key == hold.key) {
@@ -1379,6 +1392,7 @@ fn record_local_race(
             id: head.id.clone(),
             digest: head.digest.clone(),
             deleted: head.deleted,
+            at: head.at,
             entity: None,
         }],
     });
@@ -1393,7 +1407,7 @@ fn record_name_conflict(db: &Database, store: &dyn CredentialStore, registry: &R
         label: local.as_ref().map(PortableEntity::label).unwrap_or_else(|| "同名资源".into()),
         local_present: local.is_some(), local_digest: local.as_ref().map(PortableEntity::digest).transpose()?.unwrap_or_default(),
         remote_versions: 1, remote_deleted: head.deleted,
-        versions: vec![SyncConflictVersion { id: head.id.clone(), digest: head.digest.clone(), deleted: head.deleted, entity: None }],
+        versions: vec![SyncConflictVersion { id: head.id.clone(), digest: head.digest.clone(), deleted: head.deleted, at: head.at, entity: None }],
     });
     Ok(())
 }
@@ -1715,6 +1729,7 @@ fn run_once(
                     current_digest.clone()
                 },
                 deleted: current.is_none(),
+                at: now(),
             };
             dav.mkdir_versions()?;
             write_version(
@@ -1776,6 +1791,7 @@ fn run_once(
                         id: head.id.clone(),
                         digest: head.digest.clone(),
                         deleted: head.deleted,
+                        at: head.at,
                         entity: None,
                     })
                     .collect(),
@@ -1985,6 +2001,7 @@ pub fn resolve(
         parents: heads.iter().map(|head| head.id.clone()).collect(),
         digest: resolved_digest.clone(),
         deleted: chosen.is_none(),
+        at: now(),
     };
     dav.mkdir_versions()?;
     write_version(
@@ -2200,6 +2217,7 @@ pub fn preview_conflict(
                 id: hold.version_id.clone(),
                 summary: summary(Some(&entity)),
                 deleted: false,
+                at: hold.at,
             });
         }
     }
@@ -2230,6 +2248,7 @@ pub fn preview_conflict(
                     id: head.id.clone(),
                     summary: summary(value.as_ref()),
                     deleted: head.deleted,
+                    at: head.at,
                 });
             }
         }
