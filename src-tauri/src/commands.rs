@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::credentials::{CredentialStore, SystemCredentialStore};
+use crate::credentials::{AppCredentialStore, CredentialStore};
 use crate::database::{Database, OpenError};
 use crate::domain::{Bootstrap, CliId, Theme};
 use crate::native::{
@@ -37,7 +37,7 @@ pub async fn operate_native_agent(
 ) -> Result<resources::agents::AgentResult, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        resources::agents::operate(&db, &SystemCredentialStore, &home()?, &request)
+        resources::agents::operate(&db, &AppCredentialStore, &home()?, &request)
             .map_err(native_error)
     })
     .await
@@ -74,7 +74,7 @@ pub async fn operate_native_plugin(
 ) -> Result<resources::plugins::PluginResult, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        resources::plugins::operate(&db, &SystemCredentialStore, &home()?, &request)
+        resources::plugins::operate(&db, &AppCredentialStore, &home()?, &request)
             .map_err(native_error)
     })
     .await
@@ -314,7 +314,7 @@ pub async fn ensure_profile_usage(
     usage_blocking(app, move |db| {
         crate::usage::ensure_profile_query(
             db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &profile_id,
             expected_profile_version,
         )
@@ -424,7 +424,7 @@ pub async fn test_usage_query(
     usage_blocking(app, move |db| {
         crate::usage::test_draft(
             db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             execution_id,
             draft_revision,
             draft,
@@ -447,7 +447,7 @@ pub async fn save_usage_query(
     draft: crate::usage::UsageQueryDraft,
 ) -> Result<crate::usage::SaveQueryResult, crate::usage::UsageError> {
     usage_blocking(app, move |db| {
-        crate::usage::save_query(db, &SystemCredentialStore, draft)
+        crate::usage::save_query(db, &AppCredentialStore, draft)
     })
     .await
 }
@@ -459,7 +459,7 @@ pub async fn delete_usage_query(
     expected_version: u32,
 ) -> Result<crate::usage::DeleteQueryResult, crate::usage::UsageError> {
     usage_blocking(app, move |db| {
-        crate::usage::delete_query(db, &SystemCredentialStore, &id, expected_version)
+        crate::usage::delete_query(db, &AppCredentialStore, &id, expected_version)
     })
     .await
 }
@@ -470,7 +470,7 @@ pub async fn list_portable_items(app: AppHandle) -> Result<Vec<portable::ImportI
     blocking(move || {
         let snapshot = portable::collect_snapshot(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
         )
         .map_err(native_error)?;
@@ -507,7 +507,7 @@ pub async fn export_portable_bundle(
         let _ = selected;
         portable::export_bundle(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &password,
             None,
@@ -530,7 +530,7 @@ pub async fn preview_portable_bundle(
             portable::unlock_bundle(Path::new(&source), &password).map_err(native_error)?;
         portable::preview_import(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             snapshot,
         )
@@ -606,7 +606,7 @@ pub async fn apply_portable_bundle(
             || {
                 let imported = portable::restore_preview(
                     &db,
-                    &SystemCredentialStore,
+                    &AppCredentialStore,
                     &adapters::Registry::builtins(),
                     &draft,
                 )
@@ -661,7 +661,7 @@ pub async fn configure_webdav(
 ) -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
     blocking(move || {
-        portable::sync::configure(&db, &SystemCredentialStore, setup).map_err(native_error)
+        portable::sync::configure(&db, &AppCredentialStore, setup).map_err(native_error)
     })
     .await
 }
@@ -684,7 +684,7 @@ pub async fn retry_restore_blocker(
     blocking(move || {
         portable::retry_native_blocker(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &key,
         )
@@ -704,7 +704,7 @@ pub async fn sync_webdav_now(app: AppHandle) -> Result<portable::sync::SyncStatu
             || {
                 portable::sync::run_with_progress(
                     &db,
-                    &SystemCredentialStore,
+                    &AppCredentialStore,
                     &adapters::Registry::builtins(),
                     false,
                     &|progress| {
@@ -732,7 +732,7 @@ pub async fn resolve_webdav_conflict(
             || {
                 portable::sync::resolve(
                     &db,
-                    &SystemCredentialStore,
+                    &AppCredentialStore,
                     &adapters::Registry::builtins(),
                     &key,
                     chosen_version_id.as_deref(),
@@ -753,7 +753,7 @@ pub async fn preview_webdav_conflict(
     blocking(move || {
         portable::sync::preview_conflict(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &key,
         )
@@ -770,7 +770,7 @@ pub fn sync_background_tick(app: &AppHandle) -> Result<(), ApiError> {
         || {
             portable::sync::run(
                 &db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 true,
             )
@@ -1192,7 +1192,7 @@ pub async fn delete_library_item(
         app.state::<AppState>().with_database(&app, |db| {
             resources::rules::release_rule(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &id,
@@ -1338,7 +1338,7 @@ pub async fn remove_native_mcp(
         let db = app.state::<AppState>().database(&app)?;
         resources::mcp::remove_native(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home,
             &target,
@@ -1434,7 +1434,7 @@ pub async fn commit_mcp_draft(
         let db = app.state::<AppState>().database(&app)?;
         resources::mcp::commit_draft(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home,
             draft,
@@ -1456,7 +1456,7 @@ pub async fn distribute_mcp(
         let db = app.state::<AppState>().database(&app)?;
         Ok(resources::mcp::distribute(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home,
             &definition_id,
@@ -1510,7 +1510,7 @@ pub async fn sync_rule_clients(
         app.state::<AppState>().with_database(&app, |db| {
             resources::rules::sync_clients(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &rule_id,
@@ -1535,7 +1535,7 @@ pub async fn apply_rule_targets(
         let db = app.state::<AppState>().database(&app)?;
         Ok(resources::rules::apply(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home,
             &rule_id,
@@ -1601,7 +1601,7 @@ pub async fn set_memory_switch_group(
         let db = app.state::<AppState>().database(&app)?;
         resources::memory::set_memory_switch_group(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home()?,
             &tool_id,
@@ -1636,7 +1636,7 @@ pub async fn save_memory(
         let db = app.state::<AppState>().database(&app)?;
         resources::memory::save_memory(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home()?,
             &request,
@@ -1655,7 +1655,7 @@ pub async fn delete_memory(
         let db = app.state::<AppState>().database(&app)?;
         resources::memory::delete_memory(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home()?,
             &request,
@@ -1674,7 +1674,7 @@ pub async fn set_memory_enabled(
         let db = app.state::<AppState>().database(&app)?;
         resources::memory::set_memory_enabled(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home()?,
             &request,
@@ -1997,7 +1997,7 @@ pub async fn save_native_skill(
         let db = app.state::<AppState>().database(&app)?;
         resources::skills::save_document(
             &db,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             &adapters::Registry::builtins(),
             &home,
             &tool_id,
@@ -2328,7 +2328,7 @@ pub async fn get_registered_tool_workspace(
             let recovery_needed = if summary || context_error.is_some() {
                 Vec::new()
             } else {
-                transaction::recover_pending(database, &SystemCredentialStore)
+                transaction::recover_pending(database, &AppCredentialStore)
                     .map_err(native_error)?
             };
             if context_error.is_some() {
@@ -2403,7 +2403,7 @@ pub async fn get_tool_workspace(
             let recovery_needed = if context_error.is_some() {
                 Vec::new()
             } else {
-                transaction::recover_pending(database, &SystemCredentialStore)
+                transaction::recover_pending(database, &AppCredentialStore)
                     .map_err(native_error)?
             };
             if context_error.is_some() {
@@ -2501,7 +2501,7 @@ pub fn delete_native_profile(
         for secret_ref in profile::credential_refs(&removed) {
             let _ = crate::native::workspace::cleanup_unreferenced_credential(
                 database,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &secret_ref,
             );
         }
@@ -2575,7 +2575,7 @@ pub async fn recover_native_transactions(app: AppHandle) -> Result<Vec<String>, 
     blocking(move || {
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
-            transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)
+            transaction::recover_pending(database, &AppCredentialStore).map_err(native_error)
         })
     })
     .await
@@ -2588,7 +2588,7 @@ pub async fn set_connection_secret(secret: String) -> Result<String, ApiError> {
             return Err(native_error("API 密钥不能为空或超过长度限制".into()));
         }
         let id = format!("connection-{}", uuid::Uuid::new_v4());
-        SystemCredentialStore
+        AppCredentialStore
             .put(&id, &secret)
             .map_err(native_error)?;
         Ok(id)
@@ -2646,7 +2646,7 @@ pub async fn set_skill_enabled(
                 .map_err(native_error)?;
             resources::skills::set_enabled(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home,
                 &package_id,
@@ -2683,7 +2683,7 @@ pub async fn set_native_rule_enabled(
         app.state::<AppState>().with_database(&app, |db| {
             rules::set_enabled(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2720,7 +2720,7 @@ pub async fn save_native_rule(
         app.state::<AppState>().with_database(&app, |db| {
             rules::save_current(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2759,7 +2759,7 @@ pub async fn save_native_rule_file(
         app.state::<AppState>().with_database(&app, |db| {
             rules::save_file(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2784,7 +2784,7 @@ pub async fn create_native_rule_file(
         app.state::<AppState>().with_database(&app, |db| {
             rules::create_file(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2808,7 +2808,7 @@ pub async fn delete_native_rule_file(
         app.state::<AppState>().with_database(&app, |db| {
             rules::delete_file(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2833,7 +2833,7 @@ pub async fn set_native_rule_file_enabled(
         app.state::<AppState>().with_database(&app, |db| {
             rules::set_file_enabled(
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &adapters::Registry::builtins(),
                 &home()?,
                 &target,
@@ -2876,7 +2876,7 @@ pub async fn get_connection_secret(secret_ref: String) -> Result<String, ApiErro
         if !profile::valid_connection_secret_ref(&secret_ref) {
             return Err(native_error("不是本应用保存的 API 密钥".into()));
         }
-        SystemCredentialStore.get(&secret_ref).map_err(native_error)
+        AppCredentialStore.get(&secret_ref).map_err(native_error)
     })
     .await
 }
@@ -2891,7 +2891,7 @@ pub async fn list_provider_models(
     blocking(move || {
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
-            models::list_models(database, &SystemCredentialStore, &connection, force, &query)
+            models::list_models(database, &AppCredentialStore, &connection, force, &query)
                 .map_err(native_error)
         })
     })
@@ -2908,7 +2908,7 @@ pub async fn test_provider_connection(
         Ok(models::test_connection(
             tool,
             &connection,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             allow_model_request,
         ))
     })
@@ -2926,7 +2926,7 @@ pub async fn test_registered_provider_connection(
             &adapters::Registry::builtins(),
             &tool_id,
             &connection,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             allow_model_request,
         ))
     })
@@ -2947,7 +2947,7 @@ pub async fn prepare_native_import(
     files: std::collections::BTreeMap<String, String>,
 ) -> Result<intake::NativeImport, ApiError> {
     blocking(move || {
-        intake::prepare_import(tool, files, &SystemCredentialStore).map_err(native_error)
+        intake::prepare_import(tool, files, &AppCredentialStore).map_err(native_error)
     })
     .await
 }
@@ -2998,7 +2998,7 @@ pub async fn prepare_native_import_from_disk(
                     files.insert(role.clone(), text);
                 }
             }
-            intake::prepare_import(tool, files, &SystemCredentialStore).map_err(native_error)
+            intake::prepare_import(tool, files, &AppCredentialStore).map_err(native_error)
         })
     })
     .await
@@ -3232,7 +3232,7 @@ pub async fn apply_compared_application(
             let result = apply::apply_compared_application(
                 &adapters::Registry::builtins(),
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &comparison,
                 &home,
                 scope,
@@ -3277,7 +3277,7 @@ pub(crate) fn apply_registered_now(
         let result = apply::apply_registered_profile(
             &adapters::Registry::builtins(),
             database,
-            &SystemCredentialStore,
+            &AppCredentialStore,
             tool_id,
             profile_id,
             scope,
@@ -3396,7 +3396,7 @@ pub async fn relink_project(
                     ) {
                         portable::apply_relinked_directory(
                             db,
-                            &SystemCredentialStore,
+                            &AppCredentialStore,
                             &adapters::Registry::builtins(),
                             old,
                             new_path,
@@ -3977,7 +3977,7 @@ pub async fn prepare_registered_native_import(
             &adapters::Registry::builtins(),
             &tool_id,
             files,
-            &SystemCredentialStore,
+            &AppCredentialStore,
         )
         .map_err(native_error)
     })
@@ -4037,7 +4037,7 @@ pub async fn prepare_registered_native_import_from_disk(
                     files.insert(role, text);
                 }
             }
-            intake::prepare_registered_import(&registry, &tool_id, files, &SystemCredentialStore)
+            intake::prepare_registered_import(&registry, &tool_id, files, &AppCredentialStore)
                 .map_err(native_error)
         })
     })
@@ -4244,7 +4244,7 @@ pub async fn preview_native_backup(
             &role,
         )?;
         app.state::<AppState>().with_database(&app, |db| {
-            transaction::preview_backup(db, &SystemCredentialStore, &path, &transaction_id)
+            transaction::preview_backup(db, &AppCredentialStore, &path, &transaction_id)
                 .map_err(native_error)
         })
     })
@@ -4276,7 +4276,7 @@ pub async fn restore_native_backup(
             let probe = adapter::probe_registered(&registry, &tool_id, custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?;
             if probe.native_writes.state != "supported" { return Err(native_error(probe.native_writes.reason.into())); }
             let scope_key = apply::scope_key(scope, project.as_deref()).map_err(native_error)?;
-            transaction::restore_backup(db, &SystemCredentialStore, &path, &transaction_id, &current, |tx| {
+            transaction::restore_backup(db, &AppCredentialStore, &path, &transaction_id, &current, |tx| {
                 tx.execute("UPDATE applied_bindings SET managed='{}', profile_version=-1 WHERE tool=?1 AND scope_key=?2", rusqlite::params![tool_id, scope_key]).map(|_| ()).map_err(|e| e.to_string())
             }).map_err(native_error)
         })
@@ -4338,7 +4338,7 @@ pub async fn save_registered_native_file(
                 project.as_deref(),
                 version,
                 db,
-                &SystemCredentialStore,
+                &AppCredentialStore,
                 &original,
                 &edited,
             )
@@ -4562,7 +4562,7 @@ pub fn save_remote_target(
     crate::remote::read_cache::invalidate(&saved.id);
     // The secret goes straight to the system credential store; SQLite keeps
     // only the target record.
-    crate::remote::password::apply_save_request(&crate::credentials::SystemCredentialStore, &saved, password.as_deref())
+    crate::remote::password::apply_save_request(&crate::credentials::AppCredentialStore, &saved, password.as_deref())
         .map_err(|error| native_error(format!("主机已保存，但密码未能写入系统凭据：{error}")))?;
     Ok(saved)
 }
@@ -4578,7 +4578,7 @@ pub fn list_remote_saved_passwords(
     })?;
     Ok(targets
         .into_iter()
-        .filter(|target| target.auth_method == "password" && crate::remote::password::is_saved(&crate::credentials::SystemCredentialStore, &target.id))
+        .filter(|target| target.auth_method == "password" && crate::remote::password::is_saved(&crate::credentials::AppCredentialStore, &target.id))
         .map(|target| target.id)
         .collect())
 }
@@ -4593,7 +4593,7 @@ pub fn delete_remote_target(
         crate::remote::delete_target(database, &id).map_err(|error| native_error(error.to_string()))
     })?;
     crate::remote::read_cache::invalidate(&id);
-    let _ = crate::remote::password::forget(&crate::credentials::SystemCredentialStore, &id);
+    let _ = crate::remote::password::forget(&crate::credentials::AppCredentialStore, &id);
     Ok(())
 }
 
@@ -4739,7 +4739,7 @@ pub async fn test_remote_target(
         };
         // Test a password that is not saved yet under a throwaway credential id,
         // then remove it, so "test before save" never persists the secret.
-        let store = crate::credentials::SystemCredentialStore;
+        let store = crate::credentials::AppCredentialStore;
         let mut probe_target = target.clone();
         probe_target.id = uuid::Uuid::new_v4().to_string();
         crate::remote::password::save(&store, &probe_target.id, &typed)
@@ -5516,7 +5516,7 @@ pub fn reveal_configuration_draft_secret(
 ) -> Result<String, ApiError> {
     app.state::<AppState>()
         .workspace
-        .reveal_secret(&draft, &SystemCredentialStore)
+        .reveal_secret(&draft, &AppCredentialStore)
         .map_err(native_error)
 }
 #[tauri::command]
@@ -5568,7 +5568,7 @@ pub async fn list_configuration_models(
             // Remote and local drafts both ask the provider written in the draft.
             // The secret is the draft lease or the saved connection secret.
             let directory = workspace
-                .provider_directory(db, &draft, &SystemCredentialStore, force, &query)
+                .provider_directory(db, &draft, &AppCredentialStore, force, &query)
                 .map_err(native_error)?;
             workspace.finish_request(&draft).map_err(native_error)?;
             Ok(ConfigurationDirectoryResult {
@@ -5613,7 +5613,7 @@ pub async fn check_configuration_connection(
         }
         let workspace = &app.state::<AppState>().workspace;
         let (mut connection, credential) = workspace
-            .request(&draft, &SystemCredentialStore)
+            .request(&draft, &AppCredentialStore)
             .map_err(native_error)?;
         if allow_model_request {
             let actual = draft
@@ -5815,7 +5815,7 @@ pub async fn save_configuration_draft(
                     .save_current(
                         &registry,
                         db,
-                        &SystemCredentialStore,
+                        &AppCredentialStore,
                         draft,
                         &probe.native_files,
                     )
@@ -5823,7 +5823,7 @@ pub async fn save_configuration_draft(
             } else {
                 app.state::<AppState>()
                     .workspace
-                    .save_database(&registry, db, &SystemCredentialStore, draft)
+                    .save_database(&registry, db, &AppCredentialStore, draft)
                     .map_err(native_error)
             }
         })
@@ -5889,7 +5889,7 @@ pub async fn apply_common_configuration(
                     apply::apply_registered_validated_expected(
                         &registry,
                         db,
-                        &SystemCredentialStore,
+                        &AppCredentialStore,
                         profile,
                         Some(&common),
                         &probe.native_files,
@@ -5983,7 +5983,7 @@ pub async fn preview_configuration_backup(
                 .preview_backup(
                     &adapters::Registry::builtins(),
                     db,
-                    &SystemCredentialStore,
+                    &AppCredentialStore,
                     draft,
                     role,
                     transaction_id,
@@ -6019,7 +6019,7 @@ pub async fn restore_configuration_backup(
                 .restore_backup(
                     &adapters::Registry::builtins(),
                     db,
-                    &SystemCredentialStore,
+                    &AppCredentialStore,
                     draft,
                     role,
                     transaction_id,

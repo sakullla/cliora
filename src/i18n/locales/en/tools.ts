@@ -1199,7 +1199,7 @@ export default {
     usedFor: 'For {{target}}; {{note}}',
     currentConnection: 'current connection',
     currentNote: 'Saving updates the secret in the current files.',
-    profileNote: 'The secret is stored in the system credential store.',
+    profileNote: 'The secret is stored in the local credential store.',
     noNewSecret: 'This scope does not accept new secrets. Choose another source explicitly.',
     secretDraft: 'Secret in draft · not yet saved to the system',
     secretStored: 'Secret saved to the system · empty input keeps it',

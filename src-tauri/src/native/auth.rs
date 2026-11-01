@@ -14,8 +14,8 @@ pub fn stored_launch_credential(
         return Err("连接密钥标识无效".into());
     }
     let secret = credentials
-        .get(secret_ref)
-        .map_err(|_| "系统凭据库中找不到此连接的密钥；请重新保存密钥")?;
+        .lookup(secret_ref)?
+        .ok_or("本机凭据库中找不到此连接的密钥；请重新保存密钥")?;
     if secret.is_empty() {
         return Err("连接密钥为空；请重新保存".into());
     }
@@ -56,16 +56,7 @@ pub fn verify_stored_credential(
     credentials: &dyn CredentialStore,
 ) -> Result<(), String> {
     if let Some(id) = &connection.secret_ref {
-        if !profile::valid_connection_secret_ref(id) {
-            return Err("连接密钥标识无效".into());
-        }
-        if credentials
-            .get(id)
-            .map_err(|_| "系统凭据库中找不到此连接的密钥；请重新保存密钥")?
-            .is_empty()
-        {
-            return Err("连接密钥为空；请重新保存".into());
-        }
+        stored_launch_credential(id, credentials)?;
     }
     Ok(())
 }
@@ -118,8 +109,8 @@ fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, St
         return Err("连接密钥标识无效".into());
     }
     let value = credentials
-        .get(id)
-        .map_err(|_| "系统凭据库中找不到此连接的密钥；请重新安全接入")?;
+        .lookup(id)?
+        .ok_or("本机凭据库中找不到此连接的密钥；请重新安全接入")?;
     if value.is_empty() {
         return Err("连接密钥为空；请重新安全接入".into());
     }
@@ -132,6 +123,28 @@ mod tests {
     use crate::domain::CliId;
     use std::collections::BTreeMap;
     use std::collections::HashMap;
+
+    #[test]
+    fn storage_errors_survive_launch_and_apply_without_claiming_key_loss() {
+        struct Unavailable;
+        impl CredentialStore for Unavailable {
+            fn put(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+            fn delete(&self, _: &str) -> Result<(), String> { unreachable!() }
+            fn get(&self, _: &str) -> Result<String, String> {
+                Err("旧钥匙串凭据尚未迁移；请授权".into())
+            }
+        }
+        let id = "connection-00000000-0000-4000-8000-000000000001";
+        for result in [stored_launch_credential(id, &Unavailable), read_secret(id, &Unavailable), crate::native::apply::read_secret(id, &Unavailable)] {
+            assert_eq!(result.unwrap_err(), "旧钥匙串凭据尚未迁移；请授权");
+        }
+        let connection = Connection {
+            provider_id: "example".into(), interface_format: "openai_chat".into(),
+            base_url: "https://example.test/v1".into(), model: "test".into(),
+            secret_ref: Some(id.into()), auth_env_var: None, model_records: Vec::new(),
+        };
+        assert_eq!(verify_stored_credential(&connection, &Unavailable).unwrap_err(), "旧钥匙串凭据尚未迁移；请授权");
+    }
 
     struct MemoryStore(HashMap<String, String>);
     impl CredentialStore for MemoryStore {

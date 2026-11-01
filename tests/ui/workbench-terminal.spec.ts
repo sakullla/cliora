@@ -914,9 +914,14 @@ test('a live agent footer redraw does not bounce the viewport', async ({ page })
     (window as unknown as { __output: (text: string) => void }).__output(`${lines}\r\n> `);
   });
   const viewport = page.locator('.xterm-scrollable-element:visible');
+  // Output parsing and the React scrollbar update finish asynchronously.
+  // remaining === 0 also describes the initial, non-scrollable terminal, so
+  // wait for the history and scrollbar before taking the redraw baseline.
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('history-49');
+  const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
+  await expect(scrollbar).toBeVisible();
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
-  const result = await page.evaluate(async () => {
-    const scrollbar = document.querySelector('[role="scrollbar"]')!;
+  const result = await scrollbar.evaluate(async (scrollbar) => {
     const read = () => ({ top: Number(scrollbar.getAttribute('aria-valuenow')), max: Number(scrollbar.getAttribute('aria-valuemax')) });
     const output = (window as unknown as { __output: (text: string) => void }).__output;
     let dips = 0;

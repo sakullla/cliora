@@ -74,6 +74,8 @@ pub struct SyncSetup {
 #[serde(rename_all = "camelCase")]
 pub struct SyncConflict {
     pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_key: Option<String>,
     pub label: String,
     pub local_present: bool,
     #[serde(default)]
@@ -390,7 +392,7 @@ fn test_connection(dav: &Dav) -> Result<(), String> {
 }
 
 fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> {
-    if !matches!(manifest.schema_version, 1..=3)
+    if !matches!(manifest.schema_version, 1..=super::SNAPSHOT_VERSION)
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
         || manifest.history.len() > 10_000
@@ -489,7 +491,7 @@ fn save_manifest(
     etag: Option<&str>,
 ) -> Result<bool, String> {
     let mut upgraded = manifest.clone();
-    upgraded.schema_version = 3;
+    upgraded.schema_version = super::SNAPSHOT_VERSION;
     let manifest = &upgraded;
     validate_manifest(manifest, &manifest.space_id)?;
     let plain = serde_json::to_vec(manifest).map_err(|_| "无法整理同步清单".to_string())?;
@@ -535,6 +537,8 @@ pub(crate) struct BundleHold {
     pub label: String,
     pub local_present: bool,
     pub local_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_key: Option<String>,
     pub version_id: String,
     pub digest: String,
     pub entity: PortableEntity,
@@ -675,6 +679,7 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         } else {
             conflicts.push(SyncConflict {
                 key: hold.key,
+                local_key: hold.local_key,
                 label: hold.label,
                 local_present: hold.local_present,
                 local_digest: hold.local_digest,
@@ -796,7 +801,7 @@ fn take_remote(
         read_version(dav, key, space_id, entity_key, head)?
     };
     let described = describe_transfer(entity.as_ref(), entity_key);
-    apply_entity(db, store, registry, entity_key, entity, expected_digest)?;
+    apply_entity(db, store, registry, entity_key, entity, expected_digest, true)?;
     Ok(described)
 }
 
@@ -829,18 +834,20 @@ pub fn configure(
     }
     let previous_password = if !setup.previous_encryption_password.is_empty() {
         Some(setup.previous_encryption_password.clone())
-    } else if let Some(existing) = old.as_ref().filter(|item| item.endpoint == url.as_str()) {
-        Some(store.get(&existing.space_secret_id)?)
     } else {
         None
     };
     let mut finalize_rotation = false;
     let (space_id, key, created_space) = match dav.read("space.cliora")? {
         Some((old_bytes, etag)) => {
-            let opened = previous_password
-                .as_deref()
-                .and_then(|password| crypto::open_sync_space(password, &old_bytes).ok())
-                .or_else(|| crypto::open_sync_space(&encryption_password, &old_bytes).ok())
+            // A newly supplied working password repairs a locked/lost local
+            // credential. Only consult the old store when rotation needs it.
+            let opened = crypto::open_sync_space(&encryption_password, &old_bytes).ok()
+                .or_else(|| previous_password.as_deref()
+                    .and_then(|password| crypto::open_sync_space(password, &old_bytes).ok()))
+                .or_else(|| old.as_ref().filter(|item| item.endpoint == url.as_str())
+                    .and_then(|existing| store.get(&existing.space_secret_id).ok())
+                    .and_then(|password| crypto::open_sync_space(&password, &old_bytes).ok()))
                 .ok_or("同步空间无法用当前或旧加密口令解锁；本机连接保持不变")?;
             let (space_id, key) = opened;
             if old.as_ref().is_some_and(|existing| {
@@ -906,7 +913,7 @@ pub fn configure(
                 return Err("远端同步清单缺失；请先恢复远端备份，本机资料未改动".into());
             }
             let manifest = Manifest {
-                schema_version: 3,
+                schema_version: super::SNAPSHOT_VERSION,
                 space_id: space_id.clone(),
                 heads: BTreeMap::new(),
                 history: BTreeMap::new(),
@@ -1224,10 +1231,17 @@ fn delete_local(
                 tx.execute("DELETE FROM library_items WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "mcp" => {
+                super::resources::require_released(&tx, "mcp", id)?;
                 tx.execute("DELETE FROM mcp_definitions WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "skill" => {
+                super::resources::require_released(&tx, "skill", id)?;
                 tx.execute("DELETE FROM skill_packages WHERE id=?1", [id]).map_err(|error| error.to_string())?;
+            }
+            "deployment" => {
+                if let Some(PortableEntity { payload: PortablePayload::Deployment(value), .. }) = current {
+                    super::resources::queue(&tx, &value, true)?;
+                }
             }
             _ => return Err("未知同步资料类型".into()),
         }
@@ -1245,6 +1259,9 @@ fn delete_local(
             &release.scope_key,
             &release.managed,
         );
+    }
+    if let Some((home, _)) = super::restore_roots(db) {
+        super::resources::apply_pending(db, store, registry, &home)?;
     }
     Ok(())
 }
@@ -1268,9 +1285,11 @@ fn apply_remote(
         entity_key,
         read_version(dav, key, space_id, entity_key, head)?,
         expected_digest,
+        false,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_entity(
     db: &Database,
     store: &dyn CredentialStore,
@@ -1278,10 +1297,11 @@ fn apply_entity(
     entity_key: &str,
     entity: Option<PortableEntity>,
     expected_digest: &str,
+    defer_native: bool,
 ) -> Result<(), String> {
     match entity {
         Some(entity) => {
-            let draft = preview_import(
+            let mut draft = preview_import(
                 db,
                 store,
                 registry,
@@ -1299,12 +1319,28 @@ fn apply_entity(
             {
                 return Err("本机资料已变化，请重新同步后处理冲突".into());
             }
-            apply_import(
+            if defer_native {
+                if let Some((local_key, _)) = draft.name_baseline.get(entity_key) {
+                    if draft.items.iter().any(|item| item.key == entity_key && item.status == "conflict") {
+                        return Err(format!("{}{local_key}", super::resource_names::CONFLICT));
+                    }
+                }
+            } else if let Some(recorded) = read_conflicts(db)?.into_iter().find(|item| item.key == entity_key) {
+                if let Some(key) = recorded.local_key {
+                    draft.name_baseline.insert(entity_key.into(), (key, recorded.local_digest));
+                } else {
+                    draft.name_baseline.remove(entity_key);
+                }
+            }
+            super::apply_import_selecting(
                 db,
                 store,
                 registry,
                 &draft,
                 &BTreeSet::from([entity_key.to_owned()]),
+                &BTreeSet::new(),
+                false,
+                !defer_native,
             )?;
         }
         None => delete_local(db, store, registry, entity_key, expected_digest)?,
@@ -1326,6 +1362,7 @@ fn record_local_race(
         .find(|entity| entity.key() == entity_key);
     status.conflicts.push(SyncConflict {
         key: entity_key.into(),
+        local_key: None,
         label: current
             .as_ref()
             .map(PortableEntity::label)
@@ -1344,6 +1381,19 @@ fn record_local_race(
             deleted: head.deleted,
             entity: None,
         }],
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_name_conflict(db: &Database, store: &dyn CredentialStore, registry: &Registry, status: &mut SyncStatus, entity_key: &str, local_key: &str, head: &Version) -> Result<(), String> {
+    let local = collect_snapshot(db, store, registry)?.entities.into_iter().find(|item| item.key() == local_key);
+    status.conflicts.push(SyncConflict {
+        key: entity_key.into(), local_key: local.as_ref().filter(|item| item.key() != entity_key).map(PortableEntity::key),
+        label: local.as_ref().map(PortableEntity::label).unwrap_or_else(|| "同名资源".into()),
+        local_present: local.is_some(), local_digest: local.as_ref().map(PortableEntity::digest).transpose()?.unwrap_or_default(),
+        remote_versions: 1, remote_deleted: head.deleted,
+        versions: vec![SyncConflictVersion { id: head.id.clone(), digest: head.digest.clone(), deleted: head.deleted, entity: None }],
     });
     Ok(())
 }
@@ -1407,6 +1457,31 @@ fn clear_outbox(
     })
 }
 
+fn acknowledge_received_writes(db: &Database, store: &dyn CredentialStore, registry: &Registry, keys: &BTreeSet<String>) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let pending = super::read_rows(&tx, "SELECT id FROM sync_outbox", |row| row.get::<_, String>(0))?;
+        if pending.is_empty() { return Ok(()) }
+        let collected = super::collect_snapshot_on(&tx, store, registry)?;
+        let blocked: BTreeSet<_> = collected.blocked_entities.iter().map(|item| item.key.as_str()).collect();
+        let current: BTreeMap<_, _> = collected.snapshot.entities.into_iter().map(|item| (item.key(), item)).collect();
+        for key in pending {
+            if !keys.contains(&key) || blocked.contains(key.as_str()) { continue; }
+            let known: Option<(String, bool)> = tx.query_row("SELECT local_digest,deleted FROM sync_entity_state WHERE entity_key=?1", [&key], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional().map_err(|error| error.to_string())?;
+            let Some((digest, deleted)) = known else { continue };
+            let entity = current.get(&key);
+            if deleted == entity.is_none() && entity.map(PortableEntity::digest).transpose()?.unwrap_or_default() == digest {
+                // Receive/native-apply writes produce their own outbox tokens.
+                // A matching digest is already synchronized. Recheck and clear
+                // under one transaction so a concurrent user edit survives.
+                tx.execute("DELETE FROM sync_outbox WHERE id=?1", [&key]).map_err(|error| error.to_string())?;
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
 fn merge_head(heads: &mut Vec<Version>, version: Version) -> Result<(), String> {
     let parents: BTreeSet<_> = version.parents.iter().collect();
     heads.retain(|head| !parents.contains(&head.id));
@@ -1425,6 +1500,11 @@ fn run_once(
     progress: &dyn Fn(&SyncProgress),
 ) -> Result<SyncStatus, String> {
     report_progress(progress, "connect", "", 0, 0);
+    // Finish a previously interrupted resource removal before its definition
+    // is considered for deletion again. This never installs missing CLIs.
+    if let Some((home, _)) = super::restore_roots(db) {
+        super::resources::apply_pending(db, store, registry, &home)?;
+    }
     let dav = Dav::new(
         endpoint(&config.endpoint)?,
         &config.username,
@@ -1443,8 +1523,8 @@ fn run_once(
         return Err("远端同步空间已更换，本机资料未改动".into());
     }
     let pending_tokens = outbox_tokens(db)?;
-    let (snapshot, blocked_accounts) = super::collect_reported(db, store, registry)?;
-    let skipped_accounts: BTreeSet<String> = blocked_accounts.into_iter().map(|item| item.key).collect();
+    let (snapshot, blocked_entities) = super::collect_reported(db, store, registry)?;
+    let skipped_accounts: BTreeSet<String> = blocked_entities.into_iter().map(|item| item.key).collect();
     let seen = seen_versions(db)?;
     let mut verified = BTreeMap::new();
     for (entity_key, heads) in &manifest.heads {
@@ -1473,13 +1553,24 @@ fn run_once(
     let compared = all_keys.len().saturating_sub(skipped_accounts.len());
     let mut seen_count = 0usize;
     report_progress(progress, "compare", "", 0, compared);
+    let mut all_keys: Vec<_> = all_keys.into_iter().collect();
+    // A binding must never be applied ahead of its profile/account/project;
+    // lexical order used to download "binding:" before "profile:".
+    all_keys.sort_by_key(|key| {
+        let deleted = manifest.heads.get(key).is_some_and(|heads| heads.len() == 1 && heads[0].deleted);
+        let rank = super::dependency_order(key);
+        (if deleted { 0 } else { 1 }, if deleted { 8 - rank } else { rank }, key.clone())
+    });
     for entity_key in all_keys {
         if skipped_accounts.contains(&entity_key) {
             continue;
         }
         seen_count += 1;
         processed_keys.insert(entity_key.clone());
-        let current = local.get(&entity_key);
+        // A prior receive may have coalesced an ID from this initial snapshot.
+        // Do not upload that obsolete copy again later in the same run.
+        let obsolete = local.get(&entity_key).map(|item| db.with_connection(|conn| super::resource_names::obsolete(conn, item))).transpose()?.unwrap_or(false);
+        let current = local.get(&entity_key).filter(|_| !obsolete);
         report_progress(
             progress,
             "compare",
@@ -1495,6 +1586,10 @@ fn run_once(
         let remote = manifest.heads.get(&entity_key).cloned().unwrap_or_default();
         if known.is_some_and(|state| !state.heads.is_empty()) && remote.is_empty() {
             return Err("远端同步清单缺少已知版本，可能被截断；本机资料未覆盖".into());
+        }
+        if current.is_none() && !remote.is_empty() && remote.iter().all(|head| head.deleted) {
+            save_state(db, &entity_key, "", &remote.iter().map(|head| head.id.clone()).collect::<Vec<_>>(), true)?;
+            continue;
         }
         if remote.len() == 1 && !remote[0].deleted && remote[0].digest == current_digest {
             save_state(
@@ -1558,6 +1653,10 @@ fn run_once(
                     record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
                     continue;
                 }
+                Err(error) if error.starts_with(super::resource_names::CONFLICT) => {
+                    record_name_conflict(db, store, registry, &mut status, &entity_key, &error[super::resource_names::CONFLICT.len()..], &remote[0])?;
+                    continue;
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -1578,6 +1677,10 @@ fn run_once(
                 Ok(described) => described,
                 Err(error) if error.starts_with("本机资料已变化") => {
                     record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
+                    continue;
+                }
+                Err(error) if error.starts_with(super::resource_names::CONFLICT) => {
+                    record_name_conflict(db, store, registry, &mut status, &entity_key, &error[super::resource_names::CONFLICT.len()..], &remote[0])?;
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -1659,6 +1762,7 @@ fn run_once(
         {
             status.conflicts.push(SyncConflict {
                 key: entity_key,
+                local_key: None,
                 label: current
                     .map(PortableEntity::label)
                     .unwrap_or_else(|| "远端资料".into()),
@@ -1695,12 +1799,14 @@ fn run_once(
         processed_keys.remove(&conflict.key);
     }
     clear_outbox(db, &processed_keys, &pending_tokens)?;
-    status.pending_changes = self::status(db)?.pending_changes;
     // Matching digests skip the entity body. They must not skip a CLI write or release
     // that failed after the saved entity was already current.
     report_progress(progress, "apply", "", compared, compared);
-    super::finish_pending_native(db, store, registry).ok();
-    status.blockers = super::load_blockers(db).unwrap_or_default();
+    super::apply_synced_bindings(db, store, registry)?;
+    super::finish_pending_native(db, store, registry)?;
+    acknowledge_received_writes(db, store, registry, &processed_keys)?;
+    status.pending_changes = self::status(db)?.pending_changes;
+    status.blockers = super::load_blockers(db)?;
     status.transfers = transfers;
     status.compared = compared;
     report_progress(progress, "done", "", compared, compared);
@@ -1746,7 +1852,7 @@ pub fn run_with_progress(
                 transfers: result.transfers.clone(),
             };
             let receipt_json = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
-            let complete = result.conflicts.is_empty();
+            let complete = result.conflicts.is_empty() && result.blockers.is_empty() && result.pending_changes == 0;
             let previous_success = config.last_success;
             db.with_connection(|conn| {
                 let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -1842,10 +1948,11 @@ pub fn resolve(
         return Err("远端冲突版本已变化，请重新同步".into());
     }
     let pending_tokens = outbox_tokens(db)?;
-    let local = collect_snapshot(db, store, registry)?
-        .entities
-        .into_iter()
-        .find(|item| item.key() == entity_key);
+    let snapshot = collect_snapshot(db, store, registry)?;
+    let direct_digest = snapshot.entities.iter().find(|item| item.key() == entity_key)
+        .map(PortableEntity::digest).transpose()?.unwrap_or_default();
+    let local_key = previewed.local_key.as_deref().unwrap_or(entity_key);
+    let local = snapshot.entities.into_iter().find(|item| item.key() == local_key);
     let digest = local
         .as_ref()
         .map(PortableEntity::digest)
@@ -1854,7 +1961,7 @@ pub fn resolve(
     if previewed.local_digest != digest {
         return Err("本机资料已变化，请重新同步后处理冲突".into());
     }
-    let chosen = if let Some(id) = chosen_version_id {
+    let mut chosen = if let Some(id) = chosen_version_id {
         let head = heads
             .iter()
             .find(|item| item.id == id)
@@ -1863,6 +1970,11 @@ pub fn resolve(
     } else {
         local.clone()
     };
+    if chosen_version_id.is_none() && previewed.local_key.is_some() {
+        let template = read_version(&dav, &key, &config.space_id, entity_key, heads.first().ok_or("冲突版本缺失")?)?
+            .ok_or("同名资源版本已删除，请重新同步")?;
+        chosen = chosen.map(|value| super::resource_names::with_identity(value, &template));
+    }
     let resolved_digest = chosen
         .as_ref()
         .map(PortableEntity::digest)
@@ -1894,7 +2006,7 @@ pub fn resolve(
     if !save_manifest(&dav, &manifest, &key, Some(&etag))? {
         return Err("远端在处理冲突时变化，请重新同步；本机资料未覆盖".into());
     }
-    if chosen_version_id.is_some() {
+    if chosen_version_id.is_some() || previewed.local_key.is_some() {
         apply_remote(
             db,
             store,
@@ -1904,7 +2016,7 @@ pub fn resolve(
             &config.space_id,
             entity_key,
             &version,
-            &digest,
+            &direct_digest,
         )?;
     }
     save_state(
@@ -1947,7 +2059,7 @@ fn resolve_held_bundle(
     let local = collect_snapshot(db, store, registry)?
         .entities
         .into_iter()
-        .find(|item| item.key() == entity_key);
+        .find(|item| item.key() == holds[0].local_key.as_deref().unwrap_or(entity_key));
     let digest = local
         .as_ref()
         .map(PortableEntity::digest)
@@ -1970,7 +2082,18 @@ fn resolve_held_bundle(
             entities: vec![entity],
         };
         super::validate_snapshot(&snapshot)?;
-        let draft = preview_import(db, store, registry, snapshot)?;
+        let mut draft = preview_import(db, store, registry, snapshot)?;
+        if let Some(key) = &hold.local_key {
+            draft.name_baseline.insert(entity_key.into(), (key.clone(), hold.local_digest.clone()));
+        }
+        apply_import(db, store, registry, &draft, &BTreeSet::from([entity_key.to_owned()]))?;
+    } else if let (Some(current), Some(hold)) = (local, holds.first().filter(|hold| hold.local_key.is_some())) {
+        // Keep the local content, but join the identities so accepted deployment
+        // references from the same bundle can resolve without recreating it.
+        let entity = super::resource_names::with_identity(current, &hold.entity);
+        let snapshot = PortableSnapshot { schema_version: super::SNAPSHOT_VERSION, entities: vec![entity] };
+        let mut draft = preview_import(db, store, registry, snapshot)?;
+        draft.name_baseline.insert(entity_key.into(), (hold.local_key.clone().unwrap(), hold.local_digest.clone()));
         apply_import(db, store, registry, &draft, &BTreeSet::from([entity_key.to_owned()]))?;
     }
     discard_bundle_holds(db, store, entity_key)?;
@@ -2017,10 +2140,14 @@ fn summary(entity: Option<&PortableEntity>) -> String {
             value.title,
             value.body.chars().take(180).collect::<String>()
         ),
-        PortablePayload::Mcp(value) => format!(
-            "{} · {:?}",
-            value.definition.name, value.definition.transport
-        ),
+        PortablePayload::Mcp(value) => {
+            let location = match value.definition.transport {
+                crate::resources::mcp::McpTransport::Stdio => value.definition.command.split_whitespace().next().unwrap_or("").chars().take(120).collect::<String>(),
+                crate::resources::mcp::McpTransport::Http => Url::parse(&value.definition.url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default(),
+            };
+            format!("{} · {:?} · {} · {} 个参数，{} 个环境变量，{} 个请求头", value.definition.name, value.definition.transport, location,
+                value.definition.args.len(), value.definition.env.len(), value.definition.headers.len())
+        }
         PortablePayload::Skill(value) => format!(
             "{} · {} · {} 个文件",
             value.name,
@@ -2029,6 +2156,7 @@ fn summary(entity: Option<&PortableEntity>) -> String {
         ),
         PortablePayload::Account(value) => format!("{} · {}", value.account.label, value.account.tool_id),
         PortablePayload::Binding(value) => format!("{} · {}", value.tool, value.scope_key),
+        PortablePayload::Deployment(value) => format!("{} · {} · {}", value.tool, value.resource_kind, if value.enabled { "启用" } else { "停用" }),
     }
 }
 
@@ -2047,10 +2175,12 @@ pub fn preview_conflict(
     if config.is_none() && holds.is_empty() {
         return Err("请先配置 WebDAV".into());
     }
+    let local_key = recorded.as_ref().and_then(|item| item.local_key.as_deref())
+        .or_else(|| holds.first().and_then(|hold| hold.local_key.as_deref())).unwrap_or(entity_key);
     let local = collect_snapshot(db, store, registry)?
         .entities
         .into_iter()
-        .find(|item| item.key() == entity_key);
+        .find(|item| item.key() == local_key);
     let local_digest = local
         .as_ref()
         .map(PortableEntity::digest)

@@ -1,6 +1,6 @@
 //! Saved SSH passwords for remote targets.
 //!
-//! The password lives only in the system credential store, keyed by the
+//! The password lives only in the local credential store, keyed by the
 //! target id. OpenSSH never sees it on the command line or in its environment:
 //! Cliora points `SSH_ASKPASS` at its own executable together with the opaque
 //! credential id, and the askpass entry reads the store and answers the single
@@ -10,7 +10,7 @@
 use std::ffi::OsString;
 use std::process::Command;
 
-use crate::credentials::{CredentialStore, SystemCredentialStore};
+use crate::credentials::{AppCredentialStore, CredentialStore};
 
 use super::{RemoteError, RemoteTarget};
 
@@ -38,11 +38,15 @@ pub fn save(store: &dyn CredentialStore, target_id: &str, password: &str) -> Res
 
 /// Remove a saved password. An already-absent entry is not an error.
 pub fn forget(store: &dyn CredentialStore, target_id: &str) -> Result<(), RemoteError> {
-    match store.lookup(&credential_id(target_id)) {
-        Ok(None) => Ok(()),
-        Ok(Some(_)) => store.delete(&credential_id(target_id)).map_err(RemoteError::Storage),
-        Err(error) => Err(RemoteError::Storage(error)),
+    let id = credential_id(target_id);
+    // Local deletion must not read (and try to authorize) a legacy Keychain
+    // password first. OS stores may still report an already absent deletion.
+    if let Err(error) = store.delete(&id) {
+        if !matches!(store.lookup(&id), Ok(None)) {
+            return Err(RemoteError::Storage(error));
+        }
     }
+    Ok(())
 }
 
 pub fn is_saved(store: &dyn CredentialStore, target_id: &str) -> bool {
@@ -64,7 +68,7 @@ pub fn apply_save_request(store: &dyn CredentialStore, target: &RemoteTarget, pa
 /// Non-secret environment that lets OpenSSH ask Cliora for the saved password.
 /// Empty when the target uses keys or has no saved password.
 pub fn askpass_environment(target: &RemoteTarget) -> Vec<(String, String)> {
-    askpass_environment_with(&SystemCredentialStore, target)
+    askpass_environment_with(&AppCredentialStore, target)
 }
 
 pub fn askpass_environment_with(store: &dyn CredentialStore, target: &RemoteTarget) -> Vec<(String, String)> {
@@ -109,7 +113,7 @@ pub fn askpass_entry() -> bool {
     let prompt = args[1].to_string_lossy().to_ascii_lowercase();
     let id = id.to_string_lossy().into_owned();
     let answer = if prompt.contains("password") && id.starts_with("remote-ssh-") {
-        SystemCredentialStore.lookup(&id).ok().flatten()
+        AppCredentialStore.lookup(&id).ok().flatten()
     } else {
         None
     };
@@ -184,6 +188,18 @@ mod tests {
         let store = MemoryStore::default();
         assert!(save(&store, "id", "a\nb").is_err());
         assert!(save(&store, "id", "").is_err());
+    }
+
+    #[test]
+    fn forgetting_or_switching_to_keys_does_not_read_a_locked_legacy_password() {
+        struct DeleteOnly;
+        impl CredentialStore for DeleteOnly {
+            fn put(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+            fn get(&self, _: &str) -> Result<String, String> { panic!("must not request legacy authorization") }
+            fn delete(&self, _: &str) -> Result<(), String> { Ok(()) }
+        }
+        forget(&DeleteOnly, "target").unwrap();
+        apply_save_request(&DeleteOnly, &target("key"), None).unwrap();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "cliora"
-version = "0.4.80"
+version = "0.4.82"
 description = "Cliora desktop CLI manager"
 edition = "2021"
 rust-version = "1.88"
@@ -47,6 +47,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 portable-pty = "0.9.0"
+tempfile = "3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 keyring = "4.2"
@@ -58,7 +59,6 @@ security-framework = "3.7"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Diagnostics_ProcessSnapshotting", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
-tempfile = "3"
 flate2 = "1"
 
 # Keep the real 64 MiB / 3-pass KDF in tests; optimize only its CPU-bound dependencies.

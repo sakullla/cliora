@@ -1,6 +1,6 @@
 //! Saved-query scheduling is owned by the desktop process, independent of UI lifetime.
 use super::*;
-use crate::{credentials::SystemCredentialStore, database::Database};
+use crate::{credentials::AppCredentialStore, database::Database};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -292,7 +292,7 @@ fn run_saved(db: &Database, q: &UsageQuery, execution: String) -> UsageResult {
             })
             .collect(),
     };
-    let report = test_draft(db, &SystemCredentialStore, execution, 0, draft);
+    let report = test_draft(db, &AppCredentialStore, execution, 0, draft);
     match report {
         Ok(report) => report.runtime.result.unwrap_or_else(|| UsageResult {
             schema_version: 1,

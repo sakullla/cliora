@@ -29,6 +29,159 @@ fn database(directory: &Path) -> Database {
 }
 
 #[test]
+fn same_named_skill_merge_preserves_installation_disabled_state_and_old_references() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Synthetic skill\n"))]);
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z-skill','same-skill','description','local','synthetic-digest',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap();
+        conn.execute("INSERT INTO skill_installations(package_id,tool,scope_key,target_path,digest) VALUES ('z-skill','codex','global','unchanged-path','synthetic-digest')", []).unwrap();
+        conn.execute("INSERT INTO skill_operations(id,package_id,tool,scope_key,target_path,stage_path,backup_path,removing,status) VALUES ('operation','z-skill','codex','global','unchanged-path','stage','archive',1,'disabled')", []).unwrap();
+        conn.execute("INSERT INTO app_settings(key,value) VALUES ('native_skill_switch:codex:global:z-skill','{}')", []).unwrap();
+        resources::queue(conn, &resources::PortableDeployment { resource_kind: "skill".into(), resource_id: "z-skill".into(), tool: "codex".into(), scope_key: "global".into(), enabled: false }, false)?;
+        Ok(())
+    }).unwrap();
+    let entity = PortableEntity { id: "a-skill".into(), payload: PortablePayload::Skill(PortableSkill {
+        id: "a-skill".into(), name: "same-skill".into(), description: "description".into(), files, digest: "synthetic-digest".into(), pending_fields: vec![],
+    }) };
+    let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![entity] }).unwrap();
+    assert_eq!(draft.items[0].status, "same");
+    restore_preview(&db, &store, &registry, &draft).unwrap();
+    db.with_connection(|conn| {
+        assert_eq!(resource_names::canonical(conn, "skill", "z-skill")?, "a-skill");
+        for table in ["skill_installations", "skill_operations"] {
+            let id: String = conn.query_row(&format!("SELECT package_id FROM {table}"), [], |row| row.get(0)).unwrap();
+            assert_eq!(id, "a-skill");
+        }
+        assert!(conn.query_row("SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='native_skill_switch:codex:global:a-skill')", [], |row| row.get::<_,bool>(0)).unwrap());
+        for entity in resources::collect(conn)? {
+            let PortablePayload::Deployment(value) = entity.payload else { panic!() };
+            assert_eq!(value.resource_id, "a-skill");
+            assert!(!value.enabled);
+        }
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn same_name_preview_checks_the_existing_row_again_before_merging() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Original"))]);
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z','same','original','local','digest',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap(); Ok(())
+    }).unwrap();
+    let incoming = PortableEntity { id: "a".into(), payload: PortablePayload::Skill(PortableSkill { id: "a".into(), name: "same".into(), description: "original".into(), files, digest: "digest".into(), pending_fields: vec![] }) };
+    let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![incoming] }).unwrap();
+    db.with_connection(|conn| { conn.execute("UPDATE skill_packages SET description='edited-after-preview' WHERE id='z'", []).unwrap(); Ok(()) }).unwrap();
+    assert!(restore_preview(&db, &store, &registry, &draft).unwrap_err().contains("本机资料已变化"));
+    db.with_connection(|conn| {
+        let description: String = conn.query_row("SELECT description FROM skill_packages WHERE id='z'", [], |row| row.get(0)).unwrap();
+        assert_eq!(description, "edited-after-preview"); Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn bundle_name_conflict_keeps_local_content_and_resolves_its_identity() {
+    for keep_local in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let db = database(root.path());
+        let store = MemoryCredentials::default();
+        let registry = Registry::builtins();
+        let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Original"))]);
+        db.with_connection(|conn| { conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z','same','local','local','old',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap(); Ok(()) }).unwrap();
+        let incoming = PortableEntity { id: "a".into(), payload: PortablePayload::Skill(PortableSkill { id: "a".into(), name: "same".into(), description: "remote".into(), files: BTreeMap::from([("SKILL.md".into(), STANDARD.encode("# Incoming"))]), digest: "new".into(), pending_fields: vec![] }) };
+        let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![incoming] }).unwrap();
+        assert_eq!(draft.items[0].status, "conflict");
+        restore_preview(&db, &store, &registry, &draft).unwrap();
+        let preview = sync::preview_conflict(&db, &store, &registry, "skill:a").unwrap();
+        assert!(preview.local_summary.contains("local"));
+        sync::resolve(&db, &store, &registry, "skill:a", if keep_local { None } else { Some(&preview.versions[0].id) }).unwrap();
+        db.with_connection(|conn| {
+            let row: (String,String) = conn.query_row("SELECT id,description FROM skill_packages", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(row, ("a".into(), if keep_local { "local".into() } else { "remote".into() }));
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
+fn stale_binding_is_not_exported_or_retried_and_native_files_are_preserved() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let native = root.path().join("native.json");
+    fs::write(&native, "current-native-configuration").unwrap();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','minimax_code','deleted-profile',1,'{}')", []).unwrap();
+        Ok(())
+    }).unwrap();
+    let key = format!("binding:{}", binding_id("minimax_code", "global"));
+    record_blocker(&db, RestoreBlocker { key: key.clone(), label: "MiniMax".into(), action: "retry".into(), detail: "命名配置不存在".into() });
+    let snapshot = collect_snapshot(&db, &MemoryCredentials::default(), &Registry::builtins()).unwrap();
+    assert!(!snapshot.entities.iter().any(|item| item.key() == key));
+    assert!(load_blockers(&db).unwrap().is_empty());
+    assert!(find_binding(&db, &key).unwrap().is_some());
+    assert_eq!(fs::read_to_string(native).unwrap(), "current-native-configuration");
+}
+
+#[test]
+fn unreadable_profile_and_its_binding_are_held_without_losing_their_secrets() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let mut profile = bare_profile("locked-profile", "codex", "Locked", BTreeMap::new());
+    profile.native_credentials.insert("auth".into(), BTreeMap::from([("token".into(), "connection-locked".into())]));
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES ('locked-profile','codex',1,?1)", [serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','locked-profile',1,'{}')", []).unwrap();
+        Ok(())
+    }).unwrap();
+    let (snapshot, blocked) = collect_reported(&db, &store, &registry).unwrap();
+    assert!(snapshot.entities.iter().all(|item| !matches!(item.kind(), "profile" | "binding")));
+    assert!(blocked.iter().any(|item| item.key == "profile:locked-profile"));
+    assert!(blocked.iter().any(|item| item.key.starts_with("binding:")));
+    store.put("connection-locked", "recovered-original").unwrap();
+    let (snapshot, blocked) = collect_reported(&db, &store, &registry).unwrap();
+    assert!(blocked.is_empty());
+    assert!(load_blockers(&db).unwrap().is_empty());
+    let PortablePayload::Profile(value) = &snapshot.entities.iter().find(|item| item.kind() == "profile").unwrap().payload else { panic!() };
+    assert_eq!(value.native_secrets["auth"]["token"], "recovered-original");
+}
+
+#[test]
+fn deferred_native_apply_survives_restart_and_waits_for_dependencies() {
+    let _roots = RestoreRootsGuard;
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home.clone(), root.path().to_path_buf())));
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let profile = bare_profile("pending", "codex", "Pending", BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]));
+    let snapshot = PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![
+        PortableEntity { id: binding_id("codex", "global"), payload: PortablePayload::Binding(PortableBinding { scope_key: "global".into(), tool: "codex".into(), profile_id: "pending".into(), context_id: None }) },
+        PortableEntity { id: "pending".into(), payload: PortablePayload::Profile(Box::new(PortableProfile { profile, connection_secret: None, native_secrets: BTreeMap::new(), pending_fields: vec![] })) },
+    ] };
+    let draft = preview_import(&db, &store, &registry, snapshot).unwrap();
+    let selected = draft.items.iter().map(|item| item.key.clone()).collect();
+    apply_import_selecting(&db, &store, &registry, &draft, &selected, &BTreeSet::new(), false, false).unwrap();
+    assert!(!home.join(".codex/config.toml").exists());
+    drop(db);
+    let restarted = database(root.path());
+    apply_synced_bindings(&restarted, &store, &registry).unwrap();
+    assert!(fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("gpt-6"));
+    assert!(restarted.with_connection(|conn| pending_native_on(conn)).unwrap().is_empty());
+    assert!(load_blockers(&restarted).unwrap().is_empty());
+}
+
+#[test]
 fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_idempotent() {
     let temp = tempfile::tempdir().unwrap();
     let source = database(&temp.path().join("old"));
@@ -1041,7 +1194,7 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     .unwrap();
     assert!(exported >= 8);
     let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
-    assert_eq!(snapshot.schema_version, 3);
+    assert_eq!(snapshot.schema_version, SNAPSHOT_VERSION);
     let rendered = serde_json::to_string(&snapshot).unwrap();
     assert!(!rendered.contains("session-body-must-stay"));
     assert!(!rendered.contains("pending-should-not-travel"));
@@ -1469,7 +1622,7 @@ fn binding_update_keeps_existing_managed_until_apply_rewrites_it() {
             .find(|item| item.key == key)
             .unwrap()
             .status,
-        "conflict"
+        "new"
     );
     apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([key])).unwrap();
     let (saved, version, profile_id): (String, i64, String) = db.with_connection(|conn| {

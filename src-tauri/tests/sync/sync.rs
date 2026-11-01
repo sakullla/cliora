@@ -235,6 +235,241 @@ fn setup(server: &Server) -> SyncSetup {
     }
 }
 
+fn seed_named_mcp(db: &Database, id: &str, command: &str) {
+    let definition = crate::resources::mcp::McpDefinition {
+        id: id.into(), name: "shared-server".into(), transport: crate::resources::mcp::McpTransport::Stdio,
+        command: command.into(), args: vec!["synthetic-package".into()], url: String::new(),
+        env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES (?1,?2,'stdio',?3,1)",
+            rusqlite::params![id, definition.name, serde_json::to_string(&definition).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn equal_named_mcp_ids_merge_without_losing_targets_or_syncing_forever() {
+    for (source_id, target_id) in [("a-resource", "z-resource"), ("z-resource", "a-resource")] {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let a = database(&root.path().join("a"));
+    let b = database(&root.path().join("b"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    seed_named_mcp(&a, source_id, "npx");
+    seed_named_mcp(&b, target_id, "npx");
+    b.with_connection(|conn| {
+        conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES (?1,'codex','global',1,'preserved-hash')", [target_id]).unwrap();
+        Ok(())
+    }).unwrap();
+    configure(&a, &store, setup(&server)).unwrap();
+    configure(&b, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    // Model both IDs already having been uploaded by older clients.
+    let config = read_config(&a).unwrap().unwrap();
+    let dav = Dav::new(endpoint(&config.endpoint).unwrap(), &config.username, &store.get(&config.auth_secret_id).unwrap()).unwrap();
+    let (_, key) = read_space(&dav, &store.get(&config.space_secret_id).unwrap()).unwrap().unwrap();
+    let (mut manifest, etag) = read_manifest(&dav, &config.space_id, &key).unwrap().unwrap();
+    let entity = collect_snapshot(&b, &store, &registry).unwrap().entities.into_iter().find(|item| item.kind() == "mcp").unwrap();
+    let version = Version { id: Uuid::new_v4().to_string(), parents: vec![], digest: entity.digest().unwrap(), deleted: false };
+    write_version(&dav, &key, &config.space_id, &entity.key(), &version, Some(entity.clone())).unwrap();
+    manifest.heads.insert(entity.key(), vec![version.clone()]);
+    assert!(save_manifest(&dav, &manifest, &key, Some(&etag)).unwrap());
+    save_state(&b, &entity.key(), &version.digest, &[version.id], false).unwrap();
+    let result = run(&b, &store, &registry, false).unwrap();
+    assert!(result.conflicts.is_empty());
+    let rows = crate::resources::mcp::list_definitions(&b).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "a-resource");
+    b.with_connection(|conn| {
+        let target: (String, String) = conn.query_row("SELECT definition_id,managed_hash FROM mcp_targets", [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(target, ("a-resource".into(), "preserved-hash".into()));
+        Ok(())
+    }).unwrap();
+    for _ in 0..3 {
+        assert!(run(&a, &store, &registry, false).unwrap().conflicts.is_empty());
+        assert!(run(&b, &store, &registry, false).unwrap().conflicts.is_empty());
+    }
+    let quiet = run(&b, &store, &registry, false).unwrap();
+    assert_eq!((quiet.uploaded, quiet.downloaded), (0, 0));
+    }
+}
+
+#[test]
+fn different_named_mcp_is_a_resolvable_conflict_and_other_items_keep_syncing() {
+    for keep_local in [false, true] {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let a = database(&root.path().join("a"));
+    let b = database(&root.path().join("b"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    seed_named_mcp(&a, "a-resource", "npx");
+    seed_named_mcp(&b, "z-resource", "uvx");
+    put_library(&a, "unrelated-data");
+    configure(&a, &store, setup(&server)).unwrap();
+    configure(&b, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    let result = run(&b, &store, &registry, false).unwrap();
+    assert_eq!(body(&b).as_deref(), Some("unrelated-data"));
+    assert_eq!(crate::resources::mcp::get_definition(&b, "z-resource").unwrap().command, "uvx");
+    let conflict = result.conflicts.iter().find(|item| item.key == "mcp:a-resource").unwrap();
+    assert!(conflict.local_present);
+    let preview = preview_conflict(&b, &store, &registry, &conflict.key).unwrap();
+    assert!(preview.local_summary.contains("shared-server"));
+    resolve(&b, &store, &registry, &conflict.key, if keep_local { None } else { Some(&conflict.versions[0].id) }).unwrap();
+    let rows = crate::resources::mcp::list_definitions(&b).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].command, if keep_local { "uvx" } else { "npx" });
+    for _ in 0..3 {
+        assert!(run(&b, &store, &registry, false).unwrap().conflicts.is_empty());
+        assert!(run(&a, &store, &registry, false).unwrap().conflicts.is_empty());
+    }
+    }
+}
+
+#[test]
+fn reconnect_with_valid_password_does_not_need_the_locked_old_credential() {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    configure(&db, &store, setup(&server)).unwrap();
+    let old = read_config(&db).unwrap().unwrap();
+    store.delete(&old.auth_secret_id).unwrap();
+    store.delete(&old.space_secret_id).unwrap();
+    configure(&db, &store, setup(&server)).unwrap();
+    let result = run(&db, &store, &Registry::builtins(), false).unwrap();
+    assert!(result.last_error.is_none());
+    assert!(result.last_success.is_some());
+}
+
+#[test]
+fn merged_mcp_remains_managed_in_the_existing_native_file() {
+    use crate::resources::mcp;
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { super::super::set_restore_roots_for_test(None); } }
+    let _guard = Guard;
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let a = database(&root.path().join("a"));
+    let b = database(&root.path().join("b"));
+    let home = root.path().join("home"); std::fs::create_dir(&home).unwrap();
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    seed_named_mcp(&a, "a-resource", "npx"); seed_named_mcp(&b, "z-resource", "npx");
+    let mut target = mcp::McpTargetRequest { context_id: None, tool_id: "codex".into(), scope: crate::native::adapter::Scope::Global,
+        project_path: None, enabled: true, baseline_hash: None, allow_replace: false, preview_token: None };
+    let preview = mcp::preview_targets(&b, &registry, &home, "z-resource", vec![target.clone()]).remove(0);
+    target.baseline_hash = preview.baseline_hash; target.preview_token = preview.preview_token;
+    let written = mcp::distribute(&b, &store, &registry, &home, "z-resource", vec![target.clone()]).remove(0);
+    assert_eq!(written.status, "written", "{}", written.detail);
+    let path = home.join(".codex/config.toml");
+    let before = std::fs::read(&path).unwrap();
+    configure(&a, &store, setup(&server)).unwrap(); configure(&b, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    super::super::set_restore_roots_for_test(Some((home.clone(), root.path().join("b"))));
+    let result = run(&b, &store, &registry, false).unwrap();
+    assert!(result.blockers.is_empty(), "{:?}", result.blockers);
+    assert!(result.conflicts.is_empty());
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    let preview = mcp::preview_targets(&b, &registry, &home, "a-resource", vec![target]).remove(0);
+    assert_eq!(preview.status, "ready", "{}", preview.detail);
+}
+
+#[test]
+fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver() {
+    use crate::native::profile::{RegisteredProfile, Connection, ProfileAuthentication};
+    use crate::resources::{mcp, skills};
+    use crate::native::adapter::Scope;
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { super::super::set_restore_roots_for_test(None); } }
+    let _guard = Guard;
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let source = database(&root.path().join("source"));
+    let target = database(&root.path().join("target"));
+    let old_store = MemoryCredentials::default();
+    let new_store = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let source_home = std::path::PathBuf::from(r"C:\Users\Alice");
+    let target_home = root.path().join("mac-home");
+    std::fs::create_dir_all(target_home.join("projects/demo")).unwrap();
+    old_store.put("connection-source", "synthetic-api-key").unwrap();
+    let profile = RegisteredProfile { editing: None, authentication: ProfileAuthentication::Native,
+        id: "synced-profile".into(), tool: "codex".into(), name: "Work".into(), version: 1, revision: String::new(),
+        inherit_common: false, files: BTreeMap::new(), suppressed: BTreeMap::new(), native_credentials: BTreeMap::new(),
+        connection: Some(Connection { provider_id: "example".into(), interface_format: "openai_responses".into(),
+            base_url: "https://example.test/v1".into(), model: "gpt-6".into(), secret_ref: Some("connection-source".into()), auth_env_var: None, model_records: vec![] }),
+    };
+    let definition = mcp::McpDefinition { id: "runner".into(), name: "runner".into(), transport: mcp::McpTransport::Stdio,
+        command: r"C:\Program Files\nodejs\npx.cmd".into(), args: vec!["-y".into(), "synthetic-mcp-package".into(), r"C:\Users\Alice\projects\demo".into()],
+        url: String::new(), env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    let skill_dir = root.path().join("synthetic-skill");
+    std::fs::create_dir(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "---\nname: synthetic-skill\ndescription: Synthetic test\n---\n# Test\n").unwrap();
+    let skill = skills::import_local(&source, skill_dir.to_str().unwrap(), None, None).unwrap();
+    source.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES ('synced-profile','codex',1,?1)", [serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','synced-profile',1,'{}')", []).unwrap();
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES ('demo','Demo',?1,'codex',0)", [r"C:\Users\Alice\projects\demo"]).unwrap();
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES ('runner','runner','stdio',?1,1)", [serde_json::to_string(&definition).unwrap()]).unwrap();
+        conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES ('runner','codex','global',1,'synthetic')", []).unwrap();
+        conn.execute("INSERT INTO skill_installations(package_id,tool,scope_key,target_path,digest) VALUES (?1,'codex','global',?2,?3)", rusqlite::params![skill.id, r"C:\Users\Alice\.agents\skills\synthetic-skill", skill.digest]).unwrap();
+        Ok(())
+    }).unwrap();
+    let source_roots = || super::super::set_restore_roots_for_test(Some((source_home.clone(), root.path().join("source"))));
+    let target_roots = || super::super::set_restore_roots_for_test(Some((target_home.clone(), root.path().join("target"))));
+    source_roots();
+    configure(&source, &old_store, setup(&server)).unwrap();
+    run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    configure(&target, &new_store, setup(&server)).unwrap();
+    let received = run(&target, &new_store, &registry, false).unwrap();
+    assert!(received.blockers.is_empty(), "{:?}", received.blockers);
+    assert!(received.conflicts.is_empty());
+    let local = crate::native::profile::get_registered_profile(&target, "synced-profile").unwrap();
+    assert_eq!(new_store.get(local.connection.unwrap().secret_ref.as_deref().unwrap()).unwrap(), "synthetic-api-key");
+    let project = crate::projects::get(&target, "demo").unwrap();
+    assert_eq!(project.path.as_deref(), target_home.join("projects/demo").to_str());
+    let native = std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap();
+    assert!(native.contains("mcp_servers.runner"), "{native}");
+    assert!(native.contains("npx"));
+    assert!(!native.contains("Alice"));
+    assert!(!native.contains("Program Files"));
+    let installations = skills::installations(&target, &registry, &target_home, &skill.id).unwrap();
+    assert_eq!(installations.len(), 1);
+    assert!(std::path::Path::new(&installations[0].target_path).join("SKILL.md").is_file());
+    let repeated = run(&target, &new_store, &registry, false).unwrap();
+    assert_eq!((repeated.uploaded, repeated.downloaded), (0, 0));
+    // Disable travels with the resource, rather than making the user install
+    // and toggle it again after the next synchronization.
+    source.with_connection(|conn| {
+        conn.execute("UPDATE mcp_targets SET enabled=0", []).unwrap();
+        conn.execute("INSERT INTO app_settings(key,value) VALUES (?1,'{}')", [format!("native_skill_switch:codex:global:{}", skill.id)]).unwrap();
+        Ok(())
+    }).unwrap();
+    source_roots(); run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    let disabled = run(&target, &new_store, &registry, false).unwrap();
+    assert!(disabled.blockers.is_empty(), "{:?}", disabled.blockers);
+    assert!(!skills::enabled(&target, &registry, &target_home, &skill.id, "codex", Scope::Global, None).unwrap());
+    source.with_connection(|conn| {
+        conn.execute("DELETE FROM mcp_definitions WHERE id='runner'", []).unwrap();
+        conn.execute("DELETE FROM skill_packages WHERE id=?1", [&skill.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    source_roots(); run(&source, &old_store, &registry, false).unwrap();
+    target_roots();
+    let deleted = run(&target, &new_store, &registry, false).unwrap();
+    assert!(deleted.blockers.is_empty(), "{:?}", deleted.blockers);
+    assert!(deleted.conflicts.is_empty(), "{:?}", deleted.conflicts);
+    assert!(!std::path::Path::new(&installations[0].target_path).exists());
+    assert!(!std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap().contains("mcp_servers.runner"));
+}
+
 
 
 #[test]
@@ -548,7 +783,8 @@ fn inbound_snapshot_cannot_replace_an_edit_made_while_remote_was_read() {
         &registry,
         "library:library-1",
         Some(remote),
-        &expected
+        &expected,
+        false
     )
     .unwrap_err()
     .contains("本机资料已变化"));

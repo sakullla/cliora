@@ -311,7 +311,7 @@ export const native = {
     const targets = await command<RemoteTarget[]>('list_remote_targets');
     return targets.map(target => rememberRemoteTarget(target, true, observation));
   },
-  /** `password` goes to the system credential store; omit or pass '' to keep the saved one. */
+  /** `password` goes to the local credential store; omit or pass '' to keep the saved one. */
   saveRemoteTarget: async (target: RemoteTarget, password?: string | null) => {
     const saved = await command<RemoteTarget>('save_remote_target', { target, password: password || null });
     // A confirmed save supersedes every list already in flight, including
