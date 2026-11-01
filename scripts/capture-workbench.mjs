@@ -384,6 +384,12 @@ for (const width of widths) {
       nativePlatform: 'unverified', note: 'Fixed workload observations; browser GC/DOM counters are not native CPU/memory or long-duration leak acceptance.' };
   }, false, 'connected');
   await shot('workbench-active-' + theme + '-' + width, theme, width);
+  await shot('workbench-worktrees-' + theme + '-' + width, theme, width, async (page) => {
+    // One git chip in the status line; its menu lists the repository's checkouts.
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await stage.getByRole('button', { name: new RegExp(copy('切换工作树', 'Switch worktree')) }).click();
+    await page.getByRole('menu', { name: copy('切换工作树', 'Switch worktree') }).waitFor();
+  });
   await shot('workbench-activity-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__output('s1', 'live output contrast\r\n'));
     await page.locator('[data-activity-slot="status"][data-activity-icon="live"]').waitFor();
@@ -488,7 +494,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的长标题会话栏、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与目录选择流程和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
+  '捕获工作台的长标题会话栏、Git 分支与工作树切换菜单、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与目录选择流程和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
   '',
   '执行：',
   '',

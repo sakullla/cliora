@@ -109,7 +109,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
     const tooltip = [stableTitle(item.title), item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
-    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined} data-yolo={yolo || undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
         onClick={() => onSelect(session.id)}
         onDoubleClick={(event) => { if (!narrow && onIcon(event)) { event.preventDefault(); onToggleSlim(); } }}
@@ -127,7 +127,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <span className={styles.sessionIconWrap} data-rail-icon="" data-tone={item.tone}>
           <ToolIcon toolId={session.toolId} size={compact ? 20 : 18} />
           <SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} />
-          {compact && yolo && <span className={styles.yoloBadge} title={t('sessions.modeYolo')} aria-hidden="true"><Icon name="sparkle" size={9} /></span>}
           {compact && (item.unread || item.attention) && <span className={styles.slimNotice} data-attention={item.attention || undefined} aria-hidden="true" />}
         </span>
         <span className={styles.sessionBody}>
@@ -160,8 +159,10 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   return <aside className={styles.rail} aria-label={t('sessions.listLabel')} data-slim={compact || undefined} data-strip={narrow || undefined} data-docked={docked || undefined}>
     <div className={styles.railHead} onDoubleClick={(event) => { if (!narrow && event.target === event.currentTarget) onToggleSlim(); }}>
       <div className={styles.railTitleRow}>
-        <h1 className={narrow || compact ? styles.srOnly : styles.railTitle} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>
-        {!compact && !narrow && total > 0 && <span className={styles.railCount} title={t('sessions.summary', { running, ended })}><span className={styles.liveDot} data-live={running > 0 || undefined} aria-hidden="true" />{running > 0 ? t('sessions.runningCount', { count: running }) : t('sessions.railQuiet')}</span>}
+        {/* Docked in the app sidebar, the page icon row already names the page and each group
+            label carries its count, so the heading stays for assistive tech only. */}
+        <h1 className={narrow || compact || docked ? styles.srOnly : styles.railTitle} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>
+        {!compact && !narrow && !docked && total > 0 && <span className={styles.railCount} title={t('sessions.summary', { running, ended })}><span className={styles.liveDot} data-live={running > 0 || undefined} aria-hidden="true" />{running > 0 ? t('sessions.runningCount', { count: running }) : t('sessions.railQuiet')}</span>}
         <span className={styles.railCompactLabel} aria-hidden="true"><Icon name="terminal" size={16} /></span>
         {canLaunch && (compact || narrow) && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
       </div>
@@ -180,10 +181,10 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
 
     <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onListKeyDown}>
       {groups.map((group) => <div key={group.key} className={styles.sessionGroup} role="presentation" data-group={group.key}>
-        {(groups.length > 1 || group.key === 'ended') && <div className={styles.groupLabel} role="presentation">
+        {(groups.length > 1 || group.key === 'ended' || docked) && <div className={styles.groupLabel} role="presentation">
           {group.key === 'ended' && !compact && !narrow
             ? <button type="button" className={styles.groupToggle} aria-expanded={!endedCollapsed} title={endedCollapsed ? t('sessions.endedExpand') : t('sessions.endedCollapse')} onClick={onToggleEnded}><Icon name="chevronDown" size={12} /><span>{group.label}</span><em>{group.count}</em></button>
-            : <><span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
+            : <>{group.key === 'running' && !compact && <span className={styles.liveDot} data-live="" aria-hidden="true" />}<span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
           {group.key === 'ended' && !compact && !narrow && <button type="button" className={styles.groupAction} disabled={busy} aria-label={t('sessions.clearEnded')} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEndedShort')}</span></button>}
         </div>}
         {group.items.map(renderSession)}

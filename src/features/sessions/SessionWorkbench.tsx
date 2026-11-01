@@ -7,7 +7,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
-import { compactText, displayPath, shortPath } from '../../lib/paths';
+import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
 import { confirmAction } from '../../lib/confirm';
 import { modLabel } from '../../lib/shortcut';
@@ -50,6 +50,8 @@ export function libraryHostId(projectId: string | null | undefined, remoteProjec
   return remoteProjects.find((item) => `remote:${item.id}` === projectId)?.targetId ?? null;
 }
 
+/** CLIs offered as one-click picks under the tool list in the new-session dialog. */
+const DIALOG_QUICK_TOOLS = 8;
 const DEFAULT_RAIL_WIDTH = 272;
 const MIN_RAIL_WIDTH = 232;
 const MAX_RAIL_WIDTH = 392;
@@ -1677,6 +1679,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return () => { alive = false; stop?.(); setDropTarget(null); };
   }, [active]);
 
+  function pickLaunchTool(value: string) {
+    setLaunchToolId(value);
+    const nextTool = terminalTools.find((item) => item.id === value);
+    setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
+  }
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
     // A host lists its own places only: its home folder, its saved folders and a picked one.
@@ -1792,7 +1799,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             .filter((label) => label !== endLabel);
           const git = current ? gitContexts.get(current.id) ?? null : null;
           const gitLabel = git ? git.branch ?? git.commit ?? '' : '';
-          const worktreeLabel = git?.worktree ? compactText(git.worktree, 18) : '';
           const gitTitle = git ? [git.branch ? t('sessions.gitBranch', { name: git.branch }) : t('sessions.gitDetached', { commit: git.commit }), git.worktree ? t('sessions.gitWorktree', { name: git.worktree }) : '', git.repository ? t('sessions.gitRepository', { name: git.repository }) : ''].filter(Boolean).join(' · ') : '';
           const canSplit = splitRoom && scopedSessions.length > 1;
           const splitLabel = split ? t('sessions.splitViewExit') : canSplit ? t('sessions.splitView') : t('sessions.splitNeedsTwo');
@@ -1902,17 +1908,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
-                {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
-                {canSwitchWorktree && current && <span className={styles.worktreeSwitch}>
-                  <button type="button" className={styles.worktreeTrigger} aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={t('sessions.switchWorktree')} title={t('sessions.switchWorktree')} disabled={switchingWorktree} onClick={() => setWorktreeMenuOpen((value) => !value)}><Icon name="gitWorktree" size={12} /><span>{t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
+                {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
+                    and a caret only when there are other checkouts to switch to. */}
+                {(gitLabel || canSwitchWorktree) && (canSwitchWorktree && current ? <span className={styles.worktreeSwitch}>
+                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.switchWorktree')].filter(Boolean).join(' · ')} title={[gitTitle, t('sessions.switchWorktree')].filter(Boolean).join(' · ')} disabled={switchingWorktree} onClick={() => setWorktreeMenuOpen((value) => !value)}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
                   {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.switchWorktree')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
+                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.switchWorktree')}</span><em>{worktrees.length}</em></div>
                     {worktrees.map((tree) => <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} disabled={tree.current || switchingWorktree} title={tree.path} onClick={() => void switchWorktree(current, tree)}>
                       <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} />
                       <span className={styles.worktreeName}>{tree.name}</span>
                       {tree.branch && <span className={styles.worktreeBranch}>{tree.branch}</span>}
                     </button>)}
                   </div>}
-                </span>}
+                </span> : <span className={styles.gitChip} title={gitTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
                 {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
                 <span ref={linkHintHostRef} className={`${styles.statusSpacer} ${styles.statusLinkHost}`} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
@@ -1981,11 +1989,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       <div className={styles.dialogForm}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
         <div className={styles.dialogPrimaryGrid}>
-          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={(value) => {
-            setLaunchToolId(value);
-            const nextTool = terminalTools.find((item) => item.id === value);
-            setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
-          }} /></div>
+          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
+            {/* One click for the CLIs used most; the list above still reaches every tool. */}
+            {terminalTools.length > 1 && <div className={styles.toolPicks} role="radiogroup" aria-label={t('sessions.quickPickTools')}>{terminalTools.slice(0, DIALOG_QUICK_TOOLS).map((tool) => <button key={tool.id} type="button" role="radio" aria-checked={effectiveLaunchToolId === tool.id} aria-label={tool.name} title={tool.name} className={styles.toolPick} onClick={() => pickLaunchTool(tool.id)}><ToolIcon toolId={tool.id} size={16} /></button>)}</div>}
+          </div>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
             if (value.startsWith('project:')) {

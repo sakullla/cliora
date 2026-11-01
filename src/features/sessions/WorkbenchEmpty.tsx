@@ -35,9 +35,15 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         <span className={styles.emptyEyebrow}>{t('sessions.workspaceEyebrow')}</span>
         <h2>{t('sessions.emptyTitle')}</h2>
         <p>{t('sessions.emptyDetail')}</p>
+        {/* One launcher bar, like a command field: the whole bar opens the new-session dialog. */}
+        {tools.length > 0 && <button type="button" className={styles.launcherBar} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={() => onNewSession()}>
+          <span className={styles.launcherGlyph} aria-hidden="true"><Icon name="plus" size={18} /></span>
+          <span className={styles.launcherCopy}><strong>{t('sessions.newSession')}</strong><small>{t('sessions.launcherHint')}</small></span>
+          <span className={styles.launcherTools} aria-hidden="true">{quickTools.slice(0, 4).map((tool) => <span key={tool.id}><ToolIcon toolId={tool.id} size={14} /></span>)}</span>
+          <span className={styles.launcherKeys} aria-hidden="true"><kbd>Alt</kbd><kbd>N</kbd></span>
+        </button>}
         <div className={styles.emptyActions}>
-          {tools.length > 0 && <Button variant="primary" className={styles.emptyAction} onClick={() => onNewSession()} icon={<Icon name="plus" size={14} />}><span>{t('sessions.newSession')}</span><kbd className={styles.emptyKbd}>Alt N</kbd></Button>}
-          <Button variant={tools.length > 0 ? 'secondary' : 'primary'} className={styles.emptyAction} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></Button>
+          <Button variant={tools.length > 0 ? 'ghost' : 'primary'} className={styles.emptyAction} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></Button>
         </div>
       </header>
 

@@ -57,8 +57,11 @@ test('returning to the workbench keeps the session the user selected', async ({ 
   await earlier.click();
   await expect(earlier).toHaveAttribute('aria-selected', 'true');
   const git = footer.getByLabel('Git 分支 feature/quiet-ui · 工作树 cliora-ui · 仓库 cliora');
+  // Git is one compact chip: the branch shows; the worktree name lives in its label and menu.
   await expect(git).toContainText('feature/quiet-ui');
-  await expect(git).toContainText('工作树');
+  await expect(git).not.toContainText('工作树');
+  // Outside a saved project there is nothing to switch to, so the chip offers no menu.
+  await expect(git).not.toHaveAttribute('aria-haspopup', 'menu');
   await nav.getByRole('button', { name: '快速开始' }).click();
   await nav.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(earlier).toHaveAttribute('aria-selected', 'true');
