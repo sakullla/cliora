@@ -1,0 +1,298 @@
+//! Upload local regular files into a remote project's `.cliora/uploads/`.
+//!
+//! One SFTP batch first lands every file under a unique temporary name, then
+//! each file is claimed into a non-clashing final name with a single-line
+//! POSIX `ln` command: an existing remote file is never overwritten, colliding
+//! names grow a `-1`, `-2`, ... suffix, and the temporary name is removed only
+//! after a successful claim. A failed transfer therefore never publishes a
+//! final name, and claim failures keep already claimed files in place for the
+//! session-end cleanup instead of rolling anything back.
+
+use std::collections::HashSet;
+use std::path::Path;
+use std::time::Duration;
+
+use uuid::Uuid;
+
+use super::{
+    classify_ssh_failure, directory_parent_probe, operations, run_command, run_ssh,
+    sftp_command, shell_quote, valid_text, validate_target, wait_for_output_with_stdin,
+    RemoteError, RemoteTarget,
+};
+
+/// Uploads can be far larger and slower than interactive commands, so the
+/// transport waits up to 600 seconds; the operations request carries its own
+/// deadline and a write is never replayed automatically.
+const UPLOAD_DEADLINE: Duration = Duration::from_secs(600);
+/// Final names try the plain name first, then `-1`, `-2`, ... before failing.
+const NAME_ATTEMPTS: usize = 64;
+const TEMP_PREFIX: &str = ".cliora-upload-";
+
+/// Upload the given local files into `<project_path>/.cliora/uploads/` and
+/// return the claimed absolute remote paths in input order. Any failed file
+/// fails the whole request; local paths that are directories or unreadable
+/// are rejected before any remote connection is opened.
+pub fn upload_files(
+    target: &RemoteTarget,
+    project_path: &str,
+    local_paths: &[String],
+) -> Result<Vec<String>, RemoteError> {
+    let context = operations::current()
+        .unwrap_or_else(|| operations::Context::local(operations::Kind::Write, UPLOAD_DEADLINE));
+    operations::scoped(context, || upload_files_inner(target, project_path, local_paths))
+}
+
+fn upload_files_inner(
+    target: &RemoteTarget,
+    project_path: &str,
+    local_paths: &[String],
+) -> Result<Vec<String>, RemoteError> {
+    validate_target(target)?;
+    if local_paths.is_empty() {
+        return Err(RemoteError::Storage("请至少选择一个要上传的文件".into()));
+    }
+    let directory = upload_directory(project_path)?;
+    let mut entries = Vec::with_capacity(local_paths.len());
+    let mut temporary_names: HashSet<String> = HashSet::new();
+    for local_path in local_paths {
+        let file_name = precheck_local_file(local_path)?;
+        let temporary_name = loop {
+            let candidate = format!("{TEMP_PREFIX}{}", Uuid::new_v4().simple());
+            if temporary_names.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        entries.push(UploadEntry {
+            local_path: local_path.clone(),
+            file_name,
+            temporary_path: format!("{directory}/{temporary_name}"),
+        });
+    }
+    run_command(
+        target,
+        &upload_directory_prepare_command(project_path, &directory)?,
+    )?;
+    let batch = upload_batch_script(&entries);
+    let binary = std::env::var("CLIORA_SFTP_BINARY").unwrap_or_else(|_| "sftp".into());
+    let output = run_ssh(target, || {
+        let mut command = sftp_command(target, &binary);
+        wait_for_output_with_stdin(&mut command, UPLOAD_DEADLINE, Some(batch.clone().into_bytes()))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stage = classify_ssh_failure(&stderr, output.status.code());
+        return Err(RemoteError::Transport {
+            stage: if matches!(stage, "connect" | "remote_command") {
+                "sftp"
+            } else {
+                stage
+            },
+            detail: stderr.trim().chars().take(500).collect(),
+        });
+    }
+    let mut claimed = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        claimed.push(claim_uploaded_file(target, &directory, entry)?);
+    }
+    Ok(claimed)
+}
+
+struct UploadEntry {
+    local_path: String,
+    file_name: String,
+    temporary_path: String,
+}
+
+/// Remote directory receiving session uploads: `<project_path>/.cliora/uploads`.
+pub fn upload_directory(project_path: &str) -> Result<String, RemoteError> {
+    if !valid_text(project_path, 4096) || project_path.starts_with('~') {
+        return Err(RemoteError::InvalidPath);
+    }
+    Ok(format!(
+        "{}/.cliora/uploads",
+        project_path.trim_end_matches('/')
+    ))
+}
+
+/// Reject directories, unreadable files and unusable names locally, before any
+/// remote connection is opened, so the UI can report a precise reason.
+fn precheck_local_file(local_path: &str) -> Result<String, RemoteError> {
+    if !valid_text(local_path, 32_000) {
+        return Err(RemoteError::Storage("本地文件路径无效".into()));
+    }
+    let metadata = match std::fs::metadata(local_path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Err(RemoteError::Storage(format!(
+                "无法读取本地文件（不存在或不可访问）：{local_path}"
+            )))
+        }
+    };
+    if metadata.is_dir() {
+        return Err(RemoteError::Storage(format!(
+            "本地路径是目录，仅支持上传文件：{local_path}"
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(RemoteError::Storage(format!(
+            "本地路径不是普通文件：{local_path}"
+        )));
+    }
+    if std::fs::File::open(local_path).is_err() {
+        return Err(RemoteError::Storage(format!("本地文件不可读：{local_path}")));
+    }
+    match Path::new(local_path).file_name() {
+        Some(name) => {
+            let name = name.to_string_lossy().into_owned();
+            if !valid_text(&name, 255) || name.contains('/') {
+                return Err(RemoteError::Storage(format!("本地文件名无效：{local_path}")));
+            }
+            Ok(name)
+        }
+        None => Err(RemoteError::Storage(format!(
+            "本地文件名无效：{local_path}"
+        ))),
+    }
+}
+
+/// Create `<project>/.cliora/uploads`, reusing the `create_directory` probe
+/// pattern: the project directory must exist and be writable, while an already
+/// existing `.cliora` or `uploads` counts as success.
+fn upload_directory_prepare_command(
+    project_path: &str,
+    uploads_directory: &str,
+) -> Result<String, RemoteError> {
+    let project_path = project_path.trim_end_matches('/');
+    if !valid_text(project_path, 4096) || project_path.starts_with('~') {
+        return Err(RemoteError::InvalidPath);
+    }
+    if uploads_directory != format!("{project_path}/.cliora/uploads") {
+        return Err(RemoteError::InvalidPath);
+    }
+    Ok(format!(
+        "parent={}; {} \
+         if [ ! -w \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: parent requires write and search access' >&2; exit 43; fi; \
+         mkdir -- \"$parent/.cliora\" 2>/dev/null; parent=\"$parent/.cliora\"; {} \
+         if [ ! -w \"$parent\" ] || [ ! -x \"$parent\" ]; then printf '%s\\n' 'Permission denied: parent requires write and search access' >&2; exit 43; fi; \
+         mkdir -- \"$parent/uploads\" 2>/dev/null; [ -d \"$parent/uploads\" ] || {{ printf '%s\\n' 'cliora:directory-missing: Directory does not exist' >&2; exit 44; }}",
+        shell_quote(project_path),
+        directory_parent_probe(),
+        directory_parent_probe()
+    ))
+}
+
+fn split_file_name(file_name: &str) -> (&str, Option<&str>) {
+    match file_name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
+        _ => (file_name, None),
+    }
+}
+
+/// The plain name first, then `name-1.ext`, `name-2.ext`, ... so a claim never
+/// overwrites an existing remote file.
+fn claim_candidates(file_name: &str, limit: usize) -> Vec<String> {
+    let (stem, extension) = split_file_name(file_name);
+    (0..limit)
+        .map(|index| match (index, extension) {
+            (0, _) => file_name.to_owned(),
+            (_, Some(extension)) => format!("{stem}-{index}.{extension}"),
+            (_, None) => format!("{stem}-{index}"),
+        })
+        .collect()
+}
+
+/// One single-line POSIX command that atomically claims the first free name
+/// with `ln` (fails when the destination exists), removes the temporary name
+/// only after a successful claim, prints the claimed path and stops. Exhausted
+/// candidates fail with a distinct marker instead of overwriting anything.
+fn claim_command(
+    directory: &str,
+    temporary_path: &str,
+    candidates: &[String],
+) -> Result<String, RemoteError> {
+    if !valid_text(directory, 4096)
+        || directory.starts_with('~')
+        || !valid_text(temporary_path, 8192)
+        || candidates.is_empty()
+    {
+        return Err(RemoteError::InvalidPath);
+    }
+    let mut script = format!(
+        "dir={}; tmp={}; ",
+        shell_quote(directory),
+        shell_quote(temporary_path)
+    );
+    for candidate in candidates {
+        if !valid_text(candidate, 255) || candidate.contains('/') {
+            return Err(RemoteError::InvalidPath);
+        }
+        script.push_str(&format!(
+            "name={}; if ln -- \"$tmp\" \"$dir/$name\" 2>/dev/null; then rm -f -- \"$tmp\"; printf '%s\\n' \"$dir/$name\"; exit 0; fi; ",
+            shell_quote(candidate)
+        ));
+    }
+    script.push_str(&format!(
+        "printf '%s\\n' {} >&2; exit 48",
+        shell_quote(&format!("cliora:upload-name-taken: {}", candidates[0]))
+    ));
+    Ok(script)
+}
+
+fn claim_uploaded_file(
+    target: &RemoteTarget,
+    directory: &str,
+    entry: &UploadEntry,
+) -> Result<String, RemoteError> {
+    let candidates = claim_candidates(&entry.file_name, NAME_ATTEMPTS);
+    let command = claim_command(directory, &entry.temporary_path, &candidates)?;
+    let result = run_command(target, &command)?;
+    let claimed = result.stdout.trim();
+    if candidates
+        .iter()
+        .any(|candidate| claimed == format!("{directory}/{candidate}"))
+    {
+        return Ok(claimed.to_owned());
+    }
+    Err(RemoteError::Storage(format!(
+        "上传认领结果异常：{}",
+        claimed.chars().take(200).collect::<String>()
+    )))
+}
+
+fn escape_sftp_text(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The local operand of a `put` line. Windows separators become slashes so the
+/// remaining backslashes are always data and get sftp-quote escaped.
+fn batch_local_path(local_path: &str) -> String {
+    let normalized = if cfg!(windows) {
+        local_path.replace('\\', "/")
+    } else {
+        local_path.to_owned()
+    };
+    escape_sftp_text(&normalized)
+}
+
+fn sftp_batch_line(local_path: &str, remote_path: &str) -> String {
+    format!(
+        "put \"{}\" \"{}\"\n",
+        batch_local_path(local_path),
+        escape_sftp_text(remote_path)
+    )
+}
+
+/// The whole upload is one sftp batch; in batch mode sftp aborts on the first
+/// failing command, so one failed file stops the transfer without publishing
+/// any final name.
+fn upload_batch_script(entries: &[UploadEntry]) -> String {
+    let mut script = String::new();
+    for entry in entries {
+        script.push_str(&sftp_batch_line(&entry.local_path, &entry.temporary_path));
+    }
+    script
+}
+
+#[cfg(test)]
+#[path = "../../../src-tauri/tests/uploads/uploads.rs"]
+mod tests;

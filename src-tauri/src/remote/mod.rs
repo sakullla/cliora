@@ -26,6 +26,7 @@ pub mod operations;
 pub mod read_cache;
 pub mod transactions;
 pub mod directory_receipts;
+pub mod uploads;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
