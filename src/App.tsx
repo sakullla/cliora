@@ -188,6 +188,7 @@ export default function App() {
   const mcpIntentToken = useRef(0);
   const pendingCatalog = useRef<AdapterCatalog | null>(null);
   const refreshSequence = useRef(0);
+  const preferenceEdits = useRef({ theme: 0, remote_ssh_enabled: 0, tool_icons: 0, language: 0 });
   const onWorkspaceDirtyChange = useCallback((dirty: boolean) => {
     workspaceDirty.current = dirty;
     if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
@@ -324,10 +325,19 @@ export default function App() {
   async function refreshAfterImport() {
     if (!nativeAvailable) return;
     const sequence = ++refreshSequence.current;
+    const edits = { ...preferenceEdits.current };
     try {
       const [nextBootstrap, nextCatalog] = await Promise.all([native.getBootstrap(), native.listCliAdapters()]);
       if (sequence !== refreshSequence.current) return;
-      setBootstrap(nextBootstrap);
+      // Preserve choices made after this read began, while still accepting the
+      // imported catalog and unrelated settings from the same refresh.
+      setBootstrap((current) => ({ ...nextBootstrap, preferences: {
+        ...nextBootstrap.preferences,
+        theme: edits.theme === preferenceEdits.current.theme ? nextBootstrap.preferences.theme : current.preferences.theme,
+        remote_ssh_enabled: edits.remote_ssh_enabled === preferenceEdits.current.remote_ssh_enabled ? nextBootstrap.preferences.remote_ssh_enabled : current.preferences.remote_ssh_enabled,
+        tool_icons: edits.tool_icons === preferenceEdits.current.tool_icons ? nextBootstrap.preferences.tool_icons : current.preferences.tool_icons,
+        language: edits.language === preferenceEdits.current.language ? nextBootstrap.preferences.language : current.preferences.language,
+      } }));
       if (workspaceDirty.current) {
         pendingCatalog.current = nextCatalog;
         setCatalog((current) => current ? { ...nextCatalog, managedIds: current.managedIds } : nextCatalog);
@@ -378,9 +388,10 @@ export default function App() {
     const local = readStoredLanguage();
     if (!local) return;
     let cancelled = false;
+    ++preferenceEdits.current.language;
     void native.setLanguage(local).then((next) => {
-      if (!cancelled) setBootstrap(next);
-    }).catch(() => {});
+      if (!cancelled) setBootstrap((current) => ({ ...current, preferences: { ...current.preferences, language: next.preferences.language } }));
+    }).catch(() => {}).finally(() => { ++preferenceEdits.current.language; });
     return () => { cancelled = true; };
   }, [bootstrap.preferences.language]);
 
@@ -620,28 +631,40 @@ export default function App() {
   }
 
   async function updateTheme(theme: Theme) {
-    if (!nativeAvailable) { setBootstrap({ ...bootstrap, preferences: { ...bootstrap.preferences, theme } }); return; }
+    if (!nativeAvailable) { setBootstrap((current) => ({ ...current, preferences: { ...current.preferences, theme } })); return; }
     if (busy) return;
+    ++preferenceEdits.current.theme;
     setBusy(true); setError(null);
-    try { setBootstrap(await native.setTheme(theme)); }
+    try {
+      const next = await native.setTheme(theme);
+      setBootstrap((current) => ({ ...current, preferences: { ...current.preferences, theme: next.preferences.theme } }));
+    }
     catch (value) { setError(value as ApiError); }
-    finally { setBusy(false); }
+    finally { ++preferenceEdits.current.theme; setBusy(false); }
   }
 
   async function updateRemoteSsh(enabled: boolean) {
     if (!nativeAvailable || busy) return;
+    ++preferenceEdits.current.remote_ssh_enabled;
     setBusy(true); setError(null);
-    try { setBootstrap(await native.setRemoteSshEnabled(enabled)); }
+    try {
+      const next = await native.setRemoteSshEnabled(enabled);
+      setBootstrap((current) => ({ ...current, preferences: { ...current.preferences, remote_ssh_enabled: next.preferences.remote_ssh_enabled } }));
+    }
     catch (value) { setError(value as ApiError); }
-    finally { setBusy(false); }
+    finally { ++preferenceEdits.current.remote_ssh_enabled; setBusy(false); }
   }
 
   async function updateIcon(toolId: string, dataUrl: string | null) {
     if (!nativeAvailable || busy) return;
+    ++preferenceEdits.current.tool_icons;
     setBusy(true); setError(null);
-    try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); }
+    try {
+      const next = await native.setToolIcon(toolId, dataUrl);
+      setBootstrap((current) => ({ ...current, preferences: { ...current.preferences, tool_icons: next.preferences.tool_icons } }));
+    }
     catch (value) { setError(value as ApiError); throw value; }
-    finally { setBusy(false); }
+    finally { ++preferenceEdits.current.tool_icons; setBusy(false); }
   }
 
   return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>

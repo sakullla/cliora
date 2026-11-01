@@ -29,6 +29,28 @@ fn database(directory: &Path) -> Database {
 }
 
 #[test]
+fn preference_import_preserves_the_receivers_ssh_opt_in() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = Registry::builtins();
+    let store = MemoryCredentials::default();
+    for enabled in [false, true] {
+        let db = database(&root.path().join(enabled.to_string()));
+        db.update_preferences(|preferences| preferences.remote_ssh_enabled = enabled).unwrap();
+        let snapshot = PortableSnapshot {
+            schema_version: SNAPSHOT_VERSION,
+            entities: vec![PortableEntity { id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences {
+                managed_tools: vec!["codex".into()], theme: "dark".into(), tool_icons: BTreeMap::new(), language: Some("zh".into()),
+            }) }],
+        };
+        let draft = preview_import(&db, &store, &registry, snapshot).unwrap();
+        apply_import(&db, &store, &registry, &draft, &BTreeSet::from(["preferences:managed".into()])).unwrap();
+        let saved = db.preferences().unwrap();
+        assert_eq!(saved.theme, crate::domain::Theme::Dark);
+        assert_eq!(saved.remote_ssh_enabled, enabled, "portable preferences must not reset local SSH opt-in");
+    }
+}
+
+#[test]
 fn same_named_skill_merge_preserves_installation_disabled_state_and_old_references() {
     let root = tempfile::tempdir().unwrap();
     let db = database(root.path());

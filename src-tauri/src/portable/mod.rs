@@ -1218,7 +1218,18 @@ fn apply_import_selecting(
                     });
                     let language = value.language.clone().filter(|language| matches!(language.as_str(), "zh" | "en"))
                         .or(preserved.filter(|language| matches!(language.as_str(), "zh" | "en")));
-                    let mut body = serde_json::json!({"schema_version":1,"managed_tools":value.managed_tools,"theme":value.theme,"tool_icons":value.tool_icons});
+                    // Portable preferences own only these shared fields. Keep
+                    // receiver-only settings such as the explicit SSH opt-in.
+                    let local: Option<String> = tx.query_row(
+                        "SELECT value FROM app_settings WHERE key='preferences'", [], |row| row.get(0),
+                    ).optional().map_err(|error| error.to_string())?;
+                    let mut body: Value = local.as_deref().map(serde_json::from_str).transpose()
+                        .map_err(|_| "本机设置格式无法识别")?.unwrap_or_else(|| serde_json::json!({}));
+                    if !body.is_object() { return Err("本机设置格式无法识别".into()); }
+                    body["schema_version"] = serde_json::json!(1);
+                    body["managed_tools"] = serde_json::json!(value.managed_tools);
+                    body["theme"] = serde_json::json!(value.theme);
+                    body["tool_icons"] = serde_json::json!(value.tool_icons);
                     if let Some(language) = language {
                         body["language"] = serde_json::Value::String(language);
                     }
