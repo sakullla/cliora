@@ -6,11 +6,11 @@ use std::process::Command;
 use super::super::hide_console_window;
 use super::super::tests::with_local_transport;
 
-fn upload_target() -> RemoteTarget {
+fn upload_target_with(host: &str) -> RemoteTarget {
     RemoteTarget {
-        id: "upload-fixture.invalid".into(),
-        name: "upload-fixture.invalid".into(),
-        host: "upload-fixture.invalid".into(),
+        id: host.into(),
+        name: host.into(),
+        host: host.into(),
         port: 22,
         user: "root".into(),
         auth_method: "key".into(),
@@ -21,6 +21,10 @@ fn upload_target() -> RemoteTarget {
         created_at: 0,
         updated_at: 0,
     }
+}
+
+fn upload_target() -> RemoteTarget {
+    upload_target_with("channel-fixture.invalid")
 }
 
 #[test]
@@ -254,10 +258,26 @@ fn parse_put_line(line: &str) -> Option<(String, String)> {
 
 /// sftp fixture: consumes the batch from stdin and performs each `put` as a
 /// local copy, aborting like batch-mode sftp on the first failure.
+///
+/// Fixture-only environment controls: `CLIORA_UPLOAD_SFTP_FAIL_AFTER` fails the
+/// put after N copies, `CLIORA_UPLOAD_SFTP_EXIT`/`_STDERR` emulate a transport
+/// failure before the batch, and `CLIORA_UPLOAD_SFTP_TRACE` appends one line
+/// per invocation so tests can count connection attempts.
 #[test]
 fn upload_sftp_fixture_child() {
     if std::env::var_os("CLIORA_UPLOAD_SFTP_FIXTURE").is_none() {
         return;
+    }
+    if let Some(trace) = std::env::var_os("CLIORA_UPLOAD_SFTP_TRACE") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&trace) {
+            let _ = writeln!(file, "invoked");
+        }
+    }
+    if let Ok(exit) = std::env::var("CLIORA_UPLOAD_SFTP_EXIT") {
+        let stderr = std::env::var("CLIORA_UPLOAD_SFTP_STDERR").unwrap_or_default();
+        eprintln!("{stderr}");
+        std::process::exit(exit.parse().unwrap_or(255));
     }
     let mut batch = String::new();
     std::io::stdin().read_to_string(&mut batch).unwrap();
@@ -289,7 +309,16 @@ fn upload_sftp_fixture_child() {
     std::process::exit(0);
 }
 
+/// Environment-controlled fixtures are process-global; serialize every test
+/// that drives the sftp fixture so their scenario variables cannot leak into
+/// each other while tests run in parallel.
+fn sftp_fixture_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(Default::default)
+}
+
 fn with_sftp_fixture(run: impl FnOnce(&str)) {
+    let _guard = sftp_fixture_lock().lock().unwrap_or_else(|error| error.into_inner());
     let directory = tempfile::tempdir().unwrap();
     let executable = std::env::current_exe().unwrap().to_string_lossy().replace('\\', "/");
     let child = "remote::uploads::tests::upload_sftp_fixture_child";
@@ -413,6 +442,217 @@ fn upload_files_moves_through_sftp_temp_and_atomic_claim() {
                 ["data-1.bin", "data.bin", "notes v2-1.txt", "notes v2.txt"],
                 "no final name appears when any file fails"
             );
+        });
+    });
+}
+
+/// A database whose stored target reproduces the fixture target exactly, so
+/// the command layer resolves the same identity the local transport binds.
+fn upload_database(target: &RemoteTarget, project_path: &str) -> crate::database::Database {
+    let database = crate::database::Database::open(Path::new(":memory:")).unwrap();
+    database.update_preferences(|preferences| preferences.remote_ssh_enabled = true).unwrap();
+    database.with_connection(|connection| {
+        connection.execute(
+            "INSERT INTO remote_targets (id,name,host,port,user_name,enabled,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,1,0,0)",
+            rusqlite::params![target.id, target.name, target.host, target.port, target.user],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO remote_projects (id,target_id,name,path,updated_at)
+             VALUES ('fixture-project',?1,'Fixture',?2,0)",
+            rusqlite::params![target.id, project_path],
+        ).unwrap();
+        Ok(())
+    }).unwrap();
+    database
+}
+
+#[test]
+fn upload_session_files_records_claimed_paths_for_the_active_session() {
+    let fixture = tempfile::tempdir().unwrap();
+    let local_one = fixture.path().join("session notes.txt");
+    std::fs::write(&local_one, "session upload body").unwrap();
+    let local_two = fixture.path().join("image.png");
+    std::fs::write(&local_two, b"\x89PNG\r\n\x1a\nbody").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("command-success-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    let prefix = format!("{}/.cliora/uploads/", project_path.trim_end_matches('/'));
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            let paths = crate::commands::upload_session_files_core(
+                &database,
+                "fixture-session",
+                "remote:fixture-project",
+                &[local_one.to_string_lossy().into_owned(), local_two.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap();
+            assert_eq!(paths, [format!("{prefix}session notes.txt"), format!("{prefix}image.png")]);
+            let records = crate::remote::upload_records::list_for_session(
+                &database, &target.id, "fixture-session",
+            )
+            .unwrap();
+            assert_eq!(records.len(), 2, "{records:?}");
+            // Listing order is storage order; compare recorded landings as a set.
+            let mut recorded_paths: Vec<&str> = records.iter().map(|record| record.remote_path.as_str()).collect();
+            recorded_paths.sort_unstable();
+            let mut expected_paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+            expected_paths.sort_unstable();
+            assert_eq!(recorded_paths, expected_paths);
+            for record in &records {
+                let expected_name = record.remote_path.strip_suffix("image.png").map(|_| "image.png").unwrap_or("session notes.txt");
+                assert_eq!(record.local_name, expected_name);
+            }
+            // Records belong to their own session; a different session of the
+            // same target starts empty.
+            assert!(crate::remote::upload_records::list_for_session(
+                &database, &target.id, "other-session"
+            )
+            .unwrap()
+            .is_empty());
+            assert_eq!(
+                crate::remote::upload_records::delete_for_session(
+                    &database, &target.id, "fixture-session"
+                )
+                .unwrap(),
+                2
+            );
+
+            // A non-remote project key is rejected before anything is touched.
+            let error = crate::commands::upload_session_files_core(
+                &database,
+                "fixture-session",
+                "local-project",
+                &[local_one.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap_err();
+            assert!(error.message.contains("仅远程项目"), "{}", error.message);
+        });
+    });
+}
+
+#[test]
+fn upload_session_files_failure_records_the_landed_residue_of_the_attempt() {
+    let fixture = tempfile::tempdir().unwrap();
+    let local_one = fixture.path().join("first.txt");
+    std::fs::write(&local_one, "first body").unwrap();
+    let local_two = fixture.path().join("second.txt");
+    std::fs::write(&local_two, "second body").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("command-failure-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    let uploads_directory = project_root.join(".cliora").join("uploads");
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            std::env::set_var("CLIORA_UPLOAD_SFTP_FAIL_AFTER", "1");
+            let error = crate::commands::upload_session_files_core(
+                &database,
+                "fixture-session",
+                "remote:fixture-project",
+                &[local_one.to_string_lossy().into_owned(), local_two.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap_err();
+            std::env::remove_var("CLIORA_UPLOAD_SFTP_FAIL_AFTER");
+            // The failure keeps the structured remote envelope for the UI.
+            assert!(error.remote.is_some(), "{}", error.message);
+
+            // Only the first temporary file really landed; the records keep
+            // both temporary names because a failed batch does not report
+            // which puts already succeeded (rm -f tolerates the extra name).
+            let leftovers: Vec<String> = std::fs::read_dir(&uploads_directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+            assert!(leftovers[0].starts_with(".cliora-upload-"));
+            let records = crate::remote::upload_records::list_for_session(
+                &database, &target.id, "fixture-session",
+            )
+            .unwrap();
+            assert_eq!(records.len(), 2, "{records:?}");
+            let prefix = format!("{}/.cliora/uploads/.cliora-upload-", project_path.trim_end_matches('/'));
+            for record in &records {
+                assert!(record.remote_path.starts_with(&prefix), "{}", record.remote_path);
+            }
+        });
+    });
+}
+
+#[test]
+fn upload_transport_failure_is_never_replayed_under_a_write_request() {
+    let fixture = tempfile::tempdir().unwrap();
+    let local = fixture.path().join("payload.txt");
+    std::fs::write(&local, "body").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("command-retry-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    let trace = fixture.path().join("sftp-trace.log");
+    let invocations = || std::fs::read_to_string(&trace).unwrap().lines().filter(|line| !line.is_empty()).count();
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            std::env::set_var("CLIORA_UPLOAD_SFTP_TRACE", &trace);
+            std::env::set_var("CLIORA_UPLOAD_SFTP_EXIT", "255");
+            std::env::set_var("CLIORA_UPLOAD_SFTP_STDERR", "Connection reset by peer");
+            let error = crate::commands::upload_session_files_core(
+                &database,
+                "fixture-session",
+                "remote:fixture-project",
+                &[local.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap_err();
+            assert_eq!(invocations(), 1, "a write request never replays a transport failure");
+            let failure = error.remote.expect("transport failures stay structured");
+            assert_eq!(failure.reason, "connect");
+            assert_eq!(failure.outcome, "unknown", "a dispatched write stays uncertain");
+            // The residue of the failed attempt is recorded like any landing.
+            let records = crate::remote::upload_records::list_for_session(
+                &database, &target.id, "fixture-session",
+            )
+            .unwrap();
+            assert_eq!(records.len(), 1);
+            assert!(records[0].remote_path.contains("/.cliora/uploads/.cliora-upload-"));
+
+            // Contrast: the same retryable transport failure under a Read
+            // request context is attempted once per SSH_ATTEMPTS.
+            std::fs::remove_file(&trace).unwrap();
+            let read = operations::Context::local(operations::Kind::Read, Duration::from_secs(30));
+            operations::scoped(read, || {
+                let error = crate::commands::upload_session_files_core(
+                    &database,
+                    "fixture-session",
+                    "remote:fixture-project",
+                    &[local.to_string_lossy().into_owned()],
+                    &[],
+                )
+                .unwrap_err();
+                assert!(error.remote.is_some(), "{}", error.message);
+            });
+            assert_eq!(invocations(), 3, "only reads replay a retryable transport failure");
+            std::env::remove_var("CLIORA_UPLOAD_SFTP_STDERR");
+            std::env::remove_var("CLIORA_UPLOAD_SFTP_EXIT");
+            std::env::remove_var("CLIORA_UPLOAD_SFTP_TRACE");
         });
     });
 }

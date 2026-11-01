@@ -335,6 +335,7 @@ pub fn run() {
             commands::write_workbench_session,
             commands::resize_workbench_session,
             commands::close_workbench_session,
+            commands::upload_session_files,
             commands::reattach_workbench_session,
             commands::cli_latest_version,
             commands::maintain_registered_cli,

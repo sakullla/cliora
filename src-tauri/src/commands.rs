@@ -1,4 +1,5 @@
 use crate::adapters::{self, AdapterCatalog, PublishedDescriptor, UnknownAdapterRecord};
+use base64::Engine;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -3802,6 +3803,145 @@ pub async fn close_workbench_session(window: tauri::WebviewWindow, operation: Op
     }).await
 }
 
+/// One inlined upload payload (for example a pasted image re-encoded as PNG).
+/// The backend stages it as a local temporary file and then runs it through
+/// the same SFTP channel as dropped local paths.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineUploadFile {
+    pub name: String,
+    pub bytes_base64: String,
+}
+
+/// Removes the local staging directory of inlined upload files when the
+/// request ends, regardless of its outcome; no inline payload persists here.
+struct StagedInlineUploads {
+    directory: std::path::PathBuf,
+}
+
+impl Drop for StagedInlineUploads {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn stage_inline_uploads(database_root: &Path, inline_files: &[InlineUploadFile]) -> Result<StagedInlineUploads, ApiError> {
+    let directory = database_root.join(format!("cliora-upload-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&directory).map_err(|_| native_error("无法创建上传临时目录".into()))?;
+    for file in inline_files {
+        if file.name.is_empty()
+            || file.name.len() > 255
+            || file.name.contains(['/', '\\', '\0'])
+            || file.name.chars().any(|ch| ch.is_control())
+        {
+            let _ = std::fs::remove_dir_all(&directory);
+            return Err(native_error(format!("内联上传文件名无效：{}", file.name)));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&file.bytes_base64)
+            .map_err(|_| {
+                let _ = std::fs::remove_dir_all(&directory);
+                native_error(format!("内联上传文件字节编码无效：{}", file.name))
+            })?;
+        if std::fs::write(directory.join(&file.name), bytes).is_err() {
+            let _ = std::fs::remove_dir_all(&directory);
+            return Err(native_error("无法写入上传临时文件".into()));
+        }
+    }
+    Ok(StagedInlineUploads { directory })
+}
+
+/// Shared body of the upload command: resolve the remote project, target and
+/// session, run the SFTP upload, and persist one record row per landed remote
+/// name — claimed final names on success, and failed-attempt leftovers so the
+/// session-end recovery also covers them.
+pub(crate) fn upload_session_files_core(
+    database: &Database,
+    remote_session_id: &str,
+    project_id: &str,
+    local_paths: &[String],
+    inline_files: &[InlineUploadFile],
+) -> Result<Vec<String>, ApiError> {
+    let Some(project_key) = project_id.strip_prefix("remote:") else {
+        return Err(native_error("仅远程项目的会话支持上传文件".into()));
+    };
+    if local_paths.is_empty() && inline_files.is_empty() {
+        return Err(native_error("请至少选择一个要上传的文件".into()));
+    }
+    if !local_paths.is_empty() && !inline_files.is_empty() {
+        return Err(native_error("一次上传只能使用本地路径或内联文件之一".into()));
+    }
+    let project = crate::remote::list_projects(database, None)
+        .map_err(|error| native_error(error.to_string()))?
+        .into_iter()
+        .find(|item| item.id == project_key)
+        .ok_or_else(|| native_error("远程项目不存在".into()))?;
+    let staged = stage_inline_uploads(&std::env::temp_dir(), inline_files)?;
+    let target = enabled_target(database, &project.target_id)?;
+    bind_remote_target(&target)?;
+    let mut local_paths: Vec<String> = local_paths.to_vec();
+    local_paths.extend(
+        inline_files
+            .iter()
+            .map(|file| staged.directory.join(&file.name).to_string_lossy().into_owned()),
+    );
+    let result = crate::remote::uploads::upload_files_tracked(&target, &project.path, &local_paths);
+    drop(staged);
+    match result {
+        Ok(claimed) => {
+            crate::remote::upload_records::record(database, &target.id, remote_session_id, &claimed)
+                .map_err(native_error)?;
+            Ok(claimed.into_iter().map(|file| file.remote_path).collect())
+        }
+        Err(failure) => {
+            // The failure residue belongs to the same session; recording it is
+            // what lets the session-end recovery remove it. Keep the structured
+            // upload error primary and only flag a recording problem.
+            if let Err(record_error) =
+                crate::remote::upload_records::record(database, &target.id, remote_session_id, &failure.landed)
+            {
+                if let crate::remote::RemoteError::Operation(mut structured) = failure.error.clone() {
+                    structured.message.push_str(&format!("；此外登记失败残留时出错：{record_error}"));
+                    return Err(native_error(structured.to_string()));
+                }
+            }
+            Err(native_error(failure.error.to_string()))
+        }
+    }
+}
+
+/// Upload local files (dropped paths or inlined bytes) into the remote
+/// project's `.cliora/uploads/` directory and return the claimed absolute
+/// remote paths in input order. The session's persistent remote identity is
+/// resolved from the active session host entry, exactly like session close, so
+/// records survive restarts and scope recovery to that remote session.
+#[tauri::command]
+pub async fn upload_session_files(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    session_id: String,
+    project_id: String,
+    target_id: Option<String>,
+    local_paths: Option<Vec<String>>,
+    inline_files: Option<Vec<InlineUploadFile>>,
+) -> Result<Vec<String>, ApiError> {
+    let _ = target_id; // request identity only; the target is resolved from the project
+    remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
+        let database = app.state::<AppState>().database(&app)?;
+        let remote_session_id = crate::session_host::remote_session_id(&session_id)
+            .ok_or_else(|| native_error("会话不是活动远程会话，无法归属上传记录".into()))?;
+        upload_session_files_core(
+            &database,
+            &remote_session_id,
+            &project_id,
+            &local_paths.unwrap_or_default(),
+            &inline_files.unwrap_or_default(),
+        )
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn reattach_workbench_session(session_id: String, cols: Option<u16>, rows: Option<u16>) -> Result<(), ApiError> {
     blocking(move || {
@@ -5069,6 +5209,69 @@ pub fn set_tool_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_session_files_rejects_impossible_inputs_before_any_connection() {
+        let database = Database::open(std::path::Path::new(":memory:")).unwrap();
+        database.update_preferences(|preferences| preferences.remote_ssh_enabled = true).unwrap();
+        database.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO remote_targets (id,name,host,port,user_name,enabled,created_at,updated_at)
+                 VALUES ('fixture-target','Fixture','fixture.invalid',22,'root',0,0,0)",
+                [],
+            ).unwrap();
+            connection.execute(
+                "INSERT INTO remote_projects (id,target_id,name,path,updated_at)
+                 VALUES ('fixture-project','fixture-target','Fixture','/srv/demo',0)",
+                [],
+            ).unwrap();
+            Ok(())
+        }).unwrap();
+        let path = ["/tmp/one.txt".to_owned()];
+        let no_paths: [String; 0] = [];
+        let no_inline: [InlineUploadFile; 0] = [];
+
+        // Only remote projects, at least one file, and one source at a time.
+        for (project_id, local, inline, expected) in [
+            ("local-project", &path[..], &no_inline[..], "仅远程项目"),
+            ("remote:fixture-project", &no_paths[..], &no_inline[..], "至少选择一个"),
+            ("remote:missing-project", &path[..], &no_inline[..], "项目不存在"),
+        ] {
+            let error = upload_session_files_core(&database, "session", project_id, local, inline).unwrap_err();
+            assert!(error.message.contains(expected), "{} does not contain {expected}", error.message);
+        }
+        let inline = [InlineUploadFile { name: "pasted.png".into(), bytes_base64: "aGVsbG8=".into() }];
+        let error = upload_session_files_core(&database, "session", "remote:fixture-project", &path, &inline)
+            .unwrap_err();
+        assert!(error.message.contains("之一"), "{}", error.message);
+
+        // Inline staging validates names and bytes locally, and a later target
+        // failure never leaves the staging directory behind.
+        for (file, expected) in [
+            (InlineUploadFile { name: "sub/pasted.png".into(), bytes_base64: "aGVsbG8=".into() }, "文件名无效"),
+            (InlineUploadFile { name: "pasted.png".into(), bytes_base64: "!!not-base64!!".into() }, "编码无效"),
+        ] {
+            let error = upload_session_files_core(&database, "session", "remote:fixture-project", &[], &[file])
+                .unwrap_err();
+            assert!(error.message.contains(expected), "{}", error.message);
+        }
+        let staged = InlineUploadFile { name: "staged-marker.png".into(), bytes_base64: "aGVsbG8=".into() };
+        // The stored target is disabled, so the request stops after staging.
+        let error = upload_session_files_core(&database, "session", "remote:fixture-project", &[], &[staged])
+            .unwrap_err();
+        assert_eq!(error.message, "远程主机不可用");
+        let leftovers: Vec<std::path::PathBuf> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("cliora-upload-"))
+                    && path.join("staged-marker.png").exists()
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "staging is cleaned up: {leftovers:?}");
+    }
 
     #[test]
     fn remote_cli_probe_missing_envelope_preserves_the_tool_page_contract_fixture() {

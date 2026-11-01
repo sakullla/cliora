@@ -6,7 +6,9 @@
 //! names grow a `-1`, `-2`, ... suffix, and the temporary name is removed only
 //! after a successful claim. A failed transfer therefore never publishes a
 //! final name, and claim failures keep already claimed files in place for the
-//! session-end cleanup instead of rolling anything back.
+//! session-end cleanup instead of rolling anything back. Failures report every
+//! remote path the attempt already landed so callers can record them alongside
+//! successful claims.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -15,9 +17,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use super::{
-    classify_ssh_failure, directory_parent_probe, operations, run_command, run_ssh,
-    sftp_command, shell_quote, valid_text, validate_target, wait_for_output_with_stdin,
-    RemoteError, RemoteTarget,
+    directory_parent_probe, operations, run_command, run_ssh, sftp_command, shell_quote,
+    valid_text, validate_target, wait_for_output_with_stdin, RemoteError, RemoteTarget,
 };
 
 /// Uploads can be far larger and slower than interactive commands, so the
@@ -28,6 +29,24 @@ const UPLOAD_DEADLINE: Duration = Duration::from_secs(600);
 const NAME_ATTEMPTS: usize = 64;
 const TEMP_PREFIX: &str = ".cliora-upload-";
 
+/// One remote name this application landed in the uploads directory: a claimed
+/// final name, or a leftover of a failed attempt (a temporary name that was
+/// never claimed, or a final name claimed before a later file in the same
+/// request failed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LandedUpload {
+    pub remote_path: String,
+    pub local_name: String,
+}
+
+/// A failed whole-request upload together with every remote path the attempt
+/// already landed. Callers record the landed paths like successful ones so
+/// session-end cleanup also covers failure residue instead of rolling back.
+pub struct UploadFailure {
+    pub error: RemoteError,
+    pub landed: Vec<LandedUpload>,
+}
+
 /// Upload the given local files into `<project_path>/.cliora/uploads/` and
 /// return the claimed absolute remote paths in input order. Any failed file
 /// fails the whole request; local paths that are directories or unreadable
@@ -37,25 +56,40 @@ pub fn upload_files(
     project_path: &str,
     local_paths: &[String],
 ) -> Result<Vec<String>, RemoteError> {
-    let context = operations::current()
-        .unwrap_or_else(|| operations::Context::local(operations::Kind::Write, UPLOAD_DEADLINE));
-    operations::scoped(context, || upload_files_inner(target, project_path, local_paths))
+    upload_files_tracked(target, project_path, local_paths)
+        .map(|files| files.into_iter().map(|file| file.remote_path).collect())
+        .map_err(|failure| failure.error)
 }
 
-fn upload_files_inner(
+/// [`upload_files`] with landing visibility: success returns one entry per
+/// claimed final name; failure returns the error plus every remote path this
+/// attempt may have already landed.
+pub fn upload_files_tracked(
     target: &RemoteTarget,
     project_path: &str,
     local_paths: &[String],
-) -> Result<Vec<String>, RemoteError> {
-    validate_target(target)?;
+) -> Result<Vec<LandedUpload>, UploadFailure> {
+    let context = operations::current()
+        .unwrap_or_else(|| operations::Context::local(operations::Kind::Write, UPLOAD_DEADLINE));
+    operations::scoped(context, || upload_files_tracked_inner(target, project_path, local_paths))
+}
+
+fn upload_files_tracked_inner(
+    target: &RemoteTarget,
+    project_path: &str,
+    local_paths: &[String],
+) -> Result<Vec<LandedUpload>, UploadFailure> {
+    let none_landed =
+        |error: RemoteError| UploadFailure { error, landed: Vec::new() };
+    validate_target(target).map_err(none_landed)?;
     if local_paths.is_empty() {
-        return Err(RemoteError::Storage("请至少选择一个要上传的文件".into()));
+        return Err(none_landed(RemoteError::Storage("请至少选择一个要上传的文件".into())));
     }
-    let directory = upload_directory(project_path)?;
+    let directory = upload_directory(project_path).map_err(none_landed)?;
     let mut entries = Vec::with_capacity(local_paths.len());
     let mut temporary_names: HashSet<String> = HashSet::new();
     for local_path in local_paths {
-        let file_name = precheck_local_file(local_path)?;
+        let file_name = precheck_local_file(local_path).map_err(none_landed)?;
         let temporary_name = loop {
             let candidate = format!("{TEMP_PREFIX}{}", Uuid::new_v4().simple());
             if temporary_names.insert(candidate.clone()) {
@@ -68,31 +102,49 @@ fn upload_files_inner(
             temporary_path: format!("{directory}/{temporary_name}"),
         });
     }
+    // No remote file exists yet while the directory is only being prepared.
     run_command(
         target,
-        &upload_directory_prepare_command(project_path, &directory)?,
-    )?;
+        &upload_directory_prepare_command(project_path, &directory).map_err(none_landed)?,
+    )
+    .map_err(none_landed)?;
     let batch = upload_batch_script(&entries);
     let binary = std::env::var("CLIORA_SFTP_BINARY").unwrap_or_else(|_| "sftp".into());
-    let output = run_ssh(target, || {
+    // run_ssh only returns Ok for a successful exit, and batch-mode sftp aborts
+    // at the first failing put without saying which puts already succeeded, so
+    // a failed batch conservatively reports every temporary name as landed.
+    // `rm -f` on a path that never existed stays harmless during cleanup.
+    let temporary_landings = |from: usize| -> Vec<LandedUpload> {
+        entries[from..]
+            .iter()
+            .map(|entry| LandedUpload {
+                remote_path: entry.temporary_path.clone(),
+                local_name: entry.file_name.clone(),
+            })
+            .collect()
+    };
+    let batch_landed = || temporary_landings(0);
+    run_ssh(target, || {
         let mut command = sftp_command(target, &binary);
         wait_for_output_with_stdin(&mut command, UPLOAD_DEADLINE, Some(batch.clone().into_bytes()))
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stage = classify_ssh_failure(&stderr, output.status.code());
-        return Err(RemoteError::Transport {
-            stage: if matches!(stage, "connect" | "remote_command") {
-                "sftp"
-            } else {
-                stage
-            },
-            detail: stderr.trim().chars().take(500).collect(),
-        });
-    }
+    })
+    .map_err(|error| UploadFailure { error, landed: batch_landed() })?;
     let mut claimed = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        claimed.push(claim_uploaded_file(target, &directory, entry)?);
+    for (index, entry) in entries.iter().enumerate() {
+        match claim_uploaded_file(target, &directory, entry) {
+            Ok(remote_path) => claimed.push(LandedUpload {
+                remote_path,
+                local_name: entry.file_name.clone(),
+            }),
+            Err(error) => {
+                // Claimed finals stay (their temporary names are already gone);
+                // the failing entry and every later one keep their temporary
+                // names for the session-end cleanup.
+                let mut landed = claimed.clone();
+                landed.extend(temporary_landings(index));
+                return Err(UploadFailure { error, landed });
+            }
+        }
     }
     Ok(claimed)
 }

@@ -138,6 +138,13 @@ function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 're
   }) : result;
 }
 
+/** Resolve the managing target of a `remote:<id>` project key; '' when unknown.
+ * Session-scoped remote commands reuse the same resolution as session close. */
+async function remoteTargetIdForProject(projectId: string): Promise<string> {
+  const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
+  return projects.find(item => `remote:${item.id}` === projectId)?.targetId ?? '';
+}
+
 // Share only overlapping reads. Settled workspace data is always read again so
 // external configuration edits and account bindings remain visible.
 const workspaceReads = new Map<string, Promise<RegisteredToolWorkspace>>();
@@ -379,9 +386,21 @@ export const native = {
     const sessions = await command<WorkbenchSession[]>('list_workbench_sessions');
     const projectId = sessions.find(item => item.id === sessionId)?.projectId;
     if (!projectId?.startsWith('remote:')) return command<void>('close_workbench_session', { sessionId });
-    const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
-    const targetId = projects.find(item => `remote:${item.id}` === projectId)?.targetId ?? '';
+    const targetId = await remoteTargetIdForProject(projectId);
     return remoteCommand<void>('close_workbench_session', { sessionId, targetId }, 'write', options);
+  },
+  /** Upload local files into the remote project's .cliora/uploads/ and return
+   * the claimed absolute remote paths in input order. Write semantics: the
+   * request is never replayed automatically; retry is user-driven only. */
+  uploadRemoteSessionFiles: async (sessionId: string, projectId: string, localPaths: string[], options?: RemoteOperationOptions) => {
+    const targetId = await remoteTargetIdForProject(projectId);
+    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths, inlineFiles: null }, 'write', { timeoutMs: 120_000, ...options });
+  },
+  /** Upload one inlined payload (image paste) through the same channel; the
+   * backend stages the bytes as a local temporary file before transfer. */
+  uploadRemoteSessionFileBytes: async (sessionId: string, projectId: string, name: string, bytesBase64: string, options?: RemoteOperationOptions) => {
+    const targetId = await remoteTargetIdForProject(projectId);
+    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths: null, inlineFiles: [{ name, bytesBase64 }] }, 'write', { timeoutMs: 120_000, ...options });
   },
   reattachWorkbenchSession: (sessionId: string, size?: WorkbenchTerminalSize) => command<void>('reattach_workbench_session', { sessionId, ...size }),
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),

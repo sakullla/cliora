@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 29 {
+        if version > 30 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -603,6 +603,26 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 30 {
+            let tx = connection.transaction()?;
+            // One row per remote name this application landed in a project's
+            // `.cliora/uploads/` — claimed final names and failure leftovers
+            // alike — so session-end recovery deletes exactly recorded paths.
+            // Rows are session-scoped and intentionally survive restarts and
+            // target edits until their session is confirmed ended.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS remote_session_uploads (
+                   target_id TEXT NOT NULL,
+                   remote_session_id TEXT NOT NULL,
+                   remote_path TEXT NOT NULL,
+                   local_name TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   PRIMARY KEY(target_id, remote_session_id, remote_path)
+                 );
+                 PRAGMA user_version = 30;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -868,7 +888,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 29);
+            assert_eq!(version, 30);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

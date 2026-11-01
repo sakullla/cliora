@@ -28,6 +28,14 @@ export type RemoteDirectoryListing = {
   truncated: boolean;
 };
 
+/** One inlined upload payload (for example a pasted image re-encoded as PNG).
+ * The backend stages it as a local temporary file, then it follows the same
+ * SFTP channel as dropped local paths. */
+export type RemoteInlineUploadFile = {
+  name: string;
+  bytesBase64: string;
+};
+
 export type DirectoryReceipt = {
   id: string;
   target: Pick<RemoteTarget, 'id' | 'name' | 'host' | 'port' | 'user' | 'updatedAt'>;
