@@ -593,6 +593,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
 
   const bridge = useRef<TerminalBridge>(null as unknown as TerminalBridge);
+  // The status bar shows the hovered link's target, so no hint floats over the output.
+  const linkHintHostRef = useRef<HTMLSpanElement>(null);
   bridge.current = {
     writeError: (error) => setActionError(formatFailure(error, t('sessions.writeFailed'), t('sessions.retry'))),
     linkError: (error) => {
@@ -651,6 +653,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return next;
     }),
     copied: () => flashCopied('selection'),
+    linkHintHost: () => linkHintHostRef.current,
     grid: () => {},
     directory: (id, directory) => {
       void native.setWorkbenchDirectory(id, directory).then((canonical) => {
@@ -1791,7 +1794,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {gitLabel && <span className={styles.statusGit} title={gitTitle} aria-label={gitTitle}><Icon name="branch" size={12} /><span>{gitLabel}</span>{git?.worktree && <span className={styles.statusWorktree} title={git.worktree}>{t('sessions.gitWorktreeShort')} · {worktreeLabel}</span>}</span>}
                 {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
-                <span className={styles.statusSpacer} />
+                <span ref={linkHintHostRef} className={`${styles.statusSpacer} ${styles.statusLinkHost}`} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
                 <span className={styles.statusTools}>

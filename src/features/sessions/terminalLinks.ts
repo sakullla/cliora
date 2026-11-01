@@ -6,8 +6,9 @@ export type TerminalLinks = IDisposable & { dismiss: () => void };
 
 type PhysicalLine = { row: number; text: string; columns: number[]; ends: number[] };
 const LOGICAL_LINE_LIMIT = 128;
-/** Resting the pointer this long on a link shows its hint; passing over output shows nothing. */
-const HINT_DELAY_MS = 280;
+/** Resting the pointer this long on a link shows its hint; sweeping across output shows nothing.
+ *  The hint sits in the status bar, off the text, so it can come up sooner than a floating tooltip. */
+const HINT_DELAY_MS = 140;
 /** A TUI redraw re-creates the link under a still pointer; a leave this short is not a real leave. */
 const HINT_GRACE_MS = 160;
 /** A link kept through a redraw burst is dropped if it has not been seen for this long. */
@@ -92,6 +93,9 @@ export function registerTerminalLinks(term: Terminal, options: {
   open: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<void>;
   onError: (error: unknown) => void;
+  /** Where the hint docks while shown, like a browser's link status bubble: it never covers the
+   *  output being read. Without a host it floats beside the pointer. */
+  hintHost?: () => HTMLElement | null;
 }): TerminalLinks {
   let disposed = false;
   let current: ILink | null = null;
@@ -120,12 +124,33 @@ export function registerTerminalLinks(term: Terminal, options: {
   const target = document.createElement('code');
   tooltip.append(action, target);
   term.element?.appendChild(tooltip);
+  /** Dock the shown hint in the host; park it back in this terminal when hidden, so a host shared
+   *  by split panes and background sessions only ever holds the hint that is up. */
+  const dock = (show: boolean) => {
+    const host = show ? options.hintHost?.() : null;
+    if (host) {
+      if (tooltip.parentElement !== host) host.appendChild(tooltip);
+      tooltip.dataset.docked = 'true';
+      tooltip.style.removeProperty('left');
+      tooltip.style.removeProperty('top');
+    } else {
+      delete tooltip.dataset.docked;
+      if (!show && term.element && tooltip.parentElement !== term.element) term.element.appendChild(tooltip);
+    }
+  };
 
   const modified = (event: MouseEvent | KeyboardEvent) => options.mac ? event.metaKey : event.ctrlKey;
-  const decorate = (active: boolean) => {
+  // Hovering underlines the link, as in VS Code; the pointer cursor waits for Ctrl/⌘ because a
+  // plain click selects text and only a modified click opens.
+  const decorate = (modifier: boolean) => {
     if (!current?.decorations) return;
-    current.decorations.pointerCursor = active;
-    current.decorations.underline = active;
+    current.decorations.pointerCursor = modifier;
+    current.decorations.underline = true;
+  };
+  const undecorate = () => {
+    if (!current?.decorations) return;
+    current.decorations.pointerCursor = false;
+    current.decorations.underline = false;
   };
   // The hint shows once the pointer rests on a link, stays put while the same target is
   // re-created by redraws, and hides only after a real leave. Showing and hiding on every
@@ -150,12 +175,14 @@ export function registerTerminalLinks(term: Terminal, options: {
     shown = '';
     pending = '';
     tooltip.hidden = true;
+    dock(false);
   };
   const dismiss = () => {
-    decorate(false);
+    undecorate();
     hideNow();
   };
   const place = () => {
+    if (tooltip.dataset.docked) return;
     const left = Math.min(Math.max(8, pointer.x + 14), Math.max(8, window.innerWidth - tooltip.offsetWidth - 8));
     const above = pointer.y - tooltip.offsetHeight - 12;
     const top = above >= 8 ? above : Math.min(pointer.y + 20, Math.max(8, window.innerHeight - tooltip.offsetHeight - 8));
@@ -168,6 +195,8 @@ export function registerTerminalLinks(term: Terminal, options: {
     if (disposed) return;
     action.textContent = options.hint();
     target.textContent = url;
+    target.title = url;
+    dock(true);
     tooltip.hidden = false;
     shown = url;
     shownFromText = pendingFromText;
@@ -196,6 +225,7 @@ export function registerTerminalLinks(term: Terminal, options: {
   };
   const leave = (link?: ILink) => {
     if (link && current !== link) return;
+    undecorate();
     current = null;
     // A redraw re-creates the row under a still pointer and xterm only re-hovers on the
     // next mouse move. Keep a pending show while the same text is still there.

@@ -410,6 +410,8 @@ export type TerminalBridge = {
   canSwitch: () => boolean;
   scrolled: (sessionId: string, awayFromBottom: boolean) => void;
   copied: () => void;
+  /** The status-bar slot a link hint docks into while shown. */
+  linkHintHost: () => HTMLElement | null;
   grid: (sessionId: string, cols: number, rows: number) => void;
   directory: (sessionId: string, directory: string) => void;
 };
@@ -548,6 +550,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       },
       openPath: nativeAvailable ? (path) => native.openWorkbenchPath(sessionId, path) : undefined,
       onError: (error) => bridge.current.linkError(error),
+      hintHost: () => bridge.current.linkHintHost(),
     });
     linksRef.current = links;
     void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
