@@ -137,12 +137,21 @@ tmux() {{
             # Existing unrelated setup is inert. A mouse change must be exact,
             # session-scoped, and must never touch the sibling/global setting.
             if [ "$1" = -g ]; then [ "$2" = status ] || return 91; return 0; fi
+            # Server-wide escape-time may only be raised to Cliora's minimum.
+            if [ "$1" = -s ]; then [ "$#" = 3 ] && [ "$2" = escape-time ] && [ "$3" = 150 ] || return 97; printf 'ESCAPE:150\n'; return 0; fi
             [ "$#" = 4 ] && [ "$1" = -t ] && [ "$2" = =cliora-fixture: ] && [ "$3" = mouse ] && [ "$4" = on ] || return 92
             printf 'MOUSE:=cliora-fixture:on\n'
             [ "$scenario" != setup_failed ] && [ "$scenario" != new_setup_failed ] ;;
         attach-session)
             [ "$#" = 3 ] && [ "$2" = -t ] && [ "$3" = =cliora-fixture ] || return 93
             printf 'ATTACH:=cliora-fixture\n' ;;
+        show-options)
+            [ "$#" = 3 ] && [ "$2" = -sv ] && [ "$3" = escape-time ] || return 98
+            case "$scenario" in
+                *escape_high*) echo 500 ;;
+                *escape_unreadable*) return 1 ;;
+                *) echo 10 ;;
+            esac ;;
         set-window-option|set-environment) return 0 ;;
         *) echo 'unexpected tmux command' >&2; return 94 ;;
     esac
@@ -310,8 +319,23 @@ fn remote_tmux_mouse_setup_is_exact_and_precedes_ready_on_new_and_reattach() {
         let attach = stdout.find("ATTACH:=cliora-fixture").unwrap();
         assert!(setup < ready && ready < attach, "{stdout}");
         assert_eq!(stdout.matches("MOUSE:").count(), 1, "{stdout}");
+        // tmux 3.5's 10 ms escape-time splits Windows OpenSSH wheel bursts into a bare Escape.
+        let escape = stdout.find("ESCAPE:150").unwrap();
+        assert!(setup < escape && escape < ready, "{stdout}");
         assert_eq!(stdout.contains("NEW"), new, "{stdout}");
         assert!(stdout.contains(";cliora-fixture;disconnected"), "{stdout}");
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_tmux_escape_time_is_only_raised_and_never_blocks_attach() {
+    for scenario in ["reattach_escape_high", "reattach_escape_unreadable"] {
+        let output = run_remote_mux_shell(&remote_reattach_command("cliora-fixture"), scenario);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{scenario}: {stdout}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(!stdout.contains("ESCAPE:"), "a user's higher or unknown escape-time stays: {scenario}: {stdout}");
+        assert!(stdout.contains("MOUSE:=cliora-fixture:on") && stdout.contains(";cliora-fixture;ready") && stdout.contains("ATTACH:=cliora-fixture"), "{scenario}: {stdout}");
     }
 }
 
@@ -354,6 +378,7 @@ tmux() {{
 mux -V
 mux new-session -d -s cliora-fixture-long -- sleep 60
 mux set-option -g mouse off
+mux set-option -s escape-time 10
 mux new-session -d -s cliora-fixture -- sleep 60
 if legacy_output=$( ( set +e; {legacy} ) ); then
     echo 'legacy target unexpectedly succeeded' >&2; exit 80
@@ -370,9 +395,12 @@ printf 'NEW_RESULT:%s\n' "$new_output"
 [ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = on ]
 [ "$(mux show-options -Av -t '=cliora-fixture-long:' mouse)" = off ]
 [ "$(mux show-options -gv mouse)" = off ]
+[ "$(mux show-options -sv escape-time)" = 150 ]
+mux set-option -s escape-time 600
 mux set-option -t '=cliora-fixture:' mouse off
 reattach_output=$( ( set +e; {reattach} ) )
 printf 'REATTACH_RESULT:%s\n' "$reattach_output"
+[ "$(mux show-options -sv escape-time)" = 600 ]
 [ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = on ]
 [ "$(mux show-options -Av -t '=cliora-fixture-long:' mouse)" = off ]
 [ "$(mux show-options -gv mouse)" = off ]

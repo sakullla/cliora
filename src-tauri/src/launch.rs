@@ -374,6 +374,9 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     )
 }
 
+/// Minimum tmux escape-time for remote sessions; see `remote_reattach_command`.
+pub(crate) const REMOTE_TMUX_ESCAPE_TIME_MS: u32 = 150;
+
 pub(crate) fn remote_reattach_command(session: &str) -> String {
     let session_q = remote_shell_quote(session);
     let session_target_q = remote_shell_quote(&format!("={session}"));
@@ -383,8 +386,16 @@ pub(crate) fn remote_reattach_command(session: &str) -> String {
     // tmux owns the history while its client uses xterm's alternate screen.
     // Enable its existing wheel/copy-mode bindings only for this exact session,
     // on both first attach and reconnect. Keep CLI mouse reporting untouched.
+    //
+    // Windows OpenSSH reads at most 16 console records per pass, so one wheel
+    // burst (several 11-byte SGR reports) reaches the server in pieces ~35 ms
+    // apart. tmux 3.5 defaults to a 10 ms escape-time and then delivers the
+    // dangling `ESC[<64` as a bare Escape, which interrupts Claude Code and
+    // types the remainder. escape-time is server-wide: raise it to 150 ms (the
+    // pre-3.5 default was 500) only when lower, never lower a user's value, and
+    // never fail the attach over it.
     format!(
-        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {pane_target_q} mouse on || {{ echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {session_target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
+        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {pane_target_q} mouse on || {{ echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; cliora_escape=$(tmux -u show-options -sv escape-time 2>/dev/null) || cliora_escape=; case \"$cliora_escape\" in ''|*[!0-9]*) ;; *) if [ \"$cliora_escape\" -lt {REMOTE_TMUX_ESCAPE_TIME_MS} ]; then tmux -u set-option -s escape-time {REMOTE_TMUX_ESCAPE_TIME_MS} 2>/dev/null || :; fi ;; esac; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {session_target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
         remote_mux_probe(session), remote_state_signal(session, "ended"), remote_state_signal(session, "ready"),
         remote_state_signal(session, "ended"), remote_state_signal(session, "disconnected")
     )
