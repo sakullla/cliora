@@ -275,7 +275,7 @@ fn has_model_output(format: &str, value: &serde_json::Value) -> bool {
                                 parts.iter().any(|part| {
                                     part.get("type").and_then(serde_json::Value::as_str)
                                         == Some("output_text")
-                                        && part.get("text").is_some_and(&nonempty)
+                                        && part.get("text").is_some_and(nonempty)
                                 })
                             })
                 })
@@ -287,7 +287,7 @@ fn has_model_output(format: &str, value: &serde_json::Value) -> bool {
                 items.iter().any(|item| {
                     item.get("message")
                         .and_then(|message| message.get("content"))
-                        .is_some_and(&nonempty)
+                        .is_some_and(nonempty)
                 })
             }),
         "anthropic_messages" => value
@@ -296,7 +296,7 @@ fn has_model_output(format: &str, value: &serde_json::Value) -> bool {
             .is_some_and(|parts| {
                 parts.iter().any(|part| {
                     part.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                        && part.get("text").is_some_and(&nonempty)
+                        && part.get("text").is_some_and(nonempty)
                 })
             }),
         _ => false,

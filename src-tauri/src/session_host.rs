@@ -1205,9 +1205,93 @@ pub(crate) fn reject_reader_thread(reject: bool) {
     REJECT_READER_THREAD.store(reject, Ordering::SeqCst);
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub(crate) fn detach_for_tests(id: &str) {
     if let Some(session) = sessions().remove(id) { end_child(&session); }
+}
+
+
+#[cfg(all(test, windows))]
+fn replay_text(id: &str) -> String {
+    replay(id)
+        .ok()
+        .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .unwrap_or_default()
+}
+
+/// `start /b` leaves a grandchild attached to the pty while the shim child exits;
+/// ending the session must terminate that grandchild too (kill-on-close job object).
+#[cfg(all(test, windows))]
+#[test]
+fn ending_a_session_terminates_the_process_tree() {
+    let _guard = lock_for_tests();
+    let (program, _) = shell_executable().expect("shell available");
+    let plan = LaunchPlan {
+        resume_native_id: None,
+        account_version: None,
+        account_context: None,
+        tool_id: "cliora-test".into(),
+        project_id: None,
+        mode: LaunchMode::Normal,
+        executable: program,
+        cli_args: vec![
+            "/d".into(),
+            "/q".into(),
+            "/c".into(),
+            "start /b ping -n 45 127.0.0.1".into(),
+        ],
+        directory: std::env::temp_dir(),
+        terminal: TerminalId::Workbench,
+        session_markers: &[],
+        credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
+        environment: Vec::new(),
+    };
+    let result = start(plan, None).expect("session started");
+    let id = result.session_id.expect("session id");
+    // Parallel test suites load the machine heavily; process startup needs headroom.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut answered = 0;
+    while !process_name_running("PING.EXE") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "grandchild never started; replay: {:?}",
+            replay_text(&id)
+        );
+        // A real terminal view answers cursor queries; the test host has none,
+        // and cmd's startup stalls until the position report arrives.
+        let queries = replay_text(&id).matches("[6n").count();
+        while answered < queries && answered < 8 {
+            let _ = write(&id, &base64::engine::general_purpose::STANDARD.encode("\u{1b}[1;1R".as_bytes()));
+            answered += 1;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    close(&id).expect("session closed");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while process_name_running("PING.EXE") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ending the session left the grandchild process alive"
+        );
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(all(test, windows))]
+fn process_name_running(name: &str) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {name}")])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).to_lowercase().contains(&name.to_lowercase()))
 }
 
 #[cfg(test)]
@@ -1467,88 +1551,5 @@ while ($null -ne [Console]::ReadLine()) {}
         close_with_cleanup(&id, || { called.store(true, Ordering::SeqCst); Ok(()) }).unwrap();
         assert!(called.load(Ordering::SeqCst));
         assert!(lookup(&id).is_err());
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-#[cfg(all(test, windows))]
-fn process_name_running(name: &str) -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {name}")])
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).to_lowercase().contains(&name.to_lowercase()))
-}
-
-#[cfg(all(test, windows))]
-fn replay_text(id: &str) -> String {
-    replay(id)
-        .ok()
-        .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
-        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
-        .unwrap_or_default()
-}
-
-/// `start /b` leaves a grandchild attached to the pty while the shim child exits;
-/// ending the session must terminate that grandchild too (kill-on-close job object).
-#[cfg(all(test, windows))]
-#[test]
-fn ending_a_session_terminates_the_process_tree() {
-    let _guard = lock_for_tests();
-    let (program, _) = shell_executable().expect("shell available");
-    let plan = LaunchPlan {
-        resume_native_id: None,
-        account_version: None,
-        account_context: None,
-        tool_id: "cliora-test".into(),
-        project_id: None,
-        mode: LaunchMode::Normal,
-        executable: program,
-        cli_args: vec![
-            "/d".into(),
-            "/q".into(),
-            "/c".into(),
-            "start /b ping -n 45 127.0.0.1".into(),
-        ],
-        directory: std::env::temp_dir(),
-        terminal: TerminalId::Workbench,
-        session_markers: &[],
-        credential: None,
-        remote_session_id: None,
-        remote_end_args: None,
-        environment: Vec::new(),
-    };
-    let result = start(plan, None).expect("session started");
-    let id = result.session_id.expect("session id");
-    // Parallel test suites load the machine heavily; process startup needs headroom.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let mut answered = 0;
-    while !process_name_running("PING.EXE") {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "grandchild never started; replay: {:?}",
-            replay_text(&id)
-        );
-        // A real terminal view answers cursor queries; the test host has none,
-        // and cmd's startup stalls until the position report arrives.
-        let queries = replay_text(&id).matches("[6n").count();
-        while answered < queries && answered < 8 {
-            let _ = write(&id, &base64::engine::general_purpose::STANDARD.encode("\u{1b}[1;1R".as_bytes()));
-            answered += 1;
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    close(&id).expect("session closed");
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while process_name_running("PING.EXE") {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "ending the session left the grandchild process alive"
-        );
-        thread::sleep(Duration::from_millis(250));
     }
 }

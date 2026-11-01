@@ -5,10 +5,12 @@
 //! root, next to `Cursor.exe`. `agent` is a different product and is never
 //! accepted. No default directory is guessed when the table has no row.
 
+#[cfg(any(windows, test))]
 use std::path::PathBuf;
 
 use crate::native::adapter::Installation;
 
+#[cfg(any(windows, test))]
 pub(crate) fn matches_editor(display_name: &str) -> bool {
     let lower = display_name.trim().to_ascii_lowercase();
     if lower.is_empty() || lower.contains("agent") {
@@ -19,6 +21,7 @@ pub(crate) fn matches_editor(display_name: &str) -> bool {
 
 /// Parent of a quoted `unins*.exe` command. Windows separators are parsed
 /// explicitly so the fixture does not depend on the host's path style.
+#[cfg(any(windows, test))]
 pub(crate) fn install_root_from_uninstall(command: &str) -> Option<PathBuf> {
     let quoted = command
         .split('"')
@@ -67,7 +70,8 @@ pub(crate) fn installations() -> Vec<Installation> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    #[cfg(windows)]
+    use std::path::Path;
 
     use super::*;
 

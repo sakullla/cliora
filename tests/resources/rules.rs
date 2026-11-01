@@ -177,12 +177,12 @@ fn remote_rule_plan_uses_the_host_library_and_leaves_an_external_file() {
     let missing = plan_host_rule_sync(&[], &RuleHostState::default(), &[], &[], "missing", 1, &global_tools(&["codex"], false)).unwrap_err();
     assert_eq!(missing, "资料条目不存在");
     let rule = remote_rule("rule-1", "Keep", "stay remote");
-    let external = plan_host_rule_sync(&[rule.clone()], &RuleHostState::default(), &[global_codex("hand written\n")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
+    let external = plan_host_rule_sync(std::slice::from_ref(&rule), &RuleHostState::default(), &[global_codex("hand written\n")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
     assert!(!external.commit);
     assert!(external.writes.is_empty());
     assert_eq!(external.results[0].status, "conflict");
     assert_eq!(external.state, RuleHostState::default());
-    let written = plan_host_rule_sync(&[rule.clone()], &RuleHostState::default(), &[global_codex("")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
+    let written = plan_host_rule_sync(std::slice::from_ref(&rule), &RuleHostState::default(), &[global_codex("")], &[], &rule.id, 1, &global_tools(&["codex"], false)).unwrap();
     assert!(written.commit);
     assert_eq!(written.writes[0].path, "$HOME/.codex/AGENTS.md");
     assert_eq!(written.writes[0].contents, "# Keep\n\nstay remote\n");

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -16,7 +20,7 @@ jobs:
   gate:
     name: Wait for the tagged commit to pass main CI
     runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    timeout-minutes: 65
     permissions:
       contents: read
       actions: read

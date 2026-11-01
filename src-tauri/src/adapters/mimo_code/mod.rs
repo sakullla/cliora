@@ -314,12 +314,10 @@ impl CliAdapter for MiMoCode {
                 let (command, args) = mcp::stdio_command(&definition.command, &definition.args);
                 let mut map = mcp::stdio_doc_with_env(definition, existing, "environment");
                 map.remove("args");
-                let mut command: Vec<String> =
+                let command: Vec<String> =
                     std::iter::once(command).chain(args).collect::<Vec<_>>();
                 #[cfg(windows)]
-                {
-                    command = windows_batch_command(command);
-                }
+                let command = windows_batch_command(command);
                 map.insert("command".into(), json!(command));
                 map.insert("type".into(), json!("local"));
                 map

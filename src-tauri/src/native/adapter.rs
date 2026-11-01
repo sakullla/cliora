@@ -819,7 +819,7 @@ pub fn probe_registered_summary_cached(
             return Ok(probe);
         }
     }
-    let probe = finish_probe(registry, id, custom_path, home, project, scope, true, false)?;
+    let probe = finish_probe(registry, id, custom_path, home, project, scope, ProbeMode::Identity)?;
     #[cfg(not(test))]
     store_probe(summary_cache(), key, &probe);
     Ok(probe)
@@ -863,7 +863,12 @@ pub fn probe_registered(
     project: Option<&Path>,
     scope: Scope,
 ) -> Result<ToolProbe, String> {
-    finish_probe(registry, id, custom_path, home, project, scope, false, true)
+    finish_probe(registry, id, custom_path, home, project, scope, ProbeMode::Full)
+}
+
+enum ProbeMode {
+    Identity,
+    Full,
 }
 
 fn finish_probe(
@@ -873,12 +878,13 @@ fn finish_probe(
     home: &Path,
     project: Option<&Path>,
     scope: Scope,
-    stop_at_first: bool,
-    include_native_files: bool,
+    mode: ProbeMode,
 ) -> Result<ToolProbe, String> {
     let adapter = registry
         .get(id)
         .ok_or("未注册的 CLI 适配器，不能探测或写入")?;
+    let stop_at_first = matches!(mode, ProbeMode::Identity);
+    let include_native_files = matches!(mode, ProbeMode::Full);
     let installations = registered_installations(registry, id, custom_path, home, stop_at_first)?;
     finish_installation_probe(adapter, id, installations, home, project, scope, include_native_files)
 }
@@ -986,7 +992,7 @@ fn finish_installation_probe(
         tool: id.to_owned(),
         selected_path: selected.map(|item| item.path.clone()),
         installations,
-        native_files: include_native_files.then(|| adapter.native_files(scope, home, project, writable)).unwrap_or_default(),
+        native_files: if include_native_files { adapter.native_files(scope, home, project, writable) } else { Default::default() },
         native_writes,
         interface_formats: if writable {
             adapter.interface_formats().to_vec()

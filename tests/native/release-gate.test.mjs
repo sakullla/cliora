@@ -73,3 +73,12 @@ test('API errors fail closed instead of allowing release', async () => {
   input.github.rest.actions.listWorkflowRuns = async () => { throw new Error('API unavailable'); };
   await assert.rejects(waitForMainCi(input), /API unavailable/);
 });
+
+test("default gate allows a full 60 minutes before the final check", async () => {
+  const options = fixture([...Array.from({ length: 240 }, () => []), [success]]);
+  delete options.attempts;
+  let elapsed = 0;
+  options.sleep = async (ms) => { elapsed += ms; };
+  assert.equal((await waitForMainCi(options)).id, 1);
+  assert.equal(elapsed, 60 * 60 * 1000);
+});

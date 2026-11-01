@@ -440,9 +440,10 @@ impl CliAdapter for Kiro {
         )
     }
     fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
-        let mut dirs = vec![home.join(".local/bin")];
+        let dirs = vec![home.join(".local/bin")];
         #[cfg(windows)]
-        {
+        let dirs = {
+            let mut dirs = dirs;
             if let Some(program_files) = std::env::var_os("ProgramFiles") {
                 dirs.push(PathBuf::from(program_files).join("Kiro-Cli"));
             }
@@ -453,7 +454,8 @@ impl CliAdapter for Kiro {
             if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
                 dirs.push(PathBuf::from(local_app_data).join("Kiro-Cli"));
             }
-        }
+            dirs
+        };
         dirs
     }
     fn recognizes_native_install_path(&self, path: &Path) -> bool {

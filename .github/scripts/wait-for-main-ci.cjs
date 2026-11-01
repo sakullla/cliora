@@ -4,7 +4,7 @@ async function waitForMainCi({
   sha,
   log = console.log,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  attempts = 120,
+  attempts = 241,
 }) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const { data } = await github.rest.actions.listWorkflowRuns({

@@ -1199,7 +1199,7 @@ pub struct RemoteCommandResult {
 
 #[derive(Clone, Debug)]
 pub enum RemoteError {
-    Operation(operations::Failure),
+    Operation(Box<operations::Failure>),
     InvalidName,
     InvalidHost,
     InvalidUser,
@@ -1260,11 +1260,14 @@ pub(crate) fn with_remote_user_path(command: &str) -> String {
     format!("{REMOTE_USER_PATH}; {command}")
 }
 
+#[cfg(test)]
 pub(crate) fn with_linux_session_prep(command: &str) -> String {
     format!("{LINUX_TMUX_INSTALL}; {REMOTE_USER_PATH}; {command}")
 }
 
 fn hide_console_window(command: &mut Command) {
+    #[cfg(not(windows))]
+    let _ = command;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1807,7 +1810,7 @@ pub fn save_target_with_auth_change(db: &Database, mut target: RemoteTarget, aut
             .query_row("SELECT MAX(created_at,updated_at) FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0))
             .optional()
             .map_err(|error| error.to_string())?;
-        target.created_at = if let Some(_) = existing { conn.query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0)).map_err(|error| error.to_string())? } else { timestamp };
+        target.created_at = if existing.is_some() { conn.query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0)).map_err(|error| error.to_string())? } else { timestamp };
         target.updated_at = rename_revision.filter(|revision| Some(*revision) == existing).unwrap_or_else(|| existing.map(|previous| timestamp.max(previous.saturating_add(1))).unwrap_or(timestamp));
         conn.execute(
             "INSERT INTO remote_targets (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
@@ -2674,8 +2677,8 @@ mod tests {
             "authentication" => { eprintln!("Permission denied (publickey)."); std::process::exit(255); }
             "tree" => {
                 let mut command = operation_child("hang", Path::new(&counter));
-                let _child = command.spawn().unwrap();
-                std::thread::sleep(Duration::from_secs(30));
+                let mut child = command.spawn().unwrap();
+                child.wait().unwrap();
             }
             _ => std::thread::sleep(Duration::from_secs(30)),
         }
@@ -2965,7 +2968,7 @@ mod tests {
         let fresh = "name = \"owned\"\ndescription = \"external\"\ndeveloper_instructions = \"external body\"\n";
         let encoded = format!("__CLIORA_AGENT__0\n{}\n", base64::engine::general_purpose::STANDARD.encode(fresh));
         let context = operations::Context::local(operations::Kind::Read, Duration::from_secs(3));
-        let actual = operations::scoped(context.clone(), || assemble_remote_agents("codex", &[path.clone()], &encoded, crate::adapters::agents::capability("codex").unwrap(), "actual native reload".into()));
+        let actual = operations::scoped(context.clone(), || assemble_remote_agents("codex", std::slice::from_ref(&path), &encoded, crate::adapters::agents::capability("codex").unwrap(), "actual native reload".into()));
         assert_eq!(actual["snapshot"]["entries"][0]["content"], fresh);
         assert!(!context.file_versions().contains_key(&path), "absolute alias is not a second prerequisite");
         assert_eq!(context.file_versions()["$HOME/.codex/agents/owned.toml"], transactions::digest(fresh.as_bytes()));

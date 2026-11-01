@@ -210,15 +210,17 @@ fn run(
     target: &PluginTarget,
     args: &[String],
 ) -> Result<String, String> {
-    let (mut path, prefix) =
+    let (path, prefix) =
         adapters::plugins::get_registered(registry, &target.tool_id)?.command_program(executable)?;
     #[cfg(windows)]
-    if path
+    let path = if path
         .extension()
         .is_some_and(|x| x.eq_ignore_ascii_case("cmd"))
     {
-        path.set_extension("ps1");
-    }
+        path.with_extension("ps1")
+    } else {
+        path
+    };
     let mut command = if path
         .extension()
         .is_some_and(|x| x.eq_ignore_ascii_case("ps1"))

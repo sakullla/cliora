@@ -20,12 +20,16 @@ pub(crate) struct ProbePermit;
 impl ProbePermit {
     pub(crate) fn acquire() -> Result<Self, String> {
         use std::sync::atomic::Ordering;
-        ACTIVE_PROBES
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < 4).then_some(n + 1)
-            })
-            .map(|_| Self)
-            .map_err(|_| "原生身份检查正在进行，请稍后重试".into())
+        let mut active = ACTIVE_PROBES.load(Ordering::SeqCst);
+        loop {
+            if active >= 4 {
+                return Err("原生身份检查正在进行，请稍后重试".into());
+            }
+            match ACTIVE_PROBES.compare_exchange_weak(active, active + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Ok(Self),
+                Err(current) => active = current,
+            }
+        }
     }
 }
 impl Drop for ProbePermit {
@@ -81,9 +85,9 @@ pub fn command(
     args: &[&str],
 ) -> Result<Command, String> {
     let probed = executable.to_path_buf();
-    let mut executable = probed.clone();
+    let executable = probed.clone();
     #[cfg(windows)]
-    if executable
+    let executable = if executable
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd"))
     {
@@ -91,8 +95,10 @@ pub fn command(
         if !script.is_file() {
             return Err("后台身份检查需要原生可执行文件或 PowerShell 入口".into());
         }
-        executable = script;
-    }
+        script
+    } else {
+        executable
+    };
     let mut command = if executable
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("ps1"))
@@ -337,6 +343,7 @@ pub fn perform_logout(executable: &Path, context: &NativeContext) -> Result<Obse
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     fn fixture_context(root: &Path) -> NativeContext {
         NativeContext {
             id: "fixture".into(),

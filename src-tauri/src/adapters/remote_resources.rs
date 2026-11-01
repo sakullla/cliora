@@ -96,7 +96,7 @@ pub(crate) fn render_json_mcp(config_text: &str, value: &serde_json::Value, root
     let mut document = if config_text.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str::<serde_json::Value>(&config_text).map_err(|error| format_error(format!("远程配置不是 JSON 对象：{error}")))?
+        serde_json::from_str::<serde_json::Value>(config_text).map_err(|error| format_error(format!("远程配置不是 JSON 对象：{error}")))?
     };
     let entries = value.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let mut servers = serde_json::Map::new();

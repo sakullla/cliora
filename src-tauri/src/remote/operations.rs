@@ -201,7 +201,7 @@ impl Context {
         let mut failure = match error {
             RemoteError::Operation(failure) => failure,
             RemoteError::Storage(ref message) => match message.strip_prefix("cliora:remote:").and_then(|json| serde_json::from_str::<Failure>(json).ok()) {
-                Some(failure) => failure, None => return error,
+                Some(failure) => Box::new(failure), None => return error,
             },
             _ => return error,
         };
@@ -250,7 +250,7 @@ impl Context {
             "identity" => "刷新主机配置并重新发起操作。",
             _ => "检查网络与远端状态后重试。",
         };
-        RemoteError::Operation(Failure {
+        RemoteError::Operation(Box::new(Failure {
             code: if uncertain { "remote_unknown".into() } else { format!("remote_{stage}") },
             stage: if matches!(stage, "cancelled" | "timeout") { self.effective_phase().into() } else { stage.into() },
             reason: stage.into(),
@@ -263,7 +263,7 @@ impl Context {
             receipt: None,
             exit_code: None,
             retryable: !uncertain && self.kind == Kind::Read && stage == "connect",
-        })
+        }))
     }
 
     pub fn failure_with_exit(&self, stage: &str, message: &str, exit_code: Option<i32>) -> RemoteError {

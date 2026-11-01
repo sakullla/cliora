@@ -794,7 +794,7 @@ pub struct ApiError {
     pub action: &'static str,
     pub data_directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote: Option<crate::remote::operations::Failure>,
+    pub remote: Option<Box<crate::remote::operations::Failure>>,
 }
 
 fn storage_error(message: String) -> ApiError {
@@ -953,7 +953,7 @@ pub(crate) fn native_error(message: String) -> ApiError {
     if let Some(encoded) = message.strip_prefix("cliora:remote:") {
         if let Ok(remote) = serde_json::from_str::<crate::remote::operations::Failure>(encoded) {
             return ApiError { code: "remote_error", message: remote.message.clone(),
-                action: "请按远程操作建议处理。", data_directory: None, remote: Some(remote) };
+                action: "请按远程操作建议处理。", data_directory: None, remote: Some(Box::new(remote)) };
         }
     }
     ApiError {
@@ -1276,13 +1276,13 @@ pub async fn list_remote_rule_placements(
 pub async fn sync_remote_rule_clients(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
-    app: AppHandle,
     state: State<'_, AppState>,
     target_id: String,
     rule_id: String,
     expected_version: u64,
     selection: resources::rules::RuleClientSelection,
 ) -> Result<Vec<resources::rules::RuleSyncResult>, ApiError> {
+    let app = window.app_handle().clone();
     let target = state.with_database(&app, |db| crate::remote::target(db, &target_id).map_err(|error| native_error(error.to_string())))?;
         bind_remote_target(&target)?;
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || crate::remote::sync_rules(&target, &rule_id, expected_version, selection).map_err(|error| native_error(error.to_string()))).await
@@ -3582,13 +3582,13 @@ pub async fn maintain_registered_cli(
 pub async fn maintain_remote_cli(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
-    app: AppHandle,
     target_id: String,
     tool_id: String,
     action: String,
     source: Option<String>,
     version: Option<String>,
 ) -> Result<crate::native::maintenance::MaintenanceResult, ApiError> {
+    let app = window.app_handle().clone();
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
         let database = app.state::<AppState>().database(&app)?;
         crate::remote::ensure_enabled(&database).map_err(|error| native_error(error.to_string()))?;
@@ -3967,13 +3967,13 @@ pub(crate) fn upload_session_files_core(
 pub async fn upload_session_files(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
-    app: AppHandle,
     session_id: String,
     project_id: String,
     target_id: Option<String>,
     local_paths: Option<Vec<String>>,
     inline_files: Option<Vec<InlineUploadFile>>,
 ) -> Result<Vec<String>, ApiError> {
+    let app = window.app_handle().clone();
     let _ = target_id; // request identity only; the target is resolved from the project
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
         let database = app.state::<AppState>().database(&app)?;
@@ -5312,13 +5312,13 @@ pub async fn get_remote_tool_store(
 pub async fn save_remote_tool_store(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
-    app: AppHandle,
     target_id: String,
     tool_id: String,
     store: crate::remote::RemoteToolStore,
     scope: Option<String>,
     project_path: Option<String>,
 ) -> Result<(), ApiError> {
+    let app = window.app_handle().clone();
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
         app.state::<AppState>().with_database(&app, |db| {
             crate::remote::ensure_enabled(db).map_err(|error| native_error(error.to_string()))?;
@@ -6270,7 +6270,7 @@ pub async fn save_configuration_draft(
                             crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
                         }
                         next.revision = next.revision.saturating_add(1);
-                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: None, application: None });
+                        Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: None, application: None })
                     }
                     crate::adapters::configuration::ConfigurationSubject::Common => {
                         let common = crate::native::profile::RegisteredCommon { tool: tool_id.clone(), version: next.profile.version, revision: next.profile.revision.clone(), files: next.profile.files.clone() };
@@ -6278,7 +6278,7 @@ pub async fn save_configuration_draft(
                         store.current_files = next.profile.files.clone();
                         crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
                         next.revision = next.revision.saturating_add(1);
-                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: Some(common), application: None });
+                        Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: None, common: Some(common), application: None })
                     }
                     _ => {
                         let mut profile = next.profile.clone();
@@ -6306,9 +6306,9 @@ pub async fn save_configuration_draft(
                         store.profiles.push(profile.clone());
                         crate::remote::save_tool_store(&target, &tool_id, &store).map_err(|error| native_error(error.to_string()))?;
                         next.revision = next.revision.saturating_add(1);
-                        return Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: Some(profile), common: None, application: None });
+                        Ok(crate::native::workspace::ConfigurationSaveResult { draft: next, profile: Some(profile), common: None, application: None })
                     }
-                };
+                }
             })
         }).await;
     }

@@ -285,10 +285,10 @@ fn inspection_script(receipt: &Receipt, expected: &str, rollback: bool) -> Strin
     let mut script = String::from(HELPERS);
     script.push_str(&format!("protect\nid={}\ntx=\"$HOME/.cliora/transactions/$id\"\n[ ! -L \"$tx\" ] || exit 80\n[ \"$(fingerprint \"$tx/receipt\")\" = {} ] || exit 80\nmkdir -p \"$tx\" && chmod 700 \"$tx\" || exit 80\noutcome={}\n", shell_quote(&receipt.id), shell_quote(expected), shell_quote(&receipt.outcome)));
     for (n, item) in receipt.items.iter().enumerate() { script.push_str(&format!("s{n}={}\n", shell_quote(&item.state))); }
-    script.push_str(&journal(&receipt));
+    script.push_str(&journal(receipt));
     script.push_str("restore_started=0\n");
     if rollback && (!terminal || receipt.outcome == "committed") {
-        script.push_str(&rollback_script(&receipt));
+        script.push_str(&rollback_script(receipt));
         if terminal {
             // A completed historical transaction must not undo a later write,
             // nor partially restore its other files before detecting drift.
@@ -373,7 +373,7 @@ exec /usr/bin/mv "$@"
         local_fixture(|target| {
             let receipt = interrupted_restore(target);
             let staging = format!("$HOME/a.cliora-{}-restore", receipt.id);
-            assert_eq!(versions(target, &[staging.clone()]).unwrap()[&staging], digest(b"old-a"));
+            assert_eq!(versions(target, std::slice::from_ref(&staging)).unwrap()[&staging], digest(b"old-a"));
             let first = inspect(target, &receipt.id, true, None).unwrap();
             assert_eq!(first.outcome, "recovery_required");
             assert_eq!(first.items[0].state, "rollback_failed");
@@ -382,7 +382,7 @@ exec /usr/bin/mv "$@"
             let restored = inspect(target, &receipt.id, true, None).unwrap();
             assert_eq!(restored.outcome, "rolled_back");
             assert!(restored.items.iter().all(|item| item.state == "rolled_back" && item.observed.as_deref() == Some("before")));
-            assert_eq!(versions(target, &[staging.clone()]).unwrap()[&staging], "missing");
+            assert_eq!(versions(target, std::slice::from_ref(&staging)).unwrap()[&staging], "missing");
             submit(target, &[("$HOME/a", b"next-write")]).unwrap();
         });
     }
@@ -566,7 +566,7 @@ set +e
 (
 "#);
             script.push_str(&commit_script(&receipt, &changes).unwrap());
-            script.push_str(&format!("\n)\nstatus=$?\n[ \"$status\" = 0 ] || [ \"$status\" = 99 ] || exit 91\n"));
+            script.push_str("\n)\nstatus=$?\n[ \"$status\" = 0 ] || [ \"$status\" = 99 ] || exit 91\n");
             if scenario == "interrupted" {
                 // A new invocation reads the durable state and explicitly restores;
                 // it never repeats the original write command.

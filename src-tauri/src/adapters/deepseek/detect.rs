@@ -12,6 +12,7 @@ use std::path::PathBuf;
 /// The product is published by DeepSeek; match the publisher name rather than
 /// a guessed bundle title so renamed installers still surface. A deliberately
 /// narrow substring avoids unrelated products that merely contain "dsh".
+#[cfg(any(windows, test))]
 pub(crate) fn matches_product(display_name: &str) -> bool {
     display_name.to_ascii_lowercase().contains("deepseek")
 }
