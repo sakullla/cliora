@@ -77,40 +77,56 @@ fn directories_outside_a_repository_have_no_context() {
 
 #[test]
 fn worktrees_list_the_main_checkout_and_each_linked_worktree() {
+    // Build the fixture with real git so the on-disk layout matches exactly what
+    // production reads; skip gracefully when git is unavailable in the sandbox.
     let base = scratch("worktrees-list");
     let main = base.join("cliora");
-    write(&main.join(".git/HEAD"), "ref: refs/heads/main\n");
-    // Two linked worktrees recorded under <common>/worktrees/<name>.
-    let hotfix_admin = main.join(".git/worktrees/cliora-hotfix");
-    write(&hotfix_admin.join("HEAD"), "ref: refs/heads/hotfix/replay\n");
-    write(&hotfix_admin.join("commondir"), "../..\n");
+    std::fs::create_dir_all(&main).unwrap();
+    if git(&main, &["init", "-q", "-b", "main"]).is_none() {
+        eprintln!("git unavailable; skipping worktrees enumeration test");
+        return;
+    }
+    git(&main, &["config", "user.email", "t@example.com"]).unwrap();
+    git(&main, &["config", "user.name", "Test"]).unwrap();
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]).unwrap();
+    // Two linked worktrees, each on its own branch, placed beside the main checkout.
     let hotfix_tree = base.join("cliora-hotfix");
-    write(&hotfix_tree.join(".git"), &format!("gitdir: {}\n", hotfix_admin.join(".git").display()));
-    write(&hotfix_admin.join("gitdir"), &format!("{}\n", hotfix_tree.join(".git").display()));
-
-    let feature_admin = main.join(".git/worktrees/feature-sync");
-    write(&feature_admin.join("HEAD"), "ref: refs/heads/feature/sync\n");
-    write(&feature_admin.join("commondir"), "../..\n");
+    git(&main, &["worktree", "add", "-q", "-b", "hotfix/replay", hotfix_tree.to_str().unwrap()]).unwrap();
     let feature_tree = base.join("feature-sync");
-    write(&feature_tree.join(".git"), &format!("gitdir: {}\n", feature_admin.join(".git").display()));
-    write(&feature_admin.join("gitdir"), &format!("{}\n", feature_tree.join(".git").display()));
+    git(&main, &["worktree", "add", "-q", "-b", "feature/sync", feature_tree.to_str().unwrap()]).unwrap();
 
     // Reading from the main checkout: it is current, three checkouts in total.
     let from_main = worktrees(&main).expect("worktrees");
-    assert_eq!(from_main.len(), 3);
-    assert_eq!(from_main[0].name, "cliora");
-    assert_eq!(from_main[0].branch.as_deref(), Some("main"));
-    assert!(from_main[0].current);
+    assert_eq!(from_main.len(), 3, "got {from_main:?}");
+    let main_entry = from_main.iter().find(|tree| tree.branch.as_deref() == Some("main")).expect("main listed");
+    assert_eq!(main_entry.name, "cliora");
+    assert!(main_entry.current);
     let hotfix = from_main.iter().find(|tree| tree.name == "cliora-hotfix").expect("hotfix listed");
     assert_eq!(hotfix.branch.as_deref(), Some("hotfix/replay"));
     assert!(!hotfix.current);
     assert!(from_main.iter().any(|tree| tree.name == "feature-sync" && tree.branch.as_deref() == Some("feature/sync")));
 
     // Reading from inside a linked worktree flags that checkout as current.
-    let from_hotfix = worktrees(&hotfix_tree.join("src")).expect("worktrees");
-    assert_eq!(from_hotfix.len(), 3);
+    let from_hotfix = worktrees(&hotfix_tree).expect("worktrees");
+    assert_eq!(from_hotfix.len(), 3, "got {from_hotfix:?}");
     assert!(from_hotfix.iter().find(|tree| tree.name == "cliora-hotfix").expect("hotfix").current);
     assert!(!from_hotfix.iter().find(|tree| tree.name == "cliora").expect("main").current);
+}
+
+/// Run a git command in `cwd`; `None` when git is not installed.
+fn git(cwd: &Path, args: &[&str]) -> Option<()> {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    status.success().then_some(())
 }
 
 #[test]
