@@ -210,6 +210,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn reopening_database_restores_exact_native_session_into_real_pty_once() {
+        // This test keeps a live session in the global session_host registry;
+        // session_host tests (e.g. the shutdown path) clear that registry, so
+        // they must never run concurrently with it.
+        let _guard = crate::session_host::lock_for_tests();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
         let database = home.join("restore.db");
