@@ -76,7 +76,7 @@ export default {
   exitCode: 'Exit {{code}}',
   resizeRail: 'Drag to resize session rail; double-click to reset',
   focusMode: 'Focus mode (hide sidebar)',
-  exitFocusMode: 'Show session list',
+  exitFocusMode: 'Exit focus mode (show sidebar)',
 
   newSession: 'New session',
   newSessionDialogTitle: 'New workbench session',

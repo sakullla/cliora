@@ -4,8 +4,9 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './RowMenu.module.css';
 
-/** `icon` and `title` replace the default ellipsis trigger, e.g. for the menu half of a split button. */
-export function RowMenu({ label, children, className, icon, title }: { label: string; children: ReactNode; className?: string; icon?: ReactNode; title?: string }) {
+/** `icon` and `title` replace the default ellipsis trigger, e.g. for the menu half of a split button.
+ *  `side` opens the menu beside the trigger instead of below it, for triggers in a narrow vertical rail. */
+export function RowMenu({ label, children, className, icon, title, side = false }: { label: string; children: ReactNode; className?: string; icon?: ReactNode; title?: string; side?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
@@ -34,6 +35,13 @@ export function RowMenu({ label, children, className, icon, title }: { label: st
       if (!trigger || !menu) return;
       const width = menu.offsetWidth;
       const height = menu.offsetHeight;
+      if (side) {
+        setBox({
+          top: Math.max(8, Math.min(trigger.top, window.innerHeight - height - 8)),
+          left: Math.max(8, Math.min(trigger.right + 6, window.innerWidth - width - 8)),
+        });
+        return;
+      }
       const left = Math.max(8, Math.min(trigger.right - width, window.innerWidth - width - 8));
       const spaceBelow = window.innerHeight - trigger.bottom - 8;
       const top = spaceBelow >= height || trigger.top < height + 8
@@ -45,7 +53,7 @@ export function RowMenu({ label, children, className, icon, title }: { label: st
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
+  }, [open, side]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {

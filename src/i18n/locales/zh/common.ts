@@ -241,6 +241,7 @@ export default {
     recordsGroup: '记录',
     settingsGroup: '设置',
     itemTitle: '{{label}}（{{shortcut}}）',
+    more: '更多页面',
   },
   theme: {
     system: '跟随系统主题',

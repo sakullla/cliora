@@ -21,6 +21,7 @@ import { Button, StatusBadge } from '../../components/ui';
 import { displayPath } from '../../lib/paths';
 import { launchFailureDetail } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
+import { ensureRemoteProject, forgetRemoteDir, lastRemoteDir, rememberRemoteDir, rememberedRemoteDir, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import i18n from '../../i18n';
 import styles from './ManagedTools.module.css';
 
@@ -156,6 +157,8 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
   const [favorites, setFavorites] = useState(() => readIds(favoriteToolsKey));
   const [othersOpen, setOthersOpen] = useState(() => { try { return localStorage.getItem(otherToolsExpandedKey) === 'true'; } catch { return false; } });
   const toolKey = tools.map((item) => item.id).join('|');
+  const isRemoteTarget = remoteTargetId !== 'local';
+  const remotePicker = useRemoteFolderPicker();
 
   // Remember which tools have saved profiles so the fold is stable on the next start, before
   // every workspace has been read again.
@@ -320,9 +323,24 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
     const toolName = tool?.name ?? toolId;
     const desktop = tool?.launchForm === 'desktop';
     let directory: string | null = null;
+    let remoteProjectId: string | null = null;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
-      if (!desktop) {
+      if (!desktop && isRemoteTarget) {
+        // The same steps as a local launch; only the folder dialog is drawn in-app for the host.
+        const remembered = rememberedRemoteDir(remoteTargetId, toolId);
+        let path = pickDirectory ? null : remembered ?? null;
+        if (!path) {
+          path = await remotePicker.pick(remoteTargetId, { initialPath: remembered || lastRemoteDir(remoteTargetId) });
+          if (!path) {
+            setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
+            return;
+          }
+        }
+        const project = await ensureRemoteProject(remoteTargetId, path, toolId);
+        rememberRemoteDir(remoteTargetId, toolId, path);
+        remoteProjectId = `remote:${project.id}`;
+      } else if (!desktop) {
         const remembered = launchDirectories.get(toolId);
         directory = pickDirectory ? null : remembered ?? null;
         if (!directory) {
@@ -336,7 +354,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
           lastLaunchDirectory = picked;
         }
       }
-      const request = { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory };
+      const request = { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory };
       const result = await native.launchCli(request);
       markRecent(toolId);
       const opened = workbenchSessionId(result);
@@ -346,7 +364,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       clearNoticeLater(toolId, notice);
     } catch (error) {
       if (await failedInWorkbench(desktop)) {
-        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null } } });
+        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null } } });
         setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
         return;
       }
@@ -357,7 +375,8 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
   }
 
   function clearRememberedDir(toolId: string) {
-    launchDirectories.delete(toolId);
+    if (isRemoteTarget) forgetRemoteDir(remoteTargetId, toolId);
+    else launchDirectories.delete(toolId);
     setStates((old) => {
       const current = old[toolId];
       return current ? { ...old, [toolId]: { ...current } } : old;
@@ -468,7 +487,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
-      const rememberedDir = launchDirectories.get(tool.id);
+      const rememberedDir = isRemote ? rememberedRemoteDir(remoteTargetId, tool.id) : launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || t('home.tools.notWritable') : t('home.tools.switchHint');
       const launchTitle = !installed && workspace ? t('home.tools.launchRelaunch')
         : desktop ? t('home.tools.launchDesktop')
@@ -492,10 +511,10 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       const recovery = (workspace && !installed) || !!loaded?.error || line?.tone === 'error';
       const configureLabel = workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig');
       const openConfig = () => onOpenTool(tool.id, { resource: 'config' });
-      const chooseDir = () => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })) : void launchTool(tool.id, true);
+      const chooseDir = () => void launchTool(tool.id, true);
       const menuItems = [
         !desktop && <button key="dir" type="button" role="menuitem" disabled={!installed || !!loaded?.busy} onClick={chooseDir}>{t('home.tools.chooseOtherDir')}</button>,
-        !desktop && rememberedDir && !isRemote && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>,
+        !desktop && rememberedDir && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>,
         installed && workspace && !loaded?.error && profiles.length === 0 && <button key="new" type="button" role="menuitem" onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>,
         !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}>{t('home.tools.editConfigItem')}</button>,
       ].filter(Boolean);
@@ -512,7 +531,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
           <button type="button" className={styles.favorite} aria-pressed={favorites.includes(tool.id)} aria-label={t('home.tools.favorite', { name: tool.name })} title={favorites.includes(tool.id) ? t('home.tools.unfavoriteTitle') : t('home.tools.favoriteTitle')} onClick={() => toggleFavorite(tool.id)}><Icon name="star" size={14} /></button>
           {isRemote && remote?.detail ? <Button size="sm" className={styles.recheck} icon={<Icon name="refresh" size={14} />} disabled={remoteChecking.has(tool.id)} onClick={() => setRemoteProbeRetry((value) => value + 1)}>{remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</Button>
             : !installed && (workspace || loaded?.error) ? <Button size="sm" className={styles.recheck} icon={<Icon name="refresh" size={14} />} disabled={checking.has(tool.id) || remoteChecking.has(tool.id) || loaded?.busy} onClick={() => isRemote ? setRemoteProbeRetry((value) => value + 1) : recheck.current(tool.id)}>{checking.has(tool.id) || remoteChecking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</Button>
-            : <Button size="sm" className={styles.launch} icon={<Icon name="play" size={14} />} disabled={!installed || loaded?.busy} loading={loaded?.activity === 'launch'} title={launchTitle} onClick={() => isRemote ? window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: false } })) : void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); if (!installed || loaded?.busy) return; if (isRemote) { window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: tool.id, targetId: remoteTargetId, quickLaunch: true, chooseDirectory: true } })); return; } void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</Button>}
+            : <Button size="sm" className={styles.launch} icon={<Icon name="play" size={14} />} disabled={!installed || loaded?.busy} loading={loaded?.activity === 'launch'} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); if (!installed || loaded?.busy) return; void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</Button>}
           {recovery && <Button size="sm" variant="ghost" className={styles.configure} onClick={openConfig}>{configureLabel}</Button>}
           {menuItems.length > 0 && <div className={styles.menu}><RowMenu label={t('home.tools.rowMenu', { name: tool.name })}>{menuItems}</RowMenu></div>}
         </div>
@@ -523,5 +542,6 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
     <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
       {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" disabled={conflictBusy} onClick={() => void useComparedFile()}>{conflictBusy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}
     </GuideDialog>
+    {remotePicker.element}
   </div>;
 }

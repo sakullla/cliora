@@ -15,6 +15,7 @@ import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { RemoteCliProbe, RemoteToolStore } from '../../types/remote';
 import { preferredLaunchMode } from '../../types/launch';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
+import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import type { UsageQuery } from '../../types/usage';
 import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
@@ -129,6 +130,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const pendingCreate = useRef(false);
   const management = descriptor?.management;
   const isRemote = remoteTargetId !== 'local';
+  const remotePicker = useRemoteFolderPicker();
   // The descriptor describes the local adapter installation.  A remote target
   // has its own CLI/resources and is intentionally exposed through the same
   // workspace surface; do not hide tabs while the remote probe is still
@@ -279,24 +281,25 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   }
   async function launch() {
     if (!nativeAvailable || launching) return;
-    if (isRemote) {
-      // Reuse the last remote project exactly like the local launch button.
-      // The workbench opens the directory picker only when no remote project
-      // exists for this host.
-      window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId, targetId: remoteTargetId, quickLaunch: true } }));
-      return;
-    }
     const desktop = descriptor?.launchForm === 'desktop';
     let directory: string | null = null;
+    let projectId: string | null = null;
     setLaunching(true);
     try {
       const settings = await native.getLaunchSettings();
-      if (!desktop) {
+      if (!desktop && isRemote) {
+        // Same steps as on this computer; the host's folders come from the in-app picker.
+        const path = await remotePicker.pick(remoteTargetId, { initialPath: lastRemoteDir(remoteTargetId) });
+        if (!path) return;
+        const project = await ensureRemoteProject(remoteTargetId, path, toolId);
+        rememberRemoteDir(remoteTargetId, toolId, path);
+        projectId = `remote:${project.id}`;
+      } else if (!desktop) {
         const picked = await open({ directory: true, multiple: false, title: t('tools.workspace.launchPickTitle', { name: descriptor?.name ?? toolId }) });
         if (typeof picked !== 'string') return;
         directory = picked;
       }
-      const request = { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory };
+      const request = { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory };
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
       if (opened) { onWorkbenchSession?.(opened); return; }
@@ -304,7 +307,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     } catch (failure) {
       if (await failedInWorkbench(desktop)) {
         const settings = await native.getLaunchSettings().catch(() => null);
-        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory } } });
+        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory } } });
         return;
       }
       setError(errorText(failure));
@@ -553,5 +556,5 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     </Suspense>
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
     </div>
-  </ToastScope></section></RemoteReadVisibility.Provider>;
+  {remotePicker.element}</ToastScope></section></RemoteReadVisibility.Provider>;
 }

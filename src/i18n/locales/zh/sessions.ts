@@ -76,7 +76,7 @@ export default {
   exitCode: '退出码 {{code}}',
   resizeRail: '拖动调整会话栏宽度，双击还原',
   focusMode: '专注模式（隐藏侧栏）',
-  exitFocusMode: '展开会话列表',
+  exitFocusMode: '退出专注模式（显示侧栏）',
 
   newSession: '新建会话',
   newSessionDialogTitle: '新建工作台会话',

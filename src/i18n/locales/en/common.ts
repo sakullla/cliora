@@ -241,6 +241,7 @@ export default {
     recordsGroup: 'Records',
     settingsGroup: 'Settings',
     itemTitle: '{{label}} ({{shortcut}})',
+    more: 'More pages',
   },
   theme: {
     system: 'Follow system theme',

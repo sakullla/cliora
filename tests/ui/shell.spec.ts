@@ -897,7 +897,12 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toContainText('已结束');
   await expect(stage).toContainText('已结束');
   const openPage = async (name: string) => {
-    const button = nav.getByRole('button', { name, exact: true });
+    let button = nav.getByRole('button', { name, exact: true });
+    // On the workbench only the workspace pages stay as icons; the others are in the more menu.
+    if (!await button.count()) {
+      await nav.getByRole('button', { name: '更多页面' }).click();
+      button = page.getByRole('menu', { name: '更多页面' }).getByRole('menuitem', { name: new RegExp(`^${name}`) });
+    }
     const discard = page.getByRole('dialog', { name: '放弃未保存修改？' });
     await button.click();
     if (await discard.isVisible()) await discard.getByRole('button', { name: '放弃修改' }).click();
@@ -1028,8 +1033,8 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
 
   // Toggle Focus Mode
   await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
-  await expect(stage.getByRole('button', { name: '展开会话列表' })).toBeVisible();
-  await stage.getByRole('button', { name: '展开会话列表' }).click();
+  await expect(stage.getByRole('button', { name: '退出专注模式（显示侧栏）' })).toBeVisible();
+  await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
 
   // Open New Session Modal from the rail and search among 40+ CLIs
   const rail = page.getByRole('complementary', { name: '会话列表' });

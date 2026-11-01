@@ -70,43 +70,39 @@ test('a saved remote host stays the workbench target while its list is still loa
   await expect(sidebarHost).toBeVisible();
   await expect(stageHost).toBeVisible();
   await stage.getByRole('button', { name: '新建会话' }).click();
-  await expect(page.getByRole('dialog', { name: '选择远程目录' })).toBeVisible();
-  await expect(page.getByRole('dialog', { name: '新建工作台会话' })).toHaveCount(0);
-  await expect(page.getByRole('dialog', { name: '选择远程目录' }).locator('select').first()).toContainText('测试远程主机 · root@212.60.153.19');
+  // A host uses the same dialog as this computer; its home entry points at the host.
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', '默认主目录 · 测试远程主机 · /srv/project');
+  await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
 });
 
-test('a typed remote directory stays in the path field', async ({ page }) => {
+test('a typed remote path stays in the picker path field', async ({ page }) => {
   await installHostDesktop(page, { savedHost: true });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   const stage = page.getByRole('region', { name: '当前会话' });
   await stage.getByRole('button', { name: '新建会话' }).click();
-  const dialog = page.getByRole('dialog', { name: '选择远程目录' });
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  const dialog = page.getByRole('dialog', { name: '选择远程文件夹' });
+  await expect(dialog.getByRole('navigation', { name: '当前位置' })).toContainText('srv');
+  await dialog.getByRole('button', { name: '输入路径' }).click();
   const path = dialog.getByRole('textbox', { name: '远程路径' });
   await expect(path).toHaveValue('/srv/project');
-  const layout = await path.evaluate((input) => {
-    const span = input.closest('label')?.querySelector('span');
-    const inputBox = input.getBoundingClientRect();
-    const spanBox = span?.getBoundingClientRect();
-    const style = getComputedStyle(input);
-    return {
-      userSelect: style.userSelect,
-      overlap: !!spanBox && spanBox.bottom > inputBox.top + 1,
-    };
-  });
-  expect(layout.overlap).toBe(false);
-  expect(layout.userSelect).toBe('text');
-  const name = dialog.getByRole('textbox', { name: '项目名称' });
+  expect(await path.evaluate((input) => getComputedStyle(input).userSelect)).toBe('text');
   await path.fill('/tmp/typed-project');
-  await name.fill('自定义项目');
-  await expect(path).toHaveValue('/tmp/typed-project');
   await page.evaluate(() => {
     const root = document.documentElement;
     root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   });
   await page.waitForTimeout(200);
   await expect(path).toHaveValue('/tmp/typed-project');
-  await expect(name).toHaveValue('自定义项目');
+  await path.press('Enter');
+  await expect(dialog.locator('footer code')).toHaveText('/tmp/typed-project');
+  await dialog.getByRole('button', { name: '选择此文件夹' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', 'typed-project · /tmp/typed-project');
 });
 
 test('choosing a remote host in the sidebar makes the next new session remote', async ({ page }) => {
@@ -125,8 +121,8 @@ test('choosing a remote host in the sidebar makes the next new session remote', 
   await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
   await expect(stage.getByRole('button', { name: '运行位置：测试远程主机' })).toBeVisible();
   await stage.getByRole('button', { name: '新建会话' }).click();
-  await expect(page.getByRole('dialog', { name: '选择远程目录' })).toBeVisible();
-  await expect(page.getByRole('dialog', { name: '新建工作台会话' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', /测试远程主机/);
+  await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
 });
 
 test('a remote session composer lists that host library, not this computer', async ({ page }) => {
@@ -198,7 +194,6 @@ test('a remote session composer lists that host library, not this computer', asy
   await expect(stage).toContainText('/srv/project');
   await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
-  await page.getByRole('dialog', { name: '选择远程目录' }).getByRole('button', { name: '继续启动', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
   await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
   const initial = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
@@ -239,7 +234,7 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
     };
     const descriptor = { id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } };
     Object.assign(window, {
-      isTauri: true, __independentRequests: requests, __independentSessions: sessions, __releaseIndependentLaunch: () => release(),
+      isTauri: true, __savedRemoteProjects: [], __independentRequests: requests, __independentSessions: sessions, __releaseIndependentLaunch: () => release(),
       __releaseIndependentIndex: () => releaseIndex(), __independentIndexPending: false,
       __releaseIndependentList: releaseList, __remoteState: updateState, __remoteEndFails: false, __remoteCloseCalls: [],
       __independentFreshList: false, __independentDelayedListResolved: false, __reattachCalls: [], __terminalWrites: [], __queryOnReattach: false,
@@ -254,7 +249,7 @@ async function installIndependentSessions(page: Page, options: { indexed?: boole
           if (command === 'list_remote_targets') return [host];
           if (command === 'list_remote_projects') return [project];
           if (command === 'list_remote_directories') return { parent: args.parent, items: [project.path], truncated: false };
-          if (command === 'save_remote_project') return { ...project, ...(args.project as object), id: project.id };
+          if (command === 'save_remote_project') { const saved = args.project as { path: string }; (window as unknown as { __savedRemoteProjects: unknown[] }).__savedRemoteProjects.push(saved); return { ...project, ...saved, id: saved.path === project.path ? project.id : 'saved-' + saved.path }; }
           if (command === 'list_workbench_sessions') {
             const snapshot = sessions.map(item => ({ ...item }));
             const harness = window as unknown as { __independentFreshList: boolean };
@@ -324,21 +319,73 @@ async function quickRemoteLaunch(page: Page) {
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { toolId: 'codex', targetId: 'host-1', quickLaunch: true } })));
 }
 
-test('remote tool quick launch creates a new request with an existing same-directory session and guards duplicate submission', async ({ page }) => {
+/** The first launch for a CLI on a host asks for a folder, like the system dialog does locally. */
+async function pickRemoteFolder(page: Page, folder?: string) {
+  const picker = page.getByRole('dialog', { name: '选择远程文件夹' });
+  await expect(picker).toBeVisible();
+  if (folder) await picker.getByRole('option').filter({ hasText: folder }).click();
+  await picker.getByRole('button', { name: '选择此文件夹' }).click();
+  await expect(picker).toHaveCount(0);
+}
+
+test('remote tool quick launch asks for a folder once, then reuses it and guards duplicate submission', async ({ page }) => {
   await installIndependentSessions(page, { hold: true });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
   await quickRemoteLaunch(page);
+  await pickRemoteFolder(page);
   await quickRemoteLaunch(page);
   await expect.poll(() => independentRequests(page)).toHaveLength(1);
   expect((await independentRequests(page))[0]).toMatchObject({ projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' } });
   await page.evaluate(() => (window as unknown as { __releaseIndependentLaunch: () => void }).__releaseIndependentLaunch());
   await expect(page.locator('[role="tab"][data-session-id="new-1"]')).toBeVisible();
+  // The remembered folder launches straight away, without the picker.
   await quickRemoteLaunch(page);
   await expect.poll(() => independentRequests(page)).toHaveLength(2);
+  await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
   await expect(page.locator('[role="tab"][data-session-id="new-2"]')).toBeVisible();
   await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
+});
+
+test('the home tool row launches on a host with the same steps as this computer', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  const row = page.locator('[data-tool-row]').filter({ hasText: 'Codex' });
+  const launch = row.getByRole('button', { name: '启动', exact: true });
+  await expect(launch).toBeEnabled();
+  // First launch: the in-app folder picker replaces the system dialog; nothing else is asked.
+  await launch.click();
+  await pickRemoteFolder(page);
+  await expect.poll(() => independentRequests(page)).toHaveLength(1);
+  expect((await independentRequests(page))[0]).toMatchObject({ toolId: 'codex', projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' }, directory: null });
+  await expect(page.getByRole('region', { name: '当前会话' })).toBeVisible();
+  // The folder is remembered: the next launch starts at once.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await launch.click();
+  await expect.poll(() => independentRequests(page)).toHaveLength(2);
+  await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
+  // Right-click chooses another folder, and cancelling it launches nothing.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await launch.click({ button: 'right' });
+  const picker = page.getByRole('dialog', { name: '选择远程文件夹' });
+  await expect(picker).toBeVisible();
+  await picker.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  expect(await independentRequests(page)).toHaveLength(2);
+  await expect(launch).toBeEnabled();
+});
+
+test('adding a project on a host picks a folder and saves it like a local project', async ({ page }) => {
+  await installIndependentSessions(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '添加项目', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '选择远程文件夹' });
+  await picker.getByRole('button', { name: '输入路径' }).click();
+  await picker.getByRole('textbox', { name: '远程路径' }).fill('/srv/other');
+  await picker.getByRole('textbox', { name: '远程路径' }).press('Enter');
+  await picker.getByRole('button', { name: '选择此文件夹' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __savedRemoteProjects: unknown[] }).__savedRemoteProjects)).toEqual([expect.objectContaining({ targetId: 'host-1', name: 'other', path: '/srv/other' })]);
 });
 
 test('remote project launch sends new intent even when its directory is already running', async ({ page }) => {
@@ -351,13 +398,11 @@ test('remote project launch sends new intent even when its directory is already 
   expect((await independentRequests(page))[0]).toMatchObject({ projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' } });
 });
 
-test('workbench new remote dialog creates an independent request for the saved directory', async ({ page }) => {
+test('workbench new remote session uses the same dialog and launches the host home folder', async ({ page }) => {
   await installIndependentSessions(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
-  const directory = page.getByRole('dialog', { name: '选择远程目录' });
-  await directory.getByRole('button', { name: '继续启动', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
   await dialog.locator('[data-dialog-save]').click();
   await expect.poll(() => independentRequests(page)).toHaveLength(1);
@@ -401,6 +446,7 @@ test('late remote index discovery preserves a newly launched session and still r
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __independentIndexPending: boolean }).__independentIndexPending)).toBe(true);
   await quickRemoteLaunch(page);
+  await pickRemoteFolder(page);
   await expect(page.locator('[role="tab"][data-session-id="new-1"]')).toBeVisible();
   await page.evaluate(() => (window as unknown as { __releaseIndependentIndex: () => void }).__releaseIndependentIndex());
   await expect.poll(() => independentRequests(page)).toHaveLength(4);
@@ -422,6 +468,7 @@ test('failed same-directory quick launch keeps the old session and reports the n
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
   await quickRemoteLaunch(page);
+  await pickRemoteFolder(page);
   await expect.poll(() => independentRequests(page)).toHaveLength(1);
   await expect(page.locator('[role="tab"][data-session-id="original-a"]')).toBeVisible();
   await expect(page.getByText('new remote process rejected', { exact: false })).toBeVisible();
@@ -470,6 +517,7 @@ test('a selected session awaiting listing never displays or accepts input in the
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('[data-pane-session="original-a"]')).toBeVisible();
   await quickRemoteLaunch(page);
+  await pickRemoteFolder(page);
   await expect.poll(() => independentRequests(page)).toHaveLength(1);
   await expect(page.locator('[data-pane-session="original-a"]')).toBeHidden();
   await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
@@ -491,6 +539,7 @@ test('an older event cache cannot replace a newer listed state when an earlier l
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeEnabled();
   await quickRemoteLaunch(page);
+  await pickRemoteFolder(page);
   await expect.poll(() => independentRequests(page)).toHaveLength(1);
   await page.evaluate(() => {
     const harness = window as unknown as { __remoteState: (patch: object, publish?: boolean) => void; __independentFreshList: boolean };

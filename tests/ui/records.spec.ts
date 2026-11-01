@@ -886,14 +886,16 @@ test('resuming into the workbench opens that session and an external resume does
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('project');
   await expect(page.getByText('已请求外部终端恢复会话')).toHaveCount(0);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '更多页面' }).click();
+  await page.getByRole('menu', { name: '更多页面' }).getByRole('menuitem', { name: /^使用记录/ }).click();
   await page.evaluate(() => { (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = true; });
   await page.getByRole('button', { name: '在外部终端继续' }).click();
   await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
   await expect(page.getByText('已请求外部终端恢复会话。')).toBeVisible();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '更多页面' }).click();
+  await page.getByRole('menu', { name: '更多页面' }).getByRole('menuitem', { name: /^使用记录/ }).click();
   await page.evaluate(() => { (window as unknown as { __resumeMode: { fail: boolean; external: boolean } }).__resumeMode.fail = true; (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = false; });
   await page.getByRole('button', { name: '在外部终端继续' }).click();
   await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();

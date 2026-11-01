@@ -17,7 +17,7 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SkeletonRows } from '../../components/Skeleton';
 import { Badge, Button, Card, IconButton, SplitButton, Toolbar } from '../../components/ui';
-import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
+import { ensureRemoteProject, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import styles from './ProjectLauncher.module.css';
@@ -40,7 +40,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
-  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
+  const remotePicker = useRemoteFolderPicker();
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
@@ -173,7 +173,15 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     // never fall through to the native file picker, which only knows local
     // filesystem paths.
     if (!project && remoteTargetId !== 'local') {
-      setRemoteDialogOpen(true);
+      const path = await remotePicker.pick(remoteTargetId);
+      if (!path) return;
+      begin('add');
+      try {
+        const saved = await ensureRemoteProject(remoteTargetId, path, defaultTool || null, remoteProjects);
+        setRemoteProjects((items) => [...items.filter((item) => item.id !== saved.id), saved]);
+        showPageFeedback(t('home.launcher.added'));
+      } catch (value) { showPageError(value); }
+      finally { setBusy(''); }
       return;
     }
     try {
@@ -411,23 +419,6 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       {unindexedResume.map((item) => <p key={item.id}>{item.name}：{item.history.reason} {t('home.launcher.resumeOnProject')}</p>)}
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}
-    <RemoteProjectDialog
-      open={remoteDialogOpen}
-      targets={remoteTargets}
-      projects={remoteProjects}
-      tools={managed}
-      initialTargetId={remoteTargetId === 'local' ? undefined : remoteTargetId}
-      onClose={() => setRemoteDialogOpen(false)}
-      onSaved={(saved) => {
-        setRemoteProjects((items) => {
-          const index = items.findIndex((item) => item.id === saved.id);
-          if (index < 0) return [...items, saved];
-          const next = items.slice();
-          next[index] = saved;
-          return next;
-        });
-        showPageFeedback(t('home.remote.saved'));
-      }}
-    />
+    {remotePicker.element}
   </section>;
 }

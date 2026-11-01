@@ -16,6 +16,7 @@ import { PageSkeleton } from './components/Skeleton';
 import { PageHeader } from './components/PageHeader';
 import { Tabs } from './components/Tabs';
 import { ShortcutHelp } from './components/ShortcutHelp';
+import { RowMenu } from './components/RowMenu';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { HostSwitcher } from './components/HostSwitcher';
@@ -72,6 +73,10 @@ const navGroups: { label: string; pages: Page[] }[] = [
   { label: 'settingsGroup', pages: ['settings'] },
 ];
 
+/** On the workbench the sidebar is for switching sessions: only the workspace pages stay as icons,
+ *  the rest sit behind one "more" menu. Their Mod+number shortcuts keep working. */
+const workbenchNavPages: Page[] = ['home', 'sessions'];
+
 const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'system', glyph: 'monitor' },
   { id: 'light', glyph: 'sun' },
@@ -111,8 +116,9 @@ export default function App() {
   const onRailLayout = useCallback((next: WorkbenchRailLayout) => setWorkbenchRail((old) => old.docked === next.docked && old.focus === next.focus ? old : next), []);
   const workbenchRailToggle = useRef<(() => void) | null>(null);
   const railDocked = page === 'sessions' && workbenchRail.docked;
-  // Focus mode folds the sidebar to its icon rail; the page icons stay reachable.
-  const sidebarCollapsed = navCollapsed[navContext] || (page === 'sessions' && workbenchRail.focus);
+  // Focus mode hides the sidebar entirely; the terminal takes the whole window.
+  const focusLayout = page === 'sessions' && workbenchRail.focus;
+  const sidebarCollapsed = navCollapsed[navContext] || focusLayout;
   const toggleNavCollapsed = useCallback(() => {
     const context = navContextRef.current;
     setNavCollapsed((old) => {
@@ -616,7 +622,7 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined}>
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand">
@@ -628,7 +634,8 @@ export default function App() {
       <div className="sidebar-primary">
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {navGroups.map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
+        {(railDocked ? [{ label: 'workspace', pages: workbenchNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
+        {railDocked && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{pages.filter((item) => !workbenchNavPages.includes(item.id)).map((item) => { const shortcut = pages.indexOf(item); return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={`${modAria}+${shortcut + 1}`} onClick={() => { void go(item.id); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{`${modLabel}+${shortcut + 1}`}</kbd></button>; })}</RowMenu></div>}
       </nav>
       </div>
       {/* The workbench fills this slot with its session list; other pages leave it empty. */}

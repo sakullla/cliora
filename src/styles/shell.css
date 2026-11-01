@@ -331,7 +331,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .brand { margin-bottom: var(--space-2); }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-primary { display: flex; align-items: center; gap: var(--space-0_5); min-width: 0; }
-  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav { flex: 1 1 auto; flex-direction: row; justify-content: space-between; gap: var(--space-0_5); min-width: 0; margin: 0; padding: 0; overflow: visible; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav { flex: 1 1 auto; flex-direction: row; justify-content: flex-start; gap: var(--space-0_5); min-width: 0; margin: 0; padding: 0; overflow: visible; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-group { display: contents; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 26px; min-height: 32px; padding: 0; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-text { display: none; }
@@ -353,6 +353,13 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav button { min-height: 36px; }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .sidebar-command { margin-bottom: var(--space-1); }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .sidebar-context { align-self: stretch; margin: var(--space-2) calc(var(--space-2_5) * -1) 0; }
+}
+/* Focus mode: the terminal canvas takes the whole window and the sidebar steps aside. */
+@media (min-width: 761px) {
+  .shell[data-focus="true"],
+  html[data-native="macos"] .shell[data-focus="true"] { grid-template-columns: 0 minmax(0, 1fr); }
+  .shell[data-focus="true"] .sidebar { visibility: hidden; overflow: hidden; padding: 0; border: 0; }
+  .shell[data-focus="true"] .content { margin-left: var(--canvas-gap); }
 }
 
 /* Minimum window is 720×560; stack the shell through that width so main pages do not scroll sideways. */

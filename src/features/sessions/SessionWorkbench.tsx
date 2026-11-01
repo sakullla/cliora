@@ -35,7 +35,7 @@ import { StatusBanner } from '../../components/StatusBanner';
 import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
-import { RemoteProjectDialog } from '../remote/RemoteProjectDialog';
+import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, rememberedRemoteDir, remoteBaseName, remoteStartPath, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { requestWriteRecovery, useWriteRecoveryNeeded } from '../remote/writeReceipts';
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
@@ -276,7 +276,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [splitRoom, setSplitRoom] = useState(true);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
-  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [launchToolId, setLaunchToolId] = useState('');
   const [workspaceValue, setWorkspaceValue] = useState('__home');
   const [customFolderPath, setCustomFolderPath] = useState('');
@@ -286,8 +285,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [launchingNew, setLaunchingNew] = useState(false);
   const newLaunchPending = useRef(false);
   const [dialogError, setDialogError] = useState('');
-  const [remotePrefillToolId, setRemotePrefillToolId] = useState<string | null>(null);
-  const [remoteQuickLaunch, setRemoteQuickLaunch] = useState(false);
+  const [customRemotePath, setCustomRemotePath] = useState('');
+  const remotePicker = useRemoteFolderPicker();
 
   const scopedSessions = useMemo(() => {
     if (activeTargetId === 'local') return sessions.filter((item) => !item.projectId?.startsWith('remote:'));
@@ -323,24 +322,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           openNewSessionDialog(toolId ? { toolId } : undefined, targetId);
           return;
         }
-        setRemotePrefillToolId(toolId ?? null);
-        setRemoteQuickLaunch(true);
-        const key = `cliora:remote-launch-project:${targetId}:${toolId ?? ''}`;
-        let rememberedId = '';
-        try { rememberedId = localStorage.getItem(key) ?? ''; } catch { /* optional */ }
-        void (async () => {
-          const availableProjects = remoteProjects.length ? remoteProjects : await native.listRemoteProjects().catch(() => [] as RemoteProject[]);
-          const candidate = detail.chooseDirectory
-            ? undefined
-            : (availableProjects.find((item) => item.id === rememberedId && item.targetId === targetId)
-              ?? [...availableProjects].filter((item) => item.targetId === targetId && (!toolId || !item.preferredTool || item.preferredTool === toolId)).sort((a, b) => b.updatedAt - a.updatedAt)[0]);
-          if (candidate && (!toolId || !candidate.preferredTool || candidate.preferredTool === toolId)) {
-            void launchRemoteProject(candidate, toolId);
-          } else {
-            setNewDialogOpen(false);
-            setRemoteDialogOpen(true);
-          }
-        })();
+        void quickRemoteLaunch(targetId, toolId, !!detail.chooseDirectory);
       }, 0);
     };
     window.addEventListener('cliora:remote-target-changed', onTarget);
@@ -527,7 +509,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
   }, [gitTarget, selected?.directory]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
-  const dialogHostId = newDialogOpen ? libraryHostId(workspaceValue.startsWith('remote:') ? workspaceValue : null, remoteProjects) : null;
+  // The dialog launches on the selected run location, so its prompts come from that host.
+  const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
   const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
   const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
   // A remote library read is its own SSH handshake. Reuse a recent result when
@@ -1119,13 +1102,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }, targetOverride?: string) {
     setDialogError('');
-    const targetId = targetOverride || activeTargetId;
-    if (targetId !== 'local' && remoteSshEnabled && !prefill?.projectId) {
-      setRemotePrefillToolId(prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId) ? prefill.toolId : null);
-      setNewDialogOpen(false);
-      setRemoteDialogOpen(true);
-      return;
-    }
+    if (targetOverride && targetOverride !== activeTargetId) setActiveTargetId(targetOverride);
     let nextToolId = effectiveLaunchToolId;
     if (prefill?.projectId) {
       const project = projects.find((item) => item.id === prefill.projectId);
@@ -1166,15 +1143,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         initialPrompt: null,
         resumeLatest: false,
       });
-      try { localStorage.setItem(`cliora:remote-launch-project:${project.targetId}:${toolId}`, project.id); } catch { /* optional */ }
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
       if (opened) {
-        setRemoteQuickLaunch(false);
-        setRemotePrefillToolId(null);
         onFailure(null);
         setNewDialogOpen(false);
-        setRemoteDialogOpen(false);
         selectPendingSession(opened);
         const listed = await native.listWorkbenchSessions().catch(() => sessionsRef.current);
         if (Array.isArray(listed)) applyListedSessions(listed);
@@ -1186,29 +1159,36 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
-  function handleRemoteProjectSaved(project: RemoteProject) {
+  function mergeRemoteProject(project: RemoteProject) {
     setRemoteProjects((current) => [...current.filter((item) => item.id !== project.id), project]);
-    setWorkspaceValue(`remote:${project.id}`);
-    const preferredTool = remotePrefillToolId && terminalTools.some((item) => item.id === remotePrefillToolId)
-      ? remotePrefillToolId
-      : project.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)
-        ? project.preferredTool
-        : effectiveLaunchToolId;
-    if (preferredTool) setLaunchToolId(preferredTool);
-    const nextTool = terminalTools.find((item) => item.id === preferredTool);
-    setLaunchMode(preferredLaunchMode(launchSettings, 'project', !!nextTool?.yoloAvailable));
-    setRemoteDialogOpen(false);
-    if (remoteQuickLaunch) {
-      void launchRemoteProject(project, preferredTool);
-      setRemoteQuickLaunch(false);
-      setRemotePrefillToolId(null);
-      return;
+  }
+
+  /** The tool-row launch for a host: remembered folder, else the folder picker, then launch. */
+  async function quickRemoteLaunch(targetId: string, toolOverride: string | undefined, chooseDirectory: boolean) {
+    const toolId = toolOverride ?? effectiveLaunchToolId;
+    if (!toolId || newLaunchPending.current || remotePicker.picking) return;
+    const remembered = rememberedRemoteDir(targetId, toolId);
+    const path = (!chooseDirectory && remembered) || await remotePicker.pick(targetId, { initialPath: remembered || lastRemoteDir(targetId) });
+    if (!path) return;
+    try {
+      const project = await ensureRemoteProject(targetId, path, toolId, remoteProjects);
+      mergeRemoteProject(project);
+      rememberRemoteDir(targetId, toolId, path);
+      await launchRemoteProject(project, toolId);
+    } catch (value) {
+      setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
     }
-    setRemotePrefillToolId(null);
-    setNewDialogOpen(true);
   }
 
   async function pickCustomWorkspaceFolder() {
+    if (activeRemoteTarget) {
+      const path = await remotePicker.pick(activeRemoteTarget.id, { initialPath: customRemotePath || lastRemoteDir(activeRemoteTarget.id) });
+      if (path) {
+        setCustomRemotePath(path);
+        setWorkspaceValue(`rpath:${path}`);
+      }
+      return;
+    }
     try {
       const picked = await open({ directory: true, multiple: false, title: t('sessions.pickFolder') });
       if (typeof picked === 'string' && picked.trim()) {
@@ -1231,12 +1211,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
         if (updated) setLaunchSettings(updated);
       }
-      const projectId = workspaceValue.startsWith('project:')
+      let projectId = workspaceValue.startsWith('project:') && !activeRemoteTarget
         ? workspaceValue.slice('project:'.length)
         : workspaceValue.startsWith('remote:')
           ? workspaceValue
           : null;
-      const directory = workspaceValue.startsWith('custom:') ? workspaceValue.slice('custom:'.length) : null;
+      // On a host, the home entry and a picked folder resolve to that host's project record.
+      const remotePath = !activeRemoteTarget ? '' : workspaceValue === '__home' ? remoteHomePath : workspaceValue.startsWith('rpath:') ? workspaceValue.slice('rpath:'.length) : '';
+      if (activeRemoteTarget && remotePath) {
+        const project = await ensureRemoteProject(activeRemoteTarget.id, remotePath, effectiveLaunchToolId, remoteProjects);
+        mergeRemoteProject(project);
+        rememberRemoteDir(activeRemoteTarget.id, effectiveLaunchToolId, remotePath);
+        projectId = `remote:${project.id}`;
+      }
+      const directory = !activeRemoteTarget && workspaceValue.startsWith('custom:') ? workspaceValue.slice('custom:'.length) : null;
       const promptText = initialPrompt.trim() || null;
       const request: LaunchRequest = {
         toolId: effectiveLaunchToolId,
@@ -1480,7 +1468,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   const availableProjects = useMemo(() => projects.filter((item) => item.available && item.path), [projects]);
-  const availableRemoteProjects = useMemo(() => activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId), [activeTargetId, remoteProjects]);
+  const availableRemoteProjects = useMemo(() => activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId).sort((a, b) => b.updatedAt - a.updatedAt), [activeTargetId, remoteProjects]);
+  const activeRemoteTarget = remoteSshEnabled && activeTargetId !== 'local' ? remoteTargets.find((target) => target.id === activeTargetId) ?? null : null;
+  const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
+  // A picked folder belongs to the host it was picked on.
+  useEffect(() => { setCustomRemotePath(''); }, [activeTargetId]);
   useEffect(() => {
     // An empty list means "not loaded yet" until either this screen or the shell has hosts.
     // Resetting earlier snaps a selected SSH host back to this computer while the sidebar stays put.
@@ -1582,14 +1574,26 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
+    // A host lists its own places only: its home folder, its saved folders and a picked one.
+    if (activeRemoteTarget) {
+      const list: FilterSelectOption[] = [
+        { value: '__home', label: t('sessions.workspaceHome'), detail: `${activeRemoteTarget.name} · ${remoteHomePath}`, icon: <Icon name="home" size={14} /> },
+        ...availableRemoteProjects.filter((project) => project.path !== remoteHomePath && project.path !== customRemotePath).map((project) => ({ value: `remote:${project.id}`, label: project.name, detail: project.path, icon: <Icon name="folder" size={14} /> })),
+      ];
+      if (customRemotePath) list.push({ value: `rpath:${customRemotePath}`, label: remoteBaseName(customRemotePath) || customRemotePath, detail: customRemotePath, icon: <Icon name="folder" size={14} /> });
+      return list;
+    }
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
       ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
-      ...(remoteSshEnabled ? availableRemoteProjects.map((project) => ({ value: `remote:${project.id}`, label: project.name, detail: `${remoteTargets.find((target) => target.id === project.targetId)?.name ?? project.targetId} · ${project.path}`, icon: <Icon name="globe" size={14} /> })) : []),
     ];
     if (customFolderPath) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [availableProjects, availableRemoteProjects, customFolderPath, remoteSshEnabled, remoteTargets, t]);
+  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, customFolderPath, customRemotePath, remoteHomePath, t]);
+  // Switching hosts can leave a folder from the other place selected; fall back to home.
+  useEffect(() => {
+    if (newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue)) setWorkspaceValue('__home');
+  }, [newDialogOpen, workspaceSelectOptions, workspaceValue]);
 
   const railSessions: RailSession[] = arrangedSessions.map((session) => ({
     session,
@@ -1873,13 +1877,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-        </div>{selectedLaunchTool?.resumeLatestAvailable && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
+        </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
-        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
+        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
         <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>
     </GuideDialog>
-    <RemoteProjectDialog open={remoteDialogOpen} targets={remoteTargets.filter((target) => target.enabled)} projects={remoteProjects} tools={terminalTools} initialTargetId={activeTargetId === 'local' ? undefined : activeTargetId} onClose={() => { setRemoteDialogOpen(false); if (remoteQuickLaunch) { setRemoteQuickLaunch(false); setRemotePrefillToolId(null); } else setNewDialogOpen(true); }} onSaved={handleRemoteProjectSaved} />
+    {remotePicker.element}
     <GuideDialog open={hostManagerOpen} title={t('sessions.manageHosts')} hint={t('settings.remoteSsh.description')} onClose={() => { setHostManagerOpen(false); setReload((value) => value + 1); }}><RemoteSshSettings enabled={remoteSshEnabled} busy={false} onChange={() => {}} showHosts showToggle={false} /></GuideDialog>
   </div>;
 }

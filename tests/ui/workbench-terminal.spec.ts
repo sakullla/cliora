@@ -975,6 +975,55 @@ test('terminal URLs require Ctrl+left click and preserve their complete target',
   await expect.poll(() => openedUrls(page)).toEqual([url, unicode, balanced]);
 });
 
+test('a link hint stays up while a TUI keeps redrawing the line under a still pointer', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const path = '/Users/fixture/github/project/docs/sakullla-workflow/2026-10-31-git-gui管理工具';
+  const draw = (stamp: string) => page.evaluate(({ path, stamp }) => (window as unknown as { __output: (text: string) => void }).__output(`\x1b[2;1H\x1b[2K❯ /using-workflow ${path}   ${stamp}`), { path, stamp });
+  await draw('11:46:00');
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('using-workflow');
+  const point = await pointForTerminalText(page, 'sakullla-workflow');
+  await page.mouse.move(point.x, point.y);
+  const tooltip = page.getByRole('tooltip');
+  await expect(tooltip).toBeVisible();
+  // Record every hide and every change of the shown target while the row is redrawn under a still pointer.
+  await page.evaluate(() => {
+    const hint = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+    const state = { hides: 0, texts: new Set<string>() };
+    Object.assign(window, { __hintState: state });
+    new MutationObserver(() => { if (hint.hidden) state.hides++; state.texts.add(hint.querySelector('code')?.textContent ?? ''); }).observe(hint, { attributes: true, attributeFilter: ['hidden'], subtree: true, childList: true, characterData: true });
+  });
+  // Twelve redraws ~100 ms apart, each painted in two pieces, as a CLI status line does.
+  const maxGap = await page.evaluate((path) => new Promise<number>((resolve) => {
+    const output = (window as unknown as { __output: (text: string) => void }).__output;
+    let index = 0;
+    let gap = 0;
+    const frame = () => {
+      if (++index > 12) { resolve(gap); return; }
+      output(`\x1b[2;1H\x1b[2K❯ /using-workflow ${path.slice(0, 24)}`);
+      const half = performance.now();
+      setTimeout(() => { gap = Math.max(gap, performance.now() - half); output(`${path.slice(24)}   11:46:${String(index).padStart(2, '0')}`); setTimeout(frame, 60); }, 40);
+    };
+    frame();
+  }), path);
+  await page.waitForTimeout(300);
+  const seen = await page.evaluate(() => { const state = (window as unknown as { __hintState: { hides: number; texts: Set<string> } }).__hintState; return { hides: state.hides, texts: [...state.texts].filter(Boolean) }; });
+  // A starved browser can hold a half-painted row longer than any grace period; only judge runs that kept the CLI's pace.
+  expect(seen.texts.every((text) => text === path)).toBe(true);
+  if (maxGap < 150) {
+    expect(seen.hides).toBe(0);
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText(path);
+  }
+  // Moving off the link still hides it, and a redraw that removes the link hides it too.
+  await page.mouse.move(point.x, point.y + 200);
+  await expect(tooltip).toBeHidden();
+  await page.mouse.move(point.x, point.y);
+  await expect(tooltip).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b[2;1H\x1b[2Kplain text only'));
+  await expect(tooltip).toBeHidden();
+});
+
 test('a wrapped terminal URL opens in full and its hint is cleaned up with the session', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 720, height: 760 });
@@ -1417,9 +1466,13 @@ test('double-clicks and Mod+Shift+B toggle the rail and focus mode; middle-click
   await page.mouse.dblclick(toolbar.x - 24, box.y + box.height / 2);
   await expect(root).toHaveAttribute('data-focus-mode', 'true');
   await expect(rail).toBeHidden();
+  // The whole app sidebar steps aside; the terminal canvas starts at the window edge.
+  await expect(page.getByLabel('主导航')).toBeHidden();
+  await expect.poll(async () => (await page.locator('main').boundingBox())!.x).toBeLessThan(20);
   await stage.locator('[data-stage-icon]').dblclick();
   await expect(root).not.toHaveAttribute('data-focus-mode', 'true');
   await expect(rail).toBeVisible();
+  await expect(page.getByLabel('主导航')).toBeVisible();
 
   // Middle-click closes an ended session like a browser tab.
   await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 's2'));
@@ -1446,7 +1499,15 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   const railBox = (await rail.boundingBox())!;
   expect(navBox.height).toBeLessThan(48);
   expect(railBox.y).toBeGreaterThan(navBox.y + navBox.height - 1);
-  await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeHidden();
+  // Only the workspace pages stay as icons; the other pages wait in one more menu.
+  await expect(nav.getByRole('button', { name: '使用记录', exact: true })).toHaveCount(0);
+  await expect(nav.getByRole('button', { name: '工作台', exact: true }).locator('.nav-text')).toBeHidden();
+  const more = nav.getByRole('button', { name: '更多页面' });
+  const moreMenu = page.getByRole('menu', { name: '更多页面' });
+  await more.click();
+  await expect(moreMenu.getByRole('menuitem')).toHaveText([/^工具与连接/, /^资料库/, /^使用记录/, /^设置/]);
+  await page.keyboard.press('Escape');
+  await expect(moreMenu).toHaveCount(0);
   // The terminal fills the canvas: no second frame, and no reserved scrollbar lane beside it.
   const frame = await stage.locator('header').evaluate((header) => {
     const window = header.parentElement!;
@@ -1472,20 +1533,26 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   await expect(rail).toHaveAttribute('data-slim', 'true');
   await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeLessThan(80);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('true');
+  // In the icon rail the more menu opens beside the rail instead of over the sessions.
+  await more.click();
+  const moreRight = await more.evaluate((element) => element.getBoundingClientRect().right);
+  await expect.poll(async () => (await moreMenu.boundingBox())?.x ?? -1).toBeGreaterThan(moreRight);
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+Backslash');
   await expect(rail).not.toHaveAttribute('data-slim', 'true');
 
-  // Focus mode folds the sidebar to page icons only; leaving it brings the sessions back.
+  // Focus mode hides the whole sidebar; leaving it brings the pages and sessions back.
   await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
   await expect(rail).toHaveCount(0);
-  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeLessThan(80);
-  await expect(nav.getByRole('button', { name: '使用记录', exact: true })).toBeVisible();
-  await stage.getByRole('button', { name: '展开会话列表' }).click();
+  await expect(sidebar).toBeHidden();
+  await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
   await expect(rail).toBeVisible();
+  await expect(sidebar).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('false');
 
-  // Any page is one click away; other pages get the labelled list back without the sessions.
-  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
+  // Any page is one menu away; other pages get the labelled list back without the sessions.
+  await more.click();
+  await moreMenu.getByRole('menuitem', { name: /^使用记录/ }).click();
   await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
   await expect(rail).toHaveCount(0);
   await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeVisible();

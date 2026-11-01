@@ -10,6 +10,8 @@ const LOGICAL_LINE_LIMIT = 128;
 const HINT_DELAY_MS = 280;
 /** A TUI redraw re-creates the link under a still pointer; a leave this short is not a real leave. */
 const HINT_GRACE_MS = 160;
+/** A link kept through a redraw burst is dropped if it has not been seen for this long. */
+const HINT_REDRAW_LIMIT_MS = 1500;
 
 /** The logical line's rows (start, end) when its plain text could hold a link, else null. */
 function logicalRows(term: Terminal, bufferLineNumber: number): { first: number; last: number } | null {
@@ -129,6 +131,13 @@ export function registerTerminalLinks(term: Terminal, options: {
   // re-created by redraws, and hides only after a real leave. Showing and hiding on every
   // xterm hover/leave pair made it flicker under a streaming CLI.
   let shown = '';
+  // Text links can be re-read from the buffer; OSC 8 links only exist in xterm's handler.
+  let shownFromText = false;
+  /** When the shown text link was last seen under the pointer; redraws only count once it stays gone. */
+  let shownSeenAt = 0;
+  let outputSerial = 0;
+  let pointerMovedAt = 0;
+  let pendingFromText = false;
   let pending = '';
   let showTimer = 0;
   let hideTimer = 0;
@@ -161,37 +170,99 @@ export function registerTerminalLinks(term: Terminal, options: {
     target.textContent = url;
     tooltip.hidden = false;
     shown = url;
+    shownFromText = pendingFromText;
+    shownSeenAt = performance.now();
     place();
   };
   const hover = (event: MouseEvent, url: string, link?: ILink) => {
     if (disposed) return;
     current = link ?? null;
     decorate(modified(event));
-    window.clearTimeout(hideTimer);
-    hideTimer = 0;
-    if (shown === url && !tooltip.hidden) return;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
-    // Moving straight from one link to another keeps the hint up and swaps its text.
-    if (!tooltip.hidden) { showHint(url); return; }
+    if (!tooltip.hidden) {
+      // Same target: cancel any pending hide. Another target: a half-painted redraw can
+      // briefly offer a shorter link, so swap only once the row has settled.
+      if (shown === url) { shownSeenAt = performance.now(); window.clearTimeout(hideTimer); hideTimer = 0; }
+      else if (link && shownFromText) scheduleSettle();
+      else { pendingFromText = !!link; showHint(url); }
+      return;
+    }
     if (pending === url && showTimer) return;
     window.clearTimeout(showTimer);
     pending = url;
+    pendingFromText = !!link;
     showTimer = window.setTimeout(() => showHint(url), HINT_DELAY_MS);
   };
   const leave = (link?: ILink) => {
     if (link && current !== link) return;
     current = null;
+    // A redraw re-creates the row under a still pointer and xterm only re-hovers on the
+    // next mouse move. Keep a pending show while the same text is still there.
+    if (pending && showTimer && stillUnder(pending)) return;
     window.clearTimeout(showTimer);
     showTimer = 0;
     pending = '';
-    if (tooltip.hidden || hideTimer) return;
-    hideTimer = window.setTimeout(hideNow, HINT_GRACE_MS);
+    if (!tooltip.hidden) scheduleSettle();
+  };
+  /** After a short grace, show what is really under the pointer now: keep, swap or hide. */
+  function scheduleSettle(delay = HINT_GRACE_MS) {
+    if (hideTimer) return;
+    const serial = outputSerial;
+    hideTimer = window.setTimeout(() => {
+      hideTimer = 0;
+      if (disposed || tooltip.hidden) return;
+      if (!shownFromText) { if (!current) hideNow(); return; }
+      const under = targetUnder();
+      if (under && under === shown) { shownSeenAt = performance.now(); return; }
+      // A CLI repaints a row in pieces. While output keeps arriving under a pointer that has not
+      // moved, the link is mid-redraw, not gone; decide after a window with no output or a move.
+      // Counting writes, not wall time, keeps a stalled event loop from reading a half-painted row as cleared.
+      const now = performance.now();
+      const redrawing = pointerMovedAt <= shownSeenAt && outputSerial !== serial && now - shownSeenAt < HINT_REDRAW_LIMIT_MS;
+      if (redrawing || now - shownSeenAt < HINT_GRACE_MS) { scheduleSettle(HINT_GRACE_MS); return; }
+      if (under) { pendingFromText = true; showHint(under); }
+      else hideNow();
+    }, delay);
+  }
+  /** The buffer cell under the pointer, or null when it is outside the terminal screen. */
+  const cellAt = (): IBufferCellPosition | null => {
+    const screen = term.element?.querySelector('.xterm-screen');
+    if (!screen || !term.cols || !term.rows) return null;
+    const box = screen.getBoundingClientRect();
+    if (pointer.x < box.left || pointer.x >= box.right || pointer.y < box.top || pointer.y >= box.bottom) return null;
+    return {
+      x: Math.floor((pointer.x - box.left) / (box.width / term.cols)) + 1,
+      y: Math.floor((pointer.y - box.top) / (box.height / term.rows)) + term.buffer.active.viewportY + 1,
+    };
+  };
+  const contains = (range: IBufferRange, cell: IBufferCellPosition) => {
+    const after = cell.y > range.start.y || (cell.y === range.start.y && cell.x >= range.start.x);
+    const before = cell.y < range.end.y || (cell.y === range.end.y && cell.x <= range.end.x);
+    return after && before;
+  };
+  function stillUnder(value: string): boolean {
+    return targetUnder() === value;
+  }
+  /** The link text under the pointer in the current buffer, or null. */
+  function targetUnder(): string | null {
+    const cell = cellAt();
+    if (!cell) return null;
+    return targetsForLine(cell.y).find((item) => contains(item.range, cell))?.target.value ?? null;
+  }
+  /** Output can move or remove the link under a still pointer; re-check once it settles. */
+  const recheck = () => {
+    if (disposed || tooltip.hidden || !shown || !shownFromText) return;
+    if (targetUnder() === shown) shownSeenAt = performance.now();
+    else scheduleSettle();
   };
   const trackPointer = (event: MouseEvent) => {
+    if (event.clientX !== pointer.x || event.clientY !== pointer.y) pointerMovedAt = performance.now();
     pointer.x = event.clientX;
     pointer.y = event.clientY;
+    recheck();
   };
+  const written = term.onWriteParsed(() => { outputSerial++; recheck(); });
   term.element?.addEventListener('mousemove', trackPointer, { passive: true });
   term.element?.addEventListener('mouseleave', dismiss);
   const activate = (event: MouseEvent, target: Target) => {
@@ -222,7 +293,8 @@ export function registerTerminalLinks(term: Terminal, options: {
       hover: (event) => {
         const latest = currentTarget(range);
         if (latest) hover(event, latest.value, link);
-        else dismiss();
+        // A row caught mid-redraw: let the settle check decide instead of hiding at once.
+        else { current = link; leave(link); }
       },
       leave: () => leave(link),
     };
@@ -238,7 +310,7 @@ export function registerTerminalLinks(term: Terminal, options: {
     hover: (event, url) => {
       const target = oscTerminalLink(url);
       if (target && (target.kind === 'url' || options.openPath)) hover(event, url);
-      else dismiss();
+      else leave();
     },
     leave: () => leave(),
   };
@@ -265,6 +337,7 @@ export function registerTerminalLinks(term: Terminal, options: {
       disposed = true;
       current = null;
       hideNow();
+      written.dispose();
       term.element?.removeEventListener('mousemove', trackPointer);
       term.element?.removeEventListener('mouseleave', dismiss);
       provider.dispose();
