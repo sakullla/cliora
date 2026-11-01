@@ -19,6 +19,11 @@ pub struct UploadRecord {
     pub created_at: i64,
 }
 
+/// Rows one record call may insert. The upload command layer enforces the same
+/// limit before a transfer starts, so no upload can land files its records
+/// cannot cover (and no recovery would ever learn about).
+pub const RECORD_LIMIT: usize = 512;
+
 fn valid(value: &str, max: usize) -> bool {
     !value.is_empty()
         && value.len() <= max
@@ -47,7 +52,7 @@ pub fn record(
     if !valid(target_id, 128) || !valid(remote_session_id, 256) {
         return Err("上传记录归属无效".into());
     }
-    if landed.len() > 512 {
+    if landed.len() > RECORD_LIMIT {
         return Err("单次上传记录条数超出上限".into());
     }
     for file in landed {

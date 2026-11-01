@@ -9,6 +9,10 @@ export type RemoteOperationOptions = {
   signal?: AbortSignal;
   targetId?: string;
   timeoutMs?: number;
+  /** Explicit per-request deadline ceiling. Upload requests opt into the
+   * 600-second budget; every other operation keeps the 120-second clamp,
+   * whatever timeoutMs it carries. */
+  timeoutCeilingMs?: number;
   priority?: RemotePriority;
   targetRevision?: number;
   /** Full resource/scope identity; only read operations can share work. */
@@ -109,14 +113,20 @@ export class RemoteOperations {
   }
 
   start<T>(name: string, args: Record<string, unknown>, targetId: string, kind: RemoteOperationKind, options: RemoteOperationOptions = {}): RemoteOperationHandle<T> {
-    const timeout = Math.max(1, Math.min(options.timeoutMs ?? 40_000, 120_000));
+    // The 120-second clamp is the default; only an explicit request ceiling
+    // (uploads: 600 seconds) raises it, bounded by the same maximum the
+    // backend admission enforces.
+    const ceiling = Math.min(Math.max(options.timeoutCeilingMs ?? 120_000, 1), 600_000);
+    const timeout = Math.max(1, Math.min(options.timeoutMs ?? 40_000, ceiling));
     const deadline = Date.now() + timeout;
+    const deadlineCeiling = options.timeoutCeilingMs === undefined ? undefined : ceiling;
     const key = kind === 'read' && options.shareKey ? JSON.stringify([targetId, options.targetRevision, name, options.shareKey, args]) : undefined;
     const cached = key && !options.fresh && !options.signal?.aborted ? this.cache.get(key) : undefined;
     if (cached && Date.now() - cached.at < (options.cacheTtlMs ?? 30_000)) {
       const request: RemoteOperationRequest = {
         requestId: crypto.randomUUID(), cancelToken: crypto.randomUUID(), targetId,
         targetRevision: options.targetRevision ?? null, kind, priority: options.priority ?? 'interactive', deadlineUnixMs: deadline,
+        ...(deadlineCeiling === undefined ? {} : { deadlineCeilingMs: deadlineCeiling }),
       };
       let cancel = () => {};
       const promise = new Promise<T>((resolve, reject) => {
@@ -147,6 +157,7 @@ export class RemoteOperations {
         // Shared work has a hard cap; each subscriber still enforces its own
         // deadline below and the last departed reader cancels the process.
         deadlineUnixMs: key ? Date.now() + 120_000 : deadline,
+        ...(deadlineCeiling === undefined ? {} : { deadlineCeilingMs: deadlineCeiling }),
       };
       flight = { request, promise: Promise.resolve(), subscribers: 0, settled: false };
       const created = flight;

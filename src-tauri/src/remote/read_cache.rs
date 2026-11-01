@@ -156,6 +156,7 @@ mod tests {
             target_id: target.id.clone(), target_revision: Some(target.updated_at), kind: Kind::Read,
             priority: operations::Priority::Interactive, deadline_unix_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + timeout, refresh: true,
+            deadline_ceiling_ms: None,
         }, Kind::Read).unwrap();
         (lease, id)
     }

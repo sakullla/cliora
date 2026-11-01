@@ -656,3 +656,239 @@ fn upload_transport_failure_is_never_replayed_under_a_write_request() {
         });
     });
 }
+
+#[test]
+fn recycle_command_removes_exactly_the_recorded_paths_and_only_empty_directories() {
+    let session = [
+        "/srv/demo/.cliora/uploads/report.pdf".to_owned(),
+        "/srv/demo/.cliora/uploads/.cliora-upload-abc".to_owned(),
+        "/srv/other/.cliora/uploads/it's a 'file' (1).txt".to_owned(),
+    ];
+    let command = recycle_command(&session).unwrap();
+    assert!(!command.contains('\n'), "one single-line POSIX command: {command}");
+    assert!(command.starts_with("rm -f -- "));
+    for path in &session {
+        assert!(
+            command.contains(&format!(" {}", shell_quote(path))),
+            "{path} must appear as quoted data: {command}"
+        );
+    }
+    // Never recursive, and both recorded uploads directories are dropped only
+    // when empty.
+    assert!(!command.contains(" -r") && !command.contains("-fr"), "no recursive removal: {command}");
+    assert_eq!(command.matches("rm -f --").count(), 1, "one rm covering every recorded path");
+    assert!(command.contains(&format!("rmdir -- {} 2>/dev/null || :", shell_quote("/srv/demo/.cliora/uploads"))));
+    assert!(command.contains(&format!("rmdir -- {} 2>/dev/null || :", shell_quote("/srv/other/.cliora/uploads"))));
+    assert_eq!(command.matches("rmdir --").count(), 2, "no unrecorded directory is touched");
+    assert!(command.contains("|| exit 1"), "a real removal failure must surface");
+
+    // Only absolute, sane, recorded paths are ever accepted.
+    assert!(recycle_command(&[]).is_err());
+    let too_many: Vec<String> = (0..513).map(|index| format!("/srv/d/.cliora/uploads/f-{index}")).collect();
+    assert!(recycle_command(&too_many).is_err());
+    for invalid in [
+        "srv/relative.txt".to_owned(),
+        "~/uploads/a.txt".to_owned(),
+        "/srv/demo/.cliora/uploads/new\nline.txt".to_owned(),
+        "".to_owned(),
+        "/root-level.txt".to_owned(),
+    ] {
+        assert!(recycle_command(&[invalid]).is_err(), "invalid recorded path must be rejected");
+    }
+}
+
+#[test]
+fn recycle_plan_stays_within_the_transport_line_budget() {
+    let paths: Vec<String> = (0..600)
+        .map(|index| format!("/srv/demo-{index}/.cliora/uploads/{}.txt", "long-name-".repeat(40)))
+        .collect();
+    let plan = recycle_plan(&paths).unwrap();
+    assert!(plan.len() > 1, "a pathological record list is split, not truncated");
+    let removals = plan.iter().filter(|command| command.starts_with("rm -f --")).count();
+    assert!(removals >= 3, "long lists are chunked: {removals}");
+    for command in &plan {
+        assert!(!command.contains('\n'));
+        assert!(command.len() < 32_000, "each line stays inside the transport budget: {}", command.len());
+        assert!(command.starts_with("rm -f -- ") || command.starts_with("rmdir -- "), "unexpected segment: {command}");
+    }
+    assert!(plan.iter().any(|command| command.contains("rmdir --")));
+    // A duplicate record is the same file: removed once, not twice.
+    let single = recycle_plan(&[
+        "/srv/demo/.cliora/uploads/a.txt".to_owned(),
+        "/srv/demo/.cliora/uploads/a.txt".to_owned(),
+    ])
+    .unwrap();
+    let rm = single.iter().find(|command| command.starts_with("rm -f --")).unwrap();
+    assert_eq!(rm.matches("/srv/demo/.cliora/uploads/a.txt").count(), 1);
+}
+
+#[test]
+fn recovery_after_confirmed_end_removes_only_recorded_paths_and_rows() {
+    let fixture = tempfile::tempdir().unwrap();
+    let session_a_one = fixture.path().join("a-notes.txt");
+    std::fs::write(&session_a_one, "session a body").unwrap();
+    let session_b_one = fixture.path().join("b-data.bin");
+    std::fs::write(&session_b_one, b"session b body").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("recovery-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    let native_uploads = project_root.join(".cliora").join("uploads");
+    let uploads_prefix = format!("{}/.cliora/uploads/", project_path.trim_end_matches('/'));
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            let a_paths = crate::commands::upload_session_files_core(
+                &database,
+                "session-a",
+                "remote:fixture-project",
+                &[session_a_one.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap();
+            let b_paths = crate::commands::upload_session_files_core(
+                &database,
+                "session-b",
+                "remote:fixture-project",
+                &[session_b_one.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap();
+            assert!(a_paths[0].starts_with(&uploads_prefix) && b_paths[0].starts_with(&uploads_prefix));
+            // A file this application never recorded (another tool's output).
+            std::fs::write(native_uploads.join("stranger.txt"), "not ours").unwrap();
+
+            // Trigger point one core: confirmed end of session a.
+            crate::commands::recover_session_uploads(&database, &target.id, "session-a").unwrap();
+            assert!(!native_uploads.join("a-notes.txt").exists(), "recorded file removed");
+            assert!(native_uploads.join("b-data.bin").exists(), "another session's file stays");
+            assert!(native_uploads.join("stranger.txt").exists(), "unrecorded file is never touched");
+            assert!(native_uploads.exists(), "a non-empty uploads directory is kept");
+            assert!(
+                crate::remote::upload_records::list_for_session(&database, &target.id, "session-a")
+                    .unwrap()
+                    .is_empty(),
+                "rows are removed only after the remote deletion succeeded"
+            );
+            assert_eq!(
+                crate::remote::upload_records::list_for_session(&database, &target.id, "session-b")
+                    .unwrap()
+                    .len(),
+                1
+            );
+
+            // A session without records is an immediate success.
+            crate::commands::recover_session_uploads(&database, &target.id, "unknown-session").unwrap();
+
+            // Once the directory only holds session b, its recovery also drops
+            // the now-empty uploads directory.
+            std::fs::remove_file(native_uploads.join("stranger.txt")).unwrap();
+            crate::commands::recover_session_uploads(&database, &target.id, "session-b").unwrap();
+            assert!(!native_uploads.join("b-data.bin").exists());
+            assert!(!native_uploads.exists(), "an empty uploads directory is dropped");
+        });
+    });
+}
+
+#[test]
+fn pending_upload_sweep_recovers_only_confirmed_absent_sessions() {
+    use crate::commands::RemoteSessionPresence;
+
+    let fixture = tempfile::tempdir().unwrap();
+    let first = fixture.path().join("first.txt");
+    std::fs::write(&first, "first").unwrap();
+    let second = fixture.path().join("second.txt");
+    std::fs::write(&second, "second").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("sweep-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    let native_uploads = project_root.join(".cliora").join("uploads");
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            for (session, file) in [("absent-session", &first), ("live-session", &second)] {
+                crate::commands::upload_session_files_core(
+                    &database,
+                    session,
+                    "remote:fixture-project",
+                    &[file.to_string_lossy().into_owned()],
+                    &[],
+                )
+                .unwrap();
+            }
+            let rows = |session: &str| {
+                crate::remote::upload_records::list_for_session(&database, &target.id, session)
+                    .unwrap()
+                    .len()
+            };
+            assert_eq!(rows("absent-session"), 1);
+            assert_eq!(rows("live-session"), 1);
+
+            // A probe failure keeps every row; nothing is recovered on doubt.
+            crate::commands::sweep_pending_upload_records(&database, &target, |_, _| RemoteSessionPresence::Unknown);
+            assert_eq!(rows("absent-session"), 1);
+            assert_eq!(rows("live-session"), 1);
+            assert!(native_uploads.join("first.txt").exists());
+
+            // A live session keeps its files; a confirmed-absent one recovers.
+            crate::commands::sweep_pending_upload_records(&database, &target, |_, session| {
+                if session == "absent-session" { RemoteSessionPresence::Absent } else { RemoteSessionPresence::Present }
+            });
+            assert_eq!(rows("absent-session"), 0, "recovered rows are removed");
+            assert!(!native_uploads.join("first.txt").exists());
+            assert_eq!(rows("live-session"), 1, "the live session keeps its row");
+            assert!(native_uploads.join("second.txt").exists(), "the live session keeps its file");
+        });
+    });
+}
+
+#[test]
+fn upload_failure_report_never_drops_a_record_error() {
+    let fixture = tempfile::tempdir().unwrap();
+    let one = fixture.path().join("one.txt");
+    std::fs::write(&one, "one").unwrap();
+    let two = fixture.path().join("two.txt");
+    std::fs::write(&two, "two").unwrap();
+    let project_root = fixture.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    #[cfg(windows)]
+    let project_path = wsl_path(&project_root);
+    #[cfg(not(windows))]
+    let project_path = project_root.to_string_lossy().into_owned();
+    let target = upload_target_with("record-error-fixture.invalid");
+    let database = upload_database(&target, &project_path);
+    // A session identity storage rejects: the residue cannot be recorded, and
+    // that recording failure must stay observable next to the upload error.
+    let invalid_session = "s".repeat(300);
+
+    with_local_transport(&target, |_| {
+        with_sftp_fixture(|_| {
+            std::env::set_var("CLIORA_UPLOAD_SFTP_FAIL_AFTER", "1");
+            let error = crate::commands::upload_session_files_core(
+                &database,
+                &invalid_session,
+                "remote:fixture-project",
+                &[one.to_string_lossy().into_owned(), two.to_string_lossy().into_owned()],
+                &[],
+            )
+            .unwrap_err();
+            std::env::remove_var("CLIORA_UPLOAD_SFTP_FAIL_AFTER");
+            assert!(error.remote.is_some(), "the upload error stays primary: {}", error.message);
+            assert!(error.message.contains("登记失败残留时出错"), "recording failure is not dropped: {}", error.message);
+            assert!(
+                crate::remote::upload_records::list_for_target(&database, &target.id)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    });
+}

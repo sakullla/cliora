@@ -29,6 +29,9 @@ const CONNECTED: u8 = 1;
 const DISCONNECTED: u8 = 2;
 const REMOTE_ENDED: u8 = 3;
 const UNKNOWN: u8 = 4;
+/// The reattach command's confirmed-absent status (`cliora_probe` returned 1):
+/// the exact remote session this attachment addresses no longer exists.
+const REMOTE_ATTACH_ABSENT_EXIT: i32 = 44;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -993,9 +996,42 @@ impl RemoteControlParser {
     }
 }
 
+/// The reattach command's exact-identity probe reported this remote session
+/// gone: the `ended` control signal, or transport exit 44 (the probe's
+/// confirmed-absent status). The session is ended and its recorded uploads are
+/// recovered in the background. A lost connection (exit 255) and application
+/// shutdown never reach this point, so a disconnected or quit session keeps
+/// its files and its index entry.
+fn consume_remote_absence(session: &Session) {
+    #[cfg(test)]
+    {
+        let mut calls = upload_recovery_calls()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        calls.push((
+            session.project_id.clone().unwrap_or_default(),
+            session.remote_session_id.clone().unwrap_or_default(),
+        ));
+    }
+    if let (Some(app), Some(project_id), Some(remote_id)) =
+        (APP.get(), session.project_id.as_deref(), session.remote_session_id.as_deref())
+    {
+        if project_id.starts_with("remote:") {
+            crate::commands::recover_ended_session_uploads(app, project_id, remote_id);
+        }
+    }
+}
+
+#[cfg(test)]
+fn upload_recovery_calls() -> &'static Mutex<Vec<(String, String)>> {
+    static CALLS: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+    CALLS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generation: u64) {
     let mut buffer = [0_u8; 32 * 1024];
     let mut control = RemoteControlParser::new(session.remote_session_id.as_deref());
+    let mut absence_consumed = false;
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -1006,6 +1042,10 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generati
                 let (output, states) = control.push(&buffer[..size]);
                 for state in states {
                     session.connection.store(state, Ordering::SeqCst);
+                    if state == REMOTE_ENDED && !absence_consumed {
+                        absence_consumed = true;
+                        consume_remote_absence(&session);
+                    }
                     session.notify_state();
                 }
                 if !output.is_empty() { forward_output(&session.id, &output); }
@@ -1016,8 +1056,17 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generati
     let code = session.child.lock().ok().and_then(|mut child| child.wait().ok()).map(|status| status.exit_code() as i32);
     if !control.pending.is_empty() { forward_output(&session.id, &control.pending); }
     if session.remote && session.connection.load(Ordering::SeqCst) != REMOTE_ENDED {
-        let state = if code == Some(255) || session.connection.load(Ordering::SeqCst) == DISCONNECTED { DISCONNECTED } else { UNKNOWN };
+        let state = if code == Some(REMOTE_ATTACH_ABSENT_EXIT) {
+            REMOTE_ENDED
+        } else if code == Some(255) || session.connection.load(Ordering::SeqCst) == DISCONNECTED {
+            DISCONNECTED
+        } else {
+            UNKNOWN
+        };
         session.connection.store(state, Ordering::SeqCst);
+        if state == REMOTE_ENDED && !absence_consumed {
+            consume_remote_absence(&session);
+        }
     }
     session.running.store(false, Ordering::SeqCst);
     if let Ok(mut exit_code) = session.exit_code.lock() {
@@ -1268,6 +1317,114 @@ exit 255
         assert_eq!(snapshot.connection_state, "disconnected");
         let replay = replay_snapshot(&id).unwrap();
         assert_eq!((replay.cols, replay.rows), (104, 30));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reattach_absence_is_consumed_as_ended_while_a_lost_connection_is_not() {
+        let _guard = lock_for_tests();
+        upload_recovery_calls()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let directory = tempfile::tempdir().unwrap();
+        // The reattach command's confirmed-absent path: the `ended` control
+        // signal followed by transport exit 44.
+        let absent_script = directory.path().join("absent-session.ps1");
+        std::fs::write(&absent_script, r#"
+[Console]::WriteLine('ABSENT_WAITING')
+$null = [Console]::ReadLine()
+[Console]::Write([char]27 + ']777;cliora;cliora-absent;ended' + [char]7)
+exit 44
+"#).unwrap();
+        // A lost connection: transport exit 255.
+        let lost_script = directory.path().join("lost-session.ps1");
+        std::fs::write(&lost_script, r#"
+[Console]::WriteLine('LOST_WAITING')
+$null = [Console]::ReadLine()
+exit 255
+"#).unwrap();
+        let session_plan = |script: std::path::PathBuf, remote_id: &str| LaunchPlan {
+            resume_native_id: None, account_version: None, account_context: None,
+            tool_id: "controlled".into(), project_id: Some(format!("remote:controlled-{remote_id}")),
+            mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
+            terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+            remote_session_id: Some(remote_id.into()), remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
+        };
+        struct Cleanup(String);
+        impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+
+        let absent = start(session_plan(absent_script, "cliora-absent"), None).unwrap().session_id.unwrap();
+        let _absent_cleanup = Cleanup(absent.clone());
+        wait_for_replay(&absent, "ABSENT_WAITING").unwrap();
+        write(&absent, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+        let session = lookup(&absent).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while session.running.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(session.snapshot().connection_state, "remote_ended", "exit 44 is consumed as a confirmed absence");
+        assert!(!session.snapshot().reattachable);
+
+        let lost = start(session_plan(lost_script, "cliora-lost"), None).unwrap().session_id.unwrap();
+        let _lost_cleanup = Cleanup(lost.clone());
+        wait_for_replay(&lost, "LOST_WAITING").unwrap();
+        write(&lost, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+        let session = lookup(&lost).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while session.running.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(session.snapshot().connection_state, "disconnected", "a lost connection stays reattachable");
+        assert!(session.snapshot().reattachable);
+
+        let calls = upload_recovery_calls()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        assert_eq!(
+            calls,
+            vec![("remote:controlled-cliora-absent".to_owned(), "cliora-absent".to_owned())],
+            "only the consumed absence signal recovers uploads, exactly once"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn quitting_the_application_kills_only_the_local_child_without_recovery() {
+        let _guard = lock_for_tests();
+        upload_recovery_calls()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("running-session.ps1");
+        std::fs::write(&script, r#"
+[Console]::WriteLine('QUIT_WAITING')
+while ($null -ne [Console]::ReadLine()) {}
+"#).unwrap();
+        let plan = LaunchPlan {
+            resume_native_id: None, account_version: None, account_context: None,
+            tool_id: "controlled".into(), project_id: Some("remote:controlled-quit".into()),
+            mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
+            terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+            remote_session_id: Some("cliora-quit".into()),
+            remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
+        };
+        let id = start(plan, None).unwrap().session_id.unwrap();
+        wait_for_replay(&id, "QUIT_WAITING").unwrap();
+        shutdown();
+        assert!(lookup(&id).is_err(), "shutdown removes the local sessions");
+        thread::sleep(Duration::from_millis(300));
+        assert!(
+            upload_recovery_calls()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty(),
+            "quit_app never ends the remote session or recovers its uploads"
+        );
     }
 
     #[cfg(windows)]

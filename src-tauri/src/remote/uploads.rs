@@ -345,6 +345,150 @@ fn upload_batch_script(entries: &[UploadEntry]) -> String {
     script
 }
 
+/// A recovery deletes exactly the paths this application recorded for one
+/// session. `rm` without `-r` cannot descend into anything, every operand is
+/// quoted data behind `--`, and only recorded paths are ever passed, so an
+/// unrecorded file is untouched. The uploads directories are then dropped when
+/// they are empty; a non-empty directory (another session's files) is the
+/// expected outcome and ignored. `rm -f` also tolerates a path that is already
+/// gone, so retrying a partial recovery is safe.
+fn validate_recorded_path(path: &str) -> Result<(), RemoteError> {
+    if !valid_text(path, 8192) || !path.starts_with('/') {
+        return Err(RemoteError::InvalidPath);
+    }
+    Ok(())
+}
+
+fn recorded_parent(path: &str) -> Result<&str, RemoteError> {
+    validate_recorded_path(path)?;
+    let parent = match path.rsplit_once('/') {
+        Some(("", _)) => return Err(RemoteError::InvalidPath),
+        Some((parent, _)) => parent,
+        None => return Err(RemoteError::InvalidPath),
+    };
+    if !valid_text(parent, 896) {
+        return Err(RemoteError::InvalidPath);
+    }
+    Ok(parent)
+}
+
+/// `rm -f --` exactly the recorded paths; a real removal failure (for example
+/// a read-only directory) fails the command so rows stay pending for a retry.
+fn recycle_remove_command(paths: &[String]) -> Result<String, RemoteError> {
+    let mut script = String::from("rm -f --");
+    for path in paths {
+        validate_recorded_path(path)?;
+        script.push_str(&format!(" {}", shell_quote(path)));
+    }
+    script.push_str(" || exit 1");
+    Ok(script)
+}
+
+/// Drop every recorded uploads directory that is now empty; other sessions'
+/// files keep theirs. Each failure is ignored on purpose.
+fn recycle_rmdir_command(paths: &[String]) -> Result<String, RemoteError> {
+    Ok(recycle_rmdir_command_by_parents(&recorded_parents(paths)?))
+}
+
+fn recycle_rmdir_command_by_parents(parents: &[String]) -> String {
+    let mut script = String::new();
+    for parent in parents {
+        script.push_str(&format!("rmdir -- {} 2>/dev/null || :; ", shell_quote(parent)));
+    }
+    script
+}
+
+/// Unique immediate parents of the recorded paths, in first-seen order.
+fn recorded_parents(paths: &[String]) -> Result<Vec<String>, RemoteError> {
+    let mut parents: Vec<String> = Vec::new();
+    for path in paths {
+        let parent = recorded_parent(path)?;
+        if !parents.iter().any(|seen| seen == parent) {
+            parents.push(parent.to_owned());
+        }
+    }
+    Ok(parents)
+}
+
+/// One single-line POSIX recovery command: remove the recorded files, then try
+/// to drop the now-empty uploads directories. Never recursive, never touching
+/// a path the session did not record.
+pub fn recycle_command(paths: &[String]) -> Result<String, RemoteError> {
+    if paths.is_empty() || paths.len() > 512 {
+        return Err(RemoteError::InvalidPath);
+    }
+    let mut script = recycle_remove_command(paths)?;
+    script.push_str("; ");
+    script.push_str(&recycle_rmdir_command(paths)?);
+    Ok(script)
+}
+
+/// Keep each transport command comfortably below the 32 KB line limit.
+const RECYCLE_CHUNK_BYTES: usize = 24_576;
+const RECYCLE_CHUNK_PATHS: usize = 256;
+
+/// The bounded command plan of one recovery: `rm` chunks covering exactly the
+/// unique recorded paths, then `rmdir` chunks for their uploads directories.
+/// Splitting keeps every line inside the transport's command budget even for a
+/// pathological record list.
+pub fn recycle_plan(paths: &[String]) -> Result<Vec<String>, RemoteError> {
+    let mut unique: Vec<String> = Vec::new();
+    for path in paths {
+        validate_recorded_path(path)?;
+        if !unique.iter().any(|seen| seen == path) {
+            unique.push(path.clone());
+        }
+    }
+    let mut plan = Vec::new();
+    let mut chunk: Vec<String> = Vec::new();
+    let mut chunk_bytes = 0usize;
+    for path in unique {
+        let quoted = shell_quote(&path).len() + 1;
+        if !chunk.is_empty()
+            && (chunk_bytes + quoted > RECYCLE_CHUNK_BYTES || chunk.len() >= RECYCLE_CHUNK_PATHS)
+        {
+            plan.push(recycle_remove_command(&chunk)?);
+            chunk.clear();
+            chunk_bytes = 0;
+        }
+        chunk_bytes += quoted;
+        chunk.push(path);
+    }
+    if !chunk.is_empty() {
+        plan.push(recycle_remove_command(&chunk)?);
+    }
+    let mut rmdir_chunk: Vec<String> = Vec::new();
+    let mut rmdir_bytes = 0usize;
+    for parent in recorded_parents(paths)? {
+        let quoted = shell_quote(&parent).len() + 24;
+        if !rmdir_chunk.is_empty() && rmdir_bytes + quoted > RECYCLE_CHUNK_BYTES {
+            plan.push(recycle_rmdir_command_by_parents(&rmdir_chunk));
+            rmdir_chunk.clear();
+            rmdir_bytes = 0;
+        }
+        rmdir_bytes += quoted;
+        rmdir_chunk.push(parent);
+    }
+    if !rmdir_chunk.is_empty() {
+        plan.push(recycle_rmdir_command_by_parents(&rmdir_chunk));
+    }
+    Ok(plan)
+}
+
+/// Recover one session's recorded uploads on the remote side. Any command
+/// failure aborts before the rows are removed, leaving them pending for the
+/// next recovery attempt.
+pub fn recycle_session_files(target: &RemoteTarget, paths: &[String]) -> Result<(), RemoteError> {
+    validate_target(target)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for command in recycle_plan(paths)? {
+        run_command(target, &command)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "../../../src-tauri/tests/uploads/uploads.rs"]
 mod tests;

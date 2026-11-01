@@ -2457,7 +2457,7 @@ mod tests {
             request_id: Uuid::new_v4().to_string(), cancel_token: Uuid::new_v4().to_string(), target_id: target.id.clone(),
             target_revision: Some(target.updated_at), kind: operations::Kind::Write, priority: operations::Priority::Interactive,
             deadline_unix_ms: (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() + 120_000) as u64,
-            refresh: true, expected_files: versions,
+            refresh: true, expected_files: versions, deadline_ceiling_ms: None,
         };
         let lease = operations::register("local-transport-test", request, operations::Kind::Write).unwrap();
         operations::scoped(lease.context.clone(), run);
@@ -2769,6 +2769,7 @@ mod tests {
             target_id: "cancel-tree.invalid".into(), target_revision: None, kind: operations::Kind::Read,
             priority: operations::Priority::Interactive,
             deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + 5000,
+            deadline_ceiling_ms: None,
         };
         let lease = operations::register("process-test", request.clone(), operations::Kind::Read).unwrap();
         let cancellation_counter = counter.clone();

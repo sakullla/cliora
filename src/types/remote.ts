@@ -84,6 +84,10 @@ export type RemoteOperationRequest = {
   kind: RemoteOperationKind;
   priority: RemotePriority;
   deadlineUnixMs: number;
+  /** Explicit per-request admission ceiling for deadlineUnixMs, bounded to
+   * 600 seconds by the backend. Upload requests opt in; every other operation
+   * keeps the 120-second default. */
+  deadlineCeilingMs?: number;
   refresh?: boolean;
   /** Complete frozen read baseline: at most 16384 paths / 4 MiB of path+hash
    * bytes. A transaction separately allows at most 512 changed files. */

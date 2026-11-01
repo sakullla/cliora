@@ -891,6 +891,7 @@ async fn remote_blocking<T: Send + 'static>(
         .transpose().map_err(|error| native_error(error.to_string()))?;
     let context = lease.as_ref().map(|lease| lease.context.clone())
         .unwrap_or_else(|| Context::local(kind, std::time::Duration::from_secs(40)));
+    let sweep_app = window.app_handle().clone();
     blocking(move || {
         let _lease = lease;
         operations::scoped(context.clone(), || {
@@ -899,6 +900,14 @@ async fn remote_blocking<T: Send + 'static>(
             crate::remote::transactions::retain_snapshot(&context);
             if context.kind == crate::remote::operations::Kind::Write {
                 if let Some(target_id) = context.bound_target_id() { crate::remote::read_cache::invalidate(&target_id); }
+            }
+            // Trigger point three: any successful remote operation proves the
+            // host is reachable, so pending upload records of this target are
+            // re-checked in the background (never blocking this result).
+            if result.is_ok() {
+                if let Some(target_id) = context.bound_target_id() {
+                    schedule_pending_upload_sweep(&sweep_app, &target_id);
+                }
             }
             // A persistent launch has crossed its acceptance boundary and has
             // a durable remote identity. Return that identity on late cancel;
@@ -3795,6 +3804,14 @@ pub async fn close_workbench_session(window: tauri::WebviewWindow, operation: Op
         }
         crate::session_host::close_with_cleanup(&session_id, || {
             if let (Some(remote_id), Some(target_id)) = (remote_id, remote_target_id) {
+                // Trigger point one: the end was confirmed absent. Recover the
+                // session's uploads before its identity is forgotten; a failed
+                // recovery keeps the rows pending (the background re-check on
+                // the next successful operation of this target picks them up)
+                // and never blocks the close result.
+                if let Err(error) = recover_session_uploads(&database, &target_id, &remote_id) {
+                    eprintln!("CLIORA_UPLOAD_RECOVERY_PENDING target={target_id} session={remote_id}: {error}");
+                }
                 crate::launch::forget_remote_session(&database, &target_id, &remote_id)?;
             }
             crate::workbench_restore::forget(&database, &session_id)
@@ -3871,6 +3888,15 @@ pub(crate) fn upload_session_files_core(
     if !local_paths.is_empty() && !inline_files.is_empty() {
         return Err(native_error("一次上传只能使用本地路径或内联文件之一".into()));
     }
+    // Align the command layer with the storage limit of upload records before
+    // anything is transferred: a request that cannot be recorded in full would
+    // otherwise land files no recovery ever learns about.
+    if local_paths.len() + inline_files.len() > crate::remote::upload_records::RECORD_LIMIT {
+        return Err(native_error(format!(
+            "单次上传文件数超过上限（{}），请分批上传",
+            crate::remote::upload_records::RECORD_LIMIT
+        )));
+    }
     let project = crate::remote::list_projects(database, None)
         .map_err(|error| native_error(error.to_string()))?
         .into_iter()
@@ -3896,16 +3922,26 @@ pub(crate) fn upload_session_files_core(
         Err(failure) => {
             // The failure residue belongs to the same session; recording it is
             // what lets the session-end recovery remove it. Keep the structured
-            // upload error primary and only flag a recording problem.
-            if let Err(record_error) =
-                crate::remote::upload_records::record(database, &target.id, remote_session_id, &failure.landed)
-            {
-                if let crate::remote::RemoteError::Operation(mut structured) = failure.error.clone() {
-                    structured.message.push_str(&format!("；此外登记失败残留时出错：{record_error}"));
-                    return Err(native_error(structured.to_string()));
-                }
-            }
-            Err(native_error(failure.error.to_string()))
+            // upload error primary and only flag a recording problem, whatever
+            // error variant it arrives as — never drop it silently.
+            let error = match crate::remote::upload_records::record(
+                database,
+                &target.id,
+                remote_session_id,
+                &failure.landed,
+            ) {
+                Ok(()) => failure.error,
+                Err(record_error) => match failure.error {
+                    crate::remote::RemoteError::Operation(mut structured) => {
+                        structured.message.push_str(&format!("；此外登记失败残留时出错：{record_error}"));
+                        crate::remote::RemoteError::Operation(structured)
+                    }
+                    other => crate::remote::RemoteError::Storage(format!(
+                        "{other}；此外登记失败残留时出错：{record_error}"
+                    )),
+                },
+            };
+            Err(native_error(error.to_string()))
         }
     }
 }
@@ -3940,6 +3976,237 @@ pub async fn upload_session_files(
         )
     })
     .await
+}
+
+/// Outcome of one background liveness probe of a recorded remote session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RemoteSessionPresence {
+    /// The mux session still exists: its files stay until the session is ended.
+    Present,
+    /// The exact-identity probe confirmed the session is gone: recover.
+    Absent,
+    /// Probe failure or ambiguous output: keep the rows for a later retry.
+    Unknown,
+}
+
+const SESSION_PRESENCE_ABSENT: &str = "__CLIORA_SESSION_ABSENT__";
+const SESSION_PRESENCE_PRESENT: &str = "__CLIORA_SESSION_PRESENT__";
+
+/// One single-line probe around the shared exact-identity mux probe: status 1
+/// (confirmed absent) and 0 (present) are reported distinctly, anything else
+/// stays unknown and never authorizes a recovery.
+fn session_presence_command(remote_session_id: &str) -> Result<String, crate::remote::RemoteError> {
+    if remote_session_id.is_empty()
+        || remote_session_id.len() > 256
+        || remote_session_id.chars().any(|ch| ch == '\0' || ch.is_control())
+    {
+        return Err(crate::remote::RemoteError::InvalidPath);
+    }
+    Ok(format!(
+        "{}; cliora_probe; cliora_status=$?; \
+         if [ \"$cliora_status\" -eq 1 ]; then printf '%s\\n' '{}'; \
+         elif [ \"$cliora_status\" -eq 0 ]; then printf '%s\\n' '{}'; \
+         else printf '%s\\n' '__CLIORA_SESSION_UNKNOWN__'; fi",
+        launch::remote_mux_probe(remote_session_id),
+        SESSION_PRESENCE_ABSENT,
+        SESSION_PRESENCE_PRESENT,
+    ))
+}
+
+fn probe_session_presence(
+    target: &crate::remote::RemoteTarget,
+    remote_session_id: &str,
+) -> RemoteSessionPresence {
+    let command = match session_presence_command(remote_session_id) {
+        Ok(command) => command,
+        Err(_) => return RemoteSessionPresence::Unknown,
+    };
+    let context = crate::remote::operations::Context::background(
+        crate::remote::operations::Kind::Read,
+        std::time::Duration::from_secs(40),
+    );
+    let result = crate::remote::operations::scoped(context, || {
+        crate::remote::run_command(target, &command)
+    });
+    match result {
+        Ok(output) => match output.stdout.lines().rev().find(|line| !line.trim().is_empty()) {
+            Some(line) if line == SESSION_PRESENCE_ABSENT => RemoteSessionPresence::Absent,
+            Some(line) if line == SESSION_PRESENCE_PRESENT => RemoteSessionPresence::Present,
+            _ => RemoteSessionPresence::Unknown,
+        },
+        Err(_) => RemoteSessionPresence::Unknown,
+    }
+}
+
+/// Recover one session's recorded uploads: delete exactly the recorded remote
+/// paths and drop the now-empty uploads directory. Rows are removed only after
+/// the remote deletion succeeded, so a failed recovery stays pending for the
+/// background re-check after the next successful operation on that target.
+pub(crate) fn recover_session_uploads(
+    database: &Database,
+    target_id: &str,
+    remote_session_id: &str,
+) -> Result<(), String> {
+    let records =
+        crate::remote::upload_records::list_for_session(database, target_id, remote_session_id)?;
+    if records.is_empty() {
+        return Ok(());
+    }
+    let paths: Vec<String> = records.iter().map(|record| record.remote_path.clone()).collect();
+    let target = enabled_target(database, target_id).map_err(|error| error.message)?;
+    crate::remote::uploads::recycle_session_files(&target, &paths).map_err(|error| error.to_string())?;
+    crate::remote::upload_records::delete_for_session(database, target_id, remote_session_id)?;
+    Ok(())
+}
+
+/// Resolve a `remote:<project>` id to its enabled target.
+fn project_target(database: &Database, project_id: &str) -> Result<crate::remote::RemoteTarget, String> {
+    let key = project_id
+        .strip_prefix("remote:")
+        .ok_or_else(|| "仅远程项目的会话支持上传回收".to_owned())?;
+    let target_id = crate::remote::list_projects(database, None)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|project| project.id == key)
+        .map(|project| project.target_id)
+        .ok_or_else(|| "远程项目不存在".to_owned())?;
+    enabled_target(database, &target_id).map_err(|error| error.message)
+}
+
+/// Trigger point two: an explicit absence signal of the reattach command was
+/// consumed for this session. The recovery runs off-thread; the session state
+/// change to remote_ended is never blocked by the recovery round-trip.
+pub(crate) fn recover_ended_session_uploads(
+    app: &AppHandle,
+    project_id: &str,
+    remote_session_id: &str,
+) {
+    let app = app.clone();
+    let project_id = project_id.to_owned();
+    let remote_session_id = remote_session_id.to_owned();
+    let log_project_id = project_id.clone();
+    let log_session_id = remote_session_id.clone();
+    let report_project_id = project_id.clone();
+    let report_session_id = remote_session_id.clone();
+    let log = move |context: &str, error: String| {
+        eprintln!("CLIORA_UPLOAD_RECOVERY_PENDING project={log_project_id} session={log_session_id} {context}: {error}");
+    };
+    let spawned = std::thread::Builder::new()
+        .name("cliora-upload-recovery".into())
+        .spawn(move || {
+            let database = match app.state::<AppState>().database(&app) {
+                Ok(database) => database,
+                Err(_) => return,
+            };
+            let target = match project_target(&database, &project_id) {
+                Ok(target) => target,
+                Err(error) => {
+                    log("project", error);
+                    return;
+                }
+            };
+            if let Err(error) = recover_session_uploads(&database, &target.id, &remote_session_id) {
+                log("recovery", error);
+            }
+        });
+    if spawned.is_err() {
+        eprintln!(
+            "CLIORA_UPLOAD_RECOVERY_PENDING project={report_project_id} session={report_session_id}: 无法启动回收线程"
+        );
+    }
+}
+
+/// One background sweep per target at most once a minute, so a burst of
+/// successful operations cannot turn into a probe storm.
+const UPLOAD_SWEEP_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn upload_sweep_schedule() -> &'static Mutex<std::collections::BTreeMap<String, std::time::Instant>> {
+    static SCHEDULE: std::sync::OnceLock<Mutex<std::collections::BTreeMap<String, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    SCHEDULE.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+/// Trigger point three: after any successful remote operation on a target,
+/// re-check its pending upload records in the background. Sessions whose
+/// remote mux session is confirmed absent get their files recovered; present
+/// or uncertain sessions keep their rows. Never blocks the caller.
+pub(crate) fn schedule_pending_upload_sweep(app: &AppHandle, target_id: &str) {
+    let now = std::time::Instant::now();
+    let due = {
+        let mut schedule = upload_sweep_schedule()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match schedule.get(target_id) {
+            Some(at) if now.duration_since(*at) < UPLOAD_SWEEP_COOLDOWN => false,
+            _ => {
+                schedule.insert(target_id.to_owned(), now);
+                true
+            }
+        }
+    };
+    if !due {
+        return;
+    }
+    let app = app.clone();
+    let target_id = target_id.to_owned();
+    let abort_target_id = target_id.clone();
+    let schedule_target_id = target_id.clone();
+    let spawned = std::thread::Builder::new()
+        .name("cliora-upload-sweep".into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sweep_pending_uploads(&app, &target_id)
+            }));
+            if let Err(error) = result {
+                eprintln!("CLIORA_UPLOAD_SWEEP_ABORTED target={abort_target_id}: {error:?}");
+            }
+        });
+    if spawned.is_err() {
+        upload_sweep_schedule()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&schedule_target_id);
+    }
+}
+
+/// The bounded core of one sweep, separated from scheduling so tests can drive
+/// it with an injected presence decision.
+pub(crate) fn sweep_pending_upload_records(
+    database: &Database,
+    target: &crate::remote::RemoteTarget,
+    presence: impl Fn(&crate::remote::RemoteTarget, &str) -> RemoteSessionPresence,
+) {
+    let records = match crate::remote::upload_records::list_for_target(database, &target.id) {
+        Ok(records) => records,
+        Err(_) => return,
+    };
+    if records.is_empty() {
+        return;
+    }
+    let mut sessions: Vec<String> = records.iter().map(|record| record.remote_session_id.clone()).collect();
+    sessions.sort();
+    sessions.dedup();
+    for session in sessions {
+        // Only an exact-identity confirmation of absence recovers anything;
+        // present sessions and probe failures keep their rows for a retry.
+        if presence(target, &session) == RemoteSessionPresence::Absent {
+            if let Err(error) = recover_session_uploads(database, &target.id, &session) {
+                eprintln!("CLIORA_UPLOAD_RECOVERY_PENDING target={} session={session}: {error}", target.id);
+            }
+        }
+    }
+}
+
+fn sweep_pending_uploads(app: &AppHandle, target_id: &str) {
+    let database = match app.state::<AppState>().database(app) {
+        Ok(database) => database,
+        Err(_) => return,
+    };
+    let target = match enabled_target(&database, target_id) {
+        Ok(target) => target,
+        Err(_) => return,
+    };
+    sweep_pending_upload_records(&database, &target, probe_session_presence);
 }
 
 #[tauri::command]
@@ -5209,6 +5476,60 @@ pub fn set_tool_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_session_files_rejects_more_files_than_one_record_can_hold() {
+        let database = Database::open(std::path::Path::new(":memory:")).unwrap();
+        // The count check precedes project resolution, staging and any
+        // connection: an over-limit request never starts a transfer that its
+        // records could not cover.
+        let paths: Vec<String> = (0..=crate::remote::upload_records::RECORD_LIMIT)
+            .map(|index| format!("/tmp/fixture-{index}.txt"))
+            .collect();
+        let error = upload_session_files_core(&database, "session", "remote:missing-project", &paths, &[])
+            .unwrap_err();
+        assert!(
+            error.message.contains("上限") && error.message.contains('5'),
+            "limit is stated explicitly: {}",
+            error.message
+        );
+        let inline: Vec<InlineUploadFile> = (0..=crate::remote::upload_records::RECORD_LIMIT)
+            .map(|index| InlineUploadFile { name: format!("pasted-{index}.png"), bytes_base64: "aGVsbG8=".into() })
+            .collect();
+        let error = upload_session_files_core(&database, "session", "remote:missing-project", &[], &inline)
+            .unwrap_err();
+        assert!(error.message.contains("上限"), "{}", error.message);
+        // Nothing was staged or recorded for the rejected request.
+        assert!(
+            crate::remote::upload_records::list_for_target(&database, "missing-target")
+                .unwrap()
+                .is_empty()
+        );
+        // The exact boundary is still accepted input at this layer.
+        let boundary: Vec<String> = (0..crate::remote::upload_records::RECORD_LIMIT)
+            .map(|index| format!("/tmp/fixture-{index}.txt"))
+            .collect();
+        let error = upload_session_files_core(&database, "session", "remote:missing-project", &boundary, &[])
+            .unwrap_err();
+        assert!(error.message.contains("项目不存在"), "the boundary itself is not rejected here: {}", error.message);
+    }
+
+    #[test]
+    fn session_presence_probe_reports_only_the_exact_identity_outcome() {
+        let command = session_presence_command("cliora-probe-fixture").unwrap();
+        assert!(!command.contains('\n'));
+        // The sweep reuses the shared exact-identity probe instead of a second
+        // liveness definition.
+        assert!(command.contains(&launch::remote_mux_probe("cliora-probe-fixture")));
+        assert!(command.contains("__CLIORA_SESSION_ABSENT__"));
+        assert!(command.contains("__CLIORA_SESSION_PRESENT__"));
+        assert!(command.contains("__CLIORA_SESSION_UNKNOWN__"));
+        assert_eq!(command.matches("cliora_probe; cliora_status").count(), 1);
+
+        for invalid in ["", &"s".repeat(300), "session\nwith newline", "null\0byte"] {
+            assert!(session_presence_command(invalid).is_err(), "invalid session identity: {invalid:?}");
+        }
+    }
 
     #[test]
     fn upload_session_files_rejects_impossible_inputs_before_any_connection() {

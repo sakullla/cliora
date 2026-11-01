@@ -10,6 +10,10 @@ use super::{RemoteError, RemoteTarget};
 pub const HOST_LIMIT: usize = 2;
 pub const GLOBAL_LIMIT: usize = 8;
 const QUEUE_LIMIT: usize = 128;
+/// Default admission budget for one remote request, and the hard maximum an
+/// explicit `deadline_ceiling_ms` may raise it to (uploads).
+pub const DEADLINE_BUDGET: Duration = Duration::from_millis(120_000);
+pub const DEADLINE_BUDGET_MAX: Duration = Duration::from_millis(600_000);
 // Read inventories (up to 64 CLIs x 128 Skills, plus managed/native files)
 // are larger than the 512 files a single transaction may mutate. Preserve the
 // entire user baseline within explicit count/byte bounds; never truncate it.
@@ -39,6 +43,14 @@ pub struct Request {
     pub refresh: bool,
     #[serde(default)]
     pub expected_files: BTreeMap<String, String>,
+    /// Explicit per-request admission ceiling for `deadline_unix_ms`, clamped
+    /// to at most 600 seconds. Upload requests are the one class that opts in
+    /// (a large transfer legitimately outruns the interactive budget); every
+    /// other request keeps the 120-second default regardless of the deadline
+    /// it carries. Admission is granted by this explicit request parameter,
+    /// never by command or provider identity.
+    #[serde(default)]
+    pub deadline_ceiling_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -102,6 +114,18 @@ impl Context {
         Arc::new(Self { files: Mutex::new(BTreeMap::new()), request: None, kind, priority: Priority::Interactive, refresh_reads: false, parent: None,
             deadline: Instant::now() + timeout, cancelled: AtomicBool::new(false),
             dispatched: AtomicBool::new(false), accepted: AtomicBool::new(false), identity: Mutex::new(None), target_id: Mutex::new(None), destination: Mutex::new(None), phase: Mutex::new("worker_queue"), observations: Mutex::new(Vec::new()), parent_observation: Mutex::new(None) })
+    }
+
+    /// A detached context for housekeeping work (for example the pending
+    /// upload re-check after a successful operation): background priority can
+    /// never take the final foreground admission slot, so the UI stays
+    /// responsive while the check runs.
+    pub fn background(kind: Kind, timeout: Duration) -> Arc<Self> {
+        let mut context = Self::local(kind, timeout);
+        if let Some(inner) = Arc::get_mut(&mut context) {
+            inner.priority = Priority::Background;
+        }
+        context
     }
 
     pub fn check(&self) -> Result<(), RemoteError> {
@@ -299,7 +323,13 @@ pub fn register(owner: &str, request: Request, kind: Kind) -> Result<Lease, Remo
         || request.expected_files.iter().map(|(path, hash)| path.len() + hash.len()).sum::<usize>() > EXPECTED_FILES_BYTES
         || request.expected_files.iter().any(|(path, hash)| !super::transactions::valid_path(path) || !super::transactions::valid_hash(hash)) { return Err(invalid()); }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-    let remaining = request.deadline_unix_ms.saturating_sub(now).min(120_000);
+    // An explicit ceiling is still bounded to the 600-second maximum; requests
+    // without one keep the 120-second interactive budget.
+    let budget = match request.deadline_ceiling_ms {
+        Some(ceiling) => Duration::from_millis(ceiling).min(DEADLINE_BUDGET_MAX),
+        None => DEADLINE_BUDGET,
+    };
+    let remaining = request.deadline_unix_ms.saturating_sub(now).min(budget.as_millis() as u64);
     let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
     registry.cancelled.retain(|_, at| at.elapsed() < Duration::from_secs(120));
     if registry.active.contains_key(&request.request_id) || registry.active.len() >= 1024 { return Err(invalid()); }
@@ -417,7 +447,44 @@ mod tests {
             request_id: uuid::Uuid::new_v4().to_string(), cancel_token: uuid::Uuid::new_v4().to_string(),
             target_id: "fixture".into(), target_revision: Some(7), kind, priority: Priority::Interactive, refresh: false,
             deadline_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + timeout,
+            deadline_ceiling_ms: None,
         }
+    }
+
+    #[test]
+    fn only_an_explicit_ceiling_extends_the_deadline_and_600s_is_the_maximum() {
+        // Without an explicit ceiling a 600-second upload deadline still gets
+        // the ordinary 120-second interactive budget.
+        let lease = register("deadline", request(Kind::Write, 600_000), Kind::Write).unwrap();
+        assert!(lease.context.remaining() <= DEADLINE_BUDGET);
+        drop(lease);
+
+        // Upload requests opt in explicitly and may run up to 600 seconds.
+        let mut upload = request(Kind::Write, 600_000);
+        upload.deadline_ceiling_ms = Some(600_000);
+        let lease = register("deadline", upload, Kind::Write).unwrap();
+        assert!(lease.context.remaining() > DEADLINE_BUDGET);
+        assert!(lease.context.remaining() <= DEADLINE_BUDGET_MAX);
+        drop(lease);
+
+        // The explicit ceiling itself stays bounded to the 600-second maximum.
+        let mut oversized = request(Kind::Write, 3_600_000);
+        oversized.deadline_ceiling_ms = Some(3_600_000);
+        let lease = register("deadline", oversized, Kind::Write).unwrap();
+        assert!(lease.context.remaining() <= DEADLINE_BUDGET_MAX);
+    }
+
+    #[test]
+    fn background_contexts_never_compete_for_the_final_foreground_slot() {
+        let context = Context::background(Kind::Read, Duration::from_secs(2));
+        let mut state = State::default();
+        for index in 0..GLOBAL_LIMIT {
+            state.inflight.insert(format!("host-{index}"), 1);
+            state.background_inflight.insert(format!("host-{index}"), 1);
+        }
+        state.queue.push_back(Waiting { ticket: 1, destination: "sweep".into(), priority: context.priority });
+        assert_eq!(context.priority, Priority::Background);
+        assert_eq!(Gate::selected(&state), None, "a saturated gate must not admit background housekeeping");
     }
 
     #[test]

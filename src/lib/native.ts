@@ -394,13 +394,15 @@ export const native = {
    * request is never replayed automatically; retry is user-driven only. */
   uploadRemoteSessionFiles: async (sessionId: string, projectId: string, localPaths: string[], options?: RemoteOperationOptions) => {
     const targetId = await remoteTargetIdForProject(projectId);
-    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths, inlineFiles: null }, 'write', { timeoutMs: 120_000, ...options });
+    // Uploads are the one request class with the dedicated 600-second deadline;
+    // the explicit ceiling lifts the ordinary 120-second clamp on both sides.
+    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths, inlineFiles: null }, 'write', { timeoutMs: 600_000, timeoutCeilingMs: 600_000, ...options });
   },
   /** Upload one inlined payload (image paste) through the same channel; the
    * backend stages the bytes as a local temporary file before transfer. */
   uploadRemoteSessionFileBytes: async (sessionId: string, projectId: string, name: string, bytesBase64: string, options?: RemoteOperationOptions) => {
     const targetId = await remoteTargetIdForProject(projectId);
-    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths: null, inlineFiles: [{ name, bytesBase64 }] }, 'write', { timeoutMs: 120_000, ...options });
+    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths: null, inlineFiles: [{ name, bytesBase64 }] }, 'write', { timeoutMs: 600_000, timeoutCeilingMs: 600_000, ...options });
   },
   reattachWorkbenchSession: (sessionId: string, size?: WorkbenchTerminalSize) => command<void>('reattach_workbench_session', { sessionId, ...size }),
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
