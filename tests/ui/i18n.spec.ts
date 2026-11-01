@@ -2,11 +2,18 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function installDesktop(page: Page) {
   await page.addInitScript(() => {
+    let language = sessionStorage.getItem('test.native-language');
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: [], theme: 'light', language }, tools: [] });
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: {
-        invoke: async (command: string) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [], theme: 'light' }, tools: [] };
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          if (command === 'get_bootstrap') return bootstrap();
+          if (command === 'set_language') {
+            language = String(args.language);
+            sessionStorage.setItem('test.native-language', language);
+            return bootstrap();
+          }
           if (command === 'list_cli_adapters') return { registered: [], managedIds: [], preservedUnknown: [] };
           if (command === 'get_tray_status') return { available: true, error: null };
           if (command === 'get_launch_settings') return {
@@ -39,6 +46,9 @@ test('中文环境默认中文，可切换英文、即时生效并在重启后�
   await chinese.getByRole('radio', { name: 'English' }).click();
   await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cliora:language'))).toBe('en');
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('en');
+  // Reload must restore the native preference even without the browser cache.
+  await page.evaluate(() => localStorage.removeItem('cliora:language'));
   await page.reload();
   await settingsButton(page).click();
   await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
@@ -47,6 +57,18 @@ test('中文环境默认中文，可切换英文、即时生效并在重启后�
   await english.getByRole('radio', { name: '中文' }).click();
   await expect(page.getByRole('heading', { name: '管理的 CLI' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cliora:language'))).toBe('zh');
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('zh');
+});
+
+test('旧版浏览器语言偏好迁移到本机设置后保留已加载页面', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await installDesktop(page);
+  await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
+  await openSettings(page);
+  await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('en');
+  expect(errors).toEqual([]);
 });
 
 test.describe('英文系统环境', () => {

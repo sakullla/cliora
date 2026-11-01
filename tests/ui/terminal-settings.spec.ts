@@ -91,13 +91,16 @@ test('unsaved or system default shows the workbench, and launch modes stay norma
 test('English keeps the CMD-length recovery advice by error code and falls back to text', async ({ page }) => {
   await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
   await page.addInitScript(() => {
+    let language: string | null = null;
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: [], theme: 'light', language }, tools: [] });
     const tabby = { id: 'tabby', label: 'Tabby', program: '/Applications/Tabby.app/Contents/MacOS/Tabby', args: ['run', '/bin/sh', '{script}'] };
     const settings = { selected: 'custom', custom: { program: tabby.program, args: tabby.args }, presets: [tabby], terminals: [{ id: 'auto', label: 'System default', available: true }], cliMode: 'normal', projectMode: 'normal' };
     const control = { rejection: null as { code?: string; message: string } | null };
     Object.assign(window, {
       isTauri: true, __terminalCodeTest: control,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [], theme: 'light' }, tools: [] };
+        if (command === 'get_bootstrap') return bootstrap();
+        if (command === 'set_language') { language = args.language; return bootstrap(); }
         if (command === 'list_cli_adapters') return { registered: [], managedIds: [], preservedUnknown: [] };
         if (command === 'get_tray_status') return { available: true, error: null };
         if (command === 'get_launch_settings') return { ...settings };

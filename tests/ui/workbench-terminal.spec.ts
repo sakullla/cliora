@@ -90,6 +90,8 @@ test('terminal code loads on demand and an opening request survives the first mo
 /** Synthetic native IPC shared by the workbench terminal tests. */
 async function installWorkbenchMock(page: Page, holdStartup = false) {
   await page.addInitScript((holdStartup) => {
+    let language: string | null = null;
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light', language, remote_ssh_enabled: holdStartup }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] });
     let releaseStartup = () => {};
     const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: (window as unknown as { __oldSessions?: boolean }).__oldSessions ? 1 : Date.now() }];
@@ -122,7 +124,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (holdStartup && ['list_projects', 'get_launch_settings', 'list_remote_targets', 'list_remote_sessions'].includes(command)) await startupReady;
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light', remote_ssh_enabled: holdStartup }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'get_bootstrap') return bootstrap();
+          if (command === 'set_language') { language = args.language; return bootstrap(); }
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: args.theme }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };

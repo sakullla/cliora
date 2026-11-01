@@ -51,6 +51,8 @@ async function installLibrary(page: Page, theme: 'light' | 'dark', language: 'zh
     localStorage.setItem('cliora:language', stored);
   }, language);
   await page.addInitScript((themeName) => {
+    let language: unknown = null;
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex'], theme: themeName, language }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] });
     const definitions: Array<Record<string, unknown>> = [{
       id: 'mcp-chrome',
       name: 'placeholder-server',
@@ -66,7 +68,8 @@ async function installLibrary(page: Page, theme: 'light' | 'dark', language: 'zh
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: themeName }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+        if (command === 'get_bootstrap') return bootstrap();
+        if (command === 'set_language') { language = args.language; return bootstrap(); }
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects') return [{ id: 'second-project', name: 'Second project', path: '/tmp/second-project', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
         if (command === 'list_library_items') return [];
