@@ -10,11 +10,40 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  gate:
+    name: Wait for the tagged commit to pass main CI
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Resolve tag to commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for main CI
+        uses: actions/github-script@v9
+        env:
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+        with:
+          script: |
+            const { waitForMainCi } = require('./.github/scripts/wait-for-main-ci.cjs');
+            await waitForMainCi({ github, repo: context.repo, sha: process.env.RELEASE_SHA, log: core.info });
+
   prepare:
     name: Prepare draft release
+    needs: gate
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     outputs:
@@ -23,6 +52,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
           filter: blob:none
 
@@ -60,6 +90,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp \
@@ -71,17 +102,21 @@ jobs:
               echo "::error::Release is already published; use a new version tag."
               exit 1
             fi
+            if [[ $(jq -r '.target_commitish' <<< "$release") != "$RELEASE_SHA" ]]; then
+              echo "::error::Draft release belongs to a different commit; use a new version tag."
+              exit 1
+            fi
             endpoint="$endpoint/$(jq -r '.id' <<< "$release")"
             method=PATCH
           fi
           release_id=$(gh api --method "$method" "$endpoint" \
-            -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" \
+            -f tag_name="$RELEASE_TAG" -f target_commitish="$RELEASE_SHA" \
             -f name="Cliora $RELEASE_TAG" -F body=@release-notes.md \
             -F draft=true -F prerelease=false --jq '.id')
           echo "release-id=$release_id" >> "$GITHUB_OUTPUT"
 
   release:
-    needs: prepare
+    needs: [gate, prepare]
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +143,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: matrix.platform == 'linux'
@@ -273,7 +311,7 @@ jobs:
 
   verify-release:
     name: Verify and publish release
-    needs: [prepare, release]
+    needs: [gate, prepare, release]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -364,12 +402,20 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "${repo[@]}" "$work/latest.json" --clobber
 
       - name: Publish verified release
-        shell: bash
+        uses: actions/github-script@v9
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
-        run: |
-          set -euo pipefail
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            -F draft=false
-          echo "Published release ${GITHUB_REF_NAME} (id=${RELEASE_ID})"
+          RELEASE_SHA: ${{ needs.gate.outputs.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const { data: commit } = await github.rest.repos.getCommit({
+              ...context.repo, ref: `refs/tags/${process.env.RELEASE_TAG}`,
+            });
+            if (commit.sha !== process.env.RELEASE_SHA) {
+              throw new Error('Release tag moved after main CI verification.');
+            }
+            await github.rest.repos.updateRelease({
+              ...context.repo, release_id: Number(process.env.RELEASE_ID), draft: false,
+            });
+            core.info(`Published release ${process.env.RELEASE_TAG} (id=${process.env.RELEASE_ID})`);

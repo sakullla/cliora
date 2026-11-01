@@ -37,6 +37,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Test release gate
+        run: node --test tests/native/release-gate.test.mjs
+
       - name: Build
         run: npm run build
 
