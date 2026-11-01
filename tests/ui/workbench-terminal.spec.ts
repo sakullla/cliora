@@ -1322,6 +1322,42 @@ test('switching back to a session does not resend its unchanged grid', async ({ 
   expect(await resizes('s1')).toBe(settled);
 });
 
+test.describe('session switching with the production renderer', () => {
+  test.use({
+    deviceScaleFactor: 1.25,
+  });
+
+  test('revealing a WebGL terminal preserves its grid', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.assign(window, { __twoSessions: true });
+    });
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const codex = page.getByRole('tab', { name: /Codex/ });
+    const claude = page.getByRole('tab', { name: /Claude Code/ });
+    const canvas = (id: string) => page.locator(`[data-pane-session="${id}"] .xterm-screen canvas:not(.xterm-link-layer)`);
+    const grids = () => page.evaluate(() => (window as unknown as { __resizes: Array<{ sessionId: string; cols: number; rows: number }> }).__resizes.filter(item => item.sessionId === 's1'));
+    await expect(canvas('s1')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready.then(() => {}));
+    await page.waitForTimeout(300);
+    const settled = await grids();
+    expect(settled.length).toBeGreaterThan(0);
+    for (let round = 0; round < 3; round += 1) {
+      await claude.click();
+      await expect(canvas('s2')).toBeVisible();
+      await codex.click();
+      await expect(canvas('s1')).toBeVisible();
+    }
+    await page.waitForTimeout(300);
+    expect(await grids()).toEqual(settled);
+    // Actual layout changes must still reach the PTY; the fix must not freeze fitting.
+    await page.setViewportSize({ width: 1100, height: 720 });
+    await expect.poll(async () => (await grids()).at(-1)?.cols).toBeLessThan(settled.at(-1)!.cols);
+  });
+});
+
 test('hidden live terminals answer cursor queries without accepting keyboard input', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await openWorkbench(page);

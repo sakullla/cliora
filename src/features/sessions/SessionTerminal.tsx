@@ -984,6 +984,11 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
     const fitNow = () => {
       if (disposed || !replayReady || !activeRef.current || !layoutAvailable()) return;
+      // Releasing WebGL while hidden installs xterm's DOM renderer. Its cell
+      // widths differ from WebGL's pixel-rounded widths, especially at fractional
+      // display scaling. Restore the visible renderer before measuring, otherwise
+      // every reveal briefly resizes the PTY to the DOM grid and back.
+      if (navigator.webdriver !== true) webglRef.current?.activate();
       const dims = fit.proposeDimensions();
       if (!dims) return;
       const height = node.clientHeight;
@@ -1190,9 +1195,6 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       // Use the same stable-grid guard as ResizeObserver. Resetting its lock
       // on every reveal reintroduced one-row oscillation and duplicate TUI lines.
       fitNowRef.current?.();
-      // Test automation locates glyphs through the DOM rows; keep that renderer
-      // under webdriver so coordinates stay measurable. Everyone else gets WebGL.
-      if (navigator.webdriver !== true) webglRef.current?.activate();
       // A terminal that was hidden kept its IME anchor from before; place it on the input cell now.
       imeRef.current?.refresh();
       // Keyboard navigation in the session rail deliberately keeps focus on
