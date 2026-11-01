@@ -5,6 +5,10 @@ description = "Cliora desktop CLI manager"
 edition = "2021"
 rust-version = "1.88"
 
+[lints.rust]
+# rustc excludes linker_messages from the warnings lint group.
+linker_messages = "deny"
+
 [lib]
 name = "cliora_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
