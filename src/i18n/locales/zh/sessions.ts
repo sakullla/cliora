@@ -229,6 +229,8 @@ export default {
   gitDetached: 'Git 未在分支上（{{commit}}）',
   gitWorktree: '工作树 {{name}}',
   gitWorktreeShort: '工作树',
+  switchWorktree: '切换工作树',
+  worktreeCount: '{{count}} 个工作树',
   gitRepository: '仓库 {{name}}',
   openBeside: '与 {{name}} 并排显示',
   reattachRemote: '重新附着远程会话',

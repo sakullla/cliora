@@ -173,6 +173,7 @@ export default {
     remoteDeletedNote: 'This content was deleted in the cloud.',
     identicalToLocal: 'Identical to the local version',
     differsFromLocal: '{{count}} differences from the local version',
+    viewDiff: 'View differences ({{count}})',
     contentMissing: 'There is nothing to show for this version.',
     useSelected: 'Use selected version',
     useSelectedLocal: 'Keep the local version',

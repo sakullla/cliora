@@ -93,5 +93,6 @@ export interface SyncStatus {
 export interface ConflictPreview {
   key: string;
   localSummary: string;
-  versions: { id: string; summary: string; deleted: boolean; at?: number }[];
+  localContent: string;
+  versions: { id: string; summary: string; content: string; deleted: boolean; at?: number }[];
 }

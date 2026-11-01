@@ -1163,6 +1163,21 @@
 .statusGit > :global(svg) { flex: none; color: var(--term-accent); }
 .statusGit > span:first-of-type { min-width: 0; overflow: hidden; color: var(--term-text-2); text-overflow: ellipsis; font-family: var(--font-mono); font-size: 11px; }
 .statusWorktree { flex: none; padding: 0 var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-pill); font-size: 10px; line-height: 15px; }
+/* Worktree switcher: a quiet pill that opens a menu of the repository's checkouts. */
+.worktreeSwitch { position: relative; flex: none; display: inline-flex; }
+.worktreeTrigger { display: inline-flex; align-items: center; gap: var(--space-1); height: 18px; padding: 0 var(--space-1) 0 var(--space-1_5); border: 1px solid var(--term-float-line); border-radius: var(--radius-pill); background: transparent; color: var(--term-text-2); font-size: 10px; line-height: 1; cursor: pointer; }
+.worktreeTrigger:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent) 45%, var(--term-float-line)); background: color-mix(in srgb, var(--term-accent) 10%, transparent); color: var(--term-accent); }
+.worktreeTrigger:disabled { opacity: 0.55; cursor: default; }
+.worktreeTrigger > :global(svg) { flex: none; }
+.worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: grid; gap: 1px; min-width: 200px; max-width: 320px; max-height: 320px; overflow: auto; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-md); background: var(--term-float); box-shadow: var(--term-card-shadow); }
+.worktreeItem { display: flex; align-items: center; gap: var(--space-1_5); width: 100%; padding: var(--space-1) var(--space-1_5); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--term-text-2); font-size: var(--fs-micro); text-align: left; cursor: pointer; }
+.worktreeItem:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
+.worktreeItem[data-current] { color: var(--term-fg); cursor: default; }
+.worktreeItem[data-current] > :global(svg) { color: var(--term-accent); }
+.worktreeItem:disabled:not([data-current]) { opacity: 0.55; cursor: default; }
+.worktreeItem > :global(svg) { flex: none; }
+.worktreeName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.worktreeBranch { flex: none; margin-left: auto; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-3); font-size: 10px; font-family: var(--font-mono); }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
 .statusBar .statusButton[data-size] { flex: none; min-height: 0; height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-sm); color: var(--term-text-3); font-size: var(--fs-micro); }
 .statusBar .statusButton[data-variant]:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
@@ -1516,6 +1531,8 @@
 .root[data-compact] .pathChip { max-width: 120px; }
 .root[data-compact] .statusGit { max-width: 140px; }
 .root[data-compact] .statusWorktree { display: none; }
+.root[data-compact] .worktreeTrigger > span { display: none; }
+.root[data-compact] .worktreeTrigger { padding: 0 var(--space-1); }
 .root[data-compact] .stageTail { gap: var(--space-1); }
 .root[data-compact] .terminalActions { gap: var(--space-1); padding: 0; }
 .root[data-compact] .actionGroup { padding: 1px; }

@@ -170,6 +170,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'replay_workbench_session') return transcripts[args.sessionId] ?? transcripts.s1;
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
+          if (command === 'git_worktrees') return [{ name: 'cliora', branch: 'main', path: '/repo/cliora', current: false }, { name: 'cliora-polish', branch: 'feature/workbench-polish', path: '/repo/cliora-polish', current: true }];
           if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
           if (command === 'list_remote_library_items') {
             if (args.kind !== 'prompt') return [];

@@ -229,6 +229,8 @@ export default {
   gitDetached: 'Git detached at {{commit}}',
   gitWorktree: 'Worktree {{name}}',
   gitWorktreeShort: 'worktree',
+  switchWorktree: 'Switch worktree',
+  worktreeCount: '{{count}} worktrees',
   gitRepository: 'Repository {{name}}',
   openBeside: 'Show beside {{name}}',
   reattachRemote: 'Reattach remote session',

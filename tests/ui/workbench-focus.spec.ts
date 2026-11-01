@@ -31,6 +31,7 @@ test('returning to the workbench keeps the session the user selected', async ({ 
           }
           if (command === 'replay_workbench_session') return btoa(`ready-${args.sessionId}`);
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/quiet-ui', commit: null, worktree: 'cliora-ui', repository: 'cliora' } : null;
+          if (command === 'git_worktrees') return [{ name: 'cliora', branch: 'main', path: '/repo/cliora', current: false }, { name: 'cliora-ui', branch: 'feature/quiet-ui', path: '/repo/cliora-ui', current: true }];
           if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
@@ -85,6 +86,7 @@ test('the CLI spinner stays in front of the terminal title', async ({ page }) =>
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'replay_workbench_session') return btoa('ready');
           if (command === 'workbench_git_context') return null;
+          if (command === 'git_worktrees') return [];
           if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;

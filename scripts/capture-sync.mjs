@@ -65,7 +65,7 @@ function installMock(seed) {
       if (command === 'get_tray_status') return { available: true, error: null };
       if (command === 'list_portable_items') return items;
       if (command === 'get_webdav_status' || command === 'set_webdav_enabled') return status();
-      if (command === 'preview_webdav_conflict') { const stamp = Math.floor(Date.now() / 1000); return { key: args.key, localSummary: 'model = "gpt-6-astra"\nreasoning = "medium"', versions: [{ id: 'f94d8215', summary: 'model = "gpt-6-sol"\nreasoning = "high"', deleted: false, at: stamp - 3600 }, { id: 'f2cf7555', summary: 'model = "gpt-6"\nreasoning = "low"', deleted: false, at: stamp - 86400 }] }; }
+      if (command === 'preview_webdav_conflict') { const stamp = Math.floor(Date.now() / 1000); return { key: args.key, localSummary: 'model = "gpt-6-astra"\nreasoning = "medium"', localContent: '名称: pi 活动配置\n模型: gpt-6-astra\n推理强度: medium\n作用域: pi, global', versions: [{ id: 'f94d8215', summary: 'model = "gpt-6-sol"\nreasoning = "high"', content: '名称: pi 活动配置\n模型: gpt-6-sol\n推理强度: high\n作用域: pi, global', deleted: false, at: stamp - 3600 }, { id: 'f2cf7555', summary: 'model = "gpt-6"\nreasoning = "low"', content: '名称: pi 活动配置\n模型: gpt-6\n推理强度: low\n作用域: pi, global', deleted: false, at: stamp - 86400 }] }; }
       if (command === 'sync_webdav_now') {
         if (control.hang) await new Promise(() => {});
         control.receipt = { at: Math.floor(Date.now() / 1000), compared: 42, uploaded: 3, downloaded: 3, transfers: control.sampleTransfers ?? [] };

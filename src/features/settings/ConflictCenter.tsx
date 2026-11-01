@@ -6,6 +6,8 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { Icon, type IconName } from '../../components/Icon';
 import { Badge, Button } from '../../components/ui';
 import type { ConflictPreview, SyncConflict } from '../../types/portable';
+import { compareText } from '../../lib/textDiff';
+import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { relativeTime, useKindLabel } from './syncParts';
 import styles from './ConflictCenter.module.css';
 
@@ -23,22 +25,6 @@ function segmentsOf(summary: string | null | undefined): string[] | null {
   const trimmed = (summary ?? '').trim();
   if (!trimmed || !trimmed.includes('·')) return null;
   return trimmed.split('·').map(part => part.trim()).filter(Boolean);
-}
-
-/** How many segment positions differ between two segmented summaries. */
-function segmentDiff(local: string | null | undefined, remote: string | null | undefined) {
-  const left = segmentsOf(local);
-  const right = segmentsOf(remote);
-  if (!left || !right) {
-    const same = (local ?? '').trim() === (remote ?? '').trim();
-    return { segmented: false, changed: same ? 0 : 1, identical: same };
-  }
-  const width = Math.max(left.length, right.length);
-  let changed = 0;
-  for (let index = 0; index < width; index += 1) {
-    if ((left[index] ?? '') !== (right[index] ?? '')) changed += 1;
-  }
-  return { segmented: true, changed, identical: changed === 0 };
 }
 
 function SummaryBlock({ summary, deleted }: { summary: string | null | undefined; deleted?: boolean }) {
@@ -136,13 +122,14 @@ export function ConflictCenter({ open, conflicts, focusKey, onClose, onResolve, 
     // Newest first so the choice reads like a timeline; unknown times sink to the end.
     const remote = [...(ready?.versions ?? [])].sort((left, right) => (right.at ?? 0) - (left.at ?? 0));
     const newestId = remote.find(version => (version.at ?? 0) > 0)?.id;
-    const list: Array<{ optionKey: string; choice: Choice; label: string; note: string; icon: IconName; summary: string | null; deleted: boolean; at?: number; isNewest?: boolean }> = [{
+    const list: Array<{ optionKey: string; choice: Choice; label: string; note: string; icon: IconName; summary: string | null; content: string; deleted: boolean; at?: number; isNewest?: boolean }> = [{
       optionKey: 'local',
       choice: { kind: 'local' },
       label: t('settings.webdav.localVersion'),
       note: t('settings.webdav.localVersionNote'),
       icon: 'monitor',
       summary: ready?.localSummary ?? null,
+      content: ready?.localContent ?? '',
       deleted: false,
     }];
     remote.forEach((version, index) => {
@@ -153,6 +140,7 @@ export function ConflictCenter({ open, conflicts, focusKey, onClose, onResolve, 
         note: t('settings.webdav.remoteVersionId', { id: version.id.slice(0, 8) }),
         icon: 'cloud',
         summary: version.deleted ? null : version.summary,
+        content: version.deleted ? '' : version.content,
         deleted: version.deleted,
         at: version.at || undefined,
         isNewest: version.id === newestId,
@@ -254,29 +242,46 @@ export function ConflictCenter({ open, conflicts, focusKey, onClose, onResolve, 
             {preview?.status === 'ready' && <div className={styles.options} role="radiogroup" aria-label={t('settings.webdav.centerTitle')}>
               {options.map((option) => {
                 const active = !!choice && choice.kind === option.choice.kind && (choice.kind === 'local' || option.choice.kind === 'remote' && choice.id === option.choice.id);
-                const diff = option.choice.kind === 'remote' && !option.deleted ? segmentDiff(preview.value.localSummary, option.summary) : null;
-                return <button key={option.optionKey} type="button" role="radio" aria-checked={active} data-selected={active ? '' : undefined}
-                  data-deleted={option.deleted || undefined} className={styles.option} disabled={working}
-                  onClick={() => setChoices((old) => ({ ...old, [selected.key]: option.choice }))}>
-                  <span className={styles.radio} aria-hidden="true"><span className={styles.radioDot} /></span>
-                  <span className={styles.optionBody}>
-                    <span className={styles.optionHead}>
-                      <Icon name={option.icon} size={14} />
-                      <strong>{option.label}</strong>
-                      <small>{option.note}</small>
-                      {option.at && (() => {
-                        const stamp = relativeTime(option.at, i18n.language);
-                        return <span className={styles.time} title={stamp.absolute}><Icon name="clock" size={11} /><time dateTime={new Date(option.at * 1000).toISOString()}>{stamp.text}</time></span>;
-                      })()}
-                      {option.isNewest && <Badge tone="accent">{t('settings.webdav.versionLatest')}</Badge>}
-                      {option.deleted && <Badge tone="danger">{t('settings.webdav.remoteDeletedBadge')}</Badge>}
-                      {diff && !option.deleted && (diff.identical
-                        ? <Badge tone="success">{t('settings.webdav.identicalToLocal')}</Badge>
-                        : <Badge tone="neutral">{t('settings.webdav.differsFromLocal', { count: diff.changed })}</Badge>)}
+                // Real content diff against the local version drives both the badge and the expandable view.
+                const compared = option.choice.kind === 'remote' && !option.deleted
+                  ? compareText(preview.value.localContent, option.content, 'text')
+                  : null;
+                const changeCount = compared ? compared.removed + compared.added : 0;
+                return <div key={option.optionKey} className={styles.optionWrap}>
+                  <button type="button" role="radio" aria-checked={active} data-selected={active ? '' : undefined}
+                    data-deleted={option.deleted || undefined} className={styles.option} disabled={working}
+                    onClick={() => setChoices((old) => ({ ...old, [selected.key]: option.choice }))}>
+                    <span className={styles.radio} aria-hidden="true"><span className={styles.radioDot} /></span>
+                    <span className={styles.optionBody}>
+                      <span className={styles.optionHead}>
+                        <Icon name={option.icon} size={14} />
+                        <strong>{option.label}</strong>
+                        <small>{option.note}</small>
+                        {option.at && (() => {
+                          const stamp = relativeTime(option.at, i18n.language);
+                          return <span className={styles.time} title={stamp.absolute}><Icon name="clock" size={11} /><time dateTime={new Date(option.at * 1000).toISOString()}>{stamp.text}</time></span>;
+                        })()}
+                        {option.isNewest && <Badge tone="accent">{t('settings.webdav.versionLatest')}</Badge>}
+                        {option.deleted && <Badge tone="danger">{t('settings.webdav.remoteDeletedBadge')}</Badge>}
+                        {compared && (compared.same
+                          ? <Badge tone="success">{t('settings.webdav.identicalToLocal')}</Badge>
+                          : <Badge tone="neutral">{t('settings.webdav.differsFromLocal', { count: changeCount })}</Badge>)}
+                      </span>
+                      <span className={styles.summary}><SummaryBlock summary={option.summary} deleted={option.deleted} /></span>
                     </span>
-                    <span className={styles.summary}><SummaryBlock summary={option.summary} deleted={option.deleted} /></span>
-                  </span>
-                </button>;
+                  </button>
+                  {compared && !compared.same && <details className={styles.optionDiff}>
+                    <summary><Icon name="columns" size={13} />{t('settings.webdav.viewDiff', { count: changeCount })}</summary>
+                    <ConflictCompare
+                      currentContent={preview.value.localContent}
+                      nextContent={option.content}
+                      format="text"
+                      actions={false}
+                      onUseNext={() => {}}
+                      onKeepCurrent={() => {}}
+                    />
+                  </details>}
+                </div>;
               })}
             </div>}
           </> : <div className={styles.allDone}>

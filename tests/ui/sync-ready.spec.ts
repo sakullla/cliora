@@ -138,7 +138,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
           return { imported: previewItems.filter((item) => item.status !== 'conflict').length, targets: [] };
         }
         if (command === 'cancel_portable_preview') return null;
-        if (command === 'preview_webdav_conflict') return { key: args.key, localSummary: '本机仍是原来的内容', versions: [{ id: 'bundle:1', summary: '配置包里的版本', deleted: false }] };
+        if (command === 'preview_webdav_conflict') return { key: args.key, localSummary: '本机仍是原来的内容', localContent: '标题: 本机仍是原来的内容', versions: [{ id: 'bundle:1', summary: '配置包里的版本', content: '标题: 配置包里的版本', deleted: false }] };
         if (command === 'resolve_webdav_conflict') {
           control.conflicts = control.conflicts.filter((item) => item.key !== args.key);
           return status();

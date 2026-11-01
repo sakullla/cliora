@@ -173,6 +173,7 @@ export default {
     remoteDeletedNote: '这项内容在云端已被删除。',
     identicalToLocal: '与本机内容一致',
     differsFromLocal: '与本机有 {{count}} 处不同',
+    viewDiff: '查看差异（{{count}} 处）',
     contentMissing: '这个版本没有可展示的内容。',
     useSelected: '使用所选版本',
     useSelectedLocal: '保留本机版本',

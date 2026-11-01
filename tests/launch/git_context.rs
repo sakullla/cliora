@@ -68,8 +68,57 @@ fn directories_outside_a_repository_have_no_context() {
     // A machine whose temp directory sits inside a checkout cannot show "outside".
     if !plain.ancestors().any(|path| path.join(".git").exists()) {
         assert_eq!(read(&plain.join("missing")), None);
+        assert_eq!(worktrees(&plain.join("missing")), None);
     }
     let broken = scratch("broken");
     write(&broken.join(".git/HEAD"), "not a ref");
     assert_eq!(read(&broken), None);
+}
+
+#[test]
+fn worktrees_list_the_main_checkout_and_each_linked_worktree() {
+    let base = scratch("worktrees-list");
+    let main = base.join("cliora");
+    write(&main.join(".git/HEAD"), "ref: refs/heads/main\n");
+    // Two linked worktrees recorded under <common>/worktrees/<name>.
+    let hotfix_admin = main.join(".git/worktrees/cliora-hotfix");
+    write(&hotfix_admin.join("HEAD"), "ref: refs/heads/hotfix/replay\n");
+    write(&hotfix_admin.join("commondir"), "../..\n");
+    let hotfix_tree = base.join("cliora-hotfix");
+    write(&hotfix_tree.join(".git"), &format!("gitdir: {}\n", hotfix_admin.join(".git").display()));
+    write(&hotfix_admin.join("gitdir"), &format!("{}\n", hotfix_tree.join(".git").display()));
+
+    let feature_admin = main.join(".git/worktrees/feature-sync");
+    write(&feature_admin.join("HEAD"), "ref: refs/heads/feature/sync\n");
+    write(&feature_admin.join("commondir"), "../..\n");
+    let feature_tree = base.join("feature-sync");
+    write(&feature_tree.join(".git"), &format!("gitdir: {}\n", feature_admin.join(".git").display()));
+    write(&feature_admin.join("gitdir"), &format!("{}\n", feature_tree.join(".git").display()));
+
+    // Reading from the main checkout: it is current, three checkouts in total.
+    let from_main = worktrees(&main).expect("worktrees");
+    assert_eq!(from_main.len(), 3);
+    assert_eq!(from_main[0].name, "cliora");
+    assert_eq!(from_main[0].branch.as_deref(), Some("main"));
+    assert!(from_main[0].current);
+    let hotfix = from_main.iter().find(|tree| tree.name == "cliora-hotfix").expect("hotfix listed");
+    assert_eq!(hotfix.branch.as_deref(), Some("hotfix/replay"));
+    assert!(!hotfix.current);
+    assert!(from_main.iter().any(|tree| tree.name == "feature-sync" && tree.branch.as_deref() == Some("feature/sync")));
+
+    // Reading from inside a linked worktree flags that checkout as current.
+    let from_hotfix = worktrees(&hotfix_tree.join("src")).expect("worktrees");
+    assert_eq!(from_hotfix.len(), 3);
+    assert!(from_hotfix.iter().find(|tree| tree.name == "cliora-hotfix").expect("hotfix").current);
+    assert!(!from_hotfix.iter().find(|tree| tree.name == "cliora").expect("main").current);
+}
+
+#[test]
+fn a_repository_without_linked_worktrees_lists_only_the_main_checkout() {
+    let repo = scratch("single").join("shop");
+    write(&repo.join(".git/HEAD"), "ref: refs/heads/main\n");
+    let list = worktrees(&repo).expect("worktrees");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "shop");
+    assert!(list[0].current);
 }

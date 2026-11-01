@@ -3760,6 +3760,18 @@ pub async fn workbench_git_context(session_id: String) -> Result<Option<crate::g
     }).await
 }
 
+/// Every checkout (main working tree and linked worktrees) of the repository at
+/// `directory`; empty when it is not in a repository. Takes a stable repository
+/// path (the project's path), not a live session cwd, so the list does not shift
+/// as an agent moves around inside a session.
+#[tauri::command]
+pub async fn git_worktrees(directory: String) -> Result<Vec<crate::git_context::Worktree>, ApiError> {
+    blocking(move || {
+        let path = std::path::PathBuf::from(directory);
+        Ok(crate::git_context::worktrees(&path).unwrap_or_default())
+    }).await
+}
+
 /// Update the visible local working directory from shell integration (OSC 7 /
 /// OSC 1337). The session host validates and canonicalizes the path.
 #[tauri::command]

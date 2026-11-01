@@ -35,6 +35,8 @@ export type WorkbenchOutput = { sessionId: string; dataBase64: string; offset?: 
 export type WorkbenchExit = { sessionId: string; exitCode: number | null; stateRevision?: number };
 /** Best-effort Git hint for a local session directory. */
 export type WorkbenchGitContext = { branch: string | null; commit: string | null; worktree: string | null; repository: string | null };
+/** One checkout of the repository a local session sits in (main or linked worktree). */
+export type WorkbenchWorktree = { name: string; branch: string | null; path: string; current: boolean };
 export type RemoteSessionEndResult = { outcome: 'confirmed_absent' | 'failed' | 'unknown'; stage: string; exitCode: number | null };
 export type WorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; running: boolean; exitCode: number | null; startedAt?: number; connectionState?: 'connecting' | 'connected' | 'disconnected' | 'remote_ended' | 'unknown' | 'closed'; exitReason?: 'running' | 'process_exit' | 'connection_lost' | 'remote_ended' | 'unknown'; reattachable?: boolean; remoteSessionId?: string | null; remoteEndResult?: RemoteSessionEndResult | null; stateRevision?: number };
 export type SavedWorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; startedAt: number; stoppedAt: number | null; nativeId: string | null; accountId: string | null; contextId: string | null };

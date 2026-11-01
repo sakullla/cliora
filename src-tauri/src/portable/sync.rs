@@ -105,6 +105,10 @@ pub struct SyncConflictVersion {
 pub struct ConflictVersionPreview {
     pub id: String,
     pub summary: String,
+    /// Multi-line, human-readable content of this version with secrets redacted,
+    /// used to show a real diff against the local version. Empty when deleted.
+    #[serde(default)]
+    pub content: String,
     pub deleted: bool,
     /// Creation time (unix seconds); zero when unknown (versions from old manifests or bundles).
     #[serde(default)]
@@ -116,6 +120,9 @@ pub struct ConflictVersionPreview {
 pub struct ConflictPreview {
     pub key: String,
     pub local_summary: String,
+    /// Multi-line, redacted content of the local version, the base of every diff.
+    #[serde(default)]
+    pub local_content: String,
     pub versions: Vec<ConflictVersionPreview>,
 }
 
@@ -2177,6 +2184,122 @@ fn summary(entity: Option<&PortableEntity>) -> String {
     }
 }
 
+/// Mask a secret value for display: show only that it exists, never its content,
+/// so the diff can reveal a credential changed without leaking the credential.
+fn redact(present: bool) -> &'static str {
+    if present { "（已设置，内容已隐藏）" } else { "（未设置）" }
+}
+
+/// Multi-line, human-readable content of a version for the conflict diff. Secrets
+/// are redacted; the goal is to show which configuration fields differ, not to
+/// reproduce credentials. An empty string means there is nothing to compare
+/// (a deleted or missing version).
+fn detail(entity: Option<&PortableEntity>) -> String {
+    let Some(entity) = entity else { return String::new() };
+    let mut lines: Vec<String> = Vec::new();
+    match &entity.payload {
+        PortablePayload::Preferences(value) => {
+            lines.push(format!("主题: {}", value.theme));
+            if let Some(language) = &value.language {
+                lines.push(format!("语言: {language}"));
+            }
+            lines.push(format!("管理的 CLI ({}):", value.managed_tools.len()));
+            for tool in &value.managed_tools {
+                lines.push(format!("  - {tool}"));
+            }
+        }
+        PortablePayload::Profile(value) => {
+            lines.push(format!("名称: {}", value.profile.name));
+            lines.push(format!("工具: {}", value.profile.tool));
+            if let Some(connection) = value.profile.connection.as_ref() {
+                lines.push(format!("接口格式: {}", connection.interface_format));
+                lines.push(format!("模型: {}", connection.model));
+                if !connection.base_url.is_empty() {
+                    lines.push(format!("地址: {}", connection.base_url));
+                }
+                lines.push(format!("连接密钥: {}", redact(value.connection_secret.is_some() || connection.secret_ref.is_some())));
+            } else {
+                lines.push("配置方式: 原生配置".into());
+            }
+            if !value.native_secrets.is_empty() {
+                lines.push(format!("原生密钥: {} 组{}", value.native_secrets.len(), redact(true)));
+            }
+        }
+        PortablePayload::Common(value) => {
+            lines.push(format!("工具: {}", value.tool));
+            lines.push(format!("原生文件 ({}):", value.files.len()));
+            for name in value.files.keys() {
+                lines.push(format!("  - {name}"));
+            }
+        }
+        PortablePayload::Project(value) => {
+            lines.push(format!("名称: {}", value.name));
+            if let Some(path) = &value.path {
+                lines.push(format!("路径: {path}"));
+            }
+            lines.push(format!("模型偏好 ({}):", value.model_overrides.len()));
+            for (tool, model) in &value.model_overrides {
+                lines.push(format!("  {tool}: {model}"));
+            }
+        }
+        PortablePayload::Library(value) => {
+            lines.push(format!("标题: {}", value.title));
+            if !value.category.is_empty() {
+                lines.push(format!("分类: {}", value.category));
+            }
+            lines.push("正文:".into());
+            for line in value.body.lines() {
+                lines.push(format!("  {line}"));
+            }
+        }
+        PortablePayload::Mcp(value) => {
+            lines.push(format!("名称: {}", value.definition.name));
+            lines.push(format!("传输: {:?}", value.definition.transport));
+            match value.definition.transport {
+                crate::resources::mcp::McpTransport::Stdio => {
+                    lines.push(format!("命令: {}", value.definition.command));
+                    for arg in &value.definition.args {
+                        lines.push(format!("  参数: {arg}"));
+                    }
+                }
+                crate::resources::mcp::McpTransport::Http => {
+                    lines.push(format!("地址: {}", value.definition.url));
+                    for key in value.definition.headers.keys() {
+                        lines.push(format!("  请求头: {key} = {}", redact(true)));
+                    }
+                }
+            }
+            for (key, val) in &value.definition.env {
+                lines.push(format!("环境变量: {key} = {val}"));
+            }
+        }
+        PortablePayload::Skill(value) => {
+            lines.push(format!("名称: {}", value.name));
+            lines.push(format!("描述: {}", value.description));
+            lines.push(format!("文件 ({}):", value.files.len()));
+            for name in value.files.keys() {
+                lines.push(format!("  - {name}"));
+            }
+        }
+        PortablePayload::Account(value) => {
+            lines.push(format!("标签: {}", value.account.label));
+            lines.push(format!("工具: {}", value.account.tool_id));
+            lines.push(format!("登录文件 ({}): {}", value.auth_files.len(), redact(!value.auth_files.is_empty())));
+        }
+        PortablePayload::Binding(value) => {
+            lines.push(format!("作用域: {}", value.scope_key));
+            lines.push(format!("工具: {}", value.tool));
+            lines.push(format!("配置: {}", value.profile_id));
+        }
+        PortablePayload::Deployment(value) => {
+            lines.push(format!("工具: {}", value.tool));
+            lines.push(format!("资源类型: {}", value.resource_kind));
+            lines.push(format!("状态: {}", if value.enabled { "启用" } else { "停用" }));
+        }
+    }
+    lines.join("\n")
+}
+
 pub fn preview_conflict(
     db: &Database,
     store: &dyn CredentialStore,
@@ -2216,6 +2339,7 @@ pub fn preview_conflict(
             versions.push(ConflictVersionPreview {
                 id: hold.version_id.clone(),
                 summary: summary(Some(&entity)),
+                content: detail(Some(&entity)),
                 deleted: false,
                 at: hold.at,
             });
@@ -2247,6 +2371,7 @@ pub fn preview_conflict(
                 versions.push(ConflictVersionPreview {
                     id: head.id.clone(),
                     summary: summary(value.as_ref()),
+                    content: if head.deleted { String::new() } else { detail(value.as_ref()) },
                     deleted: head.deleted,
                     at: head.at,
                 });
@@ -2259,6 +2384,7 @@ pub fn preview_conflict(
     Ok(ConflictPreview {
         key: entity_key.into(),
         local_summary: summary(local.as_ref()),
+        local_content: detail(local.as_ref()),
         versions,
     })
 }
