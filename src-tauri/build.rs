@@ -2,7 +2,22 @@ use std::path::Path;
 
 fn main() {
     stage_conpty();
-    tauri_build::build()
+    let attributes = tauri_build::Attributes::new();
+    let attributes = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        // Library test executables need Common Controls v6 as well as the app.
+        // https://github.com/tauri-apps/tauri/issues/13419
+        let manifest = Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
+            .join("windows/app.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        attributes.windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
+    } else {
+        attributes
+    };
+    tauri_build::try_build(attributes).expect("failed to run tauri-build");
 }
 
 /// `portable-pty` prefers a `conpty.dll` beside the executable over the inbox copy.

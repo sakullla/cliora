@@ -339,11 +339,10 @@ pub fn perform_logout(executable: &Path, context: &NativeContext) -> Result<Obse
     Ok(observation)
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
     fn fixture_context(root: &Path) -> NativeContext {
         NativeContext {
             id: "fixture".into(),
@@ -362,7 +361,6 @@ mod tests {
     /// The background protocol resolves the shim entry of the installed line;
     /// a 2.x shim must never resolve the 1.x entry and vice versa.
     #[test]
-    #[cfg(windows)]
     fn npm_entry_resolution_follows_the_identified_install_line() {
         for (version, entry) in [
             ("2.0.29", "node_modules/@opencode/cli/bin/opencode.exe"),
