@@ -333,7 +333,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-primary { display: flex; align-items: center; gap: var(--space-0_5); min-width: 0; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav { flex: 1 1 auto; flex-direction: row; justify-content: flex-start; gap: var(--space-0_5); min-width: 0; margin: 0; padding: 0; overflow: visible; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-group { display: contents; }
-  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button { flex: 0 1 34px; justify-content: center; width: 34px; min-width: 26px; min-height: 32px; padding: 0; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button { flex: 0 1 32px; justify-content: center; width: 32px; min-width: 26px; min-height: 32px; padding: 0; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav-text { display: none; }
   /* The current page keeps its leaf-green mark, turned to sit under the icon. */
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button.active::before { top: auto; right: 10px; bottom: -4px; left: 10px; width: auto; height: 2px; }

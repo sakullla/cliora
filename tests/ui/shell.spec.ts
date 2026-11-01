@@ -898,7 +898,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(stage).toContainText('已结束');
   const openPage = async (name: string) => {
     let button = nav.getByRole('button', { name, exact: true });
-    // On the workbench only the workspace pages stay as icons; the others are in the more menu.
+    // On the workbench, page icons that do not fit in the sidebar row are in the more menu.
     if (!await button.count()) {
       await nav.getByRole('button', { name: '更多页面' }).click();
       button = page.getByRole('menu', { name: '更多页面' }).getByRole('menuitem', { name: new RegExp(`^${name}`) });

@@ -73,9 +73,12 @@ const navGroups: { label: string; pages: Page[] }[] = [
   { label: 'settingsGroup', pages: ['settings'] },
 ];
 
-/** On the workbench the sidebar is for switching sessions: only the workspace pages stay as icons,
- *  the rest sit behind one "more" menu. Their Mod+number shortcuts keep working. */
+/** On the workbench the sidebar is for switching sessions. The expanded sidebar shows every page icon
+ *  that fits in its one row and folds only the overflow into a "more" menu; the folded icon rail keeps
+ *  just the workspace pages. Mod+number shortcuts keep working either way. */
 const workbenchNavPages: Page[] = ['home', 'sessions'];
+/** Width of one page icon in the expanded workbench row (see shell.css). */
+const WORKBENCH_NAV_SLOT = 32;
 
 const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'system', glyph: 'monitor' },
@@ -116,9 +119,28 @@ export default function App() {
   const onRailLayout = useCallback((next: WorkbenchRailLayout) => setWorkbenchRail((old) => old.docked === next.docked && old.focus === next.focus ? old : next), []);
   const workbenchRailToggle = useRef<(() => void) | null>(null);
   const railDocked = page === 'sessions' && workbenchRail.docked;
+  const navRef = useRef<HTMLElement>(null);
+  const [navRoom, setNavRoom] = useState(pages.length);
   // Focus mode hides the sidebar entirely; the terminal takes the whole window.
   const focusLayout = page === 'sessions' && workbenchRail.focus;
   const sidebarCollapsed = navCollapsed[navContext] || focusLayout;
+  // The expanded workbench row fills the space beside the search button; count how many icons fit.
+  useLayoutEffect(() => {
+    const node = navRef.current;
+    if (!railDocked || sidebarCollapsed || !node) return;
+    const measure = () => {
+      const gap = parseFloat(getComputedStyle(node).columnGap) || 0;
+      setNavRoom(Math.max(0, Math.floor((node.clientWidth + gap) / (WORKBENCH_NAV_SLOT + gap))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [railDocked, sidebarCollapsed]);
+  const dockedNavPages: Page[] = sidebarCollapsed ? workbenchNavPages
+    : navRoom >= pages.length ? pages.map((item) => item.id)
+      : pages.slice(0, Math.max(workbenchNavPages.length, navRoom - 1)).map((item) => item.id);
+  const overflowNavPages = pages.filter((item) => !dockedNavPages.includes(item.id));
   const toggleNavCollapsed = useCallback(() => {
     const context = navContextRef.current;
     setNavCollapsed((old) => {
@@ -633,9 +655,9 @@ export default function App() {
       {bootstrap.preferences.remote_ssh_enabled && <div className="sidebar-host"><HostSwitcher targets={remoteTargets} value={remoteTargetId} onChange={changeRemoteTarget} onManage={openHostManagement} collapsed={sidebarCollapsed} /></div>}
       <div className="sidebar-primary">
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
-      <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {(railDocked ? [{ label: 'workspace', pages: workbenchNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
-        {railDocked && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{pages.filter((item) => !workbenchNavPages.includes(item.id)).map((item) => { const shortcut = pages.indexOf(item); return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={`${modAria}+${shortcut + 1}`} onClick={() => { void go(item.id); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{`${modLabel}+${shortcut + 1}`}</kbd></button>; })}</RowMenu></div>}
+      <nav ref={navRef} className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
+        {(railDocked ? [{ label: 'workspace', pages: dockedNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
+        {railDocked && overflowNavPages.length > 0 && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{overflowNavPages.map((item) => { const shortcut = pages.indexOf(item); return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={`${modAria}+${shortcut + 1}`} onClick={() => { void go(item.id); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{`${modLabel}+${shortcut + 1}`}</kbd></button>; })}</RowMenu></div>}
       </nav>
       </div>
       {/* The workbench fills this slot with its session list; other pages leave it empty. */}

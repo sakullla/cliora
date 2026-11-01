@@ -741,6 +741,15 @@ test('find opens over the terminal without resizing the PTY canvas', async ({ pa
   await openWorkbench(page);
   const stage = page.getByRole('region', { name: '当前会话' });
   const screen = stage.locator('.xterm-screen:visible');
+  // Measure once the shell has settled (the session list docks into the sidebar after mount).
+  let settled = '';
+  await expect.poll(async () => {
+    const box = await screen.boundingBox();
+    const now = box ? `${box.width}x${box.height}` : '';
+    const stable = !!now && now === settled;
+    settled = now;
+    return stable;
+  }, { intervals: [150] }).toBe(true);
   const before = await screen.boundingBox();
   await page.keyboard.press('Control+Shift+F');
   const search = stage.getByRole('searchbox', { name: '在终端输出中查找…' });
@@ -1504,15 +1513,14 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   const railBox = (await rail.boundingBox())!;
   expect(navBox.height).toBeLessThan(48);
   expect(railBox.y).toBeGreaterThan(navBox.y + navBox.height - 1);
-  // Only the workspace pages stay as icons; the other pages wait in one more menu.
-  await expect(nav.getByRole('button', { name: '使用记录', exact: true })).toHaveCount(0);
+  // The expanded sidebar has room for every page icon, so nothing is folded into the more menu.
+  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) await expect(nav.getByRole('button', { name, exact: true })).toBeVisible();
   await expect(nav.getByRole('button', { name: '工作台', exact: true }).locator('.nav-text')).toBeHidden();
   const more = nav.getByRole('button', { name: '更多页面' });
   const moreMenu = page.getByRole('menu', { name: '更多页面' });
-  await more.click();
-  await expect(moreMenu.getByRole('menuitem')).toHaveText([/^工具与连接/, /^资料库/, /^使用记录/, /^设置/]);
-  await page.keyboard.press('Escape');
-  await expect(moreMenu).toHaveCount(0);
+  await expect(more).toHaveCount(0);
+  const navRow = await nav.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+  expect(navRow.scroll).toBeLessThanOrEqual(navRow.client + 1);
   // The terminal fills the canvas: no second frame, and no reserved scrollbar lane beside it.
   const frame = await stage.locator('header').evaluate((header) => {
     const window = header.parentElement!;
@@ -1531,6 +1539,20 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   await page.mouse.up();
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBeGreaterThan(300);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-width'))).not.toBeNull();
+  // Only when the row runs out of room does the overflow fold into the more menu, in page order.
+  await handle.focus();
+  for (let step = 0; step < 12; step++) await page.keyboard.press('ArrowLeft');
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBeLessThan(240);
+  await expect(more).toBeVisible();
+  const shown = await nav.locator('button[aria-current], button:not([aria-haspopup])').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+  await more.click();
+  const folded = (await moreMenu.getByRole('menuitem').allTextContents()).map((text) => text.replace(/Ctrl\+\d$/, ''));
+  expect([...shown, ...folded]).toEqual(['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']);
+  expect(folded.length).toBeGreaterThan(0);
+  await page.keyboard.press('Escape');
+  await expect(moreMenu).toHaveCount(0);
+  await page.getByRole('separator', { name: '拖动调整会话栏宽度，双击还原' }).dblclick();
+  await expect(more).toHaveCount(0);
 
   // Ctrl+\ folds the shared sidebar to one icon rail and remembers it as the rail preference.
   await stage.locator('header h2').click();
@@ -1555,9 +1577,9 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   await expect(sidebar).toBeVisible();
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-rail-slim'))).toBe('false');
 
-  // Any page is one menu away; other pages get the labelled list back without the sessions.
-  await more.click();
-  await moreMenu.getByRole('menuitem', { name: /^使用记录/ }).click();
+  // Any page is one click away; other pages get the labelled list back without the sessions.
+  await expect(more).toHaveCount(0);
+  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
   await expect(rail).toHaveCount(0);
   await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeVisible();
