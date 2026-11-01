@@ -29,6 +29,8 @@ import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailSession, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { railPlace, railTaskTitle } from './railTitle';
+import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
+import uploadStyles from './sessionUploads.module.css';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
 import { StatusBanner } from '../../components/StatusBanner';
@@ -177,6 +179,30 @@ type MenuState =
 
 /** What the shell needs to know about the session list it hosts in the app sidebar. */
 export type WorkbenchRailLayout = { docked: boolean; focus: boolean };
+
+/** Per-pane upload feedback for a remote session: an n/m progress badge or a
+    failure banner whose retry re-runs the same dropped inputs. */
+function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, retryLabel, dismissLabel, onRetry, onDismiss }: {
+  task: SessionUploadTask;
+  progressLabel: string;
+  progressText: string;
+  failedTitle: string;
+  retryLabel: string;
+  dismissLabel: string;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  if (task.phase === 'uploading') {
+    return <div className={`${uploadStyles.notice} ${uploadStyles.progress}`} role="status" title={task.names.join('、')} aria-label={progressLabel}><Icon name="upload" size={12} /><span>{progressText}</span></div>;
+  }
+  return <div className={`${uploadStyles.notice} ${uploadStyles.failure}`} role="alert">
+    <div className={uploadStyles.failureCopy}><strong>{failedTitle}</strong><span className={uploadStyles.failureDetail} title={task.error}>{task.error}</span></div>
+    <div className={uploadStyles.failureActions}>
+      <Button variant="primary" size="sm" onClick={onRetry} icon={<Icon name="refresh" size={13} />}>{retryLabel}</Button>
+      <IconButton size="sm" icon={<Icon name="close" size={14} />} aria-label={dismissLabel} onClick={onDismiss} />
+    </div>
+  </div>;
+}
 
 export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
@@ -399,6 +425,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const pendingBytes = useRef(new Map<string, number>());
   const handles = useRef(new Map<string, TerminalHandle>());
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
+
+  // A finished remote upload types its claimed paths exactly like a local drop.
+  const pasteRemoteUploadedPaths = useCallback((sessionId: string, remotePaths: string[]) => {
+    const text = quoteDroppedPaths(remotePaths);
+    if (!text) return;
+    setSelectedId(sessionId);
+    const handle = handles.current.get(sessionId);
+    if (!handle) return;
+    handle.paste(text);
+    handle.focus();
+  }, []);
+  const uploads = useSessionUploads({
+    onUploaded: pasteRemoteUploadedPaths,
+    formatError: (error) => formatFailure(error, t('sessions.uploadFailedTitle'), t('common.nativeError.retry')),
+  });
   // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
   // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
   const MOUNTED_ENDED_LIMIT = 3;
@@ -1563,10 +1604,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           setDropTarget(null);
           const id = paneAt(payload.position);
           if (!id) return;
-          const text = quoteDroppedPaths(payload.paths ?? []);
           const handle = handles.current.get(id);
-          if (!text || !handle) return;
+          const droppedPaths = (payload.paths ?? []).filter((path) => path.trim());
+          if (!handle || !droppedPaths.length) return;
           setSelectedId(id);
+          // A remote pane uploads the dropped files first and types the claimed
+          // remote paths once the whole drop has landed; local panes keep typing
+          // the local paths directly.
+          const session = sessionsRef.current.find((item) => item.id === id);
+          if (session?.projectId?.startsWith('remote:')) {
+            uploads.enqueueUpload(id, session.projectId, droppedPaths.map((path) => ({ name: uploadDisplayName(path), localPath: path })));
+            return;
+          }
+          const text = quoteDroppedPaths(droppedPaths);
+          if (!text) return;
           handle.paste(text);
           handle.focus();
         }
@@ -1776,10 +1827,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       {focused && <span className={styles.paneFocus}>{t('sessions.paneFocused')}</span>}
                       <button type="button" className={styles.paneClose} aria-label={t('sessions.closePane', { name: toolName(session) })} title={t('sessions.closePane', { name: toolName(session) })} onClick={(event) => { event.stopPropagation(); closePane(session.id); }}><Icon name="close" size={12} /></button>
                     </div> : null}
-                    overlay={visible ? <>
-                      {scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
-                      {dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
-                    </> : null}
+                    overlay={<>
+                      {visible && scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
+                      {visible && dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
+                      {uploads.tasks[session.id] && <SessionUploadNotice task={uploads.tasks[session.id]} progressLabel={t('sessions.uploadRunningLabel')} progressText={t('sessions.uploadProgress', { done: uploads.tasks[session.id].uploaded, total: uploads.tasks[session.id].total })} failedTitle={t('sessions.uploadFailedTitle')} retryLabel={t('sessions.uploadRetry')} dismissLabel={t('common.dismissError')} onRetry={() => uploads.retryUpload(session.id)} onDismiss={() => uploads.dismissUploadFailure(session.id)} />}
+                    </>}
                     footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
                       <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
                       <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
