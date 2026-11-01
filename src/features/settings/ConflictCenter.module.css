@@ -26,7 +26,7 @@
 .railItem:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .railItem[data-selected] { border-color: var(--accent-line); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .railIcon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-top: 1px; border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); }
-.railBody { display: grid; gap: 2px; min-width: 0; }
+.railBody { display: grid; gap: var(--space-0_5); min-width: 0; }
 .railTitle { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 .railTitle strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .railCheck { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--success-soft); color: var(--success); }
@@ -37,15 +37,15 @@
 .detailHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); }
 .detailHead h3 { margin: 0; color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); line-height: 1.4; }
 
-.why { display: flex; align-items: flex-start; gap: var(--space-2_5); margin: 0 0 var(--space-4); padding: var(--space-3) 14px; border: 1px solid var(--info-line); border-radius: var(--radius-sm); background: var(--info-soft); }
-.why > svg { flex: none; margin-top: 2px; color: var(--info); }
+.why { display: flex; align-items: flex-start; gap: var(--space-2_5); margin: 0 0 var(--space-4); padding: var(--space-3) calc(var(--space-3) + var(--space-0_5)); border: 1px solid var(--info-line); border-radius: var(--radius-sm); background: var(--info-soft); }
+.why > svg { flex: none; margin-top: var(--space-0_5); color: var(--info); }
 .why p { margin: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.6; }
 .whyExtra { margin-top: var(--space-1) !important; color: var(--text-2) !important; font-size: var(--fs-control) !important; }
 
 .loading { display: flex; align-items: center; gap: var(--space-2_5); padding: var(--space-4) 0; color: var(--text-2); font-size: var(--fs-body); }
 .spin { display: inline-grid; color: var(--accent); animation: cc-spin 1s linear infinite; }
 
-.previewError { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-3) 14px; border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); }
+.previewError { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-3) calc(var(--space-3) + var(--space-0_5)); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); }
 .previewError p { margin: 0; color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .previewError small { color: var(--text-2); overflow-wrap: anywhere; }
 
@@ -53,10 +53,10 @@
 .options { display: grid; gap: var(--space-2_5); }
 .optionWrap { display: grid; gap: var(--space-1_5); }
 /* Expandable real diff below a version option. */
-.optionDiff { margin-left: 34px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-1); }
-.optionDiff > summary { display: inline-flex; align-items: center; gap: var(--space-1_5); padding: var(--space-2) var(--space-3); color: var(--text-2); font-size: var(--fs-sm); cursor: pointer; list-style: none; }
+.optionDiff { margin-left: calc(var(--space-8) + var(--space-0_5)); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.optionDiff > summary { display: inline-flex; align-items: center; gap: var(--space-1_5); padding: var(--space-2) var(--space-3); color: var(--text-2); font-size: var(--fs-control); cursor: pointer; list-style: none; }
 .optionDiff > summary::-webkit-details-marker { display: none; }
-.optionDiff > summary:hover { color: var(--text-1); }
+.optionDiff > summary:hover { color: var(--text); }
 .optionDiff[open] > summary { border-bottom: 1px solid var(--line); }
 .optionDiff > summary > :global(svg) { flex: none; color: var(--accent); }
 .option {
@@ -65,7 +65,7 @@
   gap: var(--space-3);
   width: 100%;
   min-width: 0;
-  padding: var(--space-3) 14px;
+  padding: var(--space-3) calc(var(--space-3) + var(--space-0_5));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -80,7 +80,7 @@
 .option[data-deleted] { border-style: dashed; border-color: var(--danger-line); background: var(--danger-soft); }
 .option[data-deleted][data-selected] { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
 
-.radio { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-top: 2px; border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: border-color var(--fast) var(--ease); }
+.radio { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-top: var(--space-0_5); border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: border-color var(--fast) var(--ease); }
 .radioDot { width: 8px; height: 8px; border-radius: 50%; background: transparent; transition: background-color var(--fast) var(--ease); }
 .option[data-selected] .radio { border-color: var(--accent); }
 .option[data-selected] .radioDot { background: var(--accent); }
@@ -92,7 +92,7 @@
 .optionHead > svg { flex: none; color: var(--text-3); }
 .optionHead strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .optionHead small { color: var(--text-3); font-size: var(--fs-caption); font-family: var(--font-mono); }
-.time { display: inline-flex; align-items: center; gap: 3px; color: var(--text-3); font-size: var(--fs-caption); }
+.time { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-3); font-size: var(--fs-caption); }
 .time > svg { flex: none; color: inherit; }
 
 .summary { display: block; min-width: 0; }
