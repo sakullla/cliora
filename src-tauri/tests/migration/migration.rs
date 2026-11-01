@@ -29,6 +29,88 @@ fn database(directory: &Path) -> Database {
 }
 
 #[test]
+fn same_named_skill_merge_preserves_installation_disabled_state_and_old_references() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Synthetic skill\n"))]);
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z-skill','same-skill','description','local','synthetic-digest',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap();
+        conn.execute("INSERT INTO skill_installations(package_id,tool,scope_key,target_path,digest) VALUES ('z-skill','codex','global','unchanged-path','synthetic-digest')", []).unwrap();
+        conn.execute("INSERT INTO skill_operations(id,package_id,tool,scope_key,target_path,stage_path,backup_path,removing,status) VALUES ('operation','z-skill','codex','global','unchanged-path','stage','archive',1,'disabled')", []).unwrap();
+        conn.execute("INSERT INTO app_settings(key,value) VALUES ('native_skill_switch:codex:global:z-skill','{}')", []).unwrap();
+        resources::queue(conn, &resources::PortableDeployment { resource_kind: "skill".into(), resource_id: "z-skill".into(), tool: "codex".into(), scope_key: "global".into(), enabled: false }, false)?;
+        Ok(())
+    }).unwrap();
+    let entity = PortableEntity { id: "a-skill".into(), payload: PortablePayload::Skill(PortableSkill {
+        id: "a-skill".into(), name: "same-skill".into(), description: "description".into(), files, digest: "synthetic-digest".into(), pending_fields: vec![],
+    }) };
+    let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![entity] }).unwrap();
+    assert_eq!(draft.items[0].status, "same");
+    restore_preview(&db, &store, &registry, &draft).unwrap();
+    db.with_connection(|conn| {
+        assert_eq!(resource_names::canonical(conn, "skill", "z-skill")?, "a-skill");
+        for table in ["skill_installations", "skill_operations"] {
+            let id: String = conn.query_row(&format!("SELECT package_id FROM {table}"), [], |row| row.get(0)).unwrap();
+            assert_eq!(id, "a-skill");
+        }
+        assert!(conn.query_row("SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='native_skill_switch:codex:global:a-skill')", [], |row| row.get::<_,bool>(0)).unwrap());
+        for entity in resources::collect(conn)? {
+            let PortablePayload::Deployment(value) = entity.payload else { panic!() };
+            assert_eq!(value.resource_id, "a-skill");
+            assert!(!value.enabled);
+        }
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn same_name_preview_checks_the_existing_row_again_before_merging() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(root.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Original"))]);
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z','same','original','local','digest',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap(); Ok(())
+    }).unwrap();
+    let incoming = PortableEntity { id: "a".into(), payload: PortablePayload::Skill(PortableSkill { id: "a".into(), name: "same".into(), description: "original".into(), files, digest: "digest".into(), pending_fields: vec![] }) };
+    let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![incoming] }).unwrap();
+    db.with_connection(|conn| { conn.execute("UPDATE skill_packages SET description='edited-after-preview' WHERE id='z'", []).unwrap(); Ok(()) }).unwrap();
+    assert!(restore_preview(&db, &store, &registry, &draft).unwrap_err().contains("本机资料已变化"));
+    db.with_connection(|conn| {
+        let description: String = conn.query_row("SELECT description FROM skill_packages WHERE id='z'", [], |row| row.get(0)).unwrap();
+        assert_eq!(description, "edited-after-preview"); Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn bundle_name_conflict_keeps_local_content_and_resolves_its_identity() {
+    for keep_local in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let db = database(root.path());
+        let store = MemoryCredentials::default();
+        let registry = Registry::builtins();
+        let files = BTreeMap::from([("SKILL.md".to_owned(), STANDARD.encode("# Original"))]);
+        db.with_connection(|conn| { conn.execute("INSERT INTO skill_packages(id,name,description,source,digest,files_json,updated_at) VALUES ('z','same','local','local','old',?1,0)", [serde_json::to_string(&files).unwrap()]).unwrap(); Ok(()) }).unwrap();
+        let incoming = PortableEntity { id: "a".into(), payload: PortablePayload::Skill(PortableSkill { id: "a".into(), name: "same".into(), description: "remote".into(), files: BTreeMap::from([("SKILL.md".into(), STANDARD.encode("# Incoming"))]), digest: "new".into(), pending_fields: vec![] }) };
+        let draft = preview_import(&db, &store, &registry, PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: vec![incoming] }).unwrap();
+        assert_eq!(draft.items[0].status, "conflict");
+        restore_preview(&db, &store, &registry, &draft).unwrap();
+        let preview = sync::preview_conflict(&db, &store, &registry, "skill:a").unwrap();
+        assert!(preview.local_summary.contains("local"));
+        sync::resolve(&db, &store, &registry, "skill:a", if keep_local { None } else { Some(&preview.versions[0].id) }).unwrap();
+        db.with_connection(|conn| {
+            let row: (String,String) = conn.query_row("SELECT id,description FROM skill_packages", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(row, ("a".into(), if keep_local { "local".into() } else { "remote".into() }));
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
 fn stale_binding_is_not_exported_or_retried_and_native_files_are_preserved() {
     let root = tempfile::tempdir().unwrap();
     let db = database(root.path());

@@ -2,6 +2,7 @@ pub mod crypto;
 pub mod sync;
 mod paths;
 mod resources;
+mod resource_names;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
@@ -257,6 +258,8 @@ pub struct ImportDraft {
     pub id: String,
     pub snapshot: PortableSnapshot,
     pub baseline: BTreeMap<String, Option<String>>,
+    /// Same-name/aliased rows observed by the preview, checked again under the write transaction.
+    pub name_baseline: BTreeMap<String, (String, String)>,
     pub items: Vec<ImportItem>,
 }
 
@@ -867,7 +870,15 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
         return Err("配置包资料版本或数量不受支持".into());
     }
     let mut keys = HashSet::new();
+    let mut names = BTreeMap::new();
     for entity in &snapshot.entities {
+        if let Some(name) = resource_names::name(entity) {
+            if let Some(previous) = names.insert((entity.kind(), name), entity) {
+                if !resource_names::equivalent(previous, entity) {
+                    return Err("配置包包含同名但内容不同的资源；未写入本机资料".into());
+                }
+            }
+        }
         if let PortablePayload::Profile(value) = &entity.payload {
             if let Some(editing) = &value.profile.editing {
                 crate::native::configuration::validate_state(editing)?;
@@ -982,15 +993,22 @@ pub fn preview_import(
         .into_iter()
         .collect();
     let mut baseline = BTreeMap::new();
+    let mut name_baseline = BTreeMap::new();
     let mut items = Vec::new();
     for entity in &snapshot.entities {
         let key = entity.key();
+        let matched = db.with_connection(|conn| Ok(resource_names::matching(conn, entity, &local)?.cloned()))?;
+        if let Some(named) = matched.as_ref().filter(|named| named.key() != key) {
+            name_baseline.insert(key.clone(), (named.key(), named.digest()?));
+        }
         let current = local.get(&key).map(PortableEntity::digest).transpose()?;
         let incoming = entity.digest()?;
         let blocked_local_account = current.is_none()
             && matches!(entity.payload, PortablePayload::Account(_))
             && stored_account_ids.contains(&entity.id);
-        let status = if blocked_local_account {
+        let status = if let Some(named) = matched.as_ref().filter(|named| named.key() != key) {
+            if resource_names::equivalent(named, entity) { "same" } else { "conflict" }
+        } else if blocked_local_account {
             "conflict"
         } else {
             match &current {
@@ -1010,7 +1028,7 @@ pub fn preview_import(
             label: entity.label(),
             status,
             pending_fields: entity.pending_fields(),
-            local_preview: local.get(&entity.key()).map(preview_content).transpose()?,
+            local_preview: matched.as_ref().map(preview_content).transpose()?,
             incoming_preview: preview_content(entity)?,
         });
     }
@@ -1018,6 +1036,7 @@ pub fn preview_import(
         id: Uuid::new_v4().to_string(),
         snapshot,
         baseline,
+        name_baseline,
         items,
     })
 }
@@ -1180,8 +1199,17 @@ fn apply_import_selecting(
             if draft.baseline.get(key) != Some(&digest) {
                 return Err("本机资料已变化，请重新预览导入".into());
             }
+            if let Some(incoming) = draft.snapshot.entities.iter().find(|entity| entity.key() == *key) {
+                let named = resource_names::matching(&tx, incoming, &current)?.filter(|item| item.key() != *key)
+                    .map(|item| Ok::<_,String>((item.key(), item.digest()?))).transpose()?;
+                if named.as_ref() != draft.name_baseline.get(key) {
+                    return Err("本机资料已变化，请重新预览导入".into());
+                }
+            }
         }
-        for entity in &prepared {
+        for entity in &mut prepared {
+            let chosen_conflict = apply_native && draft.items.iter().any(|item| item.key == entity.key() && item.status == "conflict");
+            resource_names::prepare(&tx, entity, chosen_conflict)?;
             match &entity.payload {
                 PortablePayload::Preferences(value) => {
                     let preserved = current.get("preferences:managed").and_then(|entity| match &entity.payload {
@@ -1398,12 +1426,13 @@ fn retain_bundle_conflicts(
         let digest = incoming.digest()?;
         let (entity, secret_ids) = seal_conflict_entity(store, incoming)?;
         created.extend(secret_ids.iter().cloned());
-        let local = current.get(key);
+        let local = draft.name_baseline.get(key).and_then(|(local_key, _)| current.get(local_key)).or_else(|| current.get(key));
         holds.push(sync::BundleHold {
             key: key.clone(),
             label: local.map(PortableEntity::label).unwrap_or_else(|| incoming.label()),
             local_present: local.is_some(),
             local_digest: local.map(PortableEntity::digest).transpose()?.unwrap_or_default(),
+            local_key: local.filter(|local| local.key() != *key).map(PortableEntity::key),
             version_id: format!("bundle:{digest}"),
             digest,
             entity,

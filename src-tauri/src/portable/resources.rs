@@ -84,6 +84,8 @@ pub(super) fn queue(
     value: &PortableDeployment,
     remove: bool,
 ) -> Result<(), String> {
+    let mut value = value.clone();
+    value.resource_id = super::resource_names::canonical(conn, &value.resource_kind, &value.resource_id)?;
     let mut items = pending(conn)?;
     items.insert(
         value.id(),
@@ -93,6 +95,39 @@ pub(super) fn queue(
         },
     );
     save(conn, &items)
+}
+
+pub(super) fn remap_resource(conn: &Connection, kind: &str, old: &str, new: &str) -> Result<(), String> {
+    let mut remapped = BTreeMap::new();
+    let mut key_changes = BTreeMap::new();
+    for (id, mut item) in pending(conn)? {
+        if item.deployment.resource_kind == kind && item.deployment.resource_id == old {
+            item.deployment.resource_id = new.into();
+            key_changes.insert(format!("deployment:{id}"), format!("deployment:{}", item.deployment.id()));
+        }
+        remapped.entry(item.deployment.id()).or_insert(item);
+    }
+    save(conn, &remapped)?;
+    for entity in collect(conn)? {
+        if let PortablePayload::Deployment(mut value) = entity.payload {
+            if value.resource_kind == kind && value.resource_id == new {
+                let new_key = format!("deployment:{}", value.id());
+                value.resource_id = old.into();
+                key_changes.insert(format!("deployment:{}", value.id()), new_key);
+            }
+        }
+    }
+    let json: Option<String> = conn.query_row("SELECT value FROM app_settings WHERE key='sync_blockers'", [], |row| row.get(0))
+        .optional().map_err(|error| error.to_string())?;
+    if let Some(json) = json {
+        let mut blockers: Vec<super::RestoreBlocker> = serde_json::from_str(&json).map_err(|_| "同步阻塞记录损坏")?;
+        for blocker in &mut blockers {
+            if let Some(key) = key_changes.get(&blocker.key) { blocker.key = key.clone(); }
+        }
+        blockers.sort_by(|a,b| a.key.cmp(&b.key)); blockers.dedup_by(|a,b| a.key == b.key);
+        conn.execute("UPDATE app_settings SET value=?1 WHERE key='sync_blockers'", [serde_json::to_string(&blockers).map_err(|error|error.to_string())?]).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub(super) fn collect(conn: &Connection) -> Result<Vec<PortableEntity>, String> {

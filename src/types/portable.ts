@@ -37,6 +37,7 @@ export interface WebdavSetup {
 
 export interface SyncConflict {
   key: string;
+  localKey?: string | null;
   label: string;
   localPresent: boolean;
   localDigest: string;
