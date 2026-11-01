@@ -158,6 +158,7 @@ export default {
   uploadProgress: '上传中 {{done}} / {{total}}',
   uploadFailedTitle: '文件上传失败',
   uploadRetry: '重试上传',
+  pasteImageEncodeFailed: '剪贴板图片转 PNG 失败',
   cursorBlink: '光标闪烁',
   fontSize: '终端字号',
   termThemeAuto: '跟随应用',

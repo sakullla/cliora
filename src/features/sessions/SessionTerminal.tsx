@@ -173,6 +173,37 @@ export function quoteDroppedPaths(paths: string[]): string {
     .join(' ');
 }
 
+/** File name for a pasted image upload: `cliora-paste-YYYYMMDD-HHmmss-SSS.png`. */
+export function pasteImageName(at: Date): string {
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  const date = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`;
+  const time = `${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
+  return `cliora-paste-${date}-${time}-${pad(at.getMilliseconds(), 3)}.png`;
+}
+
+/**
+ * Re-encode a pasted image file as PNG bytes through a canvas. The paste event is
+ * the only source of the bytes; nothing here reads the clipboard back. Any decode
+ * or conversion failure rejects so the upload attempt fails like a transfer error.
+ */
+export async function encodePastedImagePng(file: File): Promise<Uint8Array> {
+  if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap unavailable');
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('canvas 2d context unavailable');
+    context.drawImage(bitmap, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG encoding failed');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    bitmap.close();
+  }
+}
+
 export type ShortcutAction = 'find' | 'composer' | 'split' | 'rail' | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'newSession' | 'prevSession' | 'nextSession';
 
 /** Keys the workbench owns before xterm sees them. Null lets xterm encode the key. */
@@ -420,7 +451,7 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onImagePasteUpload, writers, pending, handles, bridge }: {
   sessionId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
@@ -430,6 +461,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   running: boolean;
   /** A remote PTY pays a round trip for every resize, so layout storms are collapsed. */
   remote?: boolean;
+  /** Queue an image-only clipboard paste as a PNG upload (remote panes only). The
+      bytes encode lazily, so a decode failure fails the upload attempt and its retry. */
+  onImagePasteUpload?: (input: { name: string; encodeBytes: () => Promise<string> }) => void;
   fontSize: number;
   lineHeight?: number;
   theme: TerminalTheme;
@@ -448,6 +482,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const linksRef = useRef<TerminalLinks | null>(null);
   const linkHintRef = useRef('');
   linkHintRef.current = t('sessions.openLinkHint', { modifier: MAC ? '⌘' : 'Ctrl' });
+  const pasteEncodeErrorRef = useRef('');
+  pasteEncodeErrorRef.current = t('sessions.pasteImageEncodeFailed');
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const fitNowRef = useRef<(() => void) | null>(null);
@@ -468,6 +504,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const focusedRef = useRef(focused);
   const runningRef = useRef(running);
   const remoteRef = useRef(remote);
+  const imagePasteRef = useRef(onImagePasteUpload);
   const fontSizeRef = useRef(fontSize);
   const lineHeightRef = useRef(lineHeight);
   const themeRef = useRef(theme);
@@ -475,6 +512,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   focusedRef.current = focused;
   runningRef.current = running;
   remoteRef.current = remote;
+  imagePasteRef.current = onImagePasteUpload;
   fontSizeRef.current = fontSize;
   lineHeightRef.current = lineHeight;
   themeRef.current = theme;
@@ -675,18 +713,41 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       event.preventDefault();
     };
 
-    // An image-only clipboard stays available to the CLI through Ctrl+V.
+    // A text clipboard pastes as text. An image-only clipboard stays available to a
+    // local CLI through Ctrl+V; a remote pane instead re-encodes the pasted image
+    // as PNG and uploads it through the shared queue, so the bytes come only from
+    // this paste event and no clipboard is ever read back.
     const onPaste = (event: ClipboardEvent) => {
       if (!activeRef.current) { event.preventDefault(); event.stopPropagation(); return; }
       const data = event.clipboardData;
       if (!data) return;
       const text = data.getData('text/plain');
       if (text) return;
-      const hasImage = [...data.items].some((item) => item.kind === 'file');
-      if (!hasImage) return;
+      const files = [...data.items].filter((item) => item.kind === 'file').map((item) => item.getAsFile());
+      if (!files.length) return;
       event.preventDefault();
       event.stopPropagation();
-      sendToPty('\x16');
+      const queueImage = imagePasteRef.current;
+      // A file item without a readable payload keeps the local Ctrl+V behaviour
+      // instead of failing an upload.
+      const file = files.find(Boolean);
+      if (!remoteRef.current || !queueImage || !file) {
+        sendToPty('\x16');
+        return;
+      }
+      const encodeFailed = pasteEncodeErrorRef.current;
+      queueImage({
+        name: pasteImageName(new Date()),
+        encodeBytes: async () => {
+          try {
+            return encodeBase64(await encodePastedImagePng(file));
+          } catch {
+            // Any decode or PNG conversion failure surfaces as one localized
+            // banner message; the retry re-runs the same paste image.
+            throw new Error(encodeFailed);
+          }
+        },
+      });
     };
     node.addEventListener('paste', onPaste, true);
 

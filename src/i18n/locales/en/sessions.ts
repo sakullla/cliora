@@ -158,6 +158,7 @@ export default {
   uploadProgress: 'Uploading {{done}} / {{total}}',
   uploadFailedTitle: 'File upload failed',
   uploadRetry: 'Retry upload',
+  pasteImageEncodeFailed: 'Failed to encode the clipboard image as PNG',
   cursorBlink: 'Cursor blink',
   fontSize: 'Terminal font size',
   termThemeAuto: 'Match app',

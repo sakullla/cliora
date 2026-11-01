@@ -1,8 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 
-/** One file of an upload attempt: a dropped local path, or inlined bytes (image paste). */
-export type SessionUploadInput = { name: string; localPath?: string; bytesBase64?: string };
+/** One file of an upload attempt: a dropped local path, or inlined bytes (image paste).
+    A paste image encodes lazily through `encodeBytes` so a decode or PNG conversion
+    failure fails the attempt — and its retry — exactly like a transfer error. */
+export type SessionUploadInput = { name: string; localPath?: string; bytesBase64?: string; encodeBytes?: () => Promise<string> };
 
 export type SessionUploadTask = {
   phase: 'uploading' | 'failed';
@@ -66,8 +68,11 @@ export function useSessionUploads(handlers: {
         for (const input of next.inputs) {
           // One file per request: the backend records each landed name, and the
           // pane's progress counter follows the transfer instead of guessing.
-          const paths = input.bytesBase64 !== undefined
-            ? await native.uploadRemoteSessionFileBytes(next.sessionId, next.projectId, input.name, input.bytesBase64)
+          const inlineBytes = input.bytesBase64 !== undefined ? input.bytesBase64
+            : input.encodeBytes !== undefined ? await input.encodeBytes()
+              : undefined;
+          const paths = inlineBytes !== undefined
+            ? await native.uploadRemoteSessionFileBytes(next.sessionId, next.projectId, input.name, inlineBytes)
             : await native.uploadRemoteSessionFiles(next.sessionId, next.projectId, [input.localPath ?? '']);
           claimed.push(...paths);
           uploaded += 1;
@@ -89,7 +94,7 @@ export function useSessionUploads(handlers: {
 
   /** Queue files for a remote pane; later drops on the same session run after this one. */
   const enqueueUpload = useCallback((sessionId: string, projectId: string, inputs: SessionUploadInput[]) => {
-    const usable = inputs.filter((input) => (input.localPath ?? '').trim() !== '' || input.bytesBase64 !== undefined);
+    const usable = inputs.filter((input) => (input.localPath ?? '').trim() !== '' || input.bytesBase64 !== undefined || input.encodeBytes !== undefined);
     if (!usable.length) return;
     retryInputs.current.delete(sessionId);
     const queue = queues.current.get(sessionId) ?? [];
