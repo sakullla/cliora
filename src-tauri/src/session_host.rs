@@ -476,6 +476,7 @@ struct Session {
     tool_id: String,
     project_id: Option<String>,
     directory: Mutex<String>,
+    paste_files: Mutex<Vec<tempfile::TempDir>>,
     mode: LaunchMode,
     running: AtomicBool,
     exit_code: Mutex<Option<i32>>,
@@ -565,6 +566,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         tool_id: plan.tool_id.clone(),
         project_id: plan.project_id.clone(),
         directory: Mutex::new(directory),
+        paste_files: Mutex::new(Vec::new()),
         mode: plan.mode,
         running: AtomicBool::new(true),
         exit_code: Mutex::new(None),
@@ -752,6 +754,49 @@ pub fn close(id: &str) -> Result<(), String> {
     close_with_cleanup(id, || Ok(()))
 }
 
+pub fn retain_paste_files(id: &str, directory: tempfile::TempDir) -> Result<(), String> {
+    let session = lookup(id)?;
+    let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
+    if session.remote || !session.running.load(Ordering::SeqCst) || !sessions().contains_key(id) {
+        return Err("会话不是活动本地会话，无法粘贴文件".into());
+    }
+    session.paste_files.lock().map_err(|_| "会话状态不可用")?.push(directory);
+    Ok(())
+}
+
+/// Upload and session-end cleanup share the session operation lock. Closing a
+/// session cannot recycle its files before an in-flight upload records them.
+pub fn with_remote_upload<T>(id: &str, project_id: &str, upload: impl FnOnce(&str) -> T) -> Result<T, String> {
+    let session = lookup(id)?;
+    let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
+    if !session.remote || !session.running.load(Ordering::SeqCst)
+        || session.connection.load(Ordering::SeqCst) == REMOTE_ENDED
+        || session.project_id.as_deref() != Some(project_id) || !sessions().contains_key(id)
+    {
+        return Err("会话不是该项目的活动远程会话，无法上传文件".into());
+    }
+    let remote_id = session.remote_session_id.as_deref().ok_or("远程会话缺少上传归属身份")?;
+    Ok(upload(remote_id))
+}
+
+pub(crate) fn with_upload_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    // An already-removed session has finished its locked close. Otherwise wait
+    // for any upload to record its files before background recovery reads them.
+    let session = lookup(id).ok();
+    let _operation = session.as_ref().map(|session| session.operation.lock())
+        .transpose().map_err(|_| "会话状态不可用")?;
+    cleanup()
+}
+
+pub(crate) fn with_remote_upload_cleanup(remote_id: &str, cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    let id = sessions().values().find(|session| session.remote_session_id.as_deref() == Some(remote_id))
+        .map(|session| session.id.clone());
+    match id {
+        Some(id) => with_upload_cleanup(&id, cleanup),
+        None => cleanup(),
+    }
+}
+
 pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     let session = lookup(id)?;
     let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
@@ -772,6 +817,7 @@ pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>
     // verify absence again and finish storage cleanup without losing recovery.
     cleanup()?;
     end_child(&session);
+    session.paste_files.lock().map_err(|_| "会话状态不可用")?.clear();
     sessions().remove(id);
     Ok(())
 }
@@ -1017,7 +1063,7 @@ fn consume_remote_absence(session: &Session) {
         (APP.get(), session.project_id.as_deref(), session.remote_session_id.as_deref())
     {
         if project_id.starts_with("remote:") {
-            crate::commands::recover_ended_session_uploads(app, project_id, remote_id);
+            crate::commands::recover_ended_session_uploads(app, &session.id, project_id, remote_id);
         }
     }
 }
@@ -1473,6 +1519,59 @@ exit 255
             vec![("remote:controlled-cliora-absent".to_owned(), "cliora-absent".to_owned())],
             "only the consumed absence signal recovers uploads, exactly once"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paste_files_live_until_close_and_remote_uploads_share_the_cleanup_lock() {
+        let _guard = lock_for_tests();
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("paste-session.ps1");
+        std::fs::write(&script, "[Console]::WriteLine('PASTE_READY'); while ($null -ne [Console]::ReadLine()) {}").unwrap();
+        for remote in [false, true] {
+            let plan = LaunchPlan {
+                resume_native_id: None, account_version: None, account_context: None,
+                tool_id: "controlled".into(), project_id: remote.then(|| "remote:paste".into()),
+                mode: LaunchMode::Normal, executable: script.clone(), cli_args: vec![], directory: directory.path().into(),
+                terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+                remote_session_id: remote.then(|| "cliora-paste".into()),
+                remote_end_args: remote.then(|| vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
+            };
+            let id = start(plan, None).unwrap().session_id.unwrap();
+            struct Cleanup(String);
+            impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+            let _cleanup = Cleanup(id.clone());
+            wait_for_replay(&id, "PASTE_READY").unwrap();
+            let session = lookup(&id).unwrap();
+            let staged = tempfile::tempdir().unwrap();
+            let path = staged.path().join("clipboard.png");
+            std::fs::write(&path, b"retained bytes").unwrap();
+            if remote {
+                assert!(retain_paste_files(&id, staged).is_err());
+                assert!(!path.exists());
+                assert!(with_remote_upload(&id, "remote:wrong", |_| panic!("wrong project must not upload")).is_err());
+                with_remote_upload(&id, "remote:paste", |remote_id| {
+                    assert_eq!(remote_id, "cliora-paste");
+                    assert!(session.operation.try_lock().is_err(), "upload must exclude close and recovery");
+                }).unwrap();
+                with_upload_cleanup(&id, || {
+                    assert!(session.operation.try_lock().is_err(), "background recovery must exclude upload");
+                    Ok(())
+                }).unwrap();
+                with_remote_upload_cleanup("cliora-paste", || {
+                    assert!(session.operation.try_lock().is_err(), "pending sweeps must exclude upload");
+                    Ok(())
+                }).unwrap();
+                session.connection.store(REMOTE_ENDED, Ordering::SeqCst);
+                assert!(with_remote_upload(&id, "remote:paste", |_| panic!("ended remote must not upload")).is_err());
+            } else {
+                assert!(with_remote_upload(&id, "remote:paste", |_| panic!("local session must not upload")).is_err());
+                retain_paste_files(&id, staged).unwrap();
+                assert_eq!(std::fs::read(&path).unwrap(), b"retained bytes");
+                close(&id).unwrap();
+                assert!(!path.exists(), "close releases paste files even while the Session Arc is retained");
+            }
+        }
     }
 
     #[cfg(windows)]

@@ -23,13 +23,13 @@ const project = { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/
  * the routing and status behaviour only; native platform acceptance (real PNG
  * encoding in the WebView, real SSH transfer) is recorded separately.
  */
-async function installPasteDesktop(page: Page, layout: 'remote' | 'local' = 'remote') {
-  await page.addInitScript(({ host, project, layout }) => {
+async function installPasteDesktop(page: Page, layout: 'remote' | 'local' = 'remote', toolId = 'codex', bracketed = false) {
+  await page.addInitScript(({ host, project, layout, toolId, bracketed }) => {
     if (layout !== 'local') localStorage.setItem('cliora:remote-target', host.id);
-    const names: Record<string, string> = { codex: 'Codex' };
+    const names: Record<string, string> = { [toolId]: toolId };
     const sessions = layout === 'local'
-      ? [{ id: 'local-1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: 1, stateRevision: 0 }]
-      : [{ id: 'rs1', toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null, startedAt: 1, remoteSessionId: 'cliora-rs1', connectionState: 'connected', reattachable: false, stateRevision: 0, remoteEndResult: null }];
+      ? [{ id: 'local-1', toolId, projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: 1, stateRevision: 0 }]
+      : [{ id: 'rs1', toolId, projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null, startedAt: 1, remoteSessionId: 'cliora-rs1', connectionState: 'connected', reattachable: false, stateRevision: 0, remoteEndResult: null }];
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
     const registered = Object.entries(names).map(([id, name]) => ({
       id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal',
@@ -72,13 +72,14 @@ async function installPasteDesktop(page: Page, layout: 'remote' | 'local' = 'rem
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions' || command === 'list_projects' || command === 'list_remote_sessions' || command === 'list_library_items') return command === 'list_workbench_sessions' ? sessions.map(item => ({ ...item })) : [];
           if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
-          if (command === 'replay_workbench_session') return btoa('paste-fixture-ready\r\n> ');
+          if (command === 'replay_workbench_session') return btoa((bracketed ? '\x1b[?2004h' : '') + 'paste-fixture-ready\r\n> ');
           if (command === 'write_workbench_session') {
             const raw = Uint8Array.from(atob(args.dataBase64), c => c.charCodeAt(0));
             writes.push({ sessionId: args.sessionId, text: new TextDecoder().decode(raw) });
             return null;
           }
           if (command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
+          if (command === 'stage_session_paste_files') return (args.inlineFiles as Array<{ name: string }>).map(file => `C:/fixture/${file.name}`);
           if (command === 'upload_session_files') {
             uploadCalls.push({ sessionId: args.sessionId, projectId: args.projectId, localPaths: args.localPaths ?? null, inlineFiles: args.inlineFiles ?? null });
             if (uploadControls.hold && !uploadControls.released) await holdReady;
@@ -92,7 +93,7 @@ async function installPasteDesktop(page: Page, layout: 'remote' | 'local' = 'rem
         },
       },
     });
-  }, { host, project, layout });
+  }, { host, project, layout, toolId, bracketed });
 }
 
 async function openWorkbench(page: Page) {
@@ -109,7 +110,7 @@ async function pasteOnPane(page: Page, pane: Locator, payload: { text?: string; 
     if (payload.png || payload.junk) {
       let bytes: Uint8Array;
       if (payload.png) {
-        // A real PNG drawn here, so the production decode/re-encode path runs.
+        // A real PNG drawn here, so production decoding/validation runs.
         const canvas = document.createElement('canvas');
         canvas.width = 6;
         canvas.height = 4;
@@ -133,6 +134,93 @@ const writesFor = (page: Page, sessionId: string) => page.evaluate(
   sessionId);
 const uploadCalls = (page: Page) => page.evaluate(() => (window as unknown as { __uploadCalls: Array<Record<string, unknown>> }).__uploadCalls.slice());
 const pasteName = /^cliora-paste-\d{8}-\d{6}-\d{3}\.png$/;
+
+// Every terminal adapter registered by Cliora. Desktop launchers do not own a PTY.
+for (const [tool, prefix] of [
+  ['codex', ''], ['claude_code', ''], ['grok', ''], ['pi', ''], ['opencode', ''],
+  ['qoder_cn', '@'], ['kimi_code', '@'], ['codebuddy', ''], ['mimo_code', ''],
+  ['cline', '@'], ['devin', '@'], ['command_code', ''], ['antigravity', '@'],
+  ['kiro', ''], ['minimax_code', '@'],
+]) {
+  test(`${tool} uses its adapter's attachment payload over negotiated bracketed paste`, async ({ page }) => {
+    await installPasteDesktop(page, 'remote', tool, true);
+    await openWorkbench(page);
+    await pasteOnPane(page, page.locator('[data-pane-session="rs1"]'), { png: true });
+    await expect.poll(async () => (await writesFor(page, 'rs1')).length).toBe(1);
+    const [text] = await writesFor(page, 'rs1');
+    expect(text.startsWith(`\x1b[200~${prefix}/srv/project/.cliora/uploads/`)).toBe(true);
+    expect(text.endsWith('.png\x1b[201~')).toBe(true);
+    expect(text).not.toContain('\x16');
+    expect(text).not.toMatch(/[\r\n]/);
+  });
+}
+
+test('multiple pasted files keep their names and bytes in a single transfer', async ({ page }) => {
+  await installPasteDesktop(page);
+  await openWorkbench(page);
+  await page.locator('.xterm-helper-textarea:visible').evaluate(node => {
+    const data = new DataTransfer();
+    data.items.add(new File([new Uint8Array([0, 255, 1, 2])], 'binary.dat', { type: 'application/octet-stream' }));
+    data.items.add(new File(['中文资料'], '说明.txt', { type: 'text/plain' }));
+    node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect.poll(async () => (await writesFor(page, 'rs1')).length).toBe(1);
+  const calls = await uploadCalls(page);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].inlineFiles).toEqual([
+    { name: 'binary.dat', bytesBase64: 'AP8BAg==' },
+    { name: '说明.txt', bytesBase64: Buffer.from('中文资料').toString('base64') },
+  ]);
+});
+
+test('the paste menu uploads PNG bytes without recompression', async ({ page }) => {
+  await installPasteDesktop(page);
+  await openWorkbench(page);
+  const expectedBytes = await page.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 2;
+    const original = await new Promise<Blob>(resolve => canvas.toBlob(value => resolve(value!), 'image/png'));
+    // Trailing bytes distinguish original PNG reuse from canvas recompression.
+    const blob = new Blob([original, 'preserve-original-bytes'], { type: 'image/png' });
+    Object.defineProperty(navigator.clipboard, 'read', { value: async () => [new ClipboardItem({ 'image/png': blob })] });
+    return btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
+  });
+  await page.locator('[data-pane-session="rs1"] .xterm-screen').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^粘贴/ }).click();
+  await expect.poll(async () => (await writesFor(page, 'rs1')).length).toBe(1);
+  expect((await uploadCalls(page))[0].inlineFiles).toEqual([{ name: expect.stringMatching(pasteName), bytesBase64: expectedBytes }]);
+});
+
+test('the paste menu can read text when the rich clipboard API is denied', async ({ page }) => {
+  await installPasteDesktop(page);
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'read', { value: async () => { throw new Error('unsupported'); } });
+    Object.defineProperty(navigator.clipboard, 'readText', { value: async () => '菜单粘贴文本' });
+  });
+  await page.locator('[data-pane-session="rs1"] .xterm-screen').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /^粘贴/ }).click();
+  await expect.poll(() => writesFor(page, 'rs1')).toEqual(['菜单粘贴文本']);
+  expect(await uploadCalls(page)).toEqual([]);
+});
+
+test('two images remain separate Codex paste frames after one upload batch', async ({ page }) => {
+  await installPasteDesktop(page, 'remote', 'codex', true);
+  await openWorkbench(page);
+  await page.locator('.xterm-helper-textarea:visible').evaluate(async node => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 2;
+    const blob = await new Promise<Blob>(resolve => canvas.toBlob(value => resolve(value!), 'image/png'));
+    const data = new DataTransfer();
+    for (let i = 0; i < 2; i++) data.items.add(new File([blob], `image-${i}.png`, { type: 'image/png' }));
+    node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect.poll(async () => (await writesFor(page, 'rs1')).length).toBe(1);
+  const [text] = await writesFor(page, 'rs1');
+  expect(text.match(/\x1b\[200~/g)).toHaveLength(2);
+  expect(text.match(/\x1b\[201~/g)).toHaveLength(2);
+  expect(await uploadCalls(page)).toHaveLength(1);
+});
 
 test('a remote pane pastes an image-only clipboard as a timestamped PNG upload and types the remote path', async ({ page }) => {
   await installPasteDesktop(page, 'remote');
@@ -160,7 +248,7 @@ test('a remote pane pastes an image-only clipboard as a timestamped PNG upload a
   const inline = calls[0].inlineFiles as Array<{ name: string; bytesBase64: string }>;
   expect(inline.length).toBe(1);
   expect(inline[0].name).toMatch(pasteName);
-  // PNG magic bytes survive the canvas re-encode.
+  // PNG magic bytes survive the upload.
   expect(inline[0].bytesBase64.startsWith('iVBORw0KGgo')).toBe(true);
 });
 
@@ -215,13 +303,13 @@ test('a clipboard with text still pastes as text on a remote pane and uploads no
   await expect(page.getByRole('status', { name: '正在上传文件到远程会话' })).toHaveCount(0);
 });
 
-test('a local pane still sends Ctrl+V for an image-only paste and never calls the upload IPC', async ({ page }) => {
+test('a local pane stages image bytes and pastes their path without a simulated shortcut', async ({ page }) => {
   await installPasteDesktop(page, 'local');
   await openWorkbench(page);
   const pane = page.locator('[data-pane-session="local-1"]');
   await expect(pane).toBeVisible();
   await pasteOnPane(page, pane, { png: true });
-  await expect.poll(() => writesFor(page, 'local-1')).toEqual(['\u0016']);
+  await expect.poll(() => writesFor(page, 'local-1')).toEqual([expect.stringMatching(/^C:\/fixture\/cliora-paste-.*\.png$/)]);
   expect(await uploadCalls(page)).toEqual([]);
 });
 

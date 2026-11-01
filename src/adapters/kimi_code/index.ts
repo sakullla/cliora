@@ -1,8 +1,11 @@
+import { quoteAttachmentPath } from '../attachments';
 import icon from '../../assets/tools/kimi_code.svg';
 import type { ToolUiAdapter } from '../contract';
 import { KimiConfigurationEditor } from './ConfigurationEditor';
 
 export const kimiCodeUiAdapter: ToolUiAdapter = {
+  // Kimi native file mentions use @path or @"path with spaces".
+  attachmentPastes: (paths) => [paths.map((path) => `@${quoteAttachmentPath(path)}`).join(' ')],
   remoteAgent: { root: '.kimi-code/agents', extension: 'md' },
   icon: {
     light: icon,

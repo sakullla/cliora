@@ -25,6 +25,9 @@ export type ModelMappingControl = {
 };
 export type ToolUiAdapter = {
   id: string;
+  /** Prompt payloads, each delivered as a separate paste event. Owns native
+      image-path parsing differences; never returns keyboard shortcuts. */
+  attachmentPastes?: (paths: string[]) => string[];
   /** Presentation only: native capability remains the authority for actions. */
   accounts?: {
     description: string;

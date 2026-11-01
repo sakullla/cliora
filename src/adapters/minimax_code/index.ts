@@ -1,8 +1,11 @@
+import { quoteAttachmentPath } from '../attachments';
 import icon from '../../assets/tools/minimax_code.svg';
 import type { ToolUiAdapter } from '../contract';
 import { MiniMaxCodeConfigurationEditor } from './ConfigurationEditor';
 
 export const minimaxCodeUiAdapter: ToolUiAdapter = {
+  // MCode explicitly recommends @ file references when clipboard reading is unavailable.
+  attachmentPastes: (paths) => [paths.map((path) => `@${quoteAttachmentPath(path)}`).join(' ')],
   remoteAgent: { root: '.minimax/agents', extension: 'md' },
   icon: { light: icon, source: 'https://mintcdn.com/minimax-zh/1UjvBcdoC6r0UeyA/logo/light.svg' },
   id: 'minimax_code',

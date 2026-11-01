@@ -15,6 +15,36 @@ test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-s
 test.describe.configure({ mode: 'default' });
 
 test.describe('product WebGL input integration', () => {
+  test('IME commit insertText is sent once and intentional repeated input remains intact', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    await resetWrites(page);
+    const commit = async () => {
+      await input.evaluate(node => {
+        const textarea = node as HTMLTextAreaElement;
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        textarea.value += '覆盖';
+        textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: '覆盖', bubbles: true }));
+        // Candidate selection can happen with the mouse, after keyup cleared
+        // xterm's keyDownSeen. WebView2 may commit it as insertText.
+        textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'Process', keyCode: 229, bubbles: true }));
+        textarea.dispatchEvent(new CompositionEvent('compositionend', { data: '覆盖', bubbles: true }));
+        textarea.dispatchEvent(new InputEvent('input', { data: '覆盖', inputType: 'insertText', composed: true, bubbles: true }));
+      });
+    };
+    await commit();
+    await expect.poll(async () => (await writes(page)).join('')).toBe('覆盖');
+    await commit();
+    await expect.poll(async () => (await writes(page)).join('')).toBe('覆盖覆盖');
+    // Emoji input without composition must still use xterm's input fallback.
+    await input.evaluate(node => node.dispatchEvent(new InputEvent('input', { data: '🙂', inputType: 'insertText', bubbles: true })));
+    await expect.poll(async () => (await writes(page)).join('')).toBe('覆盖覆盖🙂');
+  });
+
   test('composition retains its text and anchor while the real renderer receives output', async ({ page }) => {
     await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
     await installWorkbenchMock(page);
@@ -465,7 +495,7 @@ test('Shift+Enter sends a line feed and Enter still submits', async ({ page }) =
   await expect.poll(() => writes(page)).toEqual(['a', '\n', '\r']);
 });
 
-test('Ctrl+V pastes clipboard text instead of sending ^V, and an image-only clipboard passes ^V through', async ({ page }) => {
+test('Ctrl+V pastes text and an invalid image reports an error without sending a shortcut', async ({ page }) => {
   const input = await openWorkbench(page);
   await page.keyboard.press('Control+v');
   await page.waitForTimeout(100);
@@ -482,7 +512,8 @@ test('Ctrl+V pastes clipboard text instead of sending ^V, and an image-only clip
     data.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
     node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
   });
-  await expect.poll(() => writes(page)).toEqual(['\u0016']);
+  await expect(page.getByRole('alert').filter({ hasText: '剪贴板图片转 PNG 失败' })).toBeVisible();
+  expect(await writes(page)).toEqual([]);
 });
 
 test('Ctrl+C copies a selection instead of interrupting, and interrupts without one', async ({ page }) => {

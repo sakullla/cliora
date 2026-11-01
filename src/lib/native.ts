@@ -399,12 +399,12 @@ export const native = {
     // the explicit ceiling lifts the ordinary 120-second clamp on both sides.
     return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths, inlineFiles: null }, 'write', { timeoutMs: 600_000, timeoutCeilingMs: 600_000, ...options });
   },
-  /** Upload one inlined payload (image paste) through the same channel; the
-   * backend stages the bytes as a local temporary file before transfer. */
-  uploadRemoteSessionFileBytes: async (sessionId: string, projectId: string, name: string, bytesBase64: string, options?: RemoteOperationOptions) => {
+  /** Upload a bounded batch of inlined clipboard files through one transfer. */
+  uploadRemoteSessionByteFiles: async (sessionId: string, projectId: string, inlineFiles: { name: string; bytesBase64: string }[]) => {
     const targetId = await remoteTargetIdForProject(projectId);
-    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths: null, inlineFiles: [{ name, bytesBase64 }] }, 'write', { timeoutMs: 600_000, timeoutCeilingMs: 600_000, ...options });
+    return remoteCommand<string[]>('upload_session_files', { sessionId, projectId, targetId, localPaths: null, inlineFiles }, 'write', { timeoutMs: 600_000, timeoutCeilingMs: 600_000 });
   },
+  stageSessionPasteFiles: (sessionId: string, inlineFiles: { name: string; bytesBase64: string }[]) => command<string[]>('stage_session_paste_files', { sessionId, inlineFiles }),
   reattachWorkbenchSession: (sessionId: string, size?: WorkbenchTerminalSize) => command<void>('reattach_workbench_session', { sessionId, ...size }),
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
   cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),

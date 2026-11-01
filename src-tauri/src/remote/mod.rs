@@ -1317,8 +1317,10 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
         // Some long-haul networks drop the interactive DSCP mark and then stall.
         "-o".into(),
         "IPQoS=none".into(),
-        "-p".into(),
-        target.port.to_string(),
+        // -p means port to ssh but preserve attributes to sftp. The shared
+        // ssh_config option works with both clients, including non-default ports.
+        "-o".into(),
+        format!("Port={}", target.port),
     ];
     if target.auth_method == "password" {
         args.extend([
@@ -1402,7 +1404,9 @@ fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
     // Windows also returns 0xffffffff (-1) on a lost connection. Abnormal or
     // absent process statuses cannot confirm that a remote mutation failed.
     let remote_exit = matches!(exit_code, Some(1..=254));
-    if detail.contains("remote host identification has changed")
+    if detail.trim_start().starts_with("usage: sftp ") || detail.trim_start().starts_with("usage: ssh ") {
+        "client_arguments"
+    } else if detail.contains("remote host identification has changed")
         || detail.contains("host key verification failed")
         || detail.contains("no matching host key")
     {
@@ -3160,6 +3164,23 @@ mod tests {
         assert!(!has_option(&password_args, "PreferredAuthentications=publickey"));
         assert!(!has_option(&password_args, "IdentitiesOnly=yes"));
         assert!(!password_args.windows(2).any(|pair| pair[0] == "-i"));
+    }
+
+    #[test]
+    fn sftp_uses_port_option_and_keeps_batch_destination_last() {
+        let mut target = gate_target("example.test");
+        target.port = 2222;
+        target.ssh_config = Some("fixture config".into());
+        for auth in ["key", "password"] {
+            target.auth_method = auth.into();
+            let command = sftp_command(&target, "sftp");
+            let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+            assert!(has_option(&args, "Port=2222"));
+            assert!(!args.contains(&"-p".into()));
+            assert!(args.ends_with(&["-b".into(), "-".into(), "root@example.test".into()]));
+            assert!(args.windows(2).any(|pair| pair == ["-F", "fixture config"]));
+            assert_eq!(has_option(&args, "BatchMode=no"), auth == "password");
+        }
     }
 
     fn gate_target(host: &str) -> RemoteTarget {

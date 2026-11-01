@@ -2,6 +2,7 @@ import icon from '../../assets/tools/claude.svg';
 import type { ToolUiAdapter, ModelMappingControl, ModelRoleValue } from '../contract';
 import { ClaudeConfigurationEditor } from './ConfigurationEditor';
 import i18n from '../../i18n';
+import { quoteAttachmentPath } from '../attachments';
 
 const roles = [
   { id:'default', get label() { return i18n.t('tools.adapters.claude.roleDefault'); }, displayName:false, longContext:true, key:'ANTHROPIC_MODEL' },
@@ -42,6 +43,9 @@ const modelMapping: ModelMappingControl = {
 };
 
 export const claudeUiAdapter: ToolUiAdapter = {
+  // Claude accepts image file references in the prompt. Its clipboard shortcut
+  // reads the CLI host's clipboard, which cannot carry local images over SSH.
+  attachmentPastes: (paths) => [paths.map(quoteAttachmentPath).join(' ')],
   remoteAgent: { root: '.claude/agents', extension: 'md' },
   icon: { light: icon, source: 'https://code.claude.com/docs/logo/light.svg' },
   id: 'claude_code',

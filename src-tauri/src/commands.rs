@@ -3845,39 +3845,55 @@ pub struct InlineUploadFile {
 /// Removes the local staging directory of inlined upload files when the
 /// request ends, regardless of its outcome; no inline payload persists here.
 struct StagedInlineUploads {
-    directory: std::path::PathBuf,
-}
-
-impl Drop for StagedInlineUploads {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.directory);
-    }
+    directory: tempfile::TempDir,
+    paths: Vec<String>,
 }
 
 fn stage_inline_uploads(database_root: &Path, inline_files: &[InlineUploadFile]) -> Result<StagedInlineUploads, ApiError> {
-    let directory = database_root.join(format!("cliora-upload-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir(&directory).map_err(|_| native_error("无法创建上传临时目录".into()))?;
-    for file in inline_files {
+    let directory = tempfile::Builder::new().prefix("cliora-upload-").tempdir_in(database_root)
+        .map_err(|_| native_error("无法创建上传临时目录".into()))?;
+    let mut paths = Vec::with_capacity(inline_files.len());
+    for (index, file) in inline_files.iter().enumerate() {
         if file.name.is_empty()
+            || matches!(file.name.as_str(), "." | "..")
             || file.name.len() > 255
-            || file.name.contains(['/', '\\', '\0'])
+            || file.name.contains(['/', '\\', '\0', ':'])
             || file.name.chars().any(|ch| ch.is_control())
         {
-            let _ = std::fs::remove_dir_all(&directory);
             return Err(native_error(format!("内联上传文件名无效：{}", file.name)));
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&file.bytes_base64)
             .map_err(|_| {
-                let _ = std::fs::remove_dir_all(&directory);
                 native_error(format!("内联上传文件字节编码无效：{}", file.name))
             })?;
-        if std::fs::write(directory.join(&file.name), bytes).is_err() {
-            let _ = std::fs::remove_dir_all(&directory);
+        // Different source directories may contain the same basename. Keep
+        // both payloads; the remote claim step resolves final name collisions.
+        let parent = directory.path().join(index.to_string());
+        std::fs::create_dir(&parent).map_err(|_| native_error("无法创建上传临时目录".into()))?;
+        let path = parent.join(&file.name);
+        if std::fs::write(&path, bytes).is_err() {
             return Err(native_error("无法写入上传临时文件".into()));
         }
+        paths.push(path.to_string_lossy().into_owned());
     }
-    Ok(StagedInlineUploads { directory })
+    Ok(StagedInlineUploads { directory, paths })
+}
+
+/// Local clipboard files use the same byte transport as remote uploads. Retain
+/// the temporary files for the lifetime of the session, so the CLI can read them
+/// after the paste (including when the user submits the prompt later).
+#[tauri::command]
+pub async fn stage_session_paste_files(session_id: String, inline_files: Vec<InlineUploadFile>) -> Result<Vec<String>, ApiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if inline_files.is_empty() || inline_files.len() > crate::remote::upload_records::RECORD_LIMIT {
+            return Err(native_error("粘贴文件数量无效".into()));
+        }
+        let staged = stage_inline_uploads(&std::env::temp_dir(), &inline_files)?;
+        let paths = staged.paths;
+        crate::session_host::retain_paste_files(&session_id, staged.directory).map_err(native_error)?;
+        Ok(paths)
+    }).await.map_err(|error| native_error(error.to_string()))?
 }
 
 /// Shared body of the upload command: resolve the remote project, target and
@@ -3914,15 +3930,11 @@ pub(crate) fn upload_session_files_core(
         .into_iter()
         .find(|item| item.id == project_key)
         .ok_or_else(|| native_error("远程项目不存在".into()))?;
-    let staged = stage_inline_uploads(&std::env::temp_dir(), inline_files)?;
+    let staged = if inline_files.is_empty() { None } else { Some(stage_inline_uploads(&std::env::temp_dir(), inline_files)?) };
     let target = enabled_target(database, &project.target_id)?;
     bind_remote_target(&target)?;
     let mut local_paths: Vec<String> = local_paths.to_vec();
-    local_paths.extend(
-        inline_files
-            .iter()
-            .map(|file| staged.directory.join(&file.name).to_string_lossy().into_owned()),
-    );
+    if let Some(staged) = &staged { local_paths.extend(staged.paths.clone()); }
     let result = crate::remote::uploads::upload_files_tracked(&target, &project.path, &local_paths);
     drop(staged);
     match result {
@@ -3977,15 +3989,15 @@ pub async fn upload_session_files(
     let _ = target_id; // request identity only; the target is resolved from the project
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || {
         let database = app.state::<AppState>().database(&app)?;
-        let remote_session_id = crate::session_host::remote_session_id(&session_id)
-            .ok_or_else(|| native_error("会话不是活动远程会话，无法归属上传记录".into()))?;
-        upload_session_files_core(
-            &database,
-            &remote_session_id,
-            &project_id,
-            &local_paths.unwrap_or_default(),
-            &inline_files.unwrap_or_default(),
-        )
+        crate::session_host::with_remote_upload(&session_id, &project_id, |remote_session_id| {
+            upload_session_files_core(
+                &database,
+                remote_session_id,
+                &project_id,
+                &local_paths.unwrap_or_default(),
+                &inline_files.unwrap_or_default(),
+            )
+        }).map_err(native_error)?
     })
     .await
 }
@@ -4090,10 +4102,12 @@ fn project_target(database: &Database, project_id: &str) -> Result<crate::remote
 /// change to remote_ended is never blocked by the recovery round-trip.
 pub(crate) fn recover_ended_session_uploads(
     app: &AppHandle,
+    session_id: &str,
     project_id: &str,
     remote_session_id: &str,
 ) {
     let app = app.clone();
+    let session_id = session_id.to_owned();
     let project_id = project_id.to_owned();
     let remote_session_id = remote_session_id.to_owned();
     let log_project_id = project_id.clone();
@@ -4117,7 +4131,9 @@ pub(crate) fn recover_ended_session_uploads(
                     return;
                 }
             };
-            if let Err(error) = recover_session_uploads(&database, &target.id, &remote_session_id) {
+            if let Err(error) = crate::session_host::with_upload_cleanup(&session_id, || {
+                recover_session_uploads(&database, &target.id, &remote_session_id)
+            }) {
                 log("recovery", error);
             }
         });
@@ -4202,7 +4218,9 @@ pub(crate) fn sweep_pending_upload_records(
         // Only an exact-identity confirmation of absence recovers anything;
         // present sessions and probe failures keep their rows for a retry.
         if presence(target, &session) == RemoteSessionPresence::Absent {
-            if let Err(error) = recover_session_uploads(database, &target.id, &session) {
+            if let Err(error) = crate::session_host::with_remote_upload_cleanup(&session, || {
+                recover_session_uploads(database, &target.id, &session)
+            }) {
                 eprintln!("CLIORA_UPLOAD_RECOVERY_PENDING target={} session={session}: {error}", target.id);
             }
         }
@@ -5541,6 +5559,31 @@ mod tests {
         for invalid in ["", &"s".repeat(300), "session\nwith newline", "null\0byte"] {
             assert!(session_presence_command(invalid).is_err(), "invalid session identity: {invalid:?}");
         }
+    }
+
+    #[test]
+    fn inline_upload_staging_preserves_duplicate_names_and_cleans_up_on_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let files = [
+            InlineUploadFile { name: "same.bin".into(), bytes_base64: "AAEC/w==".into() },
+            InlineUploadFile { name: "same.bin".into(), bytes_base64: "aGVsbG8=".into() },
+        ];
+        let staged = stage_inline_uploads(root.path(), &files).unwrap();
+        assert_ne!(staged.paths[0], staged.paths[1]);
+        assert_eq!(std::fs::read(&staged.paths[0]).unwrap(), [0, 1, 2, 255]);
+        assert_eq!(std::fs::read(&staged.paths[1]).unwrap(), b"hello");
+        let directory = staged.directory.path().to_owned();
+        drop(staged);
+        assert!(!directory.exists());
+        for name in ["..", "../escape", "file:stream", "bad\nname"] {
+            let bad = InlineUploadFile { name: name.into(), bytes_base64: "AAEC/w==".into() };
+            assert!(stage_inline_uploads(root.path(), &[files[0].clone(), bad]).is_err());
+            assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+        let staged = stage_inline_uploads(root.path(), &files).unwrap();
+        let directory = staged.directory.path().to_owned();
+        assert!(crate::session_host::retain_paste_files("missing-session", staged.directory).is_err());
+        assert!(!directory.exists(), "a rejected paste must release its staging files");
     }
 
     #[test]

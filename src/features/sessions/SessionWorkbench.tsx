@@ -9,6 +9,8 @@ import { native, nativeAvailable } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
+import { uiAdapterFor } from '../../adapters';
+import { attachmentPastes } from '../../adapters/attachments';
 import { confirmAction } from '../../lib/confirm';
 import { modLabel } from '../../lib/shortcut';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
@@ -23,7 +25,7 @@ import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
-import { SessionTerminal, cleanTerminalTitle, encodeBase64, quoteDroppedPaths, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailSession, type SessionTone } from './SessionRail';
@@ -433,19 +435,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const handles = useRef(new Map<string, TerminalHandle>());
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
-  // A finished remote upload types its claimed paths exactly like a local drop.
-  const pasteRemoteUploadedPaths = useCallback((sessionId: string, remotePaths: string[]) => {
-    const text = quoteDroppedPaths(remotePaths);
-    if (!text) return;
-    setSelectedId(sessionId);
+  const pasteAttachmentPaths = useCallback(async (sessionId: string, paths: string[]) => {
+    const session = sessionsRef.current.find((item) => item.id === sessionId);
     const handle = handles.current.get(sessionId);
-    if (!handle) return;
-    handle.paste(text);
-    handle.focus();
+    if (!session?.running || !handle) throw new Error('Session is no longer available');
+    await handle.pasteAttachments(attachmentPastes(uiAdapterFor(session.toolId), paths));
+    if (selectedIdRef.current === sessionId) handle.focus();
   }, []);
   const uploads = useSessionUploads({
-    onUploaded: pasteRemoteUploadedPaths,
-    formatError: (error) => formatFailure(error, t('sessions.uploadFailedTitle'), t('common.nativeError.retry')),
+    onUploaded: pasteAttachmentPaths,
+    formatError: (error) => formatFailure(error, t('sessions.pasteFilesFailedTitle'), t('common.nativeError.retry')),
   });
   // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
   // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
@@ -1429,8 +1428,22 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const handle = handles.current.get(session.id);
     if (!handle || !session.running) return;
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) handle.paste(text);
+      // Some WebViews expose read() but only permit readText().
+      const items = navigator.clipboard.read ? await navigator.clipboard.read().catch(() => null) : null;
+      if (items) {
+        const files: File[] = [];
+        let text = '';
+        for (const item of items) {
+          if (item.types.includes('text/plain')) text += await (await item.getType('text/plain')).text();
+          const type = item.types.find((value) => value.startsWith('image/'));
+          if (type) files.push(new File([await item.getType(type)], 'clipboard', { type }));
+        }
+        if (text) handle.paste(text);
+        else handle.pasteFiles(files);
+      } else {
+        const text = await navigator.clipboard.readText();
+        if (text) handle.paste(text);
+      }
       handle.focus();
     } catch {
       setNotice(t('sessions.pasteFailed', { shortcut: `${modLabel}+V` }));
@@ -1661,18 +1674,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const droppedPaths = (payload.paths ?? []).filter((path) => path.trim());
           if (!handle || !droppedPaths.length) return;
           setSelectedId(id);
-          // A remote pane uploads the dropped files first and types the claimed
-          // remote paths once the whole drop has landed; local panes keep typing
-          // the local paths directly.
           const session = sessionsRef.current.find((item) => item.id === id);
-          if (session?.projectId?.startsWith('remote:')) {
-            uploads.enqueueUpload(id, session.projectId, droppedPaths.map((path) => ({ name: uploadDisplayName(path), localPath: path })));
-            return;
-          }
-          const text = quoteDroppedPaths(droppedPaths);
-          if (!text) return;
-          handle.paste(text);
-          handle.focus();
+          const projectId = session?.projectId?.startsWith('remote:') ? session.projectId : null;
+          uploads.enqueueUpload(id, projectId, droppedPaths.map((path) => ({ name: uploadDisplayName(path), localPath: path })));
         }
       }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
     } catch { /* Browser previews have no native drag events. */ }
@@ -1880,9 +1884,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
-                  // An image-only paste on a remote pane joins the same upload queue
-                  // as dropped files; local panes never upload their pastes.
-                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onImagePasteUpload={remotePane ? (input) => uploads.enqueueUpload(session.id, remotePane, [input]) : undefined} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  // Clipboard files use the same queue; local sessions retain staged files.
+                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -1894,7 +1897,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     overlay={<>
                       {visible && scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
                       {visible && dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
-                      {uploads.tasks[session.id] && <SessionUploadNotice task={uploads.tasks[session.id]} progressLabel={t('sessions.uploadRunningLabel')} progressText={t('sessions.uploadProgress', { done: uploads.tasks[session.id].uploaded, total: uploads.tasks[session.id].total })} failedTitle={t('sessions.uploadFailedTitle')} retryLabel={t('sessions.uploadRetry')} dismissLabel={t('common.dismissError')} onRetry={() => uploads.retryUpload(session.id)} onDismiss={() => uploads.dismissUploadFailure(session.id)} />}
+                      {uploads.tasks[session.id] && <SessionUploadNotice task={uploads.tasks[session.id]} progressLabel={t(remotePane ? 'sessions.uploadRunningLabel' : 'sessions.pasteFilesRunningLabel')} progressText={t(remotePane ? 'sessions.uploadProgress' : 'sessions.pasteFilesProgress', { done: uploads.tasks[session.id].uploaded, total: uploads.tasks[session.id].total })} failedTitle={t(remotePane ? 'sessions.uploadFailedTitle' : 'sessions.pasteFilesFailedTitle')} retryLabel={t(remotePane ? 'sessions.uploadRetry' : 'sessions.pasteFilesRetry')} dismissLabel={t('common.dismissError')} onRetry={() => uploads.retryUpload(session.id)} onDismiss={() => uploads.dismissUploadFailure(session.id)} />}
                     </>}
                     footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
                       <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>

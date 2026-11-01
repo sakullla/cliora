@@ -238,6 +238,7 @@ impl Context {
         let uncertain = self.kind == Kind::Write && self.dispatched.load(Ordering::Acquire)
             && matches!(stage, "connect" | "timeout" | "cancelled" | "unknown" | "cleanup");
         let action = match stage {
+            "client_arguments" => "本机 SSH/SFTP 启动参数不兼容，请更新 Cliora 或检查所配置的客户端。",
             _ if uncertain => "远端可能已执行；请核查目标状态，不要直接重复提交。",
             "authentication" => "检查所选主机的凭据或密钥后重试。",
             "host_key" => "通过可信渠道核实主机指纹，再更新 known_hosts。",

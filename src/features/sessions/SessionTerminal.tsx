@@ -43,6 +43,8 @@ export type TerminalHandle = {
   hasSelection: () => boolean;
   copySelection: () => boolean;
   paste: (text: string) => void;
+  pasteAttachments: (payloads: string[]) => Promise<void>;
+  pasteFiles: (files: File[]) => void;
   readOutput: () => string;
   findMatches: (query: string, caseSensitive?: boolean) => TerminalMatch[];
   revealMatch: (match: TerminalMatch | null) => void;
@@ -190,6 +192,8 @@ export async function encodePastedImagePng(file: File): Promise<Uint8Array> {
   if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap unavailable');
   const bitmap = await createImageBitmap(file);
   try {
+    // Validate the image without recompressing an already encoded PNG.
+    if (file.type === 'image/png') return new Uint8Array(await file.arrayBuffer());
     const canvas = document.createElement('canvas');
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
@@ -451,7 +455,7 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onImagePasteUpload, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
@@ -461,9 +465,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   running: boolean;
   /** A remote PTY pays a round trip for every resize, so layout storms are collapsed. */
   remote?: boolean;
-  /** Queue an image-only clipboard paste as a PNG upload (remote panes only). The
-      bytes encode lazily, so a decode failure fails the upload attempt and its retry. */
-  onImagePasteUpload?: (input: { name: string; encodeBytes: () => Promise<string> }) => void;
+  /** Bytes travel through staging/upload, never a simulated key. */
+  onFilesPaste?: (inputs: { name: string; encodeBytes: () => Promise<string> }[]) => void;
   fontSize: number;
   lineHeight?: number;
   theme: TerminalTheme;
@@ -504,7 +507,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   const focusedRef = useRef(focused);
   const runningRef = useRef(running);
   const remoteRef = useRef(remote);
-  const imagePasteRef = useRef(onImagePasteUpload);
+  const imagePasteRef = useRef(onFilesPaste);
   const fontSizeRef = useRef(fontSize);
   const lineHeightRef = useRef(lineHeight);
   const themeRef = useRef(theme);
@@ -512,7 +515,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   focusedRef.current = focused;
   runningRef.current = running;
   remoteRef.current = remote;
-  imagePasteRef.current = onImagePasteUpload;
+  imagePasteRef.current = onFilesPaste;
   fontSizeRef.current = fontSize;
   lineHeightRef.current = lineHeight;
   themeRef.current = theme;
@@ -561,14 +564,40 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     // holds still for the whole composition.
     const ime = createImeAnchor(term, () => !disposed && activeRef.current);
     const textarea = term.textarea;
-    const onCompositionStart = () => ime.compositionStart();
+    let composingInput = false;
+    let finishingComposition = false;
+    let compositionTurn = 0;
+    const onCompositionStart = () => {
+      window.clearTimeout(compositionTurn);
+      composingInput = true;
+      finishingComposition = false;
+      ime.compositionStart();
+    };
     const onCompositionUpdate = () => ime.place();
-    const onCompositionEnd = () => ime.compositionEnd();
+    const onCompositionEnd = () => {
+      composingInput = false;
+      finishingComposition = true;
+      ime.compositionEnd();
+      // Registered after xterm's compositionend listener: its deferred commit
+      // runs before this reset. WebView2's trailing insertText belongs to that
+      // same composition, not xterm's separate emoji-input fallback.
+      compositionTurn = window.setTimeout(() => { finishingComposition = false; }, 0);
+    };
+    const onCompositionInput = (event: Event) => {
+      const input = event as InputEvent;
+      if (input.target === textarea && input.inputType === 'insertText'
+        && (composingInput || finishingComposition || input.isComposing)) {
+        // Keep the native textarea update. Only stop xterm's second sender;
+        // CompositionHelper remains the sole owner of committed IME bytes.
+        event.stopImmediatePropagation();
+      }
+    };
     const onTextareaFocus = () => ime.refresh();
     textarea?.addEventListener('compositionstart', onCompositionStart);
     textarea?.addEventListener('compositionupdate', onCompositionUpdate);
     textarea?.addEventListener('compositionend', onCompositionEnd);
     textarea?.addEventListener('focus', onTextareaFocus);
+    node.addEventListener('input', onCompositionInput, true);
     imeRef.current = ime;
     const cursorSub = term.onCursorMove(() => ime.schedule());
     let acceptLive = false;
@@ -713,41 +742,35 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       event.preventDefault();
     };
 
-    // A text clipboard pastes as text. An image-only clipboard stays available to a
-    // local CLI through Ctrl+V; a remote pane instead re-encodes the pasted image
-    // as PNG and uploads it through the shared queue, so the bytes come only from
-    // this paste event and no clipboard is ever read back.
+    const pasteFiles = (files: File[]) => {
+      if (!runningRef.current || !files.length) return;
+      const encodeFailed = pasteEncodeErrorRef.current;
+      imagePasteRef.current?.(files.map((file, index) => ({
+        name: file.type.startsWith('image/') ? pasteImageName(new Date(Date.now() + index)) : file.name,
+        encodeBytes: async () => {
+          try {
+            return encodeBase64(file.type.startsWith('image/')
+              ? await encodePastedImagePng(file) : new Uint8Array(await file.arrayBuffer()));
+          } catch (error) {
+            if (file.type.startsWith('image/')) throw new Error(encodeFailed);
+            throw error;
+          }
+        },
+      })));
+    };
+    // Route clipboard content, not keys. Text keeps xterm's normal paste path;
+    // binary files preserve their bytes and names.
     const onPaste = (event: ClipboardEvent) => {
       if (!activeRef.current) { event.preventDefault(); event.stopPropagation(); return; }
       const data = event.clipboardData;
       if (!data) return;
       const text = data.getData('text/plain');
       if (text) return;
-      const files = [...data.items].filter((item) => item.kind === 'file').map((item) => item.getAsFile());
+      const files = Array.from(data.files);
       if (!files.length) return;
       event.preventDefault();
       event.stopPropagation();
-      const queueImage = imagePasteRef.current;
-      // A file item without a readable payload keeps the local Ctrl+V behaviour
-      // instead of failing an upload.
-      const file = files.find(Boolean);
-      if (!remoteRef.current || !queueImage || !file) {
-        sendToPty('\x16');
-        return;
-      }
-      const encodeFailed = pasteEncodeErrorRef.current;
-      queueImage({
-        name: pasteImageName(new Date()),
-        encodeBytes: async () => {
-          try {
-            return encodeBase64(await encodePastedImagePng(file));
-          } catch {
-            // Any decode or PNG conversion failure surfaces as one localized
-            // banner message; the retry re-runs the same paste image.
-            throw new Error(encodeFailed);
-          }
-        },
-      });
+      pasteFiles(files);
     };
     node.addEventListener('paste', onPaste, true);
 
@@ -875,6 +898,18 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       hasSelection: () => !disposed && term.hasSelection(),
       copySelection: () => !disposed && copySelection(),
       paste: (text: string) => { if (!disposed && activeRef.current && runningRef.current && text) term.paste(text); },
+      pasteFiles,
+      pasteAttachments: async (payloads: string[]) => {
+        if (disposed || !runningRef.current) throw new Error('Session is no longer running');
+        // Preserve each attachment's protocol boundary; never append Enter.
+        // Hidden panes can finish their uploads without stealing focus.
+        const clean = payloads.filter(Boolean).map((text) => text.replace(/\x1b/g, ''));
+        const text = term.modes.bracketedPasteMode
+          ? clean.map((part) => `\x1b[200~${part}\x1b[201~`).join('')
+          : clean.join(' ');
+        const bytes = concatBytes([...pendingInput.splice(0), new TextEncoder().encode(text)]);
+        await native.writeWorkbenchSession(sessionId, encodeBase64(bytes));
+      },
       readOutput: () => {
         if (disposed) return '';
         if (term.hasSelection()) {
@@ -1137,6 +1172,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       textarea?.removeEventListener('compositionstart', onCompositionStart);
       textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
       textarea?.removeEventListener('compositionend', onCompositionEnd);
+      node.removeEventListener('input', onCompositionInput, true);
+      window.clearTimeout(compositionTurn);
       textarea?.removeEventListener('focus', onTextareaFocus);
       observer.disconnect();
       links.dispose();

@@ -1,8 +1,12 @@
+import { quoteAttachmentPath } from '../attachments';
 import icon from '../../assets/tools/pi.svg';
 import type { ToolUiAdapter } from '../contract';
 import { PiConfigurationEditor } from './ConfigurationEditor';
 import i18n from '../../i18n';
-export const piUiAdapter: ToolUiAdapter = { id: 'pi',
+export const piUiAdapter: ToolUiAdapter = {
+  // Pi clipboard handling materializes an image and inserts its file path.
+  attachmentPastes: (paths) => [paths.map(quoteAttachmentPath).join(' ')],
+  id: 'pi',
   accounts: {
     get description() { return i18n.t('tools.adapters.pi.accounts.description'); },
     get nativeDescription() { return i18n.t('tools.adapters.pi.accounts.nativeDescription'); },

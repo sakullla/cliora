@@ -1,8 +1,11 @@
+import { quoteAttachmentPath } from '../attachments';
 import icon from '../../assets/tools/opencode.svg';
 import type { ToolUiAdapter } from '../contract';
 import { OpenCodeConfigurationEditor } from './ConfigurationEditor';
 import i18n from '../../i18n';
 export const opencodeUiAdapter: ToolUiAdapter = {
+  // OpenCode pasteInputText recognizes a pasted image file path.
+  attachmentPastes: (paths) => paths.map(quoteAttachmentPath),
   remoteAgent: { root: '.config/opencode/agents', extension: 'md' }, id: 'open_code',
   accounts: {
     get description() { return i18n.t('tools.adapters.opencode.accounts.description'); },
