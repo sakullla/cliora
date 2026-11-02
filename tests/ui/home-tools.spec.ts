@@ -1188,7 +1188,8 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   expect((await launcher.boundingBox())!.y).toBeLessThan((await tools.boundingBox())!.y);
 
   // Only the configured tool is listed; the other seven fold behind one toggle.
-  await expect(tools.getByText('常用工具', { exact: true })).toBeVisible();
+  await expect(tools.getByText('常用工具', { exact: true })).toHaveCount(1);
+  await expect(tools.getByText('其他工具', { exact: true })).toHaveCount(0);
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText('Tool C');
   const more = tools.getByRole('button', { name: '其他 7 个工具', exact: true });
@@ -1197,6 +1198,20 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await expect(rows).toHaveCount(8);
   const less = tools.getByRole('button', { name: '收起其他工具', exact: true });
   await expect(less).toHaveAttribute('aria-expanded', 'true');
+  // Expanded, the common heading names only the common rows and the folded rows get their own heading.
+  const commonHeading = tools.getByText('常用工具', { exact: true });
+  const otherHeading = tools.getByText('其他工具', { exact: true });
+  await expect(commonHeading).toHaveCount(1);
+  await expect(otherHeading).toHaveCount(1);
+  const boxes = {
+    common: (await commonHeading.boundingBox())!,
+    commonRow: (await rows.filter({ hasText: 'Tool C' }).boundingBox())!,
+    other: (await otherHeading.boundingBox())!,
+    otherRow: (await rows.filter({ hasText: 'Tool A' }).boundingBox())!,
+  };
+  expect(boxes.common.y).toBeLessThan(boxes.commonRow.y);
+  expect(boxes.other.y).toBeGreaterThan(boxes.commonRow.y);
+  expect(boxes.other.y).toBeLessThan(boxes.otherRow.y);
 
   // A row without profiles is quiet: grey 未配置, version as plain text, 新建配置 in the row menu.
   const toolF = rows.filter({ hasText: 'Tool F' });
@@ -1214,6 +1229,9 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await expect(toolF.getByRole('status')).toContainText('已向外部终端发出请求');
   await less.click();
   await expect(rows).toHaveCount(2);
+  // Folded again, only the common heading describes the visible rows.
+  await expect(tools.getByText('其他工具', { exact: true })).toHaveCount(0);
+  await expect(tools.getByText('常用工具', { exact: true })).toHaveCount(1);
   await page.reload();
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText('Tool C');
@@ -1267,7 +1285,7 @@ test('a failed compared apply explains itself in the dialog and retries with a f
 });
 
 /** Home with projects: one managed CLI and the desktop-shaped project records. */
-async function installContinue(page: Page, mode: 'projects' | 'empty' | 'fail-first' = 'projects') {
+async function installContinue(page: Page, mode: 'projects' | 'empty' | 'fail-first' | 'fail-always' = 'projects') {
   await page.addInitScript((mode: string) => {
     const projects = [
       { id: 'desk', name: '栖点', path: 'C:\Projects\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: { codex: 'daily' }, appliedProfiles: { codex: 'daily' } },
@@ -1292,6 +1310,8 @@ async function installContinue(page: Page, mode: 'projects' | 'empty' | 'fail-fi
           if (mode === 'empty') return [];
           // The first read fails like an unreadable database; the reload uses the same command.
           if (mode === 'fail-first' && reads === 1) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '检查磁盘和权限后重试。' };
+          // A retry of an unreadable database takes a moment and fails the same way.
+          if (mode === 'fail-always') { await new Promise((resolve) => setTimeout(resolve, 600)); throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '检查磁盘和权限后重试。' }; }
           return projects;
         }
         if (command.startsWith('plugin:event|')) return 1;
@@ -1343,5 +1363,30 @@ test('a failed project read keeps its message and reloads the list in place', as
   await alert.getByRole('button', { name: '重新读取项目', exact: true }).click();
   await expect(launcher.locator('[data-project-id]')).toHaveCount(2);
   await expect(launcher.getByRole('alert')).toHaveCount(0);
+});
+
+test('a failed project read shows the error alone and reports a failed retry', async ({ page }) => {
+  await installContinue(page, 'fail-always');
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  const launcher = page.getByRole('region', { name: '项目与启动' });
+  await expect(launcher.getByRole('alert')).toContainText('无法打开本机数据库');
+  // R2/R8: an unreadable list is not an empty list, so the empty state and its add action stay absent.
+  await expect(launcher.getByText('还没有项目', { exact: true })).toHaveCount(0);
+  await expect(launcher).not.toContainText('添加本机目录后');
+  await expect(launcher.getByRole('button', { name: '添加项目', exact: true })).toHaveCount(0);
+  const reload = launcher.getByRole('button', { name: '重新读取项目', exact: true });
+  await reload.click();
+  // The retry itself is perceivable, and a repeated failure still says something new.
+  await expect(reload).toBeDisabled();
+  await expect(reload).toHaveAttribute('aria-busy', 'true');
+  await expect(launcher.getByRole('alert')).toContainText('再次读取仍然失败');
+  await expect(reload).toBeEnabled();
+  await expect(reload).not.toHaveAttribute('aria-busy', 'true');
+  await expect(launcher.getByText('还没有项目', { exact: true })).toHaveCount(0);
+  // A second retry keeps the same honest band instead of stacking duplicates.
+  await reload.click();
+  await expect(launcher.getByRole('alert')).toHaveCount(1);
+  await expect(launcher.getByRole('alert')).toContainText('再次读取仍然失败');
 });
 

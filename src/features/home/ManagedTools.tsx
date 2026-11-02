@@ -472,11 +472,15 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
     : unpinned.slice(0, commonToolLimit);
   const common = [...pinned, ...daily];
   const others = unpinned.filter((item) => !daily.includes(item));
-  const shown = othersOpen ? [...common, ...others] : common;
+  // The heading only names the rows a folded list keeps visible; an expanded list names both bands,
+  // so the common-tools title never covers the rows that came from the fold.
+  const groups = othersOpen && others.length > 0
+    ? [{ label: t('home.tools.groupCommon'), items: common }, { label: t('home.tools.groupOther'), items: others }]
+    : [{ label: others.length > 0 ? t('home.tools.groupCommon') : '', items: common }];
   return <div className={styles.list} aria-label={t('home.managed.title')}><RemoteReadStatus state={remoteReads} />
-    {/* Only a folded list needs the heading: it names the rows that stay visible by default. */}
-    {others.length > 0 && <div className={styles.groupLabel}>{t('home.tools.groupCommon')}</div>}
-    {shown.map((tool) => {
+    {groups.flatMap((group, index) => [
+      ...(group.label ? [<div key={`group:${group.label}`} className={index === 0 ? styles.groupLabel : `${styles.groupLabel} ${styles.groupLabelNext}`}>{group.label}</div>] : []),
+      ...group.items.map((tool) => {
       const loaded = states[tool.id];
       const isRemote = remoteTargetId !== 'local';
       const remote = remoteStates[tool.id];
@@ -539,7 +543,8 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
         </div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
-    })}
+      }),
+    ])}
     {others.length > 0 && <div className={styles.more}><button type="button" aria-expanded={othersOpen} onClick={toggleOthers}><Icon name={othersOpen ? 'arrowUp' : 'more'} size={14} />{othersOpen ? t('home.tools.otherToolsLess') : t('home.tools.otherTools', { count: others.length })}</button></div>}
     <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
       {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><Button onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</Button><Button variant="primary" disabled={conflictBusy} onClick={() => void useComparedFile()}>{conflictBusy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}

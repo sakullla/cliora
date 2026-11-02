@@ -131,6 +131,8 @@
   letter-spacing: .04em;
 }
 .groupLabel + .row { border-top: 0; }
+/* The second heading separates the folded rows from the common ones above them. */
+.groupLabelNext { margin-top: var(--space-2); border-top: 1px solid var(--line); padding-top: var(--space-2); }
 
 .empty { padding: var(--space-8) var(--space-4); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 

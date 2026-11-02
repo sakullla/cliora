@@ -129,6 +129,8 @@
 .errorText { flex: 1 1 220px; min-width: 0; }
 /* The reload action keeps the failure in this task and reuses the same read command. */
 .errorAction, .errorAction:hover:not(:disabled) { flex: none; border-color: var(--danger-line); color: var(--danger); }
+/* A reload that fails again says so next to the repeated native message. */
+.errorHint { flex: 1 1 auto; min-width: 0; color: var(--text-2); font-size: var(--fs-micro); }
 .feedback { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
 @container (max-width: 420px) {
