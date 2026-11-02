@@ -8,35 +8,45 @@
 .libraryBar > :global(.tabs) button[aria-selected="true"] .tabIcon { color: var(--accent); }
 .tabCount { min-height: var(--space-4); padding: 0 var(--space-1_5); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 
-/* Filters stay on one row until the page is too narrow for three controls */
-.filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 190px) minmax(132px, 190px); align-items: center; gap: var(--space-2); }
+/* Search leads; the two filter picks sit beside it and wrap under it on narrow pages. */
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .filters input { min-width: 0; width: 100%; }
-.filterPick { min-width: 0; width: 100%; }
+.filterPicks { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.filterPick { flex: 1 1 132px; min-width: 0; max-width: 200px; }
 .scopePick { max-width: 320px; }
-.searchBox { position: relative; display: flex; align-items: center; min-width: 0; }
+.searchBox { position: relative; display: flex; flex: 1 1 240px; align-items: center; min-width: 0; }
 .searchBox > input { width: 100%; }
 .skillToolbar { display: grid; gap: var(--space-2); }
 .skillToolbar .searchBox { width: 100%; }
+/* The result line holds the page's one count plus where these items live. */
+.resultBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; }
+.resultNote { min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
 
-/* Cards: the shared Card surface, title as the click target, actions in a footer bar. */
-.layout { display: grid; align-content: start; gap: var(--space-4); min-width: 0; }
-.list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: var(--space-3); align-content: start; }
+/* Resource rows: one column, like the MCP list, so a long title keeps its line and
+   tags wrap underneath instead of squeezing the card. */
+.layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
+.list { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
 .list > .card {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-4) var(--space-4) 0;
+  display: grid;
+  gap: var(--space-1_5);
+  padding: var(--space-3) var(--space-4);
   animation: reveal var(--medium) var(--ease) backwards;
 }
 .list > .card:focus-within { border-color: var(--accent-line); }
 .list > .card:has(.cardTitle:focus-visible) { outline: var(--focus-ring); outline-offset: -1px; }
-.cardMeta { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+/* Source, tags and time read as one quiet line under the summary. */
+.cardMeta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .metaBadge { flex: none; max-width: 160px; }
 .cardTime { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; color: var(--text-3); white-space: nowrap; }
-.cardHead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+/* Title and its actions share the first line: the title leads, the buttons follow. */
+/* The title keeps at least 260px before the actions move to their own line, so a long
+   title wraps instead of being squeezed into a narrow column. */
+.cardHead { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2) var(--space-3); min-width: 0; }
 .cardTitle {
+  flex: 1 1 260px;
   justify-content: flex-start;
+  min-width: 0;
   min-height: 0;
   padding: 0;
   border: 0;
@@ -58,29 +68,42 @@
 .cardBody {
   display: -webkit-box;
   min-width: 0;
-  margin: var(--space-0_5) 0 var(--space-3);
+  margin: 0;
   overflow: hidden;
   color: var(--text-2);
   font-size: var(--fs-body);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-.cardBar { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1_5) var(--space-2_5); margin: auto calc(var(--space-4) * -1) 0; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
+/* Only rule rows have a footer: the CLI icons are the write targets. One hairline,
+   inset with the card padding, keeps it from reading as a second card edge. */
+.cardFoot { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; margin-top: var(--space-0_5); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .scopeLines { display: grid; gap: var(--space-1); min-width: 0; }
 .scopeLine { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .scopeName { flex: none; max-width: 120px; }
-.cardActions { display: flex; flex: none; align-items: center; gap: var(--space-1_5); margin-left: auto; }
+.cardActions { position: relative; z-index: 1; display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-0_5); margin-left: auto; }
 .cardActions [data-copied="true"], .cardActions [data-copied="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .danger, .danger:hover:not(:disabled) { color: var(--danger); }
 .danger:hover:not(:disabled) { background: var(--danger-soft); }
 
-.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--space-1_5); padding: var(--space-12) var(--space-4); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); color: var(--text-2); font-size: var(--fs-body); text-align: center; }
-.empty > svg { color: var(--text-3); }
-.empty > strong { color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); }
-.empty > button { margin-top: var(--space-2_5); }
+/* Empty, no-match and reload states use the shared .empty-state surface, as the MCP list does. */
+.list > :global(.empty-state) { grid-column: 1 / -1; }
+
+/* Distribution outcome: each target keeps its own success or failure line. */
+.result { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.resultHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.resultHead > svg { flex: none; color: var(--success); }
+.result[data-tone="warning"] .resultHead > svg { color: var(--warning); }
+.resultHead > span { flex: 1 1 200px; min-width: 0; }
+.resultList { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.resultList li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); }
+.resultList li > svg { flex: none; color: var(--success); }
+.resultList li[data-state="failed"] > svg { color: var(--danger); }
+.resultList li strong { flex: none; max-width: 220px; overflow: hidden; color: var(--text); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.resultList li small { flex: 1 1 160px; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 
 /* Editor (dialog) */
 .editor { display: grid; gap: var(--space-3); }
@@ -160,17 +183,13 @@
 .notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
 
 @container (max-width: 560px) {
-  .filters { grid-template-columns: 1fr 1fr; }
-  .searchBox { grid-column: 1 / -1; }
+  .filterPick { max-width: none; }
 }
 @media (max-width: 760px) {
   .libraryBar > :global(.tabs) { flex: 1 1 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .list > .card { animation: none; }
-}
-@container (max-width: 380px) {
-  .filters { grid-template-columns: 1fr; }
 }
 @media (max-width: 680px) {
   .sources { grid-template-columns: 1fr; }

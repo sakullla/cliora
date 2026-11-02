@@ -75,6 +75,8 @@ export default {
     searchTags: '搜索标签',
     listAria: '{{kind}}列表',
     countFiltered: '命中 {{filtered}} / 共 {{total}}',
+    sourceLocal: '本机资料库',
+    sourceRemote: '远程主机资料库',
     noTags: '无标签',
     originalProject: '原项目',
     emptyBody: '正文为空',
@@ -121,6 +123,12 @@ export default {
     launchSubmit: '在外部终端启动',
   },
   resources: {
+    sourceManaged: '托管包',
+    sourceRemote: '远程主机',
+    sourceRemoteReadOnly: '远程主机 · 只读',
+    resultAria: '分发结果',
+    resultOk: '已分发到 {{total}} 个 CLI',
+    resultMixed: '{{ok}} 个成功，{{failed}} 个失败',
     remoteSkillInstalled: '已安装；如需删除，请使用更多操作',
     remoteSkillDistributionUnavailable: '未安装；暂不支持从远程 Skill 标记分发到其他 CLI',
     installState: {

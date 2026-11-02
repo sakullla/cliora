@@ -472,6 +472,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     {section === 'rule' && bindingFeedback()}
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
+      <div className={styles.filterPicks}>
       <FilterSelect className={styles.filterPick} label={t('library.page.projectFilter')} value={projectFilter} options={[
         { value: '*', label: t('library.page.allProjects') },
         { value: 'global', label: t('library.page.globalItems') },
@@ -481,38 +482,44 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         { value: '*', label: t('library.page.allTags') },
         ...categories.map((category) => ({ value: category, label: category })),
       ]} searchLabel={t('library.page.searchTags')} onChange={setCategoryFilter} />
+      </div>
     </div>
     <div className={styles.layout}>
-      {(!listLoading || items.length > 0) && <div><Badge>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge></div>}
+      {(!listLoading || items.length > 0) && <div className={styles.resultBar}>
+        <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>
+        <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
+      </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
-        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id}>
-          {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <small className={styles.cardMeta}>
-            {tagsOf(item.category).map((tag) => <Badge className={styles.metaBadge} tone="accent" key={tag}>{tag}</Badge>)}
-            {item.projectId && <Badge className={styles.metaBadge}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</Badge>}
-            {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={12} />{shortTime(item.updatedAt)}</span>}
-          </small>}
+        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>
+          <div className={styles.cardHead}>
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
             const titles = Array.from(event.currentTarget.closest(`.${styles.list}`)?.querySelectorAll<HTMLElement>('[data-card-title]') ?? []);
             const next = titles[titles.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)];
             if (next) { event.preventDefault(); next.focus(); }
           }}>{item.title}</button>
-          <p className={styles.cardBody}>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : t('library.page.emptyBody')}</p>
-          <div className={styles.cardBar}>
-            {kind === 'rule' ? <ScopeMarks label={t('library.page.cliMarks', { title: item.title })} tools={scopedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy || !bindingsKnown} unavailable={(toolId, scope) => { const support = scopedTools.find(tool => tool.id === toolId)?.management?.rules; if (!support) return null; if (scope === 'project' && support.catalog) return t('library.page.ruleCatalog'); if (!support[scope]) return (scope === 'global' ? support.globalReason : support.projectReason) || t('library.page.ruleUnsupported', { scope: scope === 'global' ? t('tools.apply.global') : t('tools.accounts.scopeProject') }); return null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
+            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
+              ? <Button variant="ghost" size="sm" aria-label={t('library.page.copy')} data-copied="true" icon={<Icon name="check" size={14} />} onClick={() => void copy(item.body, 'page', item.id)}>{t('home.launcher.copied')}</Button>
+              : <Button variant="ghost" size="sm" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</Button>}{kind === 'prompt' && <Button size="sm" onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</Button>}<Button variant="ghost" size="sm" onClick={() => choose(item)}>{t('tools.workspace.edit')}</Button></div>
+          </div>
+          <p className={styles.cardBody}>{item.body ? item.body.length > 200 ? `${item.body.slice(0, 200)}…` : item.body : t('library.page.emptyBody')}</p>
+          {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <div className={styles.cardMeta}>
+            {tagsOf(item.category).map((tag) => <Badge className={styles.metaBadge} tone="accent" key={tag}>{tag}</Badge>)}
+            {item.projectId && <Badge className={styles.metaBadge}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</Badge>}
+            {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={12} />{shortTime(item.updatedAt)}</span>}
+          </div>}
+          {kind === 'rule' ? <div className={styles.cardFoot}>
+            <ScopeMarks label={t('library.page.cliMarks', { title: item.title })} tools={scopedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy || !bindingsKnown} unavailable={(toolId, scope) => { const support = scopedTools.find(tool => tool.id === toolId)?.management?.rules; if (!support) return null; if (scope === 'project' && support.catalog) return t('library.page.ruleCatalog'); if (!support[scope]) return (scope === 'global' ? support.globalReason : support.projectReason) || t('library.page.ruleUnsupported', { scope: scope === 'global' ? t('tools.apply.global') : t('tools.accounts.scopeProject') }); return null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
               if (!place && binding.rows === null) return { pressed: false, state: 'unavailable', status: t('library.page.bindingsUnknown') };
               if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: t('library.page.markUnavailable') };
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
-            }} /> : <span />}
-            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
-              ? <Button variant="ghost" size="sm" aria-label={t('library.page.copy')} data-copied="true" icon={<Icon name="check" size={14} />} onClick={() => void copy(item.body, 'page', item.id)}>{t('home.launcher.copied')}</Button>
-              : <Button variant="ghost" size="sm" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</Button>}{kind === 'prompt' && <Button size="sm" onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</Button>}<Button variant="ghost" size="sm" onClick={() => choose(item)}>{t('tools.workspace.edit')}</Button></div>
-          </div>
+            }} />
+          </div> : null}
         </Card>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><Icon name="library" size={24} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<Button icon={<Icon name="plus" size={14} />} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</Button></div>
-          : <div className={styles.empty}><Icon name="search" size={24} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
+          ? <EmptyState icon="library" title={t('library.page.emptyTitle', { kind: kindName(kind) })} detail={kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')} action={<Button icon={<Icon name="plus" size={14} />} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</Button>} />
+          : <EmptyState icon="search" title={t('library.page.noResults', { kind: kindName(kind) })} />}
       </div>
     </div>
     <GuideDialog open={!!draft} closeDisabled={busy} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>

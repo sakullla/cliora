@@ -191,3 +191,55 @@ test('library keeps four tabs, one primary action, and every prompt card in the 
   await expect(page.getByRole('button', { name: '新建 MCP', exact: true })).toHaveAttribute('data-variant', 'primary');
   await expect(toolbar.locator('[data-variant="primary"]')).toHaveCount(1);
 });
+
+
+test('library rows lead with the title, name their source, and stay inside 640', async ({ page }) => {
+  await page.addInitScript(() => {
+    const library = [
+      { id: 'prompt-long', kind: 'prompt', title: '超长提示词标题'.repeat(12), body: '先说明影响用户的行为，再给出具体文件和可执行的建议。'.repeat(6), category: '开发,写作,学习,复盘,发布,审查,文档,测试', projectId: null, version: 1, updatedAt: 1790758800 },
+      { id: 'prompt-second', kind: 'prompt', title: '整理发布说明', body: '根据变更清单写一份简洁的发布说明。', category: '写作', projectId: null, version: 1, updatedAt: 1790672400 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements') return [];
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
+          if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
+          return null;
+        },
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const card = page.getByRole('article').filter({ hasText: '超长提示词标题' }).first();
+  await expect(card).toHaveAttribute('data-source', 'global');
+  // The card names where these items live, next to the result count.
+  await expect(page.getByText('本机资料库', { exact: true })).toBeVisible();
+  // Title and its actions share the first line; the summary and metadata follow it.
+  expect(await card.evaluate((node) => {
+    const head = node.firstElementChild as HTMLElement;
+    const title = node.querySelector('[data-card-title]') as HTMLElement;
+    const body = node.querySelector('p') as HTMLElement;
+    const launch = [...node.querySelectorAll('button')].find((button) => (button.textContent ?? '').includes('启动会话')) as HTMLElement;
+    return {
+      titleInHead: head.contains(title),
+      actionsInHead: head.contains(launch),
+      bodyAfterHead: !!(head.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING),
+      titleBeforeActions: !!(title.compareDocumentPosition(launch) & Node.DOCUMENT_POSITION_FOLLOWING),
+    };
+  })).toEqual({ titleInHead: true, actionsInHead: true, bodyAfterHead: true, titleBeforeActions: true });
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(card.getByRole('button', { name: '启动会话' })).toBeVisible();
+    await expect(card.getByText('复盘', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), String(width)).toBeLessThanOrEqual(0);
+    expect(await card.evaluate((node) => node.scrollWidth - node.clientWidth), String(width)).toBeLessThanOrEqual(1);
+  }
+});

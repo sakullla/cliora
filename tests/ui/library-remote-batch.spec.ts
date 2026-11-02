@@ -242,6 +242,8 @@ test('read-only remote Skills stay readable without import or delete actions', a
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toBeVisible();
+  // A read-only root says so on the card instead of looking editable.
+  await expect(page.getByText('远程主机 · 只读', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'perf-skill-0 的更多操作', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: '删除', exact: true })).toBeDisabled();

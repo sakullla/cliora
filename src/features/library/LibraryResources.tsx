@@ -6,6 +6,7 @@ import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
+import { EmptyState } from '../../components/EmptyState';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
@@ -31,6 +32,11 @@ function installStateLabel(state: SkillInstallation['state']): string {
 }
 
 type LibrarySkill = SkillPackage & { remoteToolId?: string; remoteReadOnly?: boolean };
+
+/** Where the card's files actually live: the library package, a remote root, or a read-only remote root. */
+type SkillSource = 'managed' | 'remote' | 'remoteReadOnly';
+/** One target of an import or sync, so a partial result names what worked and what did not. */
+type TargetOutcome = { name: string; ok: boolean; detail: string };
 
 function remoteSkillPackages(toolIds: string[], stores: unknown[]): LibrarySkill[] {
   return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
@@ -59,6 +65,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const remoteToolIds = remoteTools.map(tool => tool.id);
   const remoteToolFor = (item: SkillPackage) => (item as LibrarySkill).remoteToolId ?? remoteToolId;
   const packageWritable = (item: SkillPackage) => !remoteTargetId || (!(item as LibrarySkill).remoteReadOnly && remoteWritableTools.some(tool => tool.id === remoteToolFor(item)));
+  const sourceOf = (item: SkillPackage): SkillSource => !remoteTargetId ? 'managed' : (item as LibrarySkill).remoteReadOnly ? 'remoteReadOnly' : 'remote';
+  const sourceLabel = (item: SkillPackage) => t(sourceOf(item) === 'managed' ? 'library.resources.sourceManaged' : sourceOf(item) === 'remoteReadOnly' ? 'library.resources.sourceRemoteReadOnly' : 'library.resources.sourceRemote');
   const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
   const native = remoteReads.native;
   const [packages, setPackages] = useState<LibrarySkill[]>([]);
@@ -75,6 +83,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
   const [search, setSearch] = useState('');
+  const [outcomes, setOutcomes] = useState<TargetOutcome[] | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -147,26 +156,30 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       ...checked.map((toolId) => ({ toolId, scope: 'global' as const, projectPath: null })),
     ];
     if (item && targets.length) {
-      const notes: string[] = [];
+      // Every target keeps its own row: a partial write must not read as "all done".
+      const rows: TargetOutcome[] = [];
       const conflicts: string[] = [];
       for (const target of targets) {
         const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
         const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
         if (preview?.status === 'conflict') { conflicts.push(name); continue; }
         const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
-        notes.push(t('library.resources.syncEntry', { name, result: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') }));
+        rows.push({ name, ok: outcome.status !== 'failed', detail: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') });
       }
       await reloadSkills();
-      const failed = notes.filter((line) => !line.endsWith(t('library.resources.synced')));
+      setOutcomes(rows.length ? rows : null);
+      const failed = rows.filter((row) => !row.ok);
+      const line = (row: TargetOutcome) => t('library.resources.syncEntry', { name: row.name, result: row.detail });
       if (conflicts.length) {
         setSkillSeed([]);
         setSkillTarget(item);
         setNotice(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
-      } else if (failed.length) setError(failed.join(t('tools.quota.errorSeparator')));
-      else setNotice(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
+      } else if (failed.length) setError(failed.map(line).join(t('tools.quota.errorSeparator')));
+      else setNotice(rows.map(line).join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
       if (!failed.length) setError('');
       return;
     }
+    setOutcomes(null);
     setNotice(t('library.resources.addedToLibrary'));
     setError('');
   }
@@ -291,30 +304,42 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const libraryPackages = packages.filter((item) => item.inLibrary !== false)
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
+  const allOk = !!outcomes && outcomes.every((row) => row.ok);
   return <div className={styles.layout}><RemoteReadStatus state={remoteReads} />
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
+    <div className={styles.resultBar}>
+      <Badge tone={needle ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: libraryPackages.length, total: packages.filter((entry) => entry.inLibrary !== false).length })}</Badge>
+      <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
+    </div>
+    {outcomes && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
+      <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{t(allOk ? 'library.resources.resultOk' : 'library.resources.resultMixed', { total: outcomes.length, ok: outcomes.filter((row) => row.ok).length, failed: outcomes.filter((row) => !row.ok).length })}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
+      <ul className={styles.resultList}>{outcomes.map((row) => <li key={row.name} data-state={row.ok ? 'ok' : 'failed'}><Icon name={row.ok ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
+    </section>}
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
-        return <Card className={styles.card} interactive key={item.id}>
+        return <Card className={styles.card} interactive key={item.id} data-skill-id={item.id} data-source={sourceOf(item)}>
           <div className={styles.cardHead}>
             <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
             {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
-            <Badge>{t('tools.skills.fileCount', { count: item.fileCount })}</Badge>
+            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
-          <div className={styles.cardBar}>
-            {packageWritable(item) && <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+          <div className={styles.cardMeta}>
+            <Badge className={styles.metaBadge} tone={sourceOf(item) === 'remoteReadOnly' ? 'warning' : sourceOf(item) === 'remote' ? 'info' : 'neutral'} dot>{sourceLabel(item)}</Badge>
+            <span>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
+          </div>
+          {packageWritable(item) ? <div className={styles.cardFoot}>
+            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
               return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
-            }} />}
-            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
-          </div>
+            }} />
+          </div> : null}
         </Card>;
       }) : needle
-        ? <div className={styles.empty}><Icon name="search" size={24} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}{!remoteTargetId && <Button icon={<Icon name="plus" size={14} />} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</Button>}</div>}
+        ? <EmptyState icon="search" title={t('library.resources.noSkillMatch', { query: search.trim() })} />
+        : <EmptyState icon="sparkle" title={t('library.resources.emptySkillTitle')} detail={t('library.resources.emptySkillDetail')} action={!remoteTargetId ? <Button icon={<Icon name="plus" size={14} />} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</Button> : undefined} />}
     </div>
     <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
       <div className={styles.skillAdd}>

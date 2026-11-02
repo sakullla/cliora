@@ -75,6 +75,8 @@ export default {
     searchTags: 'Search tags',
     listAria: '{{kind}} list',
     countFiltered: '{{filtered}} / {{total}}',
+    sourceLocal: 'Local library',
+    sourceRemote: 'Remote host library',
     noTags: 'No tags',
     originalProject: 'Original project',
     emptyBody: 'Body is empty',
@@ -121,6 +123,12 @@ export default {
     launchSubmit: 'Launch in external terminal',
   },
   resources: {
+    sourceManaged: 'Managed package',
+    sourceRemote: 'Remote host',
+    sourceRemoteReadOnly: 'Remote host · read-only',
+    resultAria: 'Distribution result',
+    resultOk: 'Distributed to {{total}} CLIs',
+    resultMixed: '{{ok}} succeeded, {{failed}} failed',
     remoteSkillInstalled: 'Installed; use the more actions menu to delete',
     remoteSkillDistributionUnavailable: 'Not installed; distributing remote Skills to other CLIs from these marks is unavailable',
     installState: {
