@@ -13,12 +13,14 @@
   font-weight: var(--fw-medium);
   line-height: 1.2;
   white-space: nowrap;
-  box-shadow: var(--shadow-xs);
+  /* Resting buttons are flat. Elevation belongs to surfaces that float, and a filled
+     primary reads as the one emphasised action through color alone. */
+  box-shadow: none;
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 .button[data-size="sm"] { min-height: var(--control-h-sm); padding: 0 var(--space-3); }
-.button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--control-line-hover); }
-.button:active:not(:disabled) { box-shadow: none; }
+.button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--control-line-hover); }
+.button:active:not(:disabled) { background: var(--surface-pressed); box-shadow: none; }
 .button:disabled { cursor: not-allowed; opacity: .5; }
 .button[aria-busy="true"] { cursor: progress; }
 
@@ -26,7 +28,8 @@
 .button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 
 .button[data-variant="ghost"] { border-color: transparent; background: transparent; color: var(--text-2); box-shadow: none; }
-.button[data-variant="ghost"]:hover:not(:disabled) { border-color: transparent; background: var(--surface-3); color: var(--text); }
+.button[data-variant="ghost"]:active:not(:disabled) { background: var(--surface-pressed); }
+.button[data-variant="ghost"]:hover:not(:disabled) { border-color: transparent; background: var(--row-hover); color: var(--text); }
 
 .button[data-variant="danger"] { border-color: var(--danger); background: var(--danger); color: var(--on-danger); }
 .button[data-variant="danger"]:hover:not(:disabled) { border-color: var(--danger); background: var(--danger); filter: brightness(.94); }

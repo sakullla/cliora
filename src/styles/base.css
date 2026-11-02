@@ -10,7 +10,9 @@ body {
   background: var(--sidebar);
 }
 h1, h2, h3, p { margin: 0; }
-h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); }
+/* Display faces carry their own generous leading; keep headings tight so a section title
+   reads as one line of hierarchy instead of spaced body copy. */
+h1, h2, h3 { text-wrap: balance; font-family: var(--font-display); line-height: 1.25; }
 time, .rowContext > span:last-of-type { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
 ::selection { background: var(--selection); color: inherit; }

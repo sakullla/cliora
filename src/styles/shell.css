@@ -64,7 +64,7 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .brand small { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); letter-spacing: .02em; white-space: nowrap; }
 .sidebar-toggle,
 .sidebar-toggle:hover:not(:disabled) { position: relative; flex: none; display: grid; place-items: center; width: 30px; min-height: 30px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--text-3); box-shadow: none; border-radius: var(--radius-sm); }
-.sidebar-toggle:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.sidebar-toggle:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
 .sidebar-toggle-brand { display: none; width: 26px; height: 26px; object-fit: contain; }
 .sidebar-toggle-icon { display: grid; place-items: center; }
 
@@ -154,9 +154,9 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
   box-shadow: none;
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.nav button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); box-shadow: none; }
+.nav button:hover:not(:disabled) { background: var(--row-hover); color: var(--text); box-shadow: none; }
 .nav button.active,
-.nav button.active:hover:not(:disabled) { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, transparent); }
+.nav button.active:hover:not(:disabled) { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: none; }
 /* A short leaf-green bar marks the current page in both the full and the icon sidebar. */
 .nav button.active::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: -4px; width: 3px; border-radius: var(--radius-pill); background: var(--accent); }
 .nav-glyph { display: grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--text-3); transition: color var(--fast) var(--ease); }
@@ -177,13 +177,13 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
   padding: 0 var(--space-1_5) 0 var(--space-2_5);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  background: var(--surface-2);
   color: var(--text-3);
   font-size: var(--fs-control);
   font-weight: var(--fw-regular);
   box-shadow: none;
 }
-.sidebar-command:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text-2); }
+.sidebar-command:hover:not(:disabled) { border-color: var(--control-line-hover); background: var(--surface); color: var(--text-2); }
 .sidebar-command > svg { flex: none; }
 .sidebar-command > span { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-command > kbd { flex: none; min-width: auto; padding: 0 var(--space-1); border-width: 1px; line-height: 18px; font-size: 10px; letter-spacing: .02em; box-shadow: none; background: var(--surface-2); color: var(--text-3); }
@@ -215,7 +215,7 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .status-dot[data-tone="preview"] { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
 
-.theme-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-0_5); padding: var(--space-0_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--text) 4%, transparent); }
+.theme-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-0_5); padding: var(--space-0_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .theme-switch button,
 .theme-switch button:hover:not(:disabled) {
   min-height: 26px;
@@ -226,13 +226,13 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
   color: var(--text-3);
   box-shadow: none;
 }
-.theme-switch button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--text); }
+.theme-switch button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .theme-switch button[aria-pressed="true"],
-.theme-switch button[aria-pressed="true"]:hover:not(:disabled) { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
+.theme-switch button[aria-pressed="true"]:hover:not(:disabled) { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-xs); }
 /* The folded sidebar has room for one theme control: it shows the current theme and cycles. */
 .theme-cycle,
 .theme-cycle:hover:not(:disabled) { display: none; place-items: center; width: 40px; min-height: 36px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-3); box-shadow: none; }
-.theme-cycle:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+.theme-cycle:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
 
 /* Pages float on a rounded canvas inside the window frame; the frame carries navigation. */
 .content {
@@ -242,10 +242,9 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
   overflow: auto;
   scrollbar-gutter: stable;
   border-radius: var(--canvas-radius);
-  background:
-    radial-gradient(1100px 620px at 100% -12%, var(--wash-a), transparent 62%),
-    radial-gradient(820px 520px at 0% 0%, var(--wash-b), transparent 58%),
-    var(--bg);
+  /* A flat canvas: the frame, one hairline and a soft ambient edge carry the layering,
+     so page content is never tinted by decoration behind it. */
+  background: var(--bg);
   box-shadow: var(--shadow-canvas);
 }
 .content-locked { display: flex; flex-direction: column; overflow: hidden; }
@@ -256,7 +255,8 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .content-workbench { scrollbar-gutter: auto; }
 .content-workbench > .content-inner { padding: 0; }
 html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; }
-.content-workbench > .content-inner > .environment-banner { margin: var(--space-2_5) var(--space-3) 0; }
+/* On the workbench the canvas has no page padding, so shell notices carry their own. */
+.content-workbench > .content-inner > :is(.environment-banner, .error-banner, .status-banner) { margin: var(--space-2_5) var(--space-3) 0; }
 .records-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .records-shell[hidden] { display: none; }
 .content-inner { width: 100%; max-width: 1440px; margin: 0 auto; padding: calc(var(--space-6) + var(--space-1)) calc(var(--space-8) + var(--space-1)) var(--space-12); }
@@ -267,10 +267,10 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 
 .page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-5); margin-bottom: var(--space-5); }
 .page-head > * { min-width: 0; }
-.page-head h1 { font-size: 26px; line-height: 1.2; letter-spacing: -.6px; font-weight: var(--fw-bold); }
+.page-head h1 { font-size: var(--fs-page); line-height: 1.25; letter-spacing: -.5px; font-weight: var(--fw-bold); }
 .page-head h1:focus { outline: none; }
 .page-head > div { position: relative; }
-.page-head p { margin-top: var(--space-1); max-width: 62ch; color: var(--text-3); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
+.page-head p { margin-top: var(--space-1); max-width: 62ch; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
 .page-head[data-compact] { align-items: center; margin-bottom: calc(var(--space-3) + var(--space-0_5)); }
 .page-head[data-compact] h1 { font-size: 22px; letter-spacing: -.25px; }
 .page-head[data-compact] p { margin-top: var(--space-0_5); font-size: var(--fs-body); }
@@ -297,7 +297,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-sidebar-collapsed="true"] .sidebar-host { width: 40px; }
   /* Only the sidebar's own switcher collapses to a glyph; the workbench chip keeps its label. */
   .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger { justify-content: center; width: 40px; min-height: 40px; padding: 0; border-color: transparent; background: transparent; box-shadow: none; }
-  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger:hover:not(:disabled) { background: var(--row-hover); }
   /* Folded, the host is a plain glyph with its status dot; a filled tile would read as the current page. */
   .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger .host-switcher-glyph { background: transparent; box-shadow: none; color: var(--text-2); }
   .shell[data-sidebar-collapsed="true"] .sidebar .host-switcher-trigger .host-switcher-glyph[data-remote] { color: var(--info); }
@@ -308,7 +308,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-sidebar-collapsed="true"] .nav-group { align-items: center; }
   .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; width: 40px; padding: 0; min-height: 40px; border-radius: var(--radius); }
   .shell[data-sidebar-collapsed="true"] .sidebar-command { width: 40px; min-height: 40px; margin: 0 auto var(--space-3); padding: 0; justify-content: center; border-color: transparent; background: transparent; box-shadow: none; }
-  .shell[data-sidebar-collapsed="true"] .sidebar-command:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .shell[data-sidebar-collapsed="true"] .sidebar-command:hover:not(:disabled) { background: var(--row-hover); }
   .shell[data-sidebar-collapsed="true"] .sidebar-foot { width: 100%; justify-items: center; }
   .shell[data-sidebar-collapsed="true"] .sidebar-update { width: 40px; min-height: 40px; padding: 0; justify-content: center; }
   .shell[data-sidebar-collapsed="true"] .theme-switch { display: none; }
@@ -348,7 +348,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   /* The current page keeps its leaf-green mark, turned to sit under the icon. */
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .nav button.active::before { top: auto; right: 10px; bottom: -4px; left: 10px; width: auto; height: 2px; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command { order: 2; flex: none; justify-content: center; width: 32px; min-height: 32px; margin: 0 0 0 var(--space-1); padding: 0; border-color: transparent; background: transparent; }
-  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command:hover:not(:disabled) { border-color: transparent; background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command:hover:not(:disabled) { border-color: transparent; background: var(--row-hover); }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command > span,
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-command > kbd { display: none; }
   /* The list runs to the sidebar edges so its rows and scrollbar line up with the canvas gap. */

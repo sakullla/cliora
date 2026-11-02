@@ -18,10 +18,10 @@
   /* Surfaces. The window frame (--sidebar) holds the navigation; pages sit on a lighter
      canvas (--bg) that floats inside the frame; cards are white paper on that canvas. */
   --bg: #f7f8f6;
-  --sidebar: #edefec;
+  --sidebar: #e7eae5;
   --surface: #ffffff;
-  --surface-2: #f4f5f3;
-  --surface-3: #ebedea;
+  --surface-2: #f1f3ef;
+  --surface-3: #e6e9e4;
   --overlay: rgb(12 18 14 / 34%);
   --wash-a: rgb(31 122 79 / 4%);
   --wash-b: rgb(78 116 160 / 3%);
@@ -33,11 +33,18 @@
   --text-3: #5b665e;
 
   /* Lines */
-  --line: #e4e7e3;
-  --line-strong: #c8cfca;
+  --line: #e3e7e2;
+  --line-strong: #c5cdc7;
   /* Control outlines sit between the hairline and the strong line. */
-  --control-line: #d3d9d4;
-  --control-line-hover: #aab3ad;
+  --control-line: #d2d8d3;
+  --control-line-hover: #a9b2ab;
+
+  /* Interaction tints. Derived from the text color so a hover reads the same on the
+     canvas, the sidebar and paper surfaces. --row-hover stays translucent on purpose:
+     rows and menu items sit on whatever surface owns them. */
+  --surface-hover: color-mix(in srgb, var(--text) 5%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
+  --row-hover: color-mix(in srgb, var(--text) 6%, transparent);
 
   /* Brand */
   --accent: #0f7148;
@@ -113,10 +120,11 @@
   --shadow-xs: 0 1px 1px rgb(16 24 20 / 4%);
   --shadow-sm: 0 1px 2px rgb(16 24 20 / 4%), 0 2px 8px -3px rgb(16 24 20 / 7%);
   --shadow-md: 0 12px 28px -14px rgb(13 24 18 / 18%), 0 2px 6px rgb(13 24 18 / 4%);
-  --shadow-lg: 0 28px 70px -24px rgb(9 20 14 / 28%), 0 10px 28px -14px rgb(9 20 14 / 16%), 0 0 0 1px rgb(9 20 14 / 5%);
+  /* Floating surfaces draw their own hairline border, so the shadow never repeats it. */
+  --shadow-lg: 0 28px 70px -24px rgb(9 20 14 / 28%), 0 10px 28px -14px rgb(9 20 14 / 16%);
   --shadow-accent: 0 1px 2px rgb(15 113 72 / 22%), 0 4px 12px -6px rgb(15 113 72 / 40%);
   --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
-  --shadow-canvas: 0 0 0 1px rgb(16 24 20 / 5%), 0 1px 2px rgb(16 24 20 / 4%), 0 8px 24px -16px rgb(16 24 20 / 14%);
+  --shadow-canvas: 0 0 0 1px var(--line), 0 1px 2px rgb(16 24 20 / 3%), 0 12px 32px -26px rgb(16 24 20 / 16%);
 
   /* Brand-artwork and focus ink */
   --shadow-brandmark: 0 3px 6px rgb(14 60 36 / 16%);
@@ -162,11 +170,11 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121514;
-  --sidebar: #0b0d0c;
-  --surface: #171b19;
-  --surface-2: #1c211e;
-  --surface-3: #252b27;
+  --bg: #161a18;
+  --sidebar: #0c0f0d;
+  --surface: #1a1e1c;
+  --surface-2: #202522;
+  --surface-3: #272d29;
   --overlay: rgb(0 0 0 / 60%);
   --wash-a: rgb(94 219 154 / 4%);
   --wash-b: rgb(108 154 210 / 3%);
@@ -180,6 +188,10 @@
   --line-strong: #444f48;
   --control-line: #333b36;
   --control-line-hover: #56625a;
+
+  --surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 10%, var(--surface));
+  --row-hover: color-mix(in srgb, var(--text) 8%, transparent);
 
   --accent: #6fdc9f;
   --accent-hover: #95ebbb;
@@ -215,7 +227,7 @@
   --shadow-lg: 0 36px 90px -30px rgb(0 0 0 / 80%), 0 8px 28px -12px rgb(0 0 0 / 40%);
   --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px -10px rgb(123 227 167 / 40%);
   --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 6%);
-  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 5%), 0 10px 30px -18px rgb(0 0 0 / 70%);
+  --shadow-canvas: 0 0 0 1px var(--line), 0 12px 36px -28px rgb(0 0 0 / 80%);
 
   --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a39c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");

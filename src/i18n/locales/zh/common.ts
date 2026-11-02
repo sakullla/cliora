@@ -272,6 +272,7 @@ export default {
   },
   shell: {
     brand: '栖点',
+    brandLatin: 'Cliora',
     sidebarExpand: '展开侧栏',
     sidebarCollapse: '折叠侧栏',
     statusLocalTitle: '本机资料仅存于此设备',

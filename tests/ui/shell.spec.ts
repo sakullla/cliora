@@ -104,6 +104,8 @@ test('full pages are navigable and browser mode never implies native data', asyn
   for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
     await expectPageLanded(page, name);
+    // The window title names the page the sidebar marks as current.
+    await expect.poll(() => page.title()).toBe(`${name} · Cliora`);
   }
   await expect(page.getByRole('checkbox').first()).toBeDisabled();
   await expect(page.locator('dialog')).toHaveCount(0);

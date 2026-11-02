@@ -272,6 +272,7 @@ export default {
   },
   shell: {
     brand: 'Cliora',
+    brandLatin: 'Cliora',
     sidebarExpand: 'Expand sidebar',
     sidebarCollapse: 'Collapse sidebar',
     statusLocalTitle: 'Local data stays on this device',

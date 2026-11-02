@@ -27,6 +27,8 @@ async function install(page: Page) {
   await page.addInitScript(({ catalog, promptTitle: prompt, sessionTitle: session }) => {
     let theme = 'light';
     let managed = catalog.map((item) => item[0]);
+    // The shell test flips one managed-tool write to fail so the global error notice renders.
+    const control = { failManaged: false };
     const profiles = Array.from({ length: 5 }, (_, index) => ({ id: `profile-${index}`, name: `日常配置 ${index + 1}`, version: 1, connection: null }));
     const library = [{ id: 'prompt-1', kind: 'prompt', title: prompt, body: '按用户能直接感受到的变化来写。', category: '写作', projectId: null, version: 1, updatedAt: 1790758800 }];
     const records = [{ id: 'session-1', toolId: 'codex', nativeId: '1111-2222', title: session, cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790751600000, updatedAt: 1790758800000, favorite: false, partial: false, stale: false, messageCount: 4, usageCount: 1 }];
@@ -59,12 +61,17 @@ async function install(page: Page) {
     });
     Object.assign(window, {
       isTauri: true,
+      __uiPolish: control,
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap' || command === 'set_tool_icon') return bootstrap();
           if (command === 'set_theme') { theme = args.theme ?? theme; return bootstrap(); }
           if (command === 'list_cli_adapters') return adapters();
-          if (command === 'set_registered_managed_tools') { managed = args.managedIds ?? managed; return adapters(); }
+          if (command === 'set_registered_managed_tools') {
+            if (control.failManaged) throw { message: '管理列表没有保存', action: '请重试。' };
+            managed = args.managedIds ?? managed;
+            return adapters();
+          }
           if (command === 'get_registered_tool_workspace') return workspace(args.toolId);
           if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_rule_placements' || command === 'list_accounts' || command === 'list_usage_queries' || command === 'list_usage_cache' || command === 'usage_presets' || command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
           if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
@@ -284,4 +291,128 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await expect(page.locator('.managed-checks input[type="checkbox"]').first()).toBeVisible();
     await expectNoSideScroll(page);
   }
+});
+
+/**
+ * Resolved ink/surface tokens with their WCAG contrast, the shell's resting elevation and the
+ * flat canvas. One block keeps every layer check in the same unit as the design tokens.
+ */
+async function shellInk(page: Page, selectors: string[]) {
+  return page.evaluate((list) => {
+    const resolve = (value: string) => {
+      const probe = document.createElement('span');
+      probe.style.color = value;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const channels = (color: string) => (color.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    const luminance = (color: string) => {
+      const [r, g, b] = channels(color).map((value) => {
+        const channel = value / 255;
+        return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a: string, b: string) => {
+      const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (light + 0.05) / (dark + 0.05);
+    };
+    const root = getComputedStyle(document.documentElement);
+    const token = (name: string) => resolve(root.getPropertyValue(name).trim());
+    const ink: Record<string, string> = { text: token('--text'), 'text-2': token('--text-2'), 'text-3': token('--text-3') };
+    const surfaces: Record<string, string> = { bg: token('--bg'), sidebar: token('--sidebar'), surface: token('--surface') };
+    const ratios: Record<string, number> = {};
+    for (const [inkName, inkColor] of Object.entries(ink)) {
+      for (const [surfaceName, surfaceColor] of Object.entries(surfaces)) {
+        ratios[`${inkName}/${surfaceName}`] = ratio(inkColor, surfaceColor);
+      }
+    }
+    const elevation = list.map((selector) => {
+      const node = document.querySelector<HTMLElement>(selector);
+      return { selector, shadow: node ? getComputedStyle(node).boxShadow : 'missing' };
+    });
+    return {
+      ratios,
+      layers: [surfaces.bg, surfaces.sidebar, surfaces.surface],
+      elevation,
+      canvasImage: getComputedStyle(document.querySelector('.content')!).backgroundImage,
+    };
+  }, selectors);
+}
+
+/** The shared notice geometry: one radius, one padding, one leading tone edge, no gradient. */
+async function noticeShape(locator: Locator) {
+  return locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    const root = getComputedStyle(document.documentElement);
+    return {
+      radius: style.borderTopLeftRadius,
+      radiusToken: root.getPropertyValue('--radius').trim(),
+      padTop: style.paddingTop,
+      padLeft: style.paddingLeft,
+      fontSize: style.fontSize,
+      edge: style.borderLeftWidth,
+      edgeColor: style.borderLeftColor,
+      image: style.backgroundImage,
+    };
+  });
+}
+
+test('shell and shared feedback keep readable ink, three layers, flat controls and one notice shape', async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  await install(page);
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  await expect(page.getByText('正在读取本机设置')).toBeHidden();
+  const nav = page.getByRole('navigation', { name: '页面' });
+  // Quiet shell controls carry no resting elevation; the current page is marked by fill and the
+  // leaf marker, not by a second border.
+  const quietControls = ['.sidebar-command', '.theme-switch button:not([aria-pressed="true"])', '[data-variant="secondary"]', '.nav button.active'];
+
+  const themeSwitch = page.getByRole('group', { name: '切换主题' });
+  for (const [label, attribute] of [['浅色主题', 'light'], ['深色主题', 'dark']] as const) {
+    await themeSwitch.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', attribute);
+    const ink = await shellInk(page, quietControls);
+    for (const [pair, value] of Object.entries(ink.ratios)) {
+      expect(value, `${attribute} ${pair}`).toBeGreaterThanOrEqual(4.5);
+    }
+    // Frame, canvas and paper stay three distinct layers in both themes.
+    expect(new Set(ink.layers).size, attribute).toBe(3);
+    for (const item of ink.elevation) expect(item.shadow, `${attribute} ${item.selector}`).toBe('none');
+    expect(ink.canvasImage, attribute).toBe('none');
+  }
+
+  // A failed write raises the one global notice: same shape as the environment notice, tone only.
+  await page.evaluate(() => { (window as unknown as { __uiPolish: { failManaged: boolean } }).__uiPolish.failManaged = true; });
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  const managed = page.locator('.managed-checks input[type="checkbox"]').first();
+  await expect(managed).toBeEnabled();
+  await managed.click();
+  const error = page.locator('.error-banner');
+  await expect(error).toBeVisible();
+  await expect(error).toHaveAttribute('role', 'alert');
+  const failure = await noticeShape(error);
+  expect(failure.radius).toBe(failure.radiusToken);
+  expect(failure.image).toBe('none');
+  expect(failure.edge).toBe('2px');
+
+  // Browser preview has no native storage, so the shell adds its environment notice there.
+  const previewContext = await browser.newContext({ locale: 'zh-CN', reducedMotion: 'reduce' });
+  const preview = await previewContext.newPage();
+  await preview.goto(new URL('/', page.url()).href);
+  const environment = preview.locator('.environment-banner');
+  await expect(environment).toContainText('浏览器预览');
+  const previewNotice = await noticeShape(environment);
+  await previewContext.close();
+
+  expect(previewNotice.radius).toBe(failure.radius);
+  expect(previewNotice.padTop).toBe(failure.padTop);
+  expect(previewNotice.padLeft).toBe(failure.padLeft);
+  expect(previewNotice.fontSize).toBe(failure.fontSize);
+  expect(previewNotice.edge).toBe(failure.edge);
+  expect(previewNotice.image).toBe('none');
+  expect(previewNotice.edgeColor).not.toBe(failure.edgeColor);
 });

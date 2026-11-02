@@ -458,6 +458,12 @@ export default function App() {
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
   const title: [string, string] = [t(`common.pages.${page}.title`), page === 'records' && remoteTargetId !== 'local' ? t('records.page.remoteSubtitle') : t(`common.pages.${page}.subtitle`)];
+  const brandLatin = t('common.shell.brandLatin');
+  // The window title names the current page, so the taskbar and the WebView title match
+  // what the sidebar marks as current, and it follows a language change immediately.
+  useEffect(() => {
+    document.title = title[0] === brandLatin ? brandLatin : `${title[0]} · ${brandLatin}`;
+  }, [title[0], brandLatin]);
 
   async function go(next: Page) {
     if (!await canLeave(next)) return false;
@@ -672,7 +678,7 @@ export default function App() {
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand">
         <img className="brandmark" src={brandIcon} alt="" />
-        <span className="brand-name"><strong>{t('common.shell.brand')}</strong><small>Cliora</small></span>
+        <span className="brand-name"><strong>{t('common.shell.brand')}</strong>{t('common.shell.brand') !== brandLatin && <small>{brandLatin}</small>}</span>
         <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={`${sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} (${modLabel}+\\)`} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><img className="sidebar-toggle-brand" src={brandIcon} alt="" /><span className="sidebar-toggle-icon"><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={18} /></span></button>
       </div>
       {bootstrap.preferences.remote_ssh_enabled && <div className="sidebar-host"><HostSwitcher targets={remoteTargets} value={remoteTargetId} onChange={changeRemoteTarget} onManage={openHostManagement} collapsed={sidebarCollapsed} /></div>}
