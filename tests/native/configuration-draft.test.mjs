@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 const source = readFileSync(new URL('../../src/lib/configurationDraft.ts', import.meta.url), 'utf8');
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { createConfigurationSession, configurationAction, configurationApplicationState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+const { createConfigurationSession, configurationAction, configurationApplicationState, configurationLiveState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 const initial = { sessionId: 'one', revision: 0, issues: [], profile: { files: {} } };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -174,4 +174,24 @@ test('API edits cannot rebucket confirmed A references or A input under browsed 
     assert.equal(buffers.get(a).credential.secretRef, secretRef);
     assert.equal(buffers.get(b).credential.secretRef, 'lease-b');
   }
+});
+
+test('the live strip states only what the binding supports: applied, invalid, unknown and unbound', () => {
+  const profile = { id: 'p', name: 'Plan A', version: 3, revision: 'r3', inheritCommon: true };
+  const profiles = [profile];
+  const trusted = { profileId: 'p', profileVersion: 3, commonVersion: 2, commonRevision: 'c2', appliedProfileAvailable: true, appliedSummary: { profileVersion: 3, profileRevision: 'r3' } };
+  const common = { version: 2, revision: 'c2' };
+  assert.deepEqual(configurationLiveState(trusted, profiles, common, 'global', false), { tone: 'success', state: 'applied', profile });
+  // An invalidated binding (profile_version -1 is decoded as 0) or a stale revision is no longer in effect.
+  for (const stale of [ { ...trusted, profileVersion: 0 }, { ...trusted, profileVersion: -1 }, { ...trusted, appliedProfileAvailable: false }, { ...trusted, appliedSummary: { profileVersion: 3, profileRevision: 'old' } }, { ...trusted, profileId: 'deleted' } ]) {
+    const live = configurationLiveState(stale, profiles, common, 'global', false);
+    assert.equal(live.state, 'invalid');
+    assert.equal(live.tone, 'warning');
+    assert.equal(live.profile, stale.profileId === 'deleted' ? null : profile);
+  }
+  // A remote target returns no binding, so the scope is unknown rather than empty.
+  assert.deepEqual(configurationLiveState(null, profiles, common, 'global', true), { tone: 'unknown', state: 'unconfirmed', profile: null });
+  // A project without its own binding is never reported as reading any configuration.
+  assert.deepEqual(configurationLiveState(null, profiles, common, 'project', false), { tone: 'neutral', state: 'project_unbound', profile: null });
+  assert.deepEqual(configurationLiveState(null, profiles, common, 'global', false), { tone: 'neutral', state: 'unapplied', profile: null });
 });

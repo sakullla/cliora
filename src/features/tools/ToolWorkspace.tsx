@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable } from '../../lib/native';
-import { configurationApplicationState } from '../../lib/configurationDraft';
+import { configurationApplicationState, configurationLiveState, type ConfigurationLiveState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -474,8 +474,16 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError(t('tools.workspace.quotaChanged')); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
-  // The applied profile of this exact scope, so the board states its context before any row.
-  const boundProfile = workspace?.binding?.profileId ? workspace.profiles.find(profile => profile.id === workspace.binding!.profileId) ?? null : null;
+  // One statement about this exact scope, judged from the same binding the rows read.
+  const live = configurationLiveState(workspace?.binding, workspace?.profiles ?? [], workspace?.common, scope, isRemote);
+  const liveCopy: Record<ConfigurationLiveState, { label: string; value: string; title: string }> = {
+    applied: { label: t('tools.workspace.liveNow'), value: live.profile?.name ?? '', title: t('tools.workspace.liveHint') },
+    invalid: { label: t('tools.workspace.liveInvalid'), value: live.profile?.name ?? t('tools.workspace.liveInvalidMissing'), title: t('tools.workspace.liveInvalidHint') },
+    unconfirmed: { label: t('tools.workspace.liveUnconfirmed'), value: t('tools.workspace.liveUnconfirmedValue'), title: t('tools.workspace.liveUnconfirmedHint') },
+    unapplied: { label: t('tools.workspace.liveUnapplied'), value: '', title: t('tools.workspace.liveUnappliedHint') },
+    project_unbound: { label: t('tools.workspace.liveProjectUnbound'), value: '', title: t('tools.workspace.liveProjectUnboundHint') },
+  };
+  const liveText = liveCopy[live.state];
   const modelOf = (profile: RegisteredProfile) => workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
   const query = filter.trim().toLocaleLowerCase();
   const matches = (profile: RegisteredProfile) => !query || [profile.name, modelOf(profile), host(profile.connection?.baseUrl)].some(value => value?.toLocaleLowerCase().includes(query));
@@ -535,10 +543,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       : <div ref={configBoard} className={styles.profileList} data-tools-board aria-label={t('tools.workspace.listAria')}>
         <Toolbar className={styles.listHeading} title={t('tools.workspace.profilesTitle')} titleAs="h3" count={workspace.profiles.length > 0 ? workspace.profiles.length : undefined} actions={<><Button variant="ghost" size="sm" icon={<Icon name="play" size={14} />} title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}>{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</Button><Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}>{t('tools.workspace.common')}</Button></>} primary={<Button variant="primary" size="sm" icon={<Icon name="plus" size={14} />} onClick={() => void createProfile()}>{t('tools.workspace.frameNew')}</Button>} />
         <div className={styles.boardBody}>
-        <div className={styles.liveStrip} data-tools-live data-live-profile={boundProfile?.id ?? ''} title={t('tools.workspace.liveHint')}>
+        <div className={styles.liveStrip} data-tools-live data-live-state={live.state} data-live-tone={live.tone} data-live-profile={live.profile?.id ?? ''} title={liveText.title}>
           <span className={styles.liveDot} aria-hidden="true" />
-          <span className={styles.liveLabel}>{t('tools.workspace.liveNow')}</span>
-          <strong title={boundProfile?.name ?? t('tools.workspace.liveNone')}>{boundProfile?.name ?? t('tools.workspace.liveNone')}</strong>
+          <span className={styles.liveLabel}>{liveText.label}</span>
+          {liveText.value && <strong title={liveText.value}>{liveText.value}</strong>}
         </div>
         {workspace.probe.nativeWrites.state !== 'supported' && <p className={styles.boardNote}><Icon name="lock" size={14} />{t('tools.workspace.applyBlocked')}{workspace.probe.nativeWrites.reason ? ` · ${workspace.probe.nativeWrites.reason}` : ''}</p>}
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><Button variant="ghost" size="sm" onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</Button></div>}

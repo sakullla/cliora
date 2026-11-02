@@ -14,6 +14,36 @@ export function configurationApplicationState(profile: RegisteredProfile, bindin
   return { same, commonPending, trusted, applied };
 }
 
+/** The four tones the board's live strip may use; only a trusted binding is green. */
+export type ConfigurationLiveTone = 'success' | 'warning' | 'unknown' | 'neutral';
+export type ConfigurationLiveState = 'applied' | 'invalid' | 'unconfirmed' | 'unapplied' | 'project_unbound';
+
+/**
+ * What the board may state about this exact scope. It reuses the row judgement so the
+ * strip and the rows cannot disagree, and it never claims more than the facts support:
+ * a remote target carries no binding, and a stale binding is "no longer in effect".
+ */
+export function configurationLiveState(
+  binding: AppliedBinding | null | undefined,
+  profiles: readonly RegisteredProfile[],
+  common: RegisteredCommon | null | undefined,
+  scope: 'global' | 'project',
+  remote: boolean,
+): { tone: ConfigurationLiveTone; state: ConfigurationLiveState; profile: RegisteredProfile | null } {
+  // A remote target's tool store has no binding, so nothing here is readable as a fact.
+  if (remote) return { tone: 'unknown', state: 'unconfirmed', profile: null };
+  if (!binding) return {
+    tone: 'neutral',
+    state: scope === 'project' ? 'project_unbound' : 'unapplied',
+    profile: null,
+  };
+  const profile = profiles.find(item => item.id === binding.profileId) ?? null;
+  if (profile && configurationApplicationState(profile, binding, common).applied) {
+    return { tone: 'success', state: 'applied', profile };
+  }
+  return { tone: 'warning', state: 'invalid', profile };
+}
+
 /** Opaque API refs can be restored only for the same connection identity. */
 export const configurationConnectionIdentity = (connection: Connection | null) => connection ? JSON.stringify([connection.providerId, connection.interfaceFormat, connection.baseUrl]) : '';
 
