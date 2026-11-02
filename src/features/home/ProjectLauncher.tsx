@@ -23,10 +23,23 @@ import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '..
 import styles from './ProjectLauncher.module.css';
 
 export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
+  // Recent work is identified with real project data: the backend returns projects by last_opened.
+  const relative = new Intl.RelativeTimeFormat(i18n.language || 'zh-CN', { numeric: 'auto' });
+  function lastUsed(stamp: number): string | null {
+    // Values before 2001 are not real timestamps; showing "20,000 days ago" would invent precision.
+    if (!stamp || stamp < 1_000_000_000) return null;
+    const minutes = Math.round((stamp * 1000 - Date.now()) / 60000);
+    const abs = Math.abs(minutes);
+    if (abs < 60) return relative.format(minutes, 'minute');
+    if (abs < 1440) return relative.format(Math.round(minutes / 60), 'hour');
+    return relative.format(Math.round(minutes / 1440), 'day');
+  }
   const [projects, setProjects] = useState<Project[]>([]);
   const [listLoading, setListLoading] = useState(nativeAvailable);
+  const [listFailed, setListFailed] = useState(false);
+  const listFailedRef = useRef(false);
   const [projectQuery, setProjectQuery] = useState('');
   const [names, setNames] = useState<Record<string, string>>({});
   const [globalTool, setGlobalTool] = useState('');
@@ -110,8 +123,19 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const result = await native.listProjects();
       if (!Array.isArray(result)) throw new Error(t('home.launcher.invalidData'));
       setProjects(result);
+      // A successful reload retires the read failure it was offered for; other errors stay.
+      if (listFailedRef.current) {
+        listFailedRef.current = false;
+        setListFailed(false);
+        setError('');
+      }
     }
-    catch (value) { setError((current) => current || formatFailure(value, t('home.launcher.listFailed'), projectNext)); }
+    catch (value) {
+      // The read failure keeps its own flag so the page offers a reload next to the message.
+      listFailedRef.current = true;
+      setListFailed(true);
+      setError((current) => current || formatFailure(value, t('home.launcher.listFailed'), projectNext));
+    }
     finally { setListLoading(false); }
   }
 
@@ -333,10 +357,11 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const visibleRemoteProjects = projectNeedle ? scopedRemoteProjects.filter((project) => `${project.name} ${project.path} ${remoteTargets.find((target) => target.id === project.targetId)?.host ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedRemoteProjects;
   const totalProjects = scopedProjects.length + scopedRemoteProjects.length;
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
-    {error && <div className={styles.error} role="alert">{error}</div>}
+    <Toolbar className={styles.heading} title={t('home.continue.title')} count={totalProjects || undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button> : undefined} />
+    {error && <div className={styles.error} role="alert"><span className={styles.errorText}>{error}</span>{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    <Toolbar className={styles.heading} title={t('home.projects.title')} count={totalProjects || undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button> : undefined} />
+    {totalProjects > 0 && <p className={styles.sectionHint}>{t('home.continue.hint')}</p>}
     {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {listLoading && !totalProjects ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
@@ -348,8 +373,9 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
       const marked = repair?.projectId === project.id || spotlight?.id === project.id;
       const pasteExpanded = project.id in pasteOpen ? !!pasteOpen[project.id] : repair?.projectId === project.id;
+      const used = lastUsed(project.lastOpened);
       return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
-        <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div><span title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span></div>
+        <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div><div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div></div>
         <div className={styles.controls}>
           <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} />
           <div className={styles.actions}>
@@ -409,8 +435,8 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       })}
     </div>}
     {!visibleProjects.length && !visibleRemoteProjects.length && totalProjects > 0 ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p> : null}
-    {!totalProjects && <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span></span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
-    </> : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span></span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    {!totalProjects && <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t('home.continue.emptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    </> : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t('home.continue.emptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
       <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={resumeTool} options={toolOptions(resumable)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />

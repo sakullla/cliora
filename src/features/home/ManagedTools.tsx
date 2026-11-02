@@ -474,6 +474,8 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
   const others = unpinned.filter((item) => !daily.includes(item));
   const shown = othersOpen ? [...common, ...others] : common;
   return <div className={styles.list} aria-label={t('home.managed.title')}><RemoteReadStatus state={remoteReads} />
+    {/* Only a folded list needs the heading: it names the rows that stay visible by default. */}
+    {others.length > 0 && <div className={styles.groupLabel}>{t('home.tools.groupCommon')}</div>}
     {shown.map((tool) => {
       const loaded = states[tool.id];
       const isRemote = remoteTargetId !== 'local';

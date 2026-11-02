@@ -13,7 +13,7 @@ export default {
   },
   empty: {
     title: '尚未管理工具',
-    detail: '可在设置中开启需要管理的 CLI。',
+    detail: '前往设置勾选需要管理的 CLI；勾选后这里会显示启动按钮。',
   },
   onboarding: {
     label: '首次使用引导',
@@ -30,12 +30,19 @@ export default {
     goLaunch: '去启动',
     done: '已完成',
     pending: '未完成',
+    progress: '已完成 {{done}} / {{total}}',
     close: '关闭引导',
   },
   projects: {
     title: '最近项目',
     panelTitle: '桌面应用中管理项目',
     panelDetail: '可以关联本机目录，并用选定的 CLI 在外部终端启动。',
+  },
+  continue: {
+    title: '继续工作',
+    hint: '选一个项目直接启动；工具和配置沿用卡片上的选择。',
+    lastUsed: '上次 {{when}}',
+    emptyNext: '添加本机目录后，每个项目都会带着自己的工具与配置出现在这里。',
   },
   remote: {
     receiptTitle: '目录创建结果',
@@ -161,6 +168,7 @@ export default {
     unfavoriteTitle: '取消收藏',
     unconfigured: '未配置',
     versionTitle: '已安装 {{version}}',
+    groupCommon: '常用工具',
     otherTools: '其他 {{count}} 个工具',
     otherToolsLess: '收起其他工具',
     recheck: '重新检测',
@@ -181,6 +189,7 @@ export default {
     operationFailed: '项目操作失败',
     invalidData: '项目数据格式无效，请重新读取',
     listFailed: '项目列表读取失败',
+    reload: '重新读取项目',
     removeConfirm: '从栖点移除“{{name}}”？磁盘文件保留。',
     removeAction: '移除项目',
     renamed: '项目名称已保存。',

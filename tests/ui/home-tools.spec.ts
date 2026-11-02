@@ -1182,11 +1182,13 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   const rows = tools.locator('[data-tool-row]');
-  // Tools come first; the projects section follows.
-  const projectsTop = (await page.getByRole('region', { name: '项目与启动' }).boundingBox())!.y;
-  expect((await tools.boundingBox())!.y).toBeLessThan(projectsTop);
+  // R2: continue working is the first band, tool management follows it.
+  const launcher = page.getByRole('region', { name: '项目与启动' });
+  await expect(launcher.getByRole('heading', { name: '继续工作', exact: true })).toBeVisible();
+  expect((await launcher.boundingBox())!.y).toBeLessThan((await tools.boundingBox())!.y);
 
   // Only the configured tool is listed; the other seven fold behind one toggle.
+  await expect(tools.getByText('常用工具', { exact: true })).toBeVisible();
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText('Tool C');
   const more = tools.getByRole('button', { name: '其他 7 个工具', exact: true });
@@ -1263,3 +1265,83 @@ test('a failed compared apply explains itself in the dialog and retries with a f
   await expect(dialog).toHaveCount(0);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
 });
+
+/** Home with projects: one managed CLI and the desktop-shaped project records. */
+async function installContinue(page: Page, mode: 'projects' | 'empty' | 'fail-first' = 'projects') {
+  await page.addInitScript((mode: string) => {
+    const projects = [
+      { id: 'desk', name: '栖点', path: 'C:\Projects\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: { codex: 'daily' }, appliedProfiles: { codex: 'daily' } },
+      { id: 'site', name: '个人网站', path: 'C:\Projects\personal-site', available: true, preferredTool: 'codex', lastOpened: 1790028800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} },
+    ];
+    let reads = 0;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: false }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } },
+          profiles: [{ id: 'daily', tool: 'codex', name: '日常', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'gpt-5' } }],
+          binding: { scopeKey: 'global', tool: 'codex', profileId: 'daily', profileVersion: 1, managed: {} },
+          snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_projects') {
+          reads += 1;
+          if (mode === 'empty') return [];
+          // The first read fails like an unreadable database; the reload uses the same command.
+          if (mode === 'fail-first' && reads === 1) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '检查磁盘和权限后重试。' };
+          return projects;
+        }
+        if (command.startsWith('plugin:event|')) return 1;
+        if (command.startsWith('list_')) return [];
+        return null;
+      } },
+    });
+  }, mode);
+}
+
+test('continue working leads home and every project keeps one launch entry', async ({ page }) => {
+  await installContinue(page);
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  const launcher = page.getByRole('region', { name: '项目与启动' });
+  const tools = page.getByLabel('管理中的工具');
+  await expect(launcher.getByRole('heading', { name: '继续工作', exact: true })).toBeVisible();
+  await expect(launcher).toContainText('工具和配置沿用卡片上的选择');
+  const cards = launcher.locator('[data-project-id]');
+  await expect(cards).toHaveCount(2);
+  // R2: the project band is authored after the tools list but reads first.
+  expect((await launcher.boundingBox())!.y).toBeLessThan((await tools.boundingBox())!.y);
+  // Recent work comes from the existing last-opened data, and each card has exactly one primary launch.
+  for (const card of await cards.all()) {
+    await expect(card.getByText('上次', { exact: false })).toBeVisible();
+    await expect(card.getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});
+
+test('an empty project list offers the next step without hiding the tools band', async ({ page }) => {
+  await installContinue(page, 'empty');
+  await page.goto('/');
+  const launcher = page.getByRole('region', { name: '项目与启动' });
+  await expect(launcher).toContainText('还没有项目');
+  await expect(launcher.getByRole('button', { name: '添加项目', exact: true })).toBeVisible();
+  await expect(launcher).toContainText('添加本机目录后，每个项目都会带着自己的工具与配置出现在这里');
+  // The already-managed tools stay reachable below the empty project band.
+  await expect(page.getByLabel('管理中的工具').getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
+});
+
+test('a failed project read keeps its message and reloads the list in place', async ({ page }) => {
+  await installContinue(page, 'fail-first');
+  await page.goto('/');
+  const launcher = page.getByRole('region', { name: '项目与启动' });
+  const alert = launcher.getByRole('alert');
+  // The native failure keeps its own message; the reload action sits beside it in the same band.
+  await expect(alert).toContainText('无法打开本机数据库');
+  await alert.getByRole('button', { name: '重新读取项目', exact: true }).click();
+  await expect(launcher.locator('[data-project-id]')).toHaveCount(2);
+  await expect(launcher.getByRole('alert')).toHaveCount(0);
+});
+

@@ -26,7 +26,10 @@ export function OnboardingCard({ doneTools, doneConfig, doneLaunch, onManageTool
         <h2>{t('home.onboarding.title')}</h2>
         <p>{t('home.onboarding.hint')}</p>
       </div>
-      <Button size="sm" variant="ghost" icon={<Icon name="close" size={14} />} onClick={onClose}>{t('home.onboarding.close')}</Button>
+      <div className="onboarding-head-actions">
+        <span className="onboarding-progress">{t('home.onboarding.progress', { done: steps.filter((step) => step.done).length, total: steps.length })}</span>
+        <Button size="sm" variant="ghost" icon={<Icon name="close" size={14} />} onClick={onClose}>{t('home.onboarding.close')}</Button>
+      </div>
     </div>
     <ol className="onboarding-steps">
       {steps.map((step, index) => <li key={step.id} data-done={step.done || undefined}>

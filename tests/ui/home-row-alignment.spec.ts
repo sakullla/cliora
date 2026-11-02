@@ -34,3 +34,53 @@ test('launch buttons stay in one column whether or not a CLI is installed', asyn
   const heights = await rows.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   for (const height of heights) expect(height).toBeLessThanOrEqual(48);
 });
+
+test('project cards keep one launch action and home never scrolls sideways', async ({ page }) => {
+  await page.addInitScript(() => {
+    const catalog = [['codex', 'Codex', true], ['kimi_code', 'Kimi Code', true], ['mimo_code', 'MiMo Code', false]];
+    const projects = [
+      { id: 'desk', name: '栖点 · 桌面工具', path: 'C:\\Projects\\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: { codex: 'daily' }, appliedProfiles: { codex: 'daily' } },
+      { id: 'site', name: '个人网站', path: 'C:\\Projects\\personal-site', available: true, preferredTool: 'kimi_code', lastOpened: 1790028800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} },
+    ];
+    Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: catalog.map((item) => item[0]), theme: 'light' }, tools: catalog.map(([id, name]) => ({ id, name })) };
+      if (command === 'list_cli_adapters') return { registered: catalog.map(([id, name]) => ({ id, name, interfaceFormats: ['openai_responses'] })), managedIds: catalog.map((item) => item[0]), preservedUnknown: [] };
+      if (command === 'get_registered_tool_workspace') {
+        const installed = catalog.find((item) => item[0] === args.toolId)?.[2];
+        return { probe: { tool: args.toolId, selectedPath: installed ? '/fixture/cli' : null, installations: installed ? [{ path: '/fixture/cli', version: '1.0.0', status: 'available', source: 'native' }] : [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+      }
+      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      if (command === 'list_projects') return projects;
+      if (command === 'plugin:dialog|open') return null;
+      if (command.startsWith('plugin:event|')) return 1;
+      if (command.startsWith('list_')) return [];
+      return null;
+    } } });
+  });
+
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  const cards = page.locator('[data-project-id]');
+  await expect(cards).toHaveCount(2);
+  // Continue-working is first for both sighted and sequential keyboard/screen-reader users.
+  const readingOrder = await page.evaluate(() => {
+    const launcher = document.querySelector('.home-launcher');
+    const tools = document.querySelector('.home-tools');
+    return !!launcher && !!tools && (launcher.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  });
+  expect(readingOrder).toBe(true);
+  // One primary launch per card, and equal card heights so the actions line up.
+  for (const card of await cards.all()) await expect(card.locator('[data-split-variant]')).toHaveCount(1);
+  const heights = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+  expect(new Set(heights).size).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+  // At 640 the tool rows still share one launch column and nothing spills sideways.
+  await page.setViewportSize({ width: 640, height: 900 });
+  const rows = page.locator('[data-tool-row]');
+  await expect(rows).toHaveCount(3);
+  const edges = await rows.getByRole('button', { name: /^(启动|重新检测)$/ }).evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().left) + '-' + Math.round(node.getBoundingClientRect().right)));
+  expect(new Set(edges).size).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});

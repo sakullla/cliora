@@ -13,7 +13,7 @@ export default {
   },
   empty: {
     title: 'No managed tools yet',
-    detail: 'Enable the CLIs you want to manage in settings.',
+    detail: 'Tick the CLIs to manage in settings; launch buttons appear here once one is enabled.',
   },
   onboarding: {
     label: 'First-run guide',
@@ -30,12 +30,19 @@ export default {
     goLaunch: 'Go launch',
     done: 'Done',
     pending: 'Not done',
+    progress: '{{done}} of {{total}} done',
     close: 'Close guide',
   },
   projects: {
     title: 'Recent projects',
     panelTitle: 'Manage projects in the desktop app',
     panelDetail: 'Link local folders and launch them with a CLI in an external terminal.',
+  },
+  continue: {
+    title: 'Continue working',
+    hint: 'Launch straight into a project; the tool and profile come from its card.',
+    lastUsed: 'last used {{when}}',
+    emptyNext: 'Add a local folder and every project appears here with its own tool and profile.',
   },
   remote: {
     receiptTitle: 'Directory creation results',
@@ -161,6 +168,7 @@ export default {
     unfavoriteTitle: 'Remove star',
     unconfigured: 'Not configured',
     versionTitle: 'Installed {{version}}',
+    groupCommon: 'Tools in daily use',
     otherTools: '{{count}} more tools',
     otherToolsLess: 'Hide other tools',
     recheck: 'Re-check',
@@ -181,6 +189,7 @@ export default {
     operationFailed: 'Project operation failed',
     invalidData: 'Project data is invalid. Reload it.',
     listFailed: 'Failed to read the project list',
+    reload: 'Reload projects',
     removeConfirm: 'Remove "{{name}}" from Cliora? Files on disk are kept.',
     removeAction: 'Remove project',
     renamed: 'Project name saved.',

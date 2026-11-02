@@ -1,7 +1,9 @@
 /* Home */
-/* One column: the tools in daily use first, then projects. */
-.home-band { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+/* Two bands: continue working first, managing tools second. The launcher precedes the tool
+   list in the DOM so reading and focus order match the visual hierarchy. */
+.home-band { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; }
 .home-band > * { min-width: 0; }
+.home-band > .home-tools { padding-top: var(--space-6); border-top: 1px solid var(--line); }
 .home-tools { min-width: 0; container-type: inline-size; }
 .home-secondary { display: flex; flex-direction: column; align-self: stretch; margin-top: 0; }
 .home-secondary .subtle-panel { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: 168px; padding: var(--space-6) var(--space-5); text-align: center; }
@@ -18,7 +20,10 @@
 .onboarding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .onboarding-head h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); color: var(--text); }
 .onboarding-head p { max-width: 64ch; margin: var(--space-0_5) 0 0; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
-.onboarding-steps { display: grid; gap: var(--space-1_5); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+.onboarding-head-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
+.onboarding-progress { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
+/* Wide enough for three columns the steps read as one strip; narrower they stack as before. */
+.onboarding-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-1_5); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
 .onboarding-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2_5); min-height: var(--row-h); padding: var(--space-1_5) var(--space-3); border-radius: var(--radius-sm); background: var(--surface-2); }
 .onboarding-steps li[data-done] { background: var(--accent-soft); }
 .onboarding-check { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
