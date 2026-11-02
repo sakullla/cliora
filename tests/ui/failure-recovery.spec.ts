@@ -63,6 +63,8 @@ test('a failed tool workspace read shows the error and a direct retry on the too
   await openCli(page, 'Codex');
   const region = page.getByRole('region', { name: '工具与连接' });
   await expect(region.getByText('配置读取失败', { exact: true })).toBeVisible();
+  // The read failure uses the same empty surface as the MCP / Skill / Agent / Plugin tabs.
+  await expect(region.locator('.empty-state')).toHaveCount(1);
   await expect(page.getByText('找不到 Codex 可执行文件').first()).toBeVisible();
   const retry = region.getByRole('button', { name: '重试读取配置', exact: true });
   await expectDirect(retry);

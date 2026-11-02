@@ -318,33 +318,28 @@ div > .feedback { margin-bottom: var(--space-3); }
 .profileMeta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); min-width: 0; max-width: 100%; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .profileMeta > span { min-width: 0; overflow-wrap: anywhere; }
 .profileMeta > .profileModel { max-width: min(320px, 100%); font-family: var(--font-mono); }
-.profileRow > section:not([data-empty="true"]) {
-  /* The quota panel declares width:100%; with side margins that overflows the card. */
-  width: auto;
-  margin: 0 var(--space-3) var(--space-3) var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
-}
+  /* The quota readout belongs to its row rather than to a card inside the card: one
+     hairline plus inset padding keeps a single border per profile. */
+  .profileRow > section:not([data-empty="true"]) {
+    width: auto;
+    margin: 0;
+    padding: var(--space-2) var(--space-4) var(--space-3);
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+  }
 
-/* ---------- Empty / task states ---------- */
-.taskEmpty {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-10) var(--space-6);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-xl);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 74%, transparent) 0%, color-mix(in srgb, var(--surface) 46%, transparent) 100%);
-}
-.taskEmpty > p { flex-basis: 100%; margin: 0; color: var(--text-2); font-size: var(--fs-control); line-height: 1.6; }
-.taskEmpty > svg { flex: none; color: var(--text-3); }
-.taskEmpty[data-tone="error"] > svg { color: var(--danger); }
-.taskEmpty > div { display: grid; gap: var(--space-0_5); flex: 1 1 240px; min-width: 0; }
-.taskEmpty > div > strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.taskEmpty > div > p { margin: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
+.liveStrip { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin: var(--space-2_5) var(--space-3) 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text-2); font-size: var(--fs-caption); line-height: 1.4; }
+.liveDot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
+.liveLabel { flex: none; color: var(--text-3); font-weight: var(--fw-medium); }
+.liveStrip > strong { min-width: 0; overflow: hidden; color: var(--text); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.boardNote { display: flex; align-items: flex-start; gap: var(--space-1_5); margin: var(--space-2) var(--space-3) 0; padding: 0 var(--space-1); color: var(--warning); font-size: var(--fs-caption); line-height: 1.5; }
+.boardNote > svg { flex: none; margin-top: 1px; }
+
+/* ---------- Empty / failure states ----------
+   Page-level empty and read-failure surfaces use the shared EmptyState component so
+   they match the MCP / Skill / Agent / Plugin / Memory tabs. */
 
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {

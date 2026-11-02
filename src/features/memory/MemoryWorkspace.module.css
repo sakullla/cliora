@@ -40,6 +40,14 @@
 .scopeSwitch strong { color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .scopeSwitch span { flex: 1 1 120px; min-width: 0; color: var(--text-3); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 .scopeSwitch select { min-height: 28px; max-width: 148px; font-size: var(--fs-caption) !important; }
+/* One panel for the switches under the list: a single frame with hairlines between
+   the master switch, the scope switches and each store, instead of one bordered
+   box per control. */
+.switchPanel { display: grid; flex: 1 1 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.switchPanel > * { border: 0; border-radius: 0; box-shadow: none; }
+.switchPanel > * + * { border-top: 1px solid var(--line); }
+.switchPanel > .autoToggle, .switchPanel > .storeSwitch, .switchPanel > .scopeSwitch { background: transparent; }
+.switchPanel > .autoToggle[data-state="off"] { background: color-mix(in srgb, var(--warning-soft) 70%, var(--surface)); }
 .offNote { display: inline-flex; flex: 1 1 100%; align-items: center; gap: var(--space-1_5); max-width: 100%; min-height: 28px; margin: 0; padding: 0 var(--space-2_5); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning); font-size: var(--fs-caption); font-weight: var(--fw-semibold); line-height: 1.3; box-shadow: inset 0 0 0 1px var(--warning-line); }
 .offNote > svg { flex: none; }
 

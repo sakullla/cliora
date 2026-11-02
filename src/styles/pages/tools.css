@@ -1,1 +1,55 @@
-/* Tool & connection page globals. The page currently styles itself through CSS modules. */
+/* Tools & connections page globals.
+
+   Components style themselves through CSS modules; this file only owns the two
+   guarantees that have to hold for the page as a whole:
+
+   1. nothing inside the page may widen the layout past the window (the 640px
+      check covers the chrome, the capability tabs and the configuration rows);
+   2. long profile names and scopes keep their row actions reachable instead of
+      pushing them out of the board.
+
+   Selectors hook stable data attributes rather than hashed module classes, so a
+   component rename cannot silently drop the page-level guard. */
+
+[data-tools-page] {
+  min-width: 0;
+  overflow-x: clip;
+}
+
+[data-tools-page] :where([data-tools-chrome-head], [data-tools-taskbar], [data-tools-scope], [data-tools-board], [data-tools-live], [data-tools-row-head], [data-tools-row-actions]) {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  /* The CLI identity and the install summary stop sharing a row: the summary
+     moves under the name instead of squeezing it. */
+  [data-tools-page] [data-tools-chrome-head] {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  /* Capability tabs keep their own scroll strip; the scope selector takes the
+     next line so the current scope is never truncated to an ellipsis. */
+  [data-tools-page] [data-tools-taskbar] {
+    flex-wrap: wrap;
+    padding-bottom: var(--space-1);
+  }
+
+  [data-tools-page] [data-tools-scope] {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  /* Row actions drop below the profile name rather than clipping it. */
+  [data-tools-page] [data-tools-row-head] {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    row-gap: var(--space-2);
+  }
+
+  [data-tools-page] [data-tools-row-actions] {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}

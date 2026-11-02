@@ -50,6 +50,40 @@ test('configuration search matches models, explains an empty result and clears w
   await expect(items.getByRole('listitem')).toHaveCount(20);
 });
 
+test('the configuration board states the applied profile of the current scope', async ({ page }) => {
+  await mockWorkspace(page, 3);
+  const region = page.getByRole('region', { name: '工具与连接' });
+  const live = region.locator('[data-tools-live]');
+  await expect(live).toContainText('当前生效');
+  await expect(live).toContainText('Plan A');
+  await expect(live).toHaveAttribute('data-live-profile', 'p0');
+  const liveStyle = await live.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const dot = getComputedStyle(node.querySelector('span')!);
+    return { display: style.display, background: style.backgroundColor, dot: dot.backgroundColor };
+  });
+  expect(liveStyle.display).toBe('flex');
+  expect(liveStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+  expect(liveStyle.dot).not.toBe('rgba(0, 0, 0, 0)');
+  // Applying a row moves that statement with the binding instead of leaving a stale name.
+  await page.locator('[data-profile-id="p1"]').getByRole('button', { name: '使用', exact: true }).click();
+  await expect(live).toHaveAttribute('data-live-profile', 'p1');
+  await expect(live).toContainText('配置 1');
+});
+
+test('the configuration board stays inside a 640px window and keeps row actions reachable', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 900 });
+  await mockWorkspace(page, 8);
+  const region = page.getByRole('region', { name: '工具与连接' });
+  await expect(region.getByLabel('配置列表')).toBeVisible();
+  const row = page.locator('[data-profile-id="p0"]');
+  await expect(row.locator('[data-tools-row-actions]')).toBeVisible();
+  const actions = await row.locator('[data-tools-row-actions]').boundingBox();
+  const viewport = page.viewportSize()!;
+  expect(actions!.x + actions!.width).toBeLessThanOrEqual(viewport.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});
+
 test('row menu supports keyboard navigation and returns focus to its trigger', async ({ page }) => {
   await mockWorkspace(page, 3);
   const trigger = page.getByRole('button', { name: '配置 1 更多操作' });

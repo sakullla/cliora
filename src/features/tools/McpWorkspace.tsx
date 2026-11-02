@@ -17,6 +17,7 @@ import { McpDetails } from '../../components/mcp/McpDetails';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
 import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import { SkeletonRows } from '../../components/Skeleton';
+import { EmptyState } from '../../components/EmptyState';
 import i18n from '../../i18n';
 import styles from './McpWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
@@ -260,7 +261,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   if (listLoading && !nativeEntries.length) listBody = <div className={styles.listWrap} role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
   else listBody = <div className={styles.listWrap}>
     {loadError && !nativeEntries.length && <div className={styles.empty}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><button type="button" onClick={() => void refreshNative()}><Icon name="refresh" size={14} />{t('tools.plugins.rescan')}</button></div>}
-    {!loadError && !nativeEntries.length && <div className={styles.empty}><span className={styles.emptyIcon}><Icon name="connections" size={24} /></span><strong>{t('tools.mcp.emptyTitle')}</strong><p>{t('tools.mcp.emptyDetail')}</p>{scope === 'project' && !project && <p>{t('tools.mcp.pickProjectFirst')}</p>}<Button variant="primary" disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</Button></div>}
+    {!loadError && !nativeEntries.length && <EmptyState icon="connections" title={t('tools.mcp.emptyTitle')} detail={[t('tools.mcp.emptyDetail'), scope === 'project' && !project ? t('tools.mcp.pickProjectFirst') : ''].filter(Boolean).join(' ')} action={<Button variant="primary" disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</Button>} />}
     {nativeEntries.length > 0 && shown.length === 0 && <div className={doc.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><button type="button" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</button></div>}
     {shown.length > 0 && <ul className={doc.rows} aria-label={t('tools.mcp.title')}>{shown.map(item => {
       const summary = mcpSummary(item);

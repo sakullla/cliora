@@ -765,7 +765,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </button>;
   };
 
-  const footer = aggregate && (master || switchGroups.length > 0 || storeSwitches.length > 0 || offWithoutSwitch) ? <>
+  const footer = aggregate && (master || switchGroups.length > 0 || storeSwitches.length > 0 || offWithoutSwitch) ? <div className={styles.switchPanel}>
     {master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
       <span className={styles.autoDot} aria-hidden="true" />
       <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<Badge tone={master.inUse ? 'success' : 'warning'}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</Badge></span>
@@ -781,7 +781,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </div>)}
     {storeSwitches.map(storeSwitchRow)}
     {(master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status" title={offDetail}><Icon name="eyeOff" size={14} />{t('common.memory.notInUse')}</p>}
-  </> : undefined;
+  </div> : undefined;
 
   const propertiesPanel = current && propertiesOpen && <div className={doc.info} data-memory-path="">
     <p className={doc.pathLine}><span className={doc.mono}>{displayPath(current.entry.path)}</span><Button variant="ghost" size="sm" className={doc.ghostButton} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={13} />{t('common.memory.copyPath')}</Button></p>

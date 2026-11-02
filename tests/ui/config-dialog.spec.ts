@@ -563,6 +563,17 @@ test('active configuration save only updates DB; explicit use changes the bindin
   await expect.poll(() => page.evaluate(() => (window as any).workspaceFixture.binding.profileVersion)).toBe(4);
 });
 
+test('advanced connection diagnostics stay collapsed until they are asked for', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog');
+  const advanced = dialog.locator('details').filter({ hasText: '连接检查与诊断' }).first();
+  await expect(advanced).toBeVisible();
+  await expect(advanced).toHaveJSProperty('open', false);
+  await dialog.getByText('连接检查与诊断', { exact: true }).click();
+  await expect(advanced).toHaveJSProperty('open', true);
+});
+
 test('common configuration hides tabs that have no fields', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
