@@ -117,7 +117,11 @@ export function RemoteHosts() {
   const adding = editing !== null && !editing.id;
   return <section className={styles.panel} id="remote-ssh-settings" aria-labelledby="remote-hosts-title">
     <header className={styles.head}>
-      <div><h2 id="remote-hosts-title">{t('settings.remoteSsh.hostsTitle')}</h2><p>{t('settings.remoteSsh.hostsDescription')}</p></div>
+      <div>
+        <h2 id="remote-hosts-title">{t('settings.remoteSsh.hostsTitle')}</h2>
+        <p>{t('settings.remoteSsh.hostsDescription')}</p>
+        {targets.length > 0 && <p className={styles.hostCount}>{t('settings.remoteSsh.hostCount', { count: targets.length })}</p>}
+      </div>
       {targets.length > 0 && !adding && <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => setEditing({ ...emptyDraft })}>{t('settings.remoteSsh.addHost')}</Button>}
     </header>
     {notice && <StatusBanner tone="success" autoDismissMs={5000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
@@ -132,12 +136,21 @@ export function RemoteHosts() {
       {targets.map((target) => {
         const status = tests[target.id];
         const passwordKnown = saved.has(target.id);
-        return <li key={target.id} className={styles.host}>
+        // The connection state is always named; the detail line below only repeats a finished test.
+        const connection = status?.state === 'running' ? 'running'
+          : status?.state === 'ok' ? 'ok'
+          : status?.state === 'failed' ? 'failed'
+          : 'untested';
+        return <li key={target.id} className={styles.host} data-connection={connection}>
           <span className={styles.hostGlyph} aria-hidden="true"><Icon name="server" size={16} /></span>
           <span className={styles.hostCopy}>
-            <strong>{target.name}</strong>
+            <strong title={target.name}>{target.name}</strong>
             <span className={styles.hostMeta}>
-              <code>{address(target)}</code>
+              <code title={address(target)}>{address(target)}</code>
+              <Badge tone={connection === 'ok' ? 'success' : connection === 'failed' ? 'danger' : 'neutral'} data-connection={connection}>
+                <Icon name={connection === 'ok' ? 'check' : connection === 'failed' ? 'alert' : connection === 'running' ? 'refresh' : 'server'} size={12} />
+                {connection === 'running' ? t('settings.remoteSsh.testing') : connection === 'ok' ? t('settings.remoteSsh.statusOk') : connection === 'failed' ? t('settings.remoteSsh.statusFailed') : t('settings.remoteSsh.statusUntested')}
+              </Badge>
               <Badge tone={target.authMethod === 'password' && !passwordKnown ? 'warning' : 'neutral'}><Icon name={target.authMethod === 'password' ? 'lock' : 'shield'} size={12} />{target.authMethod === 'key' ? t('settings.remoteSsh.keyBadge') : passwordKnown ? t('settings.remoteSsh.passwordSavedBadge') : t('settings.remoteSsh.passwordAskBadge')}</Badge>
               {target.defaultPath && <span className={styles.path} title={target.defaultPath}><Icon name="folder" size={12} />{target.defaultPath}</span>}
             </span>

@@ -449,6 +449,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         <Switch className={styles.autoSync} checked={status.enabled} disabled={busy} onChange={() => void toggleEnabled()} title={t('settings.webdav.autoSyncHint')}
           label={<span className={styles.switchText}><strong>{t('settings.webdav.autoSync')}</strong><small>{t('settings.webdav.autoSyncHint')}</small></span>} />
       </div>
+      {!status.enabled && !status.lastError && <p className={styles.heroNote}><Icon name="ban" size={14} />{t('settings.webdav.pausedNote')}</p>}
       {status.lastError && <div className={styles.heroError}>
         <Icon name="alert" size={16} />
         <span className={styles.heroErrorText}>{t('settings.webdav.connectionFailed', { error: status.lastError })}</span>
@@ -465,6 +466,17 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
           <Button variant="primary" disabled={busy} icon={<span className={styles.spin} data-active={syncing || undefined}><Icon name="refresh" size={14} /></span>} onClick={() => void syncNow()}>{syncing ? t('settings.webdav.syncing') : t('settings.webdav.syncNow')}</Button>
         </span>}
       </div>
+      {/* Diagnostics stay folded: the raw values are only needed when something looks wrong. */}
+      <details className={styles.diagnostics}>
+        <summary>{t('settings.webdav.diagnostics')}</summary>
+        <p className={styles.diagnosticsHint}>{t('settings.webdav.diagnosticsHint')}</p>
+        <dl>
+          <div><dt>{t('settings.webdav.diagServer')}</dt><dd>{host || t('settings.webdav.diagNone')}</dd></div>
+          <div><dt>{t('settings.webdav.diagLastSuccessAt')}</dt><dd title={last?.absolute}>{last ? last.absolute : t('settings.webdav.diagNone')}</dd></div>
+          <div><dt>{t('settings.webdav.diagPending')}</dt><dd>{status.pendingChanges ?? 0}</dd></div>
+          <div><dt>{t('settings.webdav.diagReceipt')}</dt><dd>{status.receipt ? t('settings.webdav.diagReceiptValue', { compared: status.receipt.compared, downloaded: status.receipt.downloaded, uploaded: status.receipt.uploaded }) : t('settings.webdav.diagReceiptNone')}</dd></div>
+        </dl>
+      </details>
     </Card> : <Card className={styles.hero} data-tone="idle" data-intro="">
       <div className={styles.heroTop}>
         <span className={styles.glyph} data-tone="idle" aria-hidden="true"><Icon name="cloud" size={24} /></span>

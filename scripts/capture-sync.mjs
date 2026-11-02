@@ -7,6 +7,8 @@ const option = (flag, fallback) => { const index = process.argv.indexOf(flag); r
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 const sizeOption = option('--size', 'all');
+// The General tab is captured too when asked, so the settings grouping has browser evidence.
+const withGeneral = process.argv.includes('--general');
 const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-sync`;
@@ -58,9 +60,10 @@ function installMock(seed) {
     isTauri: true,
     __sync: control,
     __TAURI_INTERNALS__: { invoke: async (command, args = {}) => {
-      if (command === 'get_bootstrap' || command === 'set_language' || command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: control.theme, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+      if (command === 'get_bootstrap' || command === 'set_language' || command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: control.theme, remote_ssh_enabled: !!control.remoteSsh, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
       if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], projectModelOverride: false, yoloAvailable: true, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
       if (command === 'list_projects') return control.projects;
+      if (command === 'list_remote_targets' || command === 'list_remote_saved_passwords') return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
       if (command === 'get_tray_status') return { available: true, error: null };
       if (command === 'list_portable_items') return items;
@@ -168,6 +171,37 @@ for (const theme of themes) for (const width of widths) {
       console.error(`${name}/${theme}/${width}: ${message}`);
     } finally { await page?.close().catch(() => {}); }
   }
+  if (withGeneral) {
+    // The General tab: task clusters, the folded update card, and the host list tab.
+    let page = null;
+    try {
+      page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
+      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, message: error.message }));
+      await page.addInitScript(installMock, { ...scenarios.attention, theme, remoteSsh: true, sampleTransfers: transfers });
+      const shot = async (label) => {
+        const file = `${theme}-${width}-${label}.png`;
+        await page.screenshot({ path: `${out}/${file}`, fullPage: true });
+        shots.push({ name: label, scenario: 'general', theme, width, file });
+        const over = await page.evaluate(findOverflow);
+        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
+        console.log(`${out}/${file}`);
+      };
+      await page.goto(previewUrl);
+      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+      await page.waitForTimeout(900);
+      await shot('settings-general');
+      const hostsTab = page.getByRole('tab', { name: '主机管理' });
+      if (await hostsTab.count()) {
+        await hostsTab.click();
+        await page.waitForTimeout(500);
+        await shot('settings-hosts-empty');
+      }
+    } catch (error) {
+      const message = String(error?.message ?? error).split('\n')[0];
+      failures.push({ type: 'scenario', name: 'general', theme, width, message });
+      console.error(`general/${theme}/${width}: ${message}`);
+    } finally { await page?.close().catch(() => {}); }
+  }
 }
 } catch (error) {
   const message = String(error?.message ?? error).split('\n')[0];
@@ -179,7 +213,7 @@ for (const theme of themes) for (const width of widths) {
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
-fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths }, scenarios: Object.keys(scenarios), success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
+fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths }, scenarios: [...Object.keys(scenarios), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
 const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
 fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\` 与 \`--size 1360,900,640\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));

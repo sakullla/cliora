@@ -3,6 +3,20 @@ export default {
     label: '本页目录',
     other: '其它',
   },
+  clusters: {
+    tools: '工具',
+    toolsHint: '决定哪些 CLI 出现在快速开始、工具与连接和使用记录里。',
+    preferences: '常规偏好',
+    preferencesHint: '主题、语言与应用更新，改完立即生效。',
+    terminal: '终端与远程',
+    terminalHint: '新会话在哪里打开，以及可切换的远程主机。',
+    other: '更多',
+    otherHint: '快捷键、上手引导与迁移同步入口。',
+  },
+  saved: {
+    theme: '主题已保存。',
+    managed: '已保存「{{name}}」的显示设置。',
+  },
   tabs: {
     label: '设置分类',
     general: '常规',
@@ -57,6 +71,10 @@ export default {
     enableHint: '关闭时不会新建连接；已保存目标和活动会话保留。',
     name: '显示名称', host: '主机或别名', port: '端口', user: '用户名', authMethod: '登录方式', keyAuth: 'SSH 密钥（默认）', passwordAuth: '密码（连接时输入）', identityFile: '私钥文件（可选）', chooseFile: '选择文件', pickIdentityFile: '选择 SSH 私钥文件', path: '默认远程目录', config: 'SSH 配置来源',
     add: '保存主机', update: '更新主机', edit: '编辑', test: '测试连接', delete: '删除', saved: '远程主机已保存。', ready: '连接正常。',
+    hostCount: '共 {{count}} 台主机',
+    statusUntested: '未测试',
+    statusOk: '连接正常',
+    statusFailed: '连接失败',
     loadFailed: '无法读取远程主机列表。', saveFailed: '无法保存远程主机。', testFailed: '远程连接测试失败。', passwordTestHint: '密码登录会在工作台或终端中提示输入密码。请直接启动一次连接进行验证。', manageHosts: '远程主机', manageHostsHint: '添加服务器、保存密码并测试连接。', openHosts: '管理主机',
   },
   icons: {
@@ -103,6 +121,9 @@ export default {
     trayAvailable: '关闭窗口后，栖点留在托盘中；已启动的 CLI 独立运行。',
     trayChecking: '正在检查托盘状态',
     quit: '完全退出',
+    saved: '终端设置已保存。',
+    quitTitle: '完全退出栖点？',
+    quitMessage: '窗口与托盘图标都会关闭。已经启动的 CLI 会继续在系统中运行；下次打开栖点可以恢复之前的会话。',
   },
   webdav: {
     statusFailed: '无法读取同步状态',
@@ -272,6 +293,16 @@ export default {
     progressBackground: '可以关闭这个窗口，同步会在后台继续。',
     endpointHint: '存放栖点数据的目录，如 Nextcloud、坚果云或群晖提供的 WebDAV 地址。',
     verifying: '正在验证…',
+    pausedNote: '自动同步已关闭，手动同步仍然可用。',
+    diagnostics: '同步诊断',
+    diagnosticsHint: '连接与本机保存的原始数据，排查问题时使用。',
+    diagServer: '服务器',
+    diagLastSuccessAt: '最近成功',
+    diagPending: '待上传',
+    diagReceipt: '最近回执',
+    diagReceiptValue: '比对 {{compared}}，接收 {{downloaded}}，上传 {{uploaded}}',
+    diagNone: '暂无',
+    diagReceiptNone: '没有同步回执',
   },
   migration: {
     kind: {

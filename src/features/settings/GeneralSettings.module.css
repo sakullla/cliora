@@ -1,7 +1,29 @@
-/* General settings: section anchors beside the groups, the update card. */
+/* General settings: clustered groups, the anchors beside them, the update card. */
 .general { display: block; min-width: 0; }
-.sections { min-width: 0; }
+.sections { display: grid; gap: var(--space-6); min-width: 0; }
 .anchors { display: none; }
+
+/* A cluster names one task area and holds the cards that belong to it. */
+.cluster { display: grid; gap: var(--space-2); min-width: 0; }
+.clusterTitle { margin: 0; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); letter-spacing: .01em; }
+.clusterHint { margin: calc(var(--space-1) * -1) 0 var(--space-2); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
+.cluster > .settings-group { margin-bottom: 0; }
+
+/* "Saved" only appears after the preference handed back matches what was requested. */
+.saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  margin-top: var(--space-2);
+  padding: var(--space-0_5) var(--space-2);
+  border: 1px solid var(--success-line);
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  animation: reveal 200ms var(--ease);
+}
 
 @media (min-width: 900px) {
   .general { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
@@ -9,6 +31,8 @@
 }
 .anchorsTitle { margin: 0 0 var(--space-1_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .anchors ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
+.anchorsGroup { margin: var(--space-2) 0 var(--space-0_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .06em; text-transform: uppercase; }
+.anchorsGroup:first-child { margin-top: 0; }
 .anchors a {
   display: block;
   min-height: var(--row-h-compact);

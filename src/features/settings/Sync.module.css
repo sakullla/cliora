@@ -93,6 +93,17 @@ label.autoSync:hover { background: var(--surface-2); }
   label.autoSync { order: 3; width: 100%; justify-content: space-between; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); text-align: left; }
 }
 
+/* ---------- Diagnostics: folded raw values, only opened when something looks wrong ---------- */
+.diagnostics { padding-top: var(--space-3); border-top: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-control); }
+.diagnostics > summary { color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); cursor: pointer; }
+.diagnostics > summary:hover { color: var(--text); }
+.diagnostics > summary:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.diagnosticsHint { margin: var(--space-1_5) 0 var(--space-2); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
+.diagnostics dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: var(--space-2); margin: 0; }
+.diagnostics dl > div { display: grid; gap: 1px; min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.diagnostics dt { color: var(--text-3); font-size: var(--fs-caption); }
+.diagnostics dd { margin: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--fs-control); font-variant-numeric: tabular-nums; }
+
 /* ---------- Notices ---------- */
 .notice { display: flex; align-items: flex-start; gap: var(--space-2_5); padding: var(--space-2_5) var(--space-3); border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); font-size: var(--fs-body); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .notice[data-tone="error"] { border-color: var(--danger-line); background: var(--danger-soft); }

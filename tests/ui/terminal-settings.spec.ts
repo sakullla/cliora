@@ -41,6 +41,8 @@ for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
     const shown = terminal === 'auto' ? 'workbench' : terminal;
     await select.selectOption(terminal);
     await expect(select).toHaveValue(shown);
+    // A saved terminal is stated in place; nothing is claimed before the backend answers.
+    await expect(page.getByRole('region', { name: '外部终端' }).getByRole('status')).toHaveText('终端设置已保存。');
     expect(await page.evaluate(() => {
       const { settings } = (window as any).__terminalTest;
       return { selected: settings.selected, program: settings.custom.program };

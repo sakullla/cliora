@@ -3,6 +3,20 @@ export default {
     label: 'On this page',
     other: 'Other',
   },
+  clusters: {
+    tools: 'Tools',
+    toolsHint: 'Which CLIs appear in Quick start, Tools & connections, and Usage records.',
+    preferences: 'Preferences',
+    preferencesHint: 'Theme, language, and app updates apply immediately.',
+    terminal: 'Terminal & remote',
+    terminalHint: 'Where new sessions open, and which remote hosts you can switch to.',
+    other: 'More',
+    otherHint: 'Shortcuts, onboarding, and the migration entry.',
+  },
+  saved: {
+    theme: 'Theme saved.',
+    managed: 'Saved the display setting for “{{name}}”.',
+  },
   tabs: {
     label: 'Settings sections',
     general: 'General',
@@ -57,6 +71,10 @@ export default {
     enableHint: 'When off, no new connection is created; saved targets and active sessions remain.',
     name: 'Display name', host: 'Host or alias', port: 'Port', user: 'User name', authMethod: 'Sign-in method', keyAuth: 'SSH key (default)', passwordAuth: 'Password (ask in terminal)', identityFile: 'Private key file (optional)', chooseFile: 'Choose file', pickIdentityFile: 'Choose an SSH private key', path: 'Default remote directory', config: 'SSH config source',
     add: 'Save host', update: 'Update host', edit: 'Edit', test: 'Test connection', delete: 'Delete', saved: 'Remote host saved.', ready: 'Connection ready.',
+    hostCount: '{{count}} hosts',
+    statusUntested: 'Not tested',
+    statusOk: 'Connection OK',
+    statusFailed: 'Connection failed',
     loadFailed: 'Unable to load remote hosts.', saveFailed: 'Unable to save remote host.', testFailed: 'Remote connection test failed.', passwordTestHint: 'Password sign-in asks in the workbench or terminal. Start a connection once to verify it.', manageHosts: 'Remote hosts', manageHostsHint: 'Add, edit, and test connection hosts.', openHosts: 'Manage hosts',
   },
   icons: {
@@ -103,6 +121,9 @@ export default {
     trayAvailable: 'After closing the window, Cliora stays in the tray; launched CLIs keep running independently.',
     trayChecking: 'Checking tray status',
     quit: 'Quit completely',
+    saved: 'Terminal settings saved.',
+    quitTitle: 'Quit Cliora completely?',
+    quitMessage: 'The window and tray icon close. CLIs that already started keep running in the system, and reopening Cliora restores those sessions.',
   },
   webdav: {
     statusFailed: 'Could not read sync status',
@@ -272,6 +293,16 @@ export default {
     progressBackground: 'You can close this window; sync keeps running in the background.',
     endpointHint: 'The directory that holds Cliora data, such as a Nextcloud, Jianguoyun, or Synology WebDAV URL.',
     verifying: 'Verifying…',
+    pausedNote: 'Automatic sync is off; manual sync still works.',
+    diagnostics: 'Sync diagnostics',
+    diagnosticsHint: 'Connection and locally stored values, for troubleshooting.',
+    diagServer: 'Server',
+    diagLastSuccessAt: 'Latest success',
+    diagPending: 'Pending upload',
+    diagReceipt: 'Latest receipt',
+    diagReceiptValue: 'compared {{compared}}, received {{downloaded}}, uploaded {{uploaded}}',
+    diagNone: 'None',
+    diagReceiptNone: 'No sync receipt yet',
   },
   migration: {
     kind: {

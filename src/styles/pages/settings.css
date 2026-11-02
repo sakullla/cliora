@@ -1,8 +1,8 @@
 /* Settings: the shared group card and setting row used by every General section. */
-.settings-group { margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); scroll-margin-top: var(--space-4); }
+.settings-group { margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); scroll-margin-top: var(--space-5); }
 .settings-group > .setting-row:first-child { border-top: 0; }
-.setting-intro { padding: var(--space-4) var(--space-5) var(--space-3); border-bottom: 1px solid var(--line); }
-.setting-intro h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); }
+.setting-intro { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); }
+.setting-intro h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); line-height: 1.35; }
 .setting-intro p { margin-top: var(--space-0_5); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
 
 /* One setting per row: label and hint on the left, the control on the right. */
@@ -19,6 +19,22 @@ label.setting-row:hover { background: var(--surface-2); }
 .setting-row-block { padding: var(--space-4) var(--space-5) var(--space-5); border-top: 1px solid var(--line); }
 .setting-row-block > section { margin-bottom: 0; }
 .setting-error { margin: 0; padding: 0 var(--space-5) var(--space-4); color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+
+/* A row's write is confirmed in place, once the backend returned the stored value. */
+.setting-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  margin-top: var(--space-2);
+  padding: var(--space-0_5) var(--space-2);
+  border: 1px solid var(--success-line);
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  animation: reveal 200ms var(--ease);
+}
 
 .custom-terminal-fields { display: grid; gap: var(--space-2); min-width: 280px; }
 .custom-terminal-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
@@ -105,8 +121,21 @@ label.setting-row:hover { background: var(--surface-2); }
 .icon-file input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 .icon-file:focus-within { outline: var(--focus-ring); outline-offset: 2px; }
 
+@media (max-width: 900px) {
+  .settings-group { scroll-margin-top: var(--space-4); }
+}
+
+/* 640: every row stacks, the control keeps the full column, and nothing gains its own scroll. */
 @media (max-width: 760px) {
-  .setting-row { flex-wrap: wrap; align-items: flex-start; padding: var(--space-3) var(--space-4); }
+  .setting-row { flex-wrap: wrap; align-items: flex-start; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); }
+  .setting-intro { padding: var(--space-3) var(--space-4); }
   .setting-row select, .setting-row > [role="radiogroup"] { width: 100%; max-width: none; flex-basis: 100%; }
+  .setting-row > button, .setting-row > span:last-child:not(:first-child) { flex: 1 1 100%; justify-content: flex-start; }
+  .setting-row-block { padding: var(--space-3) var(--space-4) var(--space-4); }
+  .setting-error { padding: 0 var(--space-4) var(--space-3); }
+  .custom-terminal-fields { min-width: 0; }
+  .custom-terminal-actions { justify-content: flex-start; }
+  .managed-checks { grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr)); padding: var(--space-3) var(--space-4); }
   .icon-setting-row { flex-wrap: wrap; }
+  .icon-setting-row > .tool-identity { flex: 1 1 100%; }
 }

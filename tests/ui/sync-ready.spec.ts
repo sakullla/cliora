@@ -619,3 +619,22 @@ test('a sync says what matched or moved instead of a zero count', async ({ page 
   await expect(page.getByRole('dialog').getByText('已接收', { exact: true })).toBeVisible();
   await expect(page.getByRole('dialog').getByText('已上传', { exact: true })).toBeVisible();
 });
+
+// R7: a paused connection is its own state with its own next step, and the raw values that
+// explain it stay folded until asked for.
+test('a paused connection states its next step and keeps diagnostics folded', async ({ page }) => {
+  await install(page, { configured: true, enabled: false, lastSuccess: 1700000000 });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.locator('[data-status="sync.off"]')).toHaveText('同步已暂停');
+  await expect(webdav.getByText('自动同步已关闭，手动同步仍然可用。')).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled();
+
+  const diagnostics = webdav.locator('details');
+  await expect(diagnostics).toHaveCount(1);
+  await expect(diagnostics.locator('dl')).toBeHidden();
+  await diagnostics.locator('summary').click();
+  await expect(diagnostics.getByText('服务器', { exact: true })).toBeVisible();
+  await expect(diagnostics.getByText('sync.example.com', { exact: true })).toBeVisible();
+  await expect(diagnostics.getByText('待上传', { exact: true })).toBeVisible();
+});

@@ -602,6 +602,9 @@ async function hosts(page: Page) {
 test('a name-only host save keeps its connection revision and remains renamed after re-entering settings', async ({ page }) => {
   await install(page); await page.goto('/');
   const panel = await hosts(page);
+  // Each host names its connection state and the list states how many it holds.
+  await expect(panel.getByText('共 2 台主机')).toBeVisible();
+  await expect(panel.getByText('未测试').first()).toBeVisible();
   await panel.getByRole('button', { name: '编辑 key fixture', exact: true }).click();
   const form = page.getByRole('form', { name: '编辑主机', exact: true });
   await form.getByLabel('显示名称', { exact: true }).fill('renamed fixture');

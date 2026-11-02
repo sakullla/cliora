@@ -2,6 +2,7 @@
 .head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-5); flex-wrap: wrap; }
 .head h2 { font-size: var(--fs-heading); font-weight: var(--fw-semibold); }
 .head p { margin-top: var(--space-0_5); max-width: 64ch; color: var(--text-2); font-size: var(--fs-body); }
+.hostCount { color: var(--text-3) !important; font-size: var(--fs-caption) !important; font-weight: var(--fw-medium); }
 .error { padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); }
 
 /* Empty */
@@ -20,7 +21,14 @@
 .hostCopy { display: grid; gap: var(--space-1); flex: 1; min-width: 0; }
 .hostCopy > strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .hostMeta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); }
-.hostMeta code { padding: 0; background: none; color: var(--text-2); font-size: var(--fs-caption); }
+.hostMeta code { min-width: 0; max-width: 42ch; overflow: hidden; padding: 0; background: none; color: var(--text-2); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+
+/* One named connection state per host: untested, testing, reachable, or failed. */
+.host[data-connection="ok"] .hostGlyph { background: var(--success-soft); color: var(--success); }
+.host[data-connection="failed"] .hostGlyph { background: var(--danger-soft); color: var(--danger); }
+.host[data-connection="running"] .hostGlyph { background: var(--accent-soft); color: var(--accent); }
+.host[data-connection="running"] .hostGlyph svg { animation: host-spin 1s linear infinite; }
+@keyframes host-spin { to { transform: rotate(360deg); } }
 .path { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 260px; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .hostActions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
 .hostActions .danger[data-variant]:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
@@ -74,6 +82,12 @@
   .field[data-span="port"], .field[data-span="user"] { grid-column: span 1; }
   .host { flex-wrap: wrap; }
   .hostActions { width: 100%; justify-content: flex-end; }
+  .hostMeta code { max-width: 100%; }
+  .path { max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host[data-connection="running"] .hostGlyph svg { animation: none; }
 }
 
 .fields { display: contents; min-width: 0; margin: 0; padding: 0; border: 0; }

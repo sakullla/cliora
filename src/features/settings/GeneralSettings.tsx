@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Button, Segmented } from '../../components/ui';
 import { getVersion } from '@tauri-apps/api/app';
@@ -20,6 +20,11 @@ import { RemoteHosts } from './RemoteHosts';
 import styles from './GeneralSettings.module.css';
 
 type ToolItem = { id: string; name: string };
+
+/** The write a row started, so its result can be read from the preferences handed back. */
+type PendingSave =
+  | { kind: 'theme'; value: Theme; target: string; text: string }
+  | { kind: 'managed'; id: string; value: boolean; target: string; text: string };
 
 const MANAGED_PREVIEW = 8;
 
@@ -210,6 +215,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   const toasts = useToasts();
   const language: AppLanguage = i18n.language === 'en' ? 'en' : 'zh';
   const catalogKey = tools.map((item) => item.id).join('\0');
+  const managedKey = managed.join('\0');
   const [managedExpanded, setManagedExpanded] = useState(false);
   const [managedPreview, setManagedPreview] = useState(() => orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
   // Refresh the collapsed set when the catalog changes or the list is folded again, so a toggle does not move the chip just clicked.
@@ -230,46 +236,99 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       toasts.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
     } catch { /* 失败原因由页面顶部错误条展示。 */ }
   }
+  // A write is confirmed only when the preference handed back by bootstrap matches
+  // what was requested; a rejected write leaves the old value and the page error bar.
+  const pendingSave = useRef<PendingSave | null>(null);
+  const [saved, setSaved] = useState<{ target: string; text: string } | null>(null);
+  useEffect(() => {
+    const waiting = pendingSave.current;
+    if (!waiting) return;
+    const landed = waiting.kind === 'theme' ? theme === waiting.value : managed.includes(waiting.id) === waiting.value;
+    if (landed) {
+      pendingSave.current = null;
+      setSaved({ target: waiting.target, text: waiting.text });
+    } else if (!busy) {
+      pendingSave.current = null;
+    }
+  }, [theme, catalogKey, managedKey, busy]);
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => setSaved(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
+  function chooseTheme(next: Theme) {
+    if (next === theme) return;
+    pendingSave.current = { kind: 'theme', value: next, target: 'settings-interface', text: t('settings.saved.theme') };
+    setSaved(null);
+    onThemeChange(next);
+  }
+  function chooseManaged(id: string, checked: boolean) {
+    const item = tools.find((candidate) => candidate.id === id);
+    pendingSave.current = { kind: 'managed', id, value: checked, target: 'settings-managed', text: t('settings.saved.managed', { name: item?.name ?? id }) };
+    setSaved(null);
+    onManagedChange(id, checked);
+  }
+  const ack = (target: string) => saved?.target === target
+    ? <span className={styles.saved} role="status"><Icon name="check" size={13} />{saved.text}</span>
+    : null;
   return <div className={styles.general}>
     <SectionAnchors items={[
-      { id: 'settings-managed', label: t('settings.managed.title') },
-      { id: 'settings-interface', label: t('settings.interface.title') },
+      { id: 'settings-managed', label: t('settings.managed.title'), group: t('settings.clusters.tools') },
+      { id: 'settings-interface', label: t('settings.interface.title'), group: t('settings.clusters.preferences') },
       ...(nativeAvailable ? [
-        { id: 'app-update', label: t('settings.update.title') },
-        { id: 'settings-terminal', label: t('settings.terminal.title') },
-        { id: 'remote-ssh-settings', label: t('settings.remoteSsh.title') },
+        { id: 'app-update', label: t('settings.update.title'), group: t('settings.clusters.preferences') },
+        { id: 'settings-terminal', label: t('settings.terminal.title'), group: t('settings.clusters.terminal') },
+        { id: 'remote-ssh-settings', label: t('settings.remoteSsh.title'), group: t('settings.clusters.terminal') },
       ] : []),
-      { id: 'settings-other', label: t('settings.sections.other') },
+      { id: 'settings-other', label: t('settings.sections.other'), group: t('settings.clusters.other') },
     ]} />
     <div className={styles.sections}>
-    <section className="settings-group" id="settings-managed">
-      <div className="setting-intro"><h2>{t('settings.managed.title')}</h2><p>{t('settings.managed.description')}</p></div>
-      <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => onManagedChange(item.id, event.target.checked)} /></label>)}</div>
-      {tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
-      <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
-      {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
+    <section className={styles.cluster} aria-label={t('settings.clusters.tools')}>
+      <p className={styles.clusterTitle}>{t('settings.clusters.tools')}</p>
+      <p className={styles.clusterHint}>{t('settings.clusters.toolsHint')}</p>
+      <section className="settings-group" id="settings-managed">
+        <div className="setting-intro"><h2>{t('settings.managed.title')}</h2><p>{t('settings.managed.description')}</p>{ack('settings-managed')}</div>
+        <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => chooseManaged(item.id, event.target.checked)} /></label>)}</div>
+        {tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
+        <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
+        {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
+      </section>
     </section>
-    <section className="settings-group" id="settings-interface">
-      <div className="setting-intro"><h2>{t('settings.interface.title')}</h2><p>{t('settings.interface.description')}</p></div>
-      <div className="setting-row"><span><strong>{t('settings.theme.label')}</strong><small>{t('settings.theme.hint')}</small></span><ThemeChoice value={theme} disabled={busy} onChange={(next) => { if (next !== theme) onThemeChange(next); }} /></div>
-      <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
+    <section className={styles.cluster} aria-label={t('settings.clusters.preferences')}>
+      <p className={styles.clusterTitle}>{t('settings.clusters.preferences')}</p>
+      <p className={styles.clusterHint}>{t('settings.clusters.preferencesHint')}</p>
+      <section className="settings-group" id="settings-interface">
+        <div className="setting-intro"><h2>{t('settings.interface.title')}</h2><p>{t('settings.interface.description')}</p>{ack('settings-interface')}</div>
+        <div className="setting-row"><span><strong>{t('settings.theme.label')}</strong><small>{t('settings.theme.hint')}</small></span><ThemeChoice value={theme} disabled={busy} onChange={chooseTheme} /></div>
+        <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
+      </section>
+      {nativeAvailable && <UpdateSettings busy={busy} />}
     </section>
-    {nativeAvailable && <UpdateSettings busy={busy} />}
-    {nativeAvailable && <TerminalSettings />}
-    {nativeAvailable && <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} showHosts={false} onOpenHosts={onOpenHosts} />}
-    <section className="settings-group" id="settings-other">
-      <div className="setting-intro"><h2>{t('settings.sections.other')}</h2></div>
-      <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><Button aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</Button></div>
-      <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><Button onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</Button></div>
-      <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button></div>
+    {nativeAvailable && <section className={styles.cluster} aria-label={t('settings.clusters.terminal')}>
+      <p className={styles.clusterTitle}>{t('settings.clusters.terminal')}</p>
+      <p className={styles.clusterHint}>{t('settings.clusters.terminalHint')}</p>
+      <TerminalSettings />
+      <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} showHosts={false} onOpenHosts={onOpenHosts} />
+    </section>}
+    <section className={styles.cluster} aria-label={t('settings.sections.other')}>
+      <p className={styles.clusterTitle}>{t('settings.sections.other')}</p>
+      <p className={styles.clusterHint}>{t('settings.clusters.otherHint')}</p>
+      <section className="settings-group" id="settings-other">
+        <div className="setting-intro"><h2>{t('settings.sections.other')}</h2></div>
+        <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><Button aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</Button></div>
+        <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><Button onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</Button></div>
+        <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button></div>
+      </section>
     </section>
     </div>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </div>;
 }
 
+type AnchorItem = { id: string; label: string; group: string };
+
 /** The General tab's table of contents: one link per settings group, shown beside them from 900px. */
-function SectionAnchors({ items }: { items: { id: string; label: string }[] }) {
+function SectionAnchors({ items }: { items: AnchorItem[] }) {
   const { t } = useTranslation();
   const [active, setActive] = useState(items[0]?.id ?? '');
   // A chosen link stays current until the reader scrolls on their own; the last sections may never reach the top.
@@ -313,6 +372,9 @@ function SectionAnchors({ items }: { items: { id: string; label: string }[] }) {
   }
   return <nav className={styles.anchors} aria-label={t('settings.sections.label')}>
     <p className={styles.anchorsTitle} aria-hidden="true">{t('settings.sections.label')}</p>
-    <ul>{items.map((item) => <li key={item.id}><a href={`#${item.id}`} aria-current={active === item.id ? 'true' : undefined} onClick={(event) => jump(event, item.id)}>{item.label}</a></li>)}</ul>
+    <ul>{items.map((item, index) => <Fragment key={item.id}>
+      {items[index - 1]?.group !== item.group && <li className={styles.anchorsGroup} aria-hidden="true">{item.group}</li>}
+      <li><a href={`#${item.id}`} aria-current={active === item.id ? 'true' : undefined} onClick={(event) => jump(event, item.id)}>{item.label}</a></li>
+    </Fragment>)}</ul>
   </nav>;
 }
