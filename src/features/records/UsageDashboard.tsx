@@ -105,7 +105,7 @@ function Composition({ totals }: { totals: UsageTotals }) {
   </div>;
 }
 
-function TrendChart({ report, metric, now }: { report: UsageReport; metric: Metric; now: number }) {
+function TrendChart({ report, metric, now, average }: { report: UsageReport; metric: Metric; now: number; average: number }) {
   const [active, setActive] = useState<number | null>(null);
   const buckets = report.timeline;
   const value = (totals: UsageTotals) => metricValueOf(totals, metric);
@@ -128,12 +128,13 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: Metr
     aria-label={i18n.t('records.usage.chartAria', { count: buckets.length, peak: peak !== null ? i18n.t('records.usage.chartPeak', { label: bucketLabel(buckets[peak], report.bucket, true, multiYear), value: format(value(buckets[peak].totals)) }) : '' })}>
     <div className={styles.yAxis} aria-hidden="true">{ticks.map((tick) => <span key={tick} style={{ bottom: `${(tick / top) * 100}%` }}>{format(tick)}</span>)}</div>
     <div className={styles.plot}>
+      {average > 0 && <div className={styles.averageLine} aria-hidden="true" style={{ bottom: `${Math.min(100, Math.max(0, (average / top) * 100))}%` }} />}
       <div className={styles.grid} aria-hidden="true">{ticks.map((tick) => <i key={tick} style={{ bottom: `${(tick / top) * 100}%` }} />)}</div>
       <div className={styles.bars} style={{ gridTemplateColumns: `repeat(${buckets.length}, minmax(0, 1fr))`, gap: buckets.length > 40 ? 1 : buckets.length > 16 ? 3 : 6 }}>
         {buckets.map((bucket, index) => {
           const amount = value(bucket.totals);
           const height = amount > 0 ? Math.max(1.5, (amount / top) * 100) : 0;
-          return <div key={bucket.start} className={styles.column} data-active={active === index || undefined} data-future={bucket.start > now || undefined} data-current={bucket.start <= now && now < bucket.end || undefined} onMouseEnter={() => setActive(index)} onClick={() => setActive(index)}>
+          return <div key={bucket.start} className={styles.column} data-peak={index === peak || undefined} data-active={active === index || undefined} data-future={bucket.start > now || undefined} data-current={bucket.start <= now && now < bucket.end || undefined} onMouseEnter={() => setActive(index)} onClick={() => setActive(index)}>
             <div className={styles.stack} style={{ height: `${height}%` }} data-metric={metric}>
               {metric === 'tokens' ? tokenParts().map((part) => bucket.totals[part.key] > 0 && <span key={part.key} data-key={part.key} style={{ flexGrow: bucket.totals[part.key] }} />) : <span data-key="cost" style={{ flexGrow: 1 }} />}
             </div>
@@ -287,6 +288,11 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const metricValue = (value: UsageTotals) => metricValueOf(value, shownMetric);
   const metricFormat = (value: number) => shownMetric.startsWith('native:') ? `${formatNativeValue(value)} ${nativeUnitLabel(shownMetric.slice(7))}` : shownMetric === 'cost' ? formatMoney(value, report?.currency ?? 'USD') : formatTokens(value);
   const average = timedBuckets.length ? timedBuckets.reduce((sum, bucket) => sum + metricValue(bucket.totals), 0) / timedBuckets.length : 0;
+  // Unknown, partial and unpriced figures stay visible as their own badges instead of
+  // being folded into the totals or silently zeroed.
+  const showBoundary = !!report && ((totals?.unpricedTokens ?? 0) > 0 || (totals?.unknownTokenRecords ?? 0) > 0
+    || (totals?.unknownRequestRecords ?? 0) > 0 || report.partialSessions > 0 || report.staleSessions > 0
+    || report.untimedRequests > 0 || report.duplicateRequests > 0 || report.mixedCurrency);
   const peak = report?.timeline.reduce<UsageBucket | null>((best, bucket) => metricValue(bucket.totals) > (best ? metricValue(best.totals) : 0) ? bucket : best, null) ?? null;
 
   function openPrice(tool = '', name = '') {
@@ -351,6 +357,17 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       </p>
     </div>
 
+    {report && totals && showBoundary && <div className={styles.boundary} role="group" aria-label={t('records.usage.boundaryAria')}>
+      <span className={styles.boundaryLead}><Icon name="info" size={14} />{t('records.usage.boundaryLead')}</span>
+      {totals.unpricedTokens > 0 && <button type="button" className={styles.boundaryChip} data-tone="warning" onClick={() => openPrice()}>{t('records.usage.boundaryUnpriced', { percent: formatPercent(1 - pricedShare) })}</button>}
+      {(totals.unknownTokenRecords ?? 0) > 0 && <span className={styles.boundaryChip}>{t('records.usage.boundaryUnknownTokens', { count: totals.unknownTokenRecords })}</span>}
+      {totals.unknownRequestRecords > 0 && <span className={styles.boundaryChip}>{t('records.usage.boundaryUnknownCalls', { count: totals.unknownRequestRecords })}</span>}
+      {report.partialSessions > 0 && <span className={styles.boundaryChip} data-tone="warning">{t('records.usage.boundaryPartial', { count: report.partialSessions })}</span>}
+      {report.staleSessions > 0 && <span className={styles.boundaryChip} data-tone="warning">{t('records.usage.boundaryStale', { count: report.staleSessions })}</span>}
+      {report.untimedRequests > 0 && <span className={styles.boundaryChip}>{t('records.usage.boundaryUntimed', { count: report.untimedRequests })}</span>}
+      {report.duplicateRequests > 0 && <span className={styles.boundaryChip}>{t('records.usage.boundaryMerged', { count: report.duplicateRequests })}</span>}
+      {report.mixedCurrency && <span className={styles.boundaryChip} data-tone="warning">{t('records.usage.noteMixed', { currency: report.currency })}</span>}
+    </div>}
     {readError ? <div className={styles.empty} role="alert"><span className="empty-symbol"><Icon name="alert" size={20} /></span><h3>{t('records.usage.readFailed')}</h3><p>{t('records.usage.readFailedHint')}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>{t('records.usage.retry')}</button></div>
     : !report ? <div className={styles.skeleton} role="status" aria-label={t('records.usage.loading')}><span /><span /><span /></div> : empty ? <div className={styles.empty}>
       <span className="empty-symbol"><Icon name="clock" size={20} /></span>
@@ -360,12 +377,12 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     </div> : totals && <>
       <NativeUsageSummary totals={totals} />
       <section className={styles.summary} aria-label={t('records.usage.summaryAria')}>
-        <div className={styles.primary}>
+        <div className={styles.primary} data-focus={shownMetric === 'tokens' || undefined}>
           <small><Icon name="sparkle" size={16} />{t(totals.unknownTokenRecords && knownTokens(totals) ? 'records.native.knownTokens' : 'records.usage.totalTokens')}</small>
           <strong>{formatTotalTokens(totals)}</strong>
           <Delta current={totals.unknownTokenRecords ? null : totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
         </div>
-        <div className={styles.metric}>
+        <div className={styles.metric} data-focus={shownMetric === 'cost' || undefined}>
           <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
           <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
           {totals.unpricedTokens > 0
@@ -398,7 +415,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
           {peak && <span>{t('records.usage.peak')} <b>{metricFormat(metricValue(peak.totals))}</b> · {bucketLabel(peak, report.bucket, true)}</span>}
           {timedBuckets.length > 1 && <span>{t('records.usage.average', { unit: multiDay ? t(report.bucket === 'month' ? 'records.usage.unitMonth' : 'records.usage.unitDay') : t('records.usage.unitHour') })} <b>{metricFormat(average)}</b></span>}
         </p>
-        <TrendChart report={report} metric={shownMetric} now={now} />
+        <TrendChart report={report} metric={shownMetric} now={now} average={average} />
         {shownMetric === 'tokens' && <ul className={styles.legend} aria-hidden="true">{tokenParts().map((part) => <li key={part.key}><i data-key={part.key} />{part.label}</li>)}</ul>}
         {shownMetric === 'cost' && <p className={styles.cardHint}>{t('records.usage.costHint')}</p>}
         </>}

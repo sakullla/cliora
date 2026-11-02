@@ -1002,3 +1002,89 @@ test('hidden records release message DOM, ignore late detail reads and restore t
   await page.getByText('会话选项', { exact: true }).click();
   await expect(page.getByRole('combobox', { name: '恢复模式' })).toHaveValue('yolo');
 });
+
+test('a failed session refresh keeps the list readable, marks the scope and retries in place', async ({ page }) => {
+  await page.addInitScript((report) => {
+    const control = { fail: false };
+    const records = [
+      { id: 'alpha', toolId: 'codex', nativeId: null, title: 'Alpha session', cwd: 'C:\alpha', model: 'gpt-6-astra', projectId: null, startedAt: 1790668802000, updatedAt: 1790668802000, favorite: false, partial: false, stale: false, messageCount: 3, usageCount: 0 },
+      { id: 'beta', toolId: 'codex', nativeId: null, title: 'Beta session', cwd: 'C:\beta', model: 'gpt-6-astra', projectId: null, startedAt: 1790668801000, updatedAt: 1790668801000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 0 },
+    ];
+    Object.assign(window, {
+      isTauri: true, __recordFailure: control,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') {
+          if (control.fail) throw new Error('列表读取失败');
+          const query = String(args.filter?.search ?? '').toLowerCase();
+          return records.filter((item) => !query || item.title.toLowerCase().includes(query));
+        }
+        if (command === 'get_history_session') return { session: records.find((item) => item.id === args.id), messages: [{ id: 'm1', role: 'user', text: '正文', timestamp: 1790668802000 }], usage: [], resumeReason: null };
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, emptyReport());
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await expect(page.getByRole('button', { name: /Alpha session/ })).toBeVisible();
+  await page.evaluate(() => { (window as typeof window & { __recordFailure: { fail: boolean } }).__recordFailure.fail = true; });
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('Alpha');
+  // The failed read keeps the previous rows on screen and explains the retry in place.
+  await expect(page.getByText('刷新失败，下面仍是上次读取的会话。')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Alpha session/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Beta session/ })).toBeVisible();
+  await page.evaluate(() => { (window as typeof window & { __recordFailure: { fail: boolean } }).__recordFailure.fail = false; });
+  await page.getByRole('button', { name: '重新读取列表' }).click();
+  await expect(page.getByText('刷新失败，下面仍是上次读取的会话。')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Beta session/ })).toHaveCount(0);
+  // Reading keeps the filtered scope visible with a one-click way out of it.
+  await expect(page.getByText('筛选后 1 个会话，共 2 个')).toBeVisible();
+  await page.getByRole('button', { name: '清除全部筛选' }).click();
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
+  await expect(page.getByRole('button', { name: /Beta session/ })).toBeVisible();
+});
+
+test('usage data boundaries keep unknown, partial and unpriced figures apart', async ({ page }) => {
+  const sum = totals(100_000, 200_000, 0, 50_000, {
+    requests: 5, usageRecords: 5, unknownRequestRecords: 2, sessions: 3,
+    cost: 1, unpricedTokens: 140_000, unknownTokenRecords: 1,
+  });
+  const report = { ...emptyReport(), from: 1790640000000, to: 1790726400000, totals: sum,
+    partialSessions: 2, staleSessions: 1, untimedRequests: 3, duplicateRequests: 4 };
+  await page.addInitScript((value) => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (['list_projects', 'list_history_prices', 'refresh_history', 'list_history_sessions'].includes(command)) return [];
+        if (command === 'get_usage_report') return value;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        return null;
+      } },
+    });
+  }, report);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const boundaries = page.getByRole('group', { name: '数据边界' });
+  await expect(boundaries).toBeVisible();
+  await expect(boundaries).toContainText('的 token 没有价格');
+  await expect(boundaries).toContainText('1 条记录 token 未知');
+  await expect(boundaries).toContainText('2 条记录次数未知');
+  await expect(boundaries).toContainText('2 个会话记录不完整');
+  await expect(boundaries).toContainText('1 个会话源暂不可读');
+  await expect(boundaries).toContainText('3 条记录没有时间');
+  await expect(boundaries).toContainText('已合并 4 条重复记录');
+  // Totals still stand on their own above the boundary line.
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('350K');
+  await boundaries.getByRole('button', { name: /没有价格/ }).click();
+  await expect(page.getByRole('dialog', { name: '设置估算价格' })).toBeVisible();
+});

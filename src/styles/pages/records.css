@@ -1,5 +1,6 @@
 /* Usage dashboard chips */
-.quiet-chip { color: var(--text-2); background: var(--surface-2); border: 1px solid var(--line); padding: var(--space-1) var(--space-2); border-radius: var(--radius-pill); font-size: var(--fs-caption); white-space: nowrap; }
+.quiet-chip { display: inline-flex; align-items: center; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--line); padding: 1px var(--space-2); border-radius: var(--radius-pill); font-size: var(--fs-caption); }
+button.quiet-chip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); color: var(--text); }
 @media (max-width: 760px) {
   .quiet-chip { display: none; }
 }
