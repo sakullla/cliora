@@ -111,6 +111,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     if (writeRecovery) localStorage.setItem('cliora:remote-writes:v1', JSON.stringify([{ id: '6754f794-3c8a-4cb3-aec1-5f5dcb197b36', targetId: 'remote-prod', targetRevision: now, identity: 'synthetic', outcome: 'recovering', items: [{ path: '$HOME/.codex/config.toml', before: 'a'.repeat(64), after: 'b'.repeat(64), state: 'applying', observed: null }] }]));
     if (directoryMode === 'password') remoteTargets[0].authMethod = 'password';
     const directoryFixture = { failure: false, creates: 0, release: () => {} };
+    const directoryReceipts = [];
     const remoteProjects = [{ id: 'remote-project', targetId: 'remote-prod', name: '远程 CLI 项目', path: '/srv/project', preferredTool: 'pi', updatedAt: now }];
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
@@ -151,6 +152,14 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'list_remote_targets') return remoteTargets;
           if (command === 'list_remote_projects') return remoteProjects;
           if (command === 'probe_remote_cli') return { targetId: args.targetId, toolId: args.toolId, executable: args.toolId === 'pi' ? 'pi' : args.toolId, installed: true, version: '0.164.0', detail: null };
+          // Receipts are the SQLite side of a remote mkdir; this fixture keeps the same contract in memory.
+          if (command === 'list_remote_directory_receipts') return directoryReceipts.map((item) => ({ ...item }));
+          if (command === 'save_remote_directory_receipt') {
+            const receipt = args.receipt;
+            const index = directoryReceipts.findIndex((item) => item.id === receipt.id);
+            if (index >= 0) directoryReceipts.splice(index, 1, receipt); else directoryReceipts.push(receipt);
+            return null;
+          }
           if (command === 'list_remote_directories') {
             if (directoryMode === 'loading') await new Promise(() => {});
             if (directoryFixture.failure) throw { message: 'Permission denied: directory requires read and search access', action: '检查远端目标目录和文件权限。' };
@@ -262,56 +271,100 @@ if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
 for (const theme of themes) {
 for (const width of widths) {
+  // The remote folder picker replaced the old "choose remote directory" form; these scenarios
+  // drive the picker the workbench actually opens: long paths, permission failure, a slow
+  // listing, and unresolved creation receipts.
   for (const directoryMode of ['key', 'password', 'permission', 'loading', 'receipt-unknown', 'receipt-inspected', 'receipt-multiple-top', 'receipt-multiple-end']) {
     await shot(`workbench-t5-directory-${directoryMode}-${theme}-${width}`, theme, width, async page => {
+      const longName = index => index + '-' + 'long-unbroken-segment'.repeat(16);
+      const session = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
+      const picker = page.getByRole('dialog', { name: copy('选择远程文件夹', 'Choose a remote folder') });
+      const receipt = picker.getByRole('region', { name: copy('目录创建结果', 'Directory creation results') });
       await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
-      const dialog = page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') });
-      const multiple = directoryMode.startsWith('receipt-multiple');
-      const longPath = index => `/srv/project/${index}-${'long-unbroken-segment'.repeat(16)}`;
-      await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill(multiple ? longPath(0) : '/srv/project/a-long-remote-directory-with-editable-input');
-      await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('保留正在编辑的远程项目名称');
-      if (directoryMode === 'permission') {
-        await page.evaluate(() => { window.__directoryFixture.failure = true; });
-        await dialog.getByRole('button', { name: copy('刷新目录', 'Refresh directories'), exact: true }).click();
-        await dialog.getByRole('status').filter({ hasText: 'Permission denied' }).waitFor();
-      }
-      if (directoryMode === 'loading') await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation') }).waitFor();
-      if (directoryMode.startsWith('receipt-')) {
-        await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).click();
-        await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('创建期间修改后保留的项目名称');
-        await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation'), exact: true }).click();
+      await session.getByRole('button', { name: copy('工作目录 / 项目', 'Working directory / project'), exact: true }).click();
+      await page.getByRole('button', { name: copy('选择其他文件夹…', 'Choose another folder…'), exact: true }).click();
+      const typedPath = picker.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true });
+      const goTo = async value => {
+        await picker.getByRole('button', { name: copy('输入路径', 'Type a path'), exact: true }).click();
+        await typedPath.fill(value);
+        await typedPath.press('Enter');
+      };
+      const folders = picker.getByRole('listbox', { name: copy('已有目录', 'Existing directory') });
+      const createFolder = async (name, expected) => {
+        const input = picker.getByLabel(copy('新文件夹名称', 'New folder name'), { exact: true });
+        if (!await input.isVisible()) await picker.getByRole('button', { name: copy('新建文件夹', 'New folder'), exact: true }).click();
+        await input.fill(name);
+        await picker.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).click();
+        // Cancel the in-flight request, then let the fixture answer: the receipt must stay unresolved.
+        await picker.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation') }).click();
         await page.evaluate(() => window.__directoryFixture.release());
-        const receipt = dialog.getByRole('region', { name: copy('目录创建结果', 'Directory creation results'), exact: true });
-        await receipt.getByRole('status').filter({ hasText: copy('结果不确定', 'Outcome unknown') }).waitFor();
+        await receipt.locator('article[data-outcome="unknown"]').nth(expected - 1).filter({ hasText: copy('结果不确定', 'Outcome unknown') }).waitFor();
+      };
+      const chosenTitle = async expected => {
+        const trigger = session.getByRole('button', { name: copy('工作目录 / 项目', 'Working directory / project'), exact: true });
+        const title = await trigger.getAttribute('title');
+        if (!title || !title.includes(expected)) throw new Error('The chosen remote folder must stay in the launch summary: ' + title);
+      };
+      if (directoryMode === 'permission') {
+        // A failed refresh keeps the last listing and states the reason.
+        await page.evaluate(() => { window.__directoryFixture.failure = true; });
+        await picker.getByRole('button', { name: copy('刷新目录', 'Refresh directories'), exact: true }).click();
+        await picker.getByRole('status').filter({ hasText: 'Permission denied' }).waitFor();
+        return null;
+      }
+      if (directoryMode === 'loading') {
+        // A listing still in flight offers its own cancel instead of a frozen list.
+        await picker.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation') }).waitFor();
+        return null;
+      }
+      if (directoryMode === 'key') {
+        await folders.getByRole('option', { name: 'project' }).click();
+        await picker.getByRole('button', { name: copy('选择此文件夹', 'Choose this folder'), exact: true }).click();
+        await chosenTitle('/srv/project');
+        return null;
+      }
+      // A long unbroken path has to stay editable and readable.
+      await goTo('/srv/' + longName(0));
+      if (directoryMode === 'password') {
+        await folders.getByRole('option', { name: 'services' }).click();
+        await picker.getByRole('button', { name: copy('选择此文件夹', 'Choose this folder'), exact: true }).click();
+        await chosenTitle('/srv/services');
+        return null;
+      }
+      if (directoryMode === 'receipt-unknown' || directoryMode === 'receipt-inspected') {
+        await createFolder(longName(1), 1);
         if (directoryMode === 'receipt-inspected') {
           await receipt.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
-          await receipt.getByRole('status').filter({ hasText: copy('原路径当前是目录', 'The original path is currently a directory') }).waitFor();
+          await receipt.getByText(copy('原路径当前是目录', 'The original path is currently a directory')).waitFor();
         }
-        if (multiple) {
-          for (let index = 1; index < 4; index++) {
-            await dialog.getByRole('textbox', { name: copy('远程路径', 'Remote path'), exact: true }).fill(longPath(index));
-            await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).click();
-            await dialog.getByRole('button', { name: copy('取消当前操作', 'Cancel current operation'), exact: true }).click();
-            await page.evaluate(() => window.__directoryFixture.release());
-            await receipt.locator('article[data-outcome="unknown"]').nth(index).waitFor();
-          }
-          const last = receipt.locator('article[data-outcome="unknown"]').last();
-          await last.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
-          await last.getByRole('status').filter({ hasText: copy('原路径当前是目录', 'The original path is currently a directory') }).waitFor();
-          await dialog.getByRole('textbox', { name: copy('项目名称', 'Project name'), exact: true }).fill('核查后继续编辑的草稿');
-          if (!await dialog.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).isDisabled()) throw new Error('Unknown original path must remain blocked after inspection');
-          if (!await dialog.getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).isEnabled()) throw new Error('The existing project action must remain available');
-          const observation = await dialog.evaluate(element => {
-            const body = element.querySelector('.guide-dialog-body');
-            return { horizontalOverflow: body.scrollWidth > body.clientWidth, scrollable: body.scrollHeight > body.clientHeight, writes: window.__directoryFixture.creates };
-          });
-          if (observation.horizontalOverflow || !observation.scrollable || observation.writes !== 4) throw new Error('Long receipts must scroll vertically without overflow or replay');
-          await (directoryMode === 'receipt-multiple-end' ? last : receipt.getByRole('heading')).scrollIntoViewIfNeeded();
-          return observation;
-        }
-        await receipt.scrollIntoViewIfNeeded();
+        return null;
       }
-      if (directoryMode === 'key' || directoryMode === 'password') await dialog.getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).scrollIntoViewIfNeeded();
+      // Four unresolved receipts: the dialog scrolls, never widens, and never replays a create.
+      for (let index = 1; index <= 4; index++) await createFolder(longName(index), index);
+      const unknown = receipt.locator('article[data-outcome="unknown"]');
+      if (await unknown.count() !== 4) throw new Error('Every cancelled create must keep an unresolved receipt');
+      const last = unknown.last();
+      await last.getByRole('button', { name: copy('核查原路径', 'Inspect original path'), exact: true }).click();
+      await last.getByText(copy('原路径当前是目录', 'The original path is currently a directory')).waitFor();
+      // Inspecting does not unlock the same path: it may already exist on the host.
+      await picker.getByLabel(copy('新文件夹名称', 'New folder name'), { exact: true }).fill(longName(4));
+      if (!await picker.getByRole('button', { name: copy('在远端新建目录', 'Create directory remotely'), exact: true }).isDisabled()) throw new Error('An unresolved path must stay blocked after inspection');
+      if (!await session.locator('[data-dialog-save]').isEnabled()) throw new Error('Existing receipts must not block the session action');
+      const observation = await picker.evaluate(element => {
+        const body = element.querySelector('.guide-dialog-body');
+        // A long unbroken path must wrap inside its receipt instead of widening the dialog.
+        const clipped = [...element.querySelectorAll('section article code')].filter((code) => code.scrollWidth > code.clientWidth + 1).length;
+        const before = body.scrollTop;
+        body.scrollTop = body.scrollHeight;
+        const scrollable = body.scrollHeight > body.clientHeight;
+        const reachedEnd = body.scrollTop > before;
+        body.scrollTop = before;
+        return { horizontalOverflow: body.scrollWidth > body.clientWidth, scrollable, reachedEnd, clipped, writes: window.__directoryFixture.creates };
+      });
+      if (observation.horizontalOverflow || observation.clipped || observation.writes !== 4) throw new Error('Long receipts must wrap without overflow or replay: ' + JSON.stringify(observation));
+      if (observation.scrollable && !observation.reachedEnd) throw new Error('Receipts below the fold must be reachable by scrolling: ' + JSON.stringify(observation));
+      await (directoryMode === 'receipt-multiple-end' ? last : receipt.locator('article').first()).scrollIntoViewIfNeeded();
+      return observation;
     }, true, 'connected', null, directoryMode);
   }
   for (const failure of ['stale', 'failed']) for (const surface of ['composer', 'dialog']) {
@@ -333,7 +386,6 @@ for (const width of widths) {
       let area = stage.getByRole('region', { name: copy('多行输入与提示词投递', 'Multi-line input & library prompts') });
       if (surface === 'dialog') {
         await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
-        await page.getByRole('dialog', { name: copy('选择远程目录', 'Choose remote directory') }).getByRole('button', { name: copy('继续启动', 'Continue launch'), exact: true }).click();
         area = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
         await area.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('保留新会话的初始提示词草稿');
       }
@@ -389,6 +441,102 @@ for (const width of widths) {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
     await stage.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
     await page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') }).waitFor();
+  });
+  await shot('workbench-metrics-' + theme + '-' + width, theme, width, async page => {
+    // Objective layout evidence: clipped text, toolbar overflow, muted-copy contrast and the
+    // ended state's affordances.
+    const stageLabel = copy('当前会话', 'Current session');
+    const measure = () => page.evaluate((stageLabel) => {
+      const size = (element) => element ? { w: Math.round(element.getBoundingClientRect().width), h: Math.round(element.getBoundingClientRect().height) } : null;
+      const fits = (element) => ({ partial: element.scrollWidth > element.clientWidth + 1, scroll: element.scrollWidth, client: element.clientWidth });
+      const channel = (value) => {
+        const match = value.match(/^rgba?\(([^)]+)\)$/);
+        if (!match) return null;
+        const parts = match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+        return parts.length >= 3 ? { rgb: parts.slice(0, 3), alpha: parts.length > 3 ? parts[3] : 1 } : null;
+      };
+      // Walk up to the first surface that actually paints, so a transparent row still resolves.
+      const backdrop = (element) => {
+        for (let node = element; node; node = node.parentElement) {
+          const paint = channel(getComputedStyle(node).backgroundColor);
+          if (paint && paint.alpha > 0.55) return paint.rgb;
+        }
+        return [255, 255, 255];
+      };
+      const luminance = (rgb) => {
+        const [r, g, b] = rgb.map((value) => {
+          const scaled = value / 255;
+          return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const contrast = (label, element) => {
+        if (!element) return { label, ratio: null };
+        const paint = channel(getComputedStyle(element).color);
+        if (!paint) return { label, ratio: null };
+        const front = luminance(paint.rgb);
+        const back = luminance(backdrop(element));
+        return { label, ratio: Math.round(((Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05)) * 100) / 100, size: getComputedStyle(element).fontSize };
+      };
+      const tabs = [...document.querySelectorAll('[role="tab"][data-session-id]')];
+      const selected = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true') ?? tabs[0] ?? null;
+      const plain = tabs.find((tab) => tab !== selected) ?? null;
+      const rail = document.querySelector('aside[aria-label]');
+      const stage = document.querySelector('section[aria-label="' + stageLabel + '"]');
+      const toolbar = stage ? stage.querySelector('[role="toolbar"]') : null;
+      const bar = toolbar ? toolbar.closest('header') : null;
+      const barBox = bar ? bar.getBoundingClientRect() : null;
+      const buttons = toolbar ? [...toolbar.querySelectorAll('button')] : [];
+      const outside = barBox ? buttons.filter((button) => { const box = button.getBoundingClientRect(); return box.width > 0 && (box.right > barBox.right + 1 || box.left < barBox.left - 1 || box.top < barBox.top - 1 || box.bottom > barBox.bottom + 1); }).length : null;
+      const status = stage ? stage.querySelector('footer') : null;
+      const rows = tabs.map((tab) => {
+        const title = tab.querySelector('strong');
+        const meta = [...tab.querySelectorAll('[data-tone]')]
+          .flatMap((node) => [...node.querySelectorAll('span')])
+          .filter((span) => span.children.length === 0 && /[\u4e00-\u9fa5A-Za-z]/.test(span.textContent))[0];
+        return {
+          id: tab.dataset.sessionId,
+          title: title ? fits(title) : null,
+          state: meta ? { text: meta.textContent.trim(), ...fits(meta) } : null,
+          row: size(tab),
+        };
+      });
+      return {
+        page: { scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth },
+        rail: size(rail),
+        header: size(bar),
+        toolbarButtons: buttons.length,
+        toolbarClipped: outside,
+        statusOverflow: status ? status.scrollWidth > status.clientWidth + 1 : null,
+        rows,
+        contrast: [
+          contrast('rail-title-selected', selected?.querySelector('strong') ?? null),
+          contrast('rail-title', plain?.querySelector('strong') ?? null),
+          contrast('rail-place', plain?.querySelector('[class*="sessionPlace"]') ?? null),
+          contrast('rail-meta', plain?.querySelector('[class*="sessionMeta"] span') ?? null),
+          contrast('stage-title', stage?.querySelector('h2') ?? null),
+          contrast('stage-sub', stage?.querySelector('header p, header span') ?? null),
+          contrast('status-bar', status ?? null),
+        ].filter((item) => item.ratio != null),
+      };
+    }, stageLabel);
+    const running = await measure();
+    // A confirmed-ended session keeps a recovery action and offers no input surface.
+    await page.locator('[role="tab"][data-session-id="s3"]').click();
+    await page.waitForTimeout(250);
+    const ended = await page.evaluate(({ label, stageLabel }) => {
+      const visible = (element) => element.getBoundingClientRect().height > 0;
+      const stage = document.querySelector('section[aria-label="' + stageLabel + '"]');
+      const buttons = stage ? [...stage.querySelectorAll('button')] : [];
+      const restart = buttons.filter((button) => button.textContent.trim() === label);
+      return {
+        restartVisible: restart.some(visible),
+        visibleButtons: buttons.filter(visible).length,
+        labels: buttons.filter(visible).map((button) => button.textContent.trim()).filter(Boolean).slice(0, 12),
+        endedBar: (stage ? [...stage.querySelectorAll('footer')].map((footer) => (footer.innerText ?? '').replace(/\s+/g, ' ').slice(0, 80)) : []),
+      };
+    }, { label: copy('重新启动', 'Restart'), stageLabel: copy('当前会话', 'Current session') });
+    return { running, ended };
   });
   await shot('workbench-activity-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__output('s1', 'live output contrast\r\n'));
@@ -502,7 +650,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的长标题会话栏、Git 分支与工作树切换菜单、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与目录选择流程和空状态。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
+  '捕获工作台的长标题会话栏、Git 分支与工作树切换菜单、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与远程文件夹选择器（长路径、权限失败、读取中、未决创建回执）和空状态。workbench-metrics 场景另记录标题截断宽度、工具条裁切、对比度与已结束会话的恢复入口。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
   '',
   '执行：',
   '',

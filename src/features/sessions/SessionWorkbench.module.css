@@ -483,8 +483,9 @@
 .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1px var(--warning-line), 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
 .sessionStateDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--wb-rail-bg); }
 .session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); background: var(--wb-row-selected); }
-.sessionStateDot[data-tone='live'],
-.sessionStateDot[data-tone='idle'] { color: var(--success); }
+/* Streaming is live; a session that is merely waiting keeps a muted dot. */
+.sessionStateDot[data-tone='live'] { color: var(--success); }
+.sessionStateDot[data-tone='idle'] { color: color-mix(in srgb, var(--success) 45%, var(--line-strong)); }
 .sessionStateDot[data-tone='ended'] { color: var(--line-strong); }
 .sessionStateDot[data-tone='error'] { color: var(--danger); }
 .sessionStateDot[data-tone='bell'] { color: var(--warning); }
@@ -496,6 +497,8 @@
 /* State and run time share one right-hand slot with the hover actions: what the session is
    doing now on top, how long it has run below. Only a state that asks for you takes color. */
 .sessionMeta { display: grid; justify-items: end; align-self: center; gap: 1px; min-width: 28px; color: var(--text-3); font-size: var(--fs-micro); line-height: 1.4; text-align: right; white-space: nowrap; }
+/* Only the run time is left, so the slot needs less room than a state label. */
+.sessionMeta[data-quiet] { min-width: 22px; }
 .sessionState { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--fw-medium); }
 .sessionTime { font-variant-numeric: tabular-nums; opacity: .85; }
 .sessionMeta[data-tone='live'] .sessionState { color: var(--success); }

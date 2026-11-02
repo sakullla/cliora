@@ -120,6 +120,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, activityLabel(item)].filter(Boolean).join('\n');
     const pending = !session.running && remoteSessionMayExist(session);
     const state = pending ? t('sessions.sshNeedsCheck') : activityLabel(item);
+    // A running session that is only waiting for input already reads that way from its tool icon
+    // and quiet state dot; repeating the label on every row would spend the room titles need.
+    const quietState = !pending && item.tone === 'idle';
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
         onClick={() => onSelect(session.id)}
@@ -153,9 +156,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
           </span>
           <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', activityLabel(item)].filter(Boolean).join(' · ')}</span>
         </span>
-        {/* State first: what the session is doing now, then how long it has been running. */}
-        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} aria-hidden="true">
-          <span className={styles.sessionState}>{state}</span>
+        {/* What the session is doing now — only when it needs saying — then how long it has run. */}
+        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} data-quiet={quietState || undefined} aria-hidden="true">
+          {!quietState && <span className={styles.sessionState}>{state}</span>}
           {session.running && item.elapsed && <span className={styles.sessionTime}>{item.elapsed}</span>}
         </span>
       </button>
