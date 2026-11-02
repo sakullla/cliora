@@ -129,6 +129,8 @@ export default {
     resultAria: 'Distribution result',
     resultOk: 'Distributed to {{total}} CLIs',
     resultMixed: '{{ok}} succeeded, {{failed}} failed',
+    resultConflict: '{{total}} targets: {{ok}} succeeded, {{failed}} failed, {{conflict}} conflict untouched',
+    resultConflictDetail: 'Externally modified; confirm the replacement in this window',
     remoteSkillInstalled: 'Installed; use the more actions menu to delete',
     remoteSkillDistributionUnavailable: 'Not installed; distributing remote Skills to other CLIs from these marks is unavailable',
     installState: {
@@ -143,8 +145,6 @@ export default {
     removed: 'Removed from the library.',
     syncEntry: '{{name}}: {{result}}',
     synced: 'synced',
-    conflictsNotice: 'Library updated. {{names}} have external modifications; confirm the replacement in this window.',
-    syncedAll: 'Synced to the installed CLIs.',
     addedToLibrary: 'Added to the library.',
     confirmDeletePlaced: 'Delete "{{name}}"? It will be removed from the library, and copies installed on tools will be uninstalled.',
     confirmDelete: 'Delete "{{name}}" from the library?',

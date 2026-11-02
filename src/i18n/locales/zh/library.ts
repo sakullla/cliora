@@ -129,6 +129,8 @@ export default {
     resultAria: '分发结果',
     resultOk: '已分发到 {{total}} 个 CLI',
     resultMixed: '{{ok}} 个成功，{{failed}} 个失败',
+    resultConflict: '{{total}} 个目标：{{ok}} 个成功，{{failed}} 个失败，{{conflict}} 个冲突未写入',
+    resultConflictDetail: '有外部修改，需要在这个窗口确认替换',
     remoteSkillInstalled: '已安装；如需删除，请使用更多操作',
     remoteSkillDistributionUnavailable: '未安装；暂不支持从远程 Skill 标记分发到其他 CLI',
     installState: {
@@ -143,8 +145,6 @@ export default {
     removed: '已从资料库删除。',
     syncEntry: '{{name}}：{{result}}',
     synced: '已同步',
-    conflictsNotice: '资料库已更新。{{names}} 上有外部修改，请在这个窗口确认替换。',
-    syncedAll: '已同步到已安装的 CLI。',
     addedToLibrary: '已放进资料库。',
     confirmDeletePlaced: '删除「{{name}}」？会从资料库移除，并卸下已安装到工具的副本。',
     confirmDelete: '从资料库删除「{{name}}」？',

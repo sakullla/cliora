@@ -36,7 +36,9 @@ type LibrarySkill = SkillPackage & { remoteToolId?: string; remoteReadOnly?: boo
 /** Where the card's files actually live: the library package, a remote root, or a read-only remote root. */
 type SkillSource = 'managed' | 'remote' | 'remoteReadOnly';
 /** One target of an import or sync, so a partial result names what worked and what did not. */
-type TargetOutcome = { name: string; ok: boolean; detail: string };
+type TargetOutcome = { name: string; state: 'ok' | 'failed' | 'conflict'; detail: string };
+/** Results belong to the host that produced them, so an old host cannot inherit new rows. */
+type OutcomeReport = { host: string | null; rows: TargetOutcome[] };
 
 function remoteSkillPackages(toolIds: string[], stores: unknown[]): LibrarySkill[] {
   return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
@@ -83,7 +85,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  const [outcomes, setOutcomes] = useState<TargetOutcome[] | null>(null);
+  const [outcomes, setOutcomes] = useState<OutcomeReport | null>(null);
 
   useEffect(() => {
     if (!active) return;
@@ -108,6 +110,10 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     void load.catch((value) => { if (live) setError(failure(value)); });
     return () => { live = false; };
   }, [active, remoteTargetId, remoteToolIds.join('|')]);
+
+  // A report names the targets of one run: leaving the page or changing the host drops it,
+  // so old rows never sit next to another host's Skill list.
+  useEffect(() => { setOutcomes(null); }, [remoteTargetId, active]);
 
   useEffect(() => {
     onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
@@ -156,27 +162,27 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       ...checked.map((toolId) => ({ toolId, scope: 'global' as const, projectPath: null })),
     ];
     if (item && targets.length) {
-      // Every target keeps its own row: a partial write must not read as "all done".
+      // Every target keeps its own row: a skipped target is a result, not a silent success.
       const rows: TargetOutcome[] = [];
-      const conflicts: string[] = [];
       for (const target of targets) {
         const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
         const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
-        if (preview?.status === 'conflict') { conflicts.push(name); continue; }
+        if (preview?.status === 'conflict') {
+          rows.push({ name, state: 'conflict', detail: preview.detail || t('library.resources.resultConflictDetail') });
+          continue;
+        }
         const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
-        rows.push({ name, ok: outcome.status !== 'failed', detail: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') });
+        rows.push({ name, state: outcome.status === 'failed' ? 'failed' : 'ok', detail: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') });
       }
       await reloadSkills();
-      setOutcomes(rows.length ? rows : null);
-      const failed = rows.filter((row) => !row.ok);
-      const line = (row: TargetOutcome) => t('library.resources.syncEntry', { name: row.name, result: row.detail });
-      if (conflicts.length) {
-        setSkillSeed([]);
-        setSkillTarget(item);
-        setNotice(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
-      } else if (failed.length) setError(failed.map(line).join(t('tools.quota.errorSeparator')));
-      else setNotice(rows.map(line).join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
-      if (!failed.length) setError('');
+      const report: OutcomeReport | null = rows.length ? { host: remoteTargetId ?? null, rows } : null;
+      setOutcomes(report);
+      const failed = rows.filter((row) => row.state === 'failed');
+      const conflicts = rows.filter((row) => row.state === 'conflict');
+      // The panel already names every target, so only failures keep the alert toast.
+      setError(failed.length ? failed.map((row) => t('library.resources.syncEntry', { name: row.name, result: row.detail })).join(t('tools.quota.errorSeparator')) : '');
+      // Conflicted targets keep the existing replace flow: open the Skill and let the user confirm there.
+      if (conflicts.length) { setSkillSeed([]); setSkillTarget(item); }
       return;
     }
     setOutcomes(null);
@@ -304,16 +310,19 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const libraryPackages = packages.filter((item) => item.inLibrary !== false)
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
-  const allOk = !!outcomes && outcomes.every((row) => row.ok);
+  // Only rows of the current host render; a stale report never speaks for another host.
+  const report = outcomes && outcomes.host === (remoteTargetId ?? null) ? outcomes.rows : null;
+  const allOk = !!report && report.every((row) => row.state === 'ok');
+  const count = (state: TargetOutcome['state']) => report?.filter((row) => row.state === state).length ?? 0;
   return <div className={styles.layout}><RemoteReadStatus state={remoteReads} />
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     <div className={styles.resultBar}>
       <Badge tone={needle ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: libraryPackages.length, total: packages.filter((entry) => entry.inLibrary !== false).length })}</Badge>
       <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
     </div>
-    {outcomes && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
-      <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{t(allOk ? 'library.resources.resultOk' : 'library.resources.resultMixed', { total: outcomes.length, ok: outcomes.filter((row) => row.ok).length, failed: outcomes.filter((row) => !row.ok).length })}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
-      <ul className={styles.resultList}>{outcomes.map((row) => <li key={row.name} data-state={row.ok ? 'ok' : 'failed'}><Icon name={row.ok ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
+    {report && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
+      <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{t(allOk ? 'library.resources.resultOk' : count('conflict') ? 'library.resources.resultConflict' : 'library.resources.resultMixed', { total: report.length, ok: count('ok'), failed: count('failed'), conflict: count('conflict') })}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
+      <ul className={styles.resultList}>{report.map((row, index) => <li key={`${row.name}:${index}`} data-state={row.state}><Icon name={row.state === 'ok' ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
     </section>}
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
