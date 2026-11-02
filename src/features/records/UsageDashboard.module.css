@@ -12,7 +12,9 @@
 .headerFilters > * { width: 138px; }
 .subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); margin-top: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .subhead p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-1_5); margin: 0; }
-.activeChips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
+.activeChips { display: inline-flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; overflow: visible; }
+/* The way out of the filters never hides behind a clipped row. */
+.activeChips > button { flex: none; }
 .chip { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 220px; min-height: 22px; padding: 0 var(--space-1) 0 var(--space-2); border: 1px solid var(--accent-line); border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-caption); font-weight: var(--fw-medium); box-shadow: none; }
 .chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip > svg { flex: none; opacity: .7; }
@@ -74,6 +76,13 @@ button.metricNote:hover:not(:disabled) { background: none; color: var(--text); t
 .boundaryChip[data-tone="warning"] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 button.boundaryChip { color: var(--text-2); text-decoration: underline dotted; text-underline-offset: 3px; }
 button.boundaryChip:hover:not(:disabled) { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
+
+/* A refresh that failed keeps the last successful report, so the stale note lives
+   in the same place as the figures instead of replacing them. */
+.staleRead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--text-2); font-size: var(--fs-caption); }
+.staleReadLead { display: inline-flex; align-items: center; gap: var(--space-1_5); color: var(--warning); font-weight: var(--fw-semibold); }
+.staleReadHint { min-width: 0; flex: 1 1 220px; }
+.staleRead > button { flex: none; margin-left: auto; }
 
 /* Cards */
 .card { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
@@ -182,6 +191,7 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
   .composition { grid-template-columns: 140px minmax(0, 1fr); align-items: center; }
   .donut { width: 140px; height: 140px; }
   .headerFilters { width: 100%; }
+  .activeChips { width: 100%; }
   .headerFilters > * { flex: 1; width: 0; min-width: 110px; }
 }
 @container (max-width: 520px) {

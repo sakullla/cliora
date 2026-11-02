@@ -493,18 +493,62 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect(page.getByLabel('用量工具')).toContainText('Codex');
 });
 
-test('usage failure replaces stale data and can retry with the same filters', async ({ page }) => {
+test('usage refresh failure keeps the last read visible and can retry with the same filters', async ({ page }) => {
   await page.addInitScript((report) => {
-    let failed = false;
     Object.assign(window, {
       isTauri: true,
+      __usageFailure: { fail: false },
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_history_sessions') return [];
         if (command === 'get_usage_report') {
-          if (args.filter.model && !failed) { failed = true; throw new Error('Read failed'); }
+          if ((window as typeof window & { __usageFailure: { fail: boolean } }).__usageFailure.fail) throw new Error('Read failed');
           return args.filter.model ? { ...report, totals: { ...report.totals, total: 940000 } } : report;
+        }
+        if (command === 'get_tray_status') return { available: false, error: null };
+        return null;
+      } },
+    });
+  }, todayReport());
+  const failRead = (fail: boolean) => page.evaluate((value) => {
+    (window as typeof window & { __usageFailure: { fail: boolean } }).__usageFailure.fail = value;
+  }, fail);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('tab', { name: '用量' }).click();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
+  await failRead(true);
+  await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
+  // The failed refresh keeps the previous overview and names itself instead of reading as empty data.
+  await expect(page.getByText('上次读取成功，刷新失败')).toBeVisible();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
+  await expect(page.getByText('这段时间没有模型调用')).toHaveCount(0);
+  await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
+  await failRead(false);
+  await page.getByRole('button', { name: '重新加载用量' }).click();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
+  await expect(page.getByText('上次读取成功，刷新失败')).toHaveCount(0);
+  await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
+  // The newest reading stays on screen under a changed filter as well, with the same way back.
+  await failRead(true);
+  await page.getByRole('radio', { name: '近 7 天' }).click();
+  await expect(page.getByText('上次读取成功，刷新失败')).toBeVisible();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
+});
+
+test('usage failure with no earlier reading clears the dashboard and reloads in place', async ({ page }) => {
+  await page.addInitScript((report) => {
+    Object.assign(window, {
+      isTauri: true,
+      __usageFailure: { fail: true },
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_history_sessions') return [];
+        if (command === 'get_usage_report') {
+          if ((window as typeof window & { __usageFailure: { fail: boolean } }).__usageFailure.fail) throw new Error('Read failed');
+          return report;
         }
         if (command === 'get_tray_status') return { available: false, error: null };
         return null;
@@ -514,13 +558,58 @@ test('usage failure replaces stale data and can retry with the same filters', as
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByRole('tab', { name: '用量' }).click();
-  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
-  await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
-  await expect(page.getByRole('alert')).toContainText('用量暂时没有读取成功');
+  // Nothing was read before, so the dashboard shows the failure instead of stale or empty figures.
+  await expect(page.getByRole('heading', { name: '用量暂时没有读取成功' })).toBeVisible();
   await expect(page.getByRole('region', { name: '用量概览' })).toHaveCount(0);
+  await page.evaluate(() => { (window as typeof window & { __usageFailure: { fail: boolean } }).__usageFailure.fail = false; });
   await page.getByRole('button', { name: '重新加载用量' }).click();
-  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
-  await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
+  await expect(page.getByRole('heading', { name: '用量暂时没有读取成功' })).toHaveCount(0);
+});
+
+test('filter scope bars keep their exit reachable at 900 and 640', async ({ page }) => {
+  await page.addInitScript((report) => {
+    const records = [
+      { id: 'scope-a', toolId: 'codex', nativeId: '1', title: 'First session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+      { id: 'scope-b', toolId: 'codex', nativeId: '2', title: 'Second session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668700000, updatedAt: 1790668700000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') return records.filter((item) => !args.filter.search || item.title.includes(args.filter.search));
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, todayReport());
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('First');
+  await page.getByRole('button', { name: '只看收藏' }).click();
+  const clearAll = page.getByRole('button', { name: '清除全部筛选' });
+  for (const width of [900, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(clearAll).toBeVisible();
+    await expect(clearAll).toBeInViewport();
+  }
+  await clearAll.click();
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('First');
+  await page.getByRole('tab', { name: '用量' }).click();
+  const clearUsage = page.getByRole('button', { name: '清除筛选' });
+  for (const width of [900, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(clearUsage).toBeInViewport();
+  }
+  await clearUsage.click();
+  await expect(page.getByRole('button', { name: '清除筛选' })).toHaveCount(0);
 });
 
 test('Grok details preserve exact token buckets and show inferred clocks and unknown calls', async ({ page }) => {
@@ -1039,6 +1128,9 @@ test('a failed session refresh keeps the list readable, marks the scope and retr
   await expect(page.getByText('刷新失败，下面仍是上次读取的会话。')).toBeVisible();
   await expect(page.getByRole('button', { name: /Alpha session/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Beta session/ })).toBeVisible();
+  // The kept rows are counted as the last read, not against a total from before the filter.
+  await expect(page.getByText('上次读取：2 个会话')).toBeVisible();
+  await expect(page.getByText('命中 2 / 共 2')).toHaveCount(0);
   await page.evaluate(() => { (window as typeof window & { __recordFailure: { fail: boolean } }).__recordFailure.fail = false; });
   await page.getByRole('button', { name: '重新读取列表' }).click();
   await expect(page.getByText('刷新失败，下面仍是上次读取的会话。')).toHaveCount(0);

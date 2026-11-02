@@ -224,6 +224,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [readError, setReadError] = useState(false);
+  const [staleRead, setStaleRead] = useState(false);
   const [retry, setRetry] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [priceOpen, setPriceOpen] = useState(false);
@@ -233,7 +234,9 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const [priceDraft, setPriceDraft] = useState({ currency: 'USD', input: '', output: '', read: '', write: '', source: '' });
   const request = useRef(0);
   const loaded = useRef(false);
-  const reportFilter = useRef('');
+  // Filter key and value of the last report that was read successfully.
+  const shownFilter = useRef('');
+  const lastGood = useRef<UsageReport | null>(null);
   const completedReport = useRef<{ key: string; at: number } | null>(null);
 
   useEffect(() => {
@@ -260,12 +263,16 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     completedReport.current = null;
     const sequence = ++request.current;
     const filterKey = JSON.stringify(filter);
-    setLoading(true); setReadError(false);
-    if (filterKey !== reportFilter.current) setReport(null);
+    setLoading(true); setReadError(false); setStaleRead(false);
+    if (filterKey !== shownFilter.current) setReport(null);
+    // A failed read falls back to the last successful report instead of an empty usage
+    // view. The screen then says the figures are the previous read and offers a reload;
+    // only a failure with no earlier report at all clears the dashboard.
+    const fallback = lastGood.current;
     const timer = window.setTimeout(() => {
       native.getUsageReport(filter)
-        .then((value) => { if (sequence === request.current) { setReport(value); reportFilter.current = filterKey; loaded.current = true; completedReport.current = { key: queryKey, at: Date.now() }; } })
-        .catch(() => { if (sequence === request.current) { setReport(null); setReadError(true); } })
+        .then((value) => { if (sequence === request.current) { setReport(value); lastGood.current = value; shownFilter.current = filterKey; loaded.current = true; completedReport.current = { key: queryKey, at: Date.now() }; } })
+        .catch(() => { if (sequence === request.current) { setReport(fallback); setReadError(true); setStaleRead(!!fallback); } })
         .finally(() => { if (sequence === request.current) setLoading(false); });
     }, loaded.current ? 120 : 0);
     return () => { window.clearTimeout(timer); request.current++; };
@@ -321,7 +328,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       completedReport.current = null;
       setPriceOpen(false); notify.status(t('records.usage.priceSaved'), true);
       const sequence = ++request.current;
-      try { const value = await native.getUsageReport(filter); if (sequence === request.current) setReport(value); }
+      try { const value = await native.getUsageReport(filter); if (sequence === request.current) { setReport(value); lastGood.current = value; shownFilter.current = JSON.stringify(filter); } }
       catch (value) { notify.readAlert(value); }
     } catch (value) { setPriceError(typeof value === 'string' ? value : (value as { message?: string })?.message ?? t('records.usage.priceSaveFailed')); }
   }
@@ -368,7 +375,12 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       {report.duplicateRequests > 0 && <span className={styles.boundaryChip}>{t('records.usage.boundaryMerged', { count: report.duplicateRequests })}</span>}
       {report.mixedCurrency && <span className={styles.boundaryChip} data-tone="warning">{t('records.usage.noteMixed', { currency: report.currency })}</span>}
     </div>}
-    {readError ? <div className={styles.empty} role="alert"><span className="empty-symbol"><Icon name="alert" size={20} /></span><h3>{t('records.usage.readFailed')}</h3><p>{t('records.usage.readFailedHint')}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>{t('records.usage.retry')}</button></div>
+    {staleRead && report && <div className={styles.staleRead} role="alert">
+      <span className={styles.staleReadLead}><Icon name="alert" size={14} />{t('records.usage.staleRead')}</span>
+      <span className={styles.staleReadHint}>{t('records.usage.staleReadHint')}</span>
+      <Button size="sm" onClick={() => setRetry((value) => value + 1)}>{t('records.usage.retry')}</Button>
+    </div>}
+    {readError && !report ? <div className={styles.empty} role="alert"><span className="empty-symbol"><Icon name="alert" size={20} /></span><h3>{t('records.usage.readFailed')}</h3><p>{t('records.usage.readFailedHint')}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>{t('records.usage.retry')}</button></div>
     : !report ? <div className={styles.skeleton} role="status" aria-label={t('records.usage.loading')}><span /><span /><span /></div> : empty ? <div className={styles.empty}>
       <span className="empty-symbol"><Icon name="clock" size={20} /></span>
       <h3>{range === 'all' ? t('records.usage.emptyAll') : t('records.usage.emptyRange')}</h3>
