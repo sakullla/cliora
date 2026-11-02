@@ -272,7 +272,15 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     const timer = window.setTimeout(() => {
       native.getUsageReport(filter)
         .then((value) => { if (sequence === request.current) { setReport(value); lastGood.current = value; shownFilter.current = filterKey; loaded.current = true; completedReport.current = { key: queryKey, at: Date.now() }; } })
-        .catch(() => { if (sequence === request.current) { setReport(fallback); setReadError(true); setStaleRead(!!fallback); } })
+        .catch(() => {
+          if (sequence !== request.current) return;
+          // Only a retry of the same filter may keep the earlier figures. A changed
+          // filter must not borrow the previous range's numbers or empty conclusion.
+          const unchanged = filterKey === shownFilter.current;
+          setReport(unchanged ? fallback : null);
+          setReadError(true);
+          setStaleRead(unchanged && !!fallback);
+        })
         .finally(() => { if (sequence === request.current) setLoading(false); });
     }, loaded.current ? 120 : 0);
     return () => { window.clearTimeout(timer); request.current++; };
@@ -328,7 +336,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       completedReport.current = null;
       setPriceOpen(false); notify.status(t('records.usage.priceSaved'), true);
       const sequence = ++request.current;
-      try { const value = await native.getUsageReport(filter); if (sequence === request.current) { setReport(value); lastGood.current = value; shownFilter.current = JSON.stringify(filter); } }
+      try { const value = await native.getUsageReport(filter); if (sequence === request.current) { setReport(value); setReadError(false); setStaleRead(false); lastGood.current = value; shownFilter.current = JSON.stringify(filter); } }
       catch (value) { notify.readAlert(value); }
     } catch (value) { setPriceError(typeof value === 'string' ? value : (value as { message?: string })?.message ?? t('records.usage.priceSaveFailed')); }
   }

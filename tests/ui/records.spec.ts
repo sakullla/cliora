@@ -518,23 +518,28 @@ test('usage refresh failure keeps the last read visible and can retry with the s
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByRole('tab', { name: '用量' }).click();
   await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
-  await failRead(true);
+  // Enter a model filter with a successful read, then fail a refresh of that same filter.
   await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
-  // The failed refresh keeps the previous overview and names itself instead of reading as empty data.
-  await expect(page.getByText('上次读取成功，刷新失败')).toBeVisible();
-  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
-  await expect(page.getByText('这段时间没有模型调用')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
   await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
+  await failRead(true);
+  await page.getByRole('button', { name: '刷新本机记录' }).click();
+  // The failed same-filter refresh keeps the previous overview and names itself instead of reading as empty data.
+  await expect(page.getByText('上次读取成功，刷新失败')).toBeVisible();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
+  await expect(page.getByText('这段时间没有模型调用')).toHaveCount(0);
   await failRead(false);
   await page.getByRole('button', { name: '重新加载用量' }).click();
   await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
   await expect(page.getByText('上次读取成功，刷新失败')).toHaveCount(0);
   await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
-  // The newest reading stays on screen under a changed filter as well, with the same way back.
+  // A changed filter cannot borrow the previous range's figures: the failed read is explicit.
   await failRead(true);
   await page.getByRole('radio', { name: '近 7 天' }).click();
-  await expect(page.getByText('上次读取成功，刷新失败')).toBeVisible();
-  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
+  await expect(page.getByRole('heading', { name: '用量暂时没有读取成功' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '用量概览' })).toHaveCount(0);
+  await expect(page.getByText('上次读取成功，刷新失败')).toHaveCount(0);
+  await expect(page.getByText('这段时间没有模型调用')).toHaveCount(0);
 });
 
 test('usage failure with no earlier reading clears the dashboard and reloads in place', async ({ page }) => {
