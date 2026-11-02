@@ -639,3 +639,99 @@ fn opencode_unverified_form_views_but_refuses_edits() {
         Some(json!({"baseUrl":"https://edited.example/v1","interfaceFormat":"openai_completions"})))).unwrap_err();
     assert!(error.contains("未验证"), "{error}");
 }
+
+/// Model pricing and capability metadata is ordinary model configuration, not secret material.
+#[test]
+fn pi_model_cost_and_cache_metadata_are_portable_parameters() {
+    use crate::adapters::configuration::PortableFieldKind;
+    let registry = Registry::builtins();
+    let port = registry.get("pi").unwrap().configuration().unwrap();
+    let field = |path: &[&str]| port.portable_field_kind(&path.iter().map(|part| part.to_string()).collect::<Vec<_>>());
+    for path in [
+        &["models", "providers", "alpha", "models", "0", "cost", "cacheRead"][..],
+        &["models", "providers", "alpha", "models", "0", "cost", "tiers", "0", "inputTokensAbove"],
+        &["models", "providers", "alpha", "models", "0", "compat", "allowedFallbackModels", "1", "cost", "cacheWrite"],
+        &["models", "providers", "alpha", "models", "0", "promptCache"],
+        &["models", "providers", "alpha", "modelOverrides", "family/one", "cost", "cacheRead"],
+        &["models", "providers", "alpha", "models", "0", "compat", "maxTokensField"],
+        &["models", "providers", "alpha", "models", "0", "compat", "supportsCacheControlOnTools"],
+    ] {
+        assert_eq!(field(path), PortableFieldKind::Parameter, "{path:?}");
+    }
+    // Credentials keep their own classification inside a model, and provider fields stay as they were.
+    assert_eq!(field(&["models", "providers", "alpha", "models", "0", "headers"]), PortableFieldKind::Credential);
+    assert_eq!(field(&["models", "providers", "alpha", "apiKey"]), PortableFieldKind::CredentialReference);
+    assert_eq!(field(&["models", "providers", "alpha", "authHeader"]), PortableFieldKind::Unknown);
+    // Undocumented model fields keep the conservative default, so a secret-looking name is still dropped.
+    for path in [
+        &["models", "providers", "alpha", "models", "0", "customAuthToken"][..],
+        &["models", "providers", "alpha", "models", "0", "compat", "sessionToken"],
+        &["models", "providers", "alpha", "models", "0", "compat", "allowedFallbackModels", "0", "apiToken"],
+    ] {
+        assert_eq!(field(path), PortableFieldKind::Unknown, "{path:?}");
+    }
+}
+
+/// An incomplete cost (as written by an older migration export) is refused before it reaches
+/// models.json, where Pi would reject every model of every provider.
+#[test]
+fn pi_incomplete_model_costs_are_refused_and_the_native_file_is_kept() {
+    let registry = Registry::builtins();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let store = Store::default();
+    let draft = save_reopen(&registry, &db, initialized("pi"));
+    let files = files(&registry, "pi", temp.path());
+    apply_draft(&registry, &db, &store, &draft, &files);
+    let before = disk(&files, "models");
+
+    let full = json!({"input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25});
+    let complete = |model: &mut Value| {
+        model["cost"] = json!({"input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125,
+            "tiers": [{"inputTokensAbove": 100000, "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625}]});
+        model["compat"] = json!({"allowedFallbackModels": [{"provider": "alpha", "model": "safe", "cost": full.clone()}]});
+    };
+    let adapter = registry.get("pi").unwrap();
+    let mut documents: BTreeMap<String, Value> = draft.profile.files.iter().map(|(role, text)| (role.clone(), format::parse(adapter.file_kind(role).unwrap(), text).unwrap())).collect();
+    let safe = documents.get_mut("models").unwrap()["providers"]["alpha"]["models"].as_array_mut().unwrap()
+        .iter_mut().find(|model| model["id"] == "safe").unwrap();
+    complete(safe);
+    let accepted = replace_documents(&registry, draft.clone(), documents.clone());
+    assert!(accepted.issues.is_empty(), "{:?}", accepted.issues);
+
+    for (pointer, field) in [
+        ("/compat/allowedFallbackModels/0/cost/cacheRead", "compat.allowedFallbackModels.0.cost.cacheRead"),
+        ("/cost/tiers/0/inputTokensAbove", "cost.tiers.0.inputTokensAbove"),
+        ("/cost/tiers/0/cacheRead", "cost.tiers.0.cacheRead"),
+    ] {
+        let mut broken = documents.clone();
+        let safe = broken.get_mut("models").unwrap()["providers"]["alpha"]["models"].as_array_mut().unwrap()
+            .iter_mut().find(|model| model["id"] == "safe").unwrap();
+        let (parent, last) = pointer.rsplit_once('/').unwrap();
+        safe.pointer_mut(parent).unwrap().as_object_mut().unwrap().remove(last);
+        let reopened = replace_documents(&registry, draft.clone(), broken.clone());
+        assert!(reopened.issues.iter().any(|issue| issue.field.as_deref() == Some(field)), "{field}: {:?}", reopened.issues);
+
+        // A profile that arrives this way (an import writes the database directly) cannot be applied.
+        let mut imported = draft.profile.clone();
+        imported.files.insert("models".into(), format::render(FileKind::Json, &broken["models"]).unwrap());
+        let stored = serde_json::to_string(&imported).unwrap();
+        db.with_connection(|conn| conn.execute("UPDATE native_profiles SET data=?1 WHERE id=?2", [stored.as_str(), imported.id.as_str()]).map_err(|error| error.to_string())).unwrap();
+        let error = apply::apply_registered_validated(&registry, &db, &store, &imported, None, &files, "global", Scope::Global, false).unwrap_err();
+        assert!(error.contains(field), "{field}: {error}");
+        assert_eq!(disk(&files, "models"), before, "{field}");
+    }
+
+    // A model's own cost merges into the native one rate by rate, so it may be partial; overrides
+    // may change only some rates too. Each rate that is set must be a number.
+    let mut partial = documents.clone();
+    let safe = partial.get_mut("models").unwrap()["providers"]["alpha"]["models"].as_array_mut().unwrap()
+        .iter_mut().find(|model| model["id"] == "safe").unwrap();
+    safe["cost"].as_object_mut().unwrap().remove("cacheWrite");
+    assert!(replace_documents(&registry, draft.clone(), partial).issues.is_empty());
+    let mut overrides = documents.clone();
+    overrides.get_mut("models").unwrap()["providers"]["alpha"]["modelOverrides"] = json!({"family/one": {"cost": {"cacheRead": 0.2}}});
+    assert!(replace_documents(&registry, draft.clone(), overrides.clone()).issues.is_empty());
+    overrides.get_mut("models").unwrap()["providers"]["alpha"]["modelOverrides"] = json!({"family/one": {"cost": {"cacheRead": "0.2"}}});
+    assert!(replace_documents(&registry, draft, overrides).issues.iter().any(|issue| issue.field.as_deref() == Some("cost.cacheRead")));
+}

@@ -97,6 +97,76 @@ fn path(kind: &str, provider: &str, id: &str, field: Option<&str>) -> Vec<String
     }
     path
 }
+/// Pi model metadata whose names merely contain words such as "cache" or "token".
+///
+/// Fields of a custom model or model override live at `providers.<p>.models[<i>]` /
+/// `providers.<p>.modelOverrides.<id>` of the `models` role. Left Unknown, the shared migration
+/// scrubber dropped `cost.cacheRead`, `cost.tiers[].inputTokensAbove`, `promptCache` and similar.
+/// Nested arrays (`cost.tiers`, `compat.allowedFallbackModels`) are written whole, so the
+/// receiving device got objects Pi rejects ("must have required properties cacheRead,
+/// cacheWrite"), which disables every model in models.json. Only these documented Pi fields are
+/// classified; other unknown model fields keep the conservative default.
+fn model_metadata_field(path: &[String]) -> bool {
+    /// Pi compatibility flags (pi-ai `compat-schema`) whose names match the scrubber's fragments.
+    const COMPAT: [&str; 8] = [
+        "maxTokensField",
+        "cacheControlFormat",
+        "sessionAffinityFormat",
+        "supportsCacheControlOnTools",
+        "supportsExplicitPromptCacheMode",
+        "supportsMaxOutputTokens",
+        "supportsThinkingTokenBudget",
+        "thinkingTokenBudgetField",
+    ];
+    if path.len() < 6
+        || path[0] != "models"
+        || path[1] != "providers"
+        || !matches!(path[3].as_str(), "models" | "modelOverrides")
+    {
+        return false;
+    }
+    let field = &path[5..];
+    match field[0].as_str() {
+        // Rates and tier thresholds: numbers only.
+        "cost" | "promptCache" => true,
+        "compat" => match field.get(1).map(String::as_str) {
+            Some(flag) if COMPAT.contains(&flag) => true,
+            // `[{ provider, model, cost }]`; only the pricing is affected.
+            Some("allowedFallbackModels") => field.get(3).is_some_and(|key| key == "cost"),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Checks a cost object. `partial` allows missing rates: a model's own `cost` is merged into
+/// the native model field by field, so a profile may carry only the rates it changes. Arrays are
+/// written whole, though, so every cost tier and every fallback model's cost must be complete,
+/// or Pi rejects all of models.json. Returns the first problem as `(field, message)`.
+fn cost_issue(cost: &Value, partial: bool) -> Option<(String, &'static str)> {
+    const RATES: [&str; 4] = ["input", "output", "cacheRead", "cacheWrite"];
+    let Some(map) = cost.as_object() else { return Some(("cost".into(), "费用须为对象")) };
+    for rate in RATES {
+        match map.get(rate) {
+            Some(value) if !value.is_number() => return Some((format!("cost.{rate}"), "费用单价须为数字")),
+            None if !partial => return Some((format!("cost.{rate}"), "Pi 要求费用包含 input、output、cacheRead、cacheWrite")),
+            _ => {}
+        }
+    }
+    if let Some(tiers) = map.get("tiers") {
+        let Some(tiers) = tiers.as_array() else { return Some(("cost.tiers".into(), "费用分档须为数组")) };
+        for (index, tier) in tiers.iter().enumerate() {
+            let Some(tier) = tier.as_object() else { return Some((format!("cost.tiers.{index}"), "费用分档须为对象")) };
+            for field in std::iter::once("inputTokensAbove").chain(RATES) {
+                if !tier.get(field).is_some_and(Value::is_number) {
+                    return Some((format!("cost.tiers.{index}.{field}"), "Pi 要求每个费用分档包含 inputTokensAbove 与四项单价"));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn as_map(mut value: Value) -> Result<Value, String> {
     if let Some(providers) = value.get_mut("providers") {
         let providers = providers.as_object_mut().ok_or("providers 须为对象")?;
@@ -281,6 +351,7 @@ impl ConfigurationAdapter for Pi {
             Some("maxTokens") => PortableFieldKind::Parameter,
             Some("apiKey") => PortableFieldKind::CredentialReference,
             Some("headers" | "oauth") => PortableFieldKind::Credential,
+            _ if model_metadata_field(path) => PortableFieldKind::Parameter,
             _ => PortableFieldKind::Unknown,
         }
     }
@@ -707,6 +778,17 @@ impl ConfigurationAdapter for Pi {
                                         "thinkingLevelMap",
                                         "思考映射须为对象，已知档位的值须为字符串或 null",
                                     ));
+                                }
+                                // Pi rejects the whole models.json for one incomplete cost entry, so
+                                // an incomplete array (e.g. from an older migration export, which
+                                // dropped cache/token fields) must not replace the native one.
+                                let fallbacks = model.pointer("/compat/allowedFallbackModels").and_then(Value::as_array);
+                                if let Some((field, message)) = model.get("cost").and_then(|cost| cost_issue(cost, true))
+                                    .or_else(|| fallbacks.into_iter().flatten().enumerate().find_map(|(index, fallback)| fallback.get("cost")
+                                        .and_then(|cost| cost_issue(cost, false))
+                                        .map(|(field, message)| (format!("compat.allowedFallbackModels.{index}.{field}"), message))))
+                                {
+                                    issues.push(issue(target.clone(), &field, message));
                                 }
                                 if private_headers(model) {
                                     issues.push(issue(

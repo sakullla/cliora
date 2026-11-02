@@ -592,6 +592,39 @@ fn adapter_native_whitelist_keeps_model_settings_but_drops_device_login_and_inli
     assert!(pending.iter().any(|field| field.contains("apiKey")));
 }
 
+/// Pi model pricing contains "cache" and "token" in its field names. Dropping them left cost
+/// tiers and fallback costs incomplete; those arrays are written whole, so the receiving device
+/// wrote a models.json Pi rejects entirely.
+#[test]
+fn pi_model_pricing_and_cache_fields_survive_migration() {
+    let registry = Registry::builtins();
+    let rates = serde_json::json!({"input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25});
+    let models = serde_json::json!({"providers": {"alpha": {
+        "baseUrl": "https://api.example.test",
+        "models": [{
+            "id": "model-a",
+            "cost": {"input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125,
+                "tiers": [{"inputTokensAbove": 100000, "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625}]},
+            "promptCache": {"short": 300, "long": 3600},
+            "compat": {"maxTokensField": "max_tokens", "allowedFallbackModels": [{"provider": "alpha", "model": "model-b", "cost": rates}]},
+            "headers": {"Authorization": "Bearer never-exported"}
+        }],
+        "modelOverrides": {"model-b": {"cost": {"cacheRead": 0.2}}}
+    }}});
+    let (pi, pending) = portable_files(&registry, "pi", &BTreeMap::from([("models".into(), models.to_string())])).unwrap();
+    let exported: serde_json::Value = serde_json::from_str(&pi["models"]).unwrap();
+    let model = &exported["providers"]["alpha"]["models"][0];
+    assert_eq!(model["cost"], models["providers"]["alpha"]["models"][0]["cost"]);
+    assert_eq!(model["promptCache"], serde_json::json!({"short": 300, "long": 3600}));
+    assert_eq!(model["compat"], models["providers"]["alpha"]["models"][0]["compat"]);
+    assert_eq!(exported["providers"]["alpha"]["modelOverrides"]["model-b"]["cost"]["cacheRead"], 0.2);
+    // Model headers remain credentials and stay on this device.
+    assert!(model.get("headers").is_none());
+    assert!(!pi["models"].contains("never-exported"));
+    assert!(pending.iter().any(|field| field.ends_with("headers")), "{pending:?}");
+    assert!(!pending.iter().any(|field| field.contains("cache") || field.contains("Token")), "{pending:?}");
+}
+
 #[test]
 fn absent_preferences_are_new_and_actual_edits_after_preview_are_protected() {
     let temp = tempfile::tempdir().unwrap();
