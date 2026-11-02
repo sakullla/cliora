@@ -84,7 +84,7 @@ const claudeTranscript = [
 const openCodeTranscript = [
   '\u001b[2m  OpenCode \u001b[0m\u001b[2m·\u001b[0m v1.18.34 \u001b[2m·\u001b[0m deepseek-v4.1-flash',
   '',
-  '\u001b[1m› 汇总 api-service 里的接口与鉴权方式\u001b[0m',
+  '\u001b[1m› 汇总 acme-svc-order-gateway 里的接口与鉴权方式\u001b[0m',
   '',
   '\u001b[32m●\u001b[0m 检索 \u001b[1mroutes/*.ts\u001b[0m \u001b[2m·\u001b[0m 12 个路由',
   '\u001b[32m●\u001b[0m 鉴权走 \u001b[1mBearer\u001b[0m + 项目级 scope',
@@ -115,8 +115,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     const sessions = blank ? [] : [
       { id: 's1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: now - 14 * 60 * 1000 },
       { id: 's2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', running: true, exitCode: null, startedAt: now - 3 * 60 * 1000 },
-      { id: 's3', toolId: 'grok', projectId: null, directory: 'C:\\Projects\\playground', mode: 'normal', running: false, exitCode: 0, startedAt: now - 46 * 60 * 1000 },
-      { id: 's4', toolId: 'open_code', projectId: null, directory: 'C:\\Projects\\api-service', mode: 'normal', running: true, exitCode: null, startedAt: now - 52 * 1000 },
+      { id: 's3', toolId: 'grok', projectId: null, directory: 'C:\\Projects\\acme-svc-order-billing', mode: 'normal', running: false, exitCode: 0, startedAt: now - 46 * 60 * 1000 },
+      { id: 's4', toolId: 'open_code', projectId: null, directory: 'C:\\Projects\\acme-svc-order-gateway', mode: 'normal', running: true, exitCode: null, startedAt: now - 52 * 1000 },
     ];
     if (remoteState) {
       localStorage.setItem('cliora:remote-target', 'remote-prod');
@@ -140,8 +140,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       __TAURI_INTERNALS__: {
         transformCallback: (callback) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command, args = {}) => {
-          if (command === 'get_bootstrap' || command === 'set_theme') {
-            return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: command === 'set_theme' ? args.theme : theme, tool_icons: {}, remote_ssh_enabled: true }, tools: [] };
+          if (command === 'get_bootstrap' || command === 'set_theme' || command === 'set_language') {
+            return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: command === 'set_theme' ? args.theme : theme, tool_icons: {}, remote_ssh_enabled: true, language }, tools: [] };
           }
           if (command === 'list_cli_adapters') return {
             registered: Object.keys(names).map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: facet, launch: facet, resume: facet, resources: facet, history: facet })),
@@ -385,10 +385,10 @@ for (const width of widths) {
   }, false, 'connected');
   await shot('workbench-active-' + theme + '-' + width, theme, width);
   await shot('workbench-worktrees-' + theme + '-' + width, theme, width, async (page) => {
-    // One git chip in the status line; its menu lists the repository's checkouts.
+    // One git chip in the status line; its menu opens a new session in another checkout.
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
-    await stage.getByRole('button', { name: new RegExp(copy('切换工作树', 'Switch worktree')) }).click();
-    await page.getByRole('menu', { name: copy('切换工作树', 'Switch worktree') }).waitFor();
+    await stage.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
+    await page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') }).waitFor();
   });
   await shot('workbench-activity-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__output('s1', 'live output contrast\r\n'));
@@ -457,6 +457,14 @@ for (const width of widths) {
     await page.evaluate(() => window.__output('s1', 'live compact output\r\n'));
     await page.locator('[data-activity-slot="rail"][data-activity-icon="live"]').waitFor();
     await page.evaluate(() => window.__bell());
+  });
+  // macOS overlay title bar: the folded sidebar sits under the traffic lights (drawn natively, so
+  // only the band and the column width show here) and stays as narrow as on other platforms.
+  if (width >= 1360) await shot('workbench-slim-macos-' + theme + '-' + width, theme, width, async (page) => {
+    await page.evaluate(() => { document.documentElement.dataset.native = 'macos'; });
+    await page.getByRole('button', { name: copy('折叠侧栏', 'Collapse sidebar'), exact: true }).click();
+    await page.evaluate(() => window.__output('s1', 'live compact output\r\n'));
+    await page.locator('[data-activity-slot="rail"][data-activity-icon="live"]').waitFor();
   });
   await shot('workbench-shortcuts-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('键盘快捷键', 'Keyboard shortcuts') }).click();

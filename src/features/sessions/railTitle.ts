@@ -54,6 +54,56 @@ export function railTaskTitle(raw: string, toolName: string, places: string[]): 
   return lower === toolName.trim().toLowerCase() ? '' : title;
 }
 
+/** A folder label split for middle truncation: `head` may shrink to an ellipsis, `tail` stays readable. */
+export type PlaceParts = { head: string; tail: string };
+
+/** Shortest head worth folding; below this a split only adds an ellipsis. */
+const MIN_HEAD = 4;
+/** Labels at least this long fold their head even when no sibling shares it. */
+const LONG_LABEL = 16;
+/** A lone long label keeps at least this much of its end visible. */
+const MIN_TAIL = 8;
+
+/** Segments that keep their trailing separator, so joining them restores the label. */
+function segments(label: string): string[] {
+  return label.match(/[^-_.\s/\\]+[-_.\s/\\]*|[-_.\s/\\]+/g) ?? [label];
+}
+
+/**
+ * Split each folder label where it starts to differ from its siblings.
+ *
+ * Team checkouts usually share a long prefix (`acme-svc-orders`, `acme-svc-billing`), and end
+ * truncation cuts exactly the part that tells them apart. Like VS Code's path shortening and
+ * Finder's middle truncation, the shared, segment-aligned prefix becomes the foldable head and
+ * the distinguishing rest stays visible. A long label with no sibling still folds its head so
+ * the last segment survives a narrow rail. Identical labels name the same folder and split alike.
+ */
+export function placeParts(labels: string[]): Map<string, PlaceParts> {
+  const unique = [...new Set(labels.filter(Boolean))];
+  const result = new Map<string, PlaceParts>();
+  for (const label of unique) {
+    const parts = segments(label);
+    const lower = label.toLowerCase();
+    const others = unique.map((other) => other.toLowerCase()).filter((other) => other !== lower);
+    let shared = 0;
+    let prefix = '';
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      const next = (prefix + parts[index]).toLowerCase();
+      if (!others.some((other) => other.startsWith(next))) break;
+      prefix += parts[index];
+      shared = index + 1;
+    }
+    // No shared prefix: a long label keeps its last segments, at least MIN_TAIL characters.
+    if (!shared && label.length >= LONG_LABEL && parts.length > 1) {
+      shared = parts.length - 1;
+      while (shared > 1 && parts.slice(shared).join('').length < MIN_TAIL) shared -= 1;
+    }
+    const head = parts.slice(0, shared).join('');
+    result.set(label, head.length >= MIN_HEAD ? { head, tail: parts.slice(shared).join('') } : { head: '', tail: label });
+  }
+  return result;
+}
+
 /** Short folder label for the rail: the project name, or the directory's last segment. */
 export function railPlace(projectName: string | undefined, directory: string | null | undefined): string {
   if (projectName) return projectName;

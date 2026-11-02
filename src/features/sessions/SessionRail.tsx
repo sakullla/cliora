@@ -6,6 +6,7 @@ import { ToolIcon } from '../../components/ToolIcon';
 import { modLabel } from '../../lib/shortcut';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import { SessionTitle, stableTitle } from './SessionTitle';
+import { placeParts, type PlaceParts } from './railTitle';
 import type { WorkbenchSession } from '../../types/launch';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import styles from './SessionWorkbench.module.css';
@@ -29,6 +30,12 @@ export type RailSession = {
 
 /** The search field only earns its room once the list is long enough to scan. */
 export const RAIL_SEARCH_MIN = 4;
+
+/** A folder label that folds its shared head first, so sibling checkouts stay distinguishable. */
+function PlaceLabel({ text, parts }: { text: string; parts?: PlaceParts }) {
+  if (!parts?.head) return <span className={styles.placeTail}>{text}</span>;
+  return <><span className={styles.placeHead}>{parts.head}</span><span className={styles.placeTail}>{parts.tail}</span></>;
+}
 
 /** True when a double-click landed on a session's tool icon (the rail toggle target). */
 function onIcon(event: MouseEvent<HTMLElement>): boolean {
@@ -65,6 +72,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const toggleLabel = compact ? t('sessions.railExpand') : t('sessions.railCollapse');
   const toggleTitle = `${toggleLabel} (${modLabel}+Shift+B) · ${t('sessions.railToggleHint')}`;
 
+  const places = placeParts(sessions.map((item) => item.place));
   const activityLabel = (item: RailSession) => {
     if (!item.session.running && remoteSessionMayExist(item.session)) return t('sessions.activityUnknown');
     if (item.attention) return t('sessions.bellBadge');
@@ -108,8 +116,11 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const selected = session.id === selectedId;
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
-    const tooltip = [stableTitle(item.title), item.place, item.name, item.directory, activityLabel(item)].filter(Boolean).join('\n');
-    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined} data-yolo={yolo || undefined}>
+    // YOLO stays discoverable in the tooltip and for assistive tech; the row itself spends its room on state.
+    const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, activityLabel(item)].filter(Boolean).join('\n');
+    const pending = !session.running && remoteSessionMayExist(session);
+    const state = pending ? t('sessions.sshNeedsCheck') : activityLabel(item);
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
         onClick={() => onSelect(session.id)}
         onDoubleClick={(event) => { if (!narrow && onIcon(event)) { event.preventDefault(); onToggleSlim(); } }}
@@ -132,19 +143,21 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <span className={styles.sessionBody}>
           <span className={styles.sessionTop}>
             {item.pinned && <span className={styles.pinBadge} title={t('sessions.unpinSession')}><Icon name="pin" size={12} /></span>}
-            <strong>{item.title ? <SessionTitle title={item.title} /> : item.place}</strong>
+            <strong className={item.title ? undefined : styles.placeLine}>{item.title ? <SessionTitle title={item.title} /> : <PlaceLabel text={item.place} parts={places.get(item.place)} />}</strong>
             {item.unread && <span className={styles.unreadDot} title={t('sessions.unread')} aria-label={t('sessions.unread')} />}
           </span>
           <span className={styles.sessionSub}>
-            <span className={styles.sessionPlace}>{item.title ? item.place : item.name}</span>
-            {yolo && <span className={styles.yoloTag}>{t('sessions.modeYolo')}</span>}
+            <span className={styles.sessionPlace}>{item.title ? <PlaceLabel text={item.place} parts={places.get(item.place)} /> : <span className={styles.placeTail}>{item.name}</span>}</span>
             {item.pane != null && <span className={styles.paneTag} title={t('sessions.splitView')}><Icon name="columns" size={11} />{item.pane + 1}</span>}
-            {item.attention && <span className={styles.attentionTag}>{t('sessions.bellBadge')}</span>}
             {failed && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
           </span>
           <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', activityLabel(item)].filter(Boolean).join(' · ')}</span>
         </span>
-        <span className={styles.sessionTime} data-tone={item.tone}>{session.running ? (item.elapsed || t('sessions.running')) : remoteSessionMayExist(session) ? t('sessions.sshNeedsCheck') : t('sessions.ended')}</span>
+        {/* State first: what the session is doing now, then how long it has been running. */}
+        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} aria-hidden="true">
+          <span className={styles.sessionState}>{state}</span>
+          {session.running && item.elapsed && <span className={styles.sessionTime}>{item.elapsed}</span>}
+        </span>
       </button>
       <div className={styles.rowActions}>
         <IconButton size="sm" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {

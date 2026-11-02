@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isShellWindowTitle, railPlace, railTaskTitle, splitActivityGlyph, stripPlaceSuffix } from '../../src/features/sessions/railTitle.ts';
+import { isShellWindowTitle, placeParts, railPlace, railTaskTitle, splitActivityGlyph, stripPlaceSuffix } from '../../src/features/sessions/railTitle.ts';
 
 test('shell window titles and paths are not task titles', () => {
   for (const title of ['Windows PowerShell', '管理员: Windows PowerShell', 'pwsh', 'PowerShell 7.5', 'cmd.exe', '命令提示符', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', '~/project', '/usr/bin/bash']) {
@@ -50,4 +50,24 @@ test('the animated status glyph is split from the stable task text', () => {
   for (const title of ['#123 fix login', 'Fix the login flow', '优化启动速度', '(draft) notes', '⠀⠁']) {
     assert.deepEqual(splitActivityGlyph(title), { glyph: '', text: title }, title);
   }
+});
+
+test('sibling folders with a shared prefix keep their distinguishing tail visible', () => {
+  const parts = placeParts(['acme-svc-orders', 'acme-svc-billing', 'notes', 'acme-svc-orders']);
+  assert.deepEqual(parts.get('acme-svc-orders'), { head: 'acme-svc-', tail: 'orders' });
+  assert.deepEqual(parts.get('acme-svc-billing'), { head: 'acme-svc-', tail: 'billing' });
+  assert.deepEqual(parts.get('notes'), { head: '', tail: 'notes' });
+  // Matching ignores case, and a label that is itself a sibling's prefix stays whole.
+  assert.deepEqual(placeParts(['Acme-Svc-Orders', 'acme-svc-billing']).get('Acme-Svc-Orders'), { head: 'Acme-Svc-', tail: 'Orders' });
+  assert.deepEqual(placeParts(['app', 'app-web']).get('app'), { head: '', tail: 'app' });
+  assert.deepEqual(placeParts(['app', 'app-web']).get('app-web'), { head: '', tail: 'app-web' });
+});
+
+test('a long lone folder name folds its head and keeps a readable end', () => {
+  assert.deepEqual(placeParts(['warehouse-inventory-sync']).get('warehouse-inventory-sync'), { head: 'warehouse-', tail: 'inventory-sync' });
+  assert.deepEqual(placeParts(['example_payment_gateway']).get('example_payment_gateway'), { head: 'example_', tail: 'payment_gateway' });
+  // Short heads are not worth an ellipsis; short or unsplittable labels stay whole.
+  assert.deepEqual(placeParts(['ab-cd', 'ab-ef']).get('ab-cd'), { head: '', tail: 'ab-cd' });
+  assert.deepEqual(placeParts(['栖点 · 桌面工具']).get('栖点 · 桌面工具'), { head: '', tail: '栖点 · 桌面工具' });
+  assert.deepEqual(placeParts(['averyveryverylongfoldername']).get('averyveryverylongfoldername'), { head: '', tail: 'averyveryverylongfoldername' });
 });

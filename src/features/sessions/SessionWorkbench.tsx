@@ -284,11 +284,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [split, setSplit] = useState<[string, string] | null>(null);
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
   const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
-  // Worktrees are anchored to each project's stable repository path, not a live
-  // session cwd, so the switcher list stays steady while the agent moves around.
+  // Checkouts of each session's repository, keyed by the folder they were read from.
   const [gitWorktrees, setGitWorktrees] = useState<Map<string, WorkbenchWorktree[]>>(() => new Map());
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
-  const [switchingWorktree, setSwitchingWorktree] = useState(false);
+  const [gitReadSeq, setGitReadSeq] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [findCase, setFindCase] = useState(false);
   const terminalMode: TerminalTheme = themePreference === 'auto' ? appTheme : themePreference;
@@ -531,9 +530,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     [terminalTools, effectiveLaunchToolId],
   );
   const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
-  // Git branch is a quiet, best-effort hint for local sessions. Agents switch branches
-  // and create worktrees mid-session, so the visible session re-reads it now and then.
+  // Git branch and the repository's worktrees are a quiet, best-effort hint for local sessions.
+  // Agents switch branches and add worktrees mid-session, so both are re-read together on the
+  // same cadence (and when the window regains focus or the menu opens); reading the worktree
+  // list only once left a worktree created during the session invisible to the switcher.
+  // The list is read from where the session sits, falling back to its project's folder, so a
+  // session started outside a saved project still sees its repository's checkouts.
   const gitTarget = active && selected && !selected.projectId?.startsWith('remote:') ? selected.id : null;
+  const worktreeAnchor = gitTarget && selected
+    ? selected.directory || projects.find((item) => item.id === selected.projectId)?.path || null
+    : null;
   useEffect(() => {
     if (!nativeAvailable || !gitTarget) return;
     let alive = true;
@@ -549,32 +555,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           return map;
         });
       }).catch(() => {});
+      if (!worktreeAnchor) return;
+      void native.gitWorktrees(worktreeAnchor).then((list) => {
+        if (!alive) return;
+        const next = Array.isArray(list) ? list : [];
+        setGitWorktrees((current) => {
+          if (current.has(worktreeAnchor) && JSON.stringify(current.get(worktreeAnchor)) === JSON.stringify(next)) return current;
+          const map = new Map(current);
+          map.set(worktreeAnchor, next);
+          return map;
+        });
+      }).catch(() => {});
     };
     read();
     const timer = window.setInterval(read, 15_000);
     window.addEventListener('focus', read);
     return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
-  }, [gitTarget, selected?.directory]);
-  // The worktree switcher is anchored to the project's stable repository path, so
-  // it does not re-read or depend on where the live session shell currently sits.
-  const worktreeAnchor = active && selected && !selected.projectId?.startsWith('remote:')
-    ? projects.find((item) => item.id === selected.projectId)?.path ?? null
-    : null;
-  useEffect(() => {
-    if (!nativeAvailable || !worktreeAnchor) { return; }
-    let alive = true;
-    void native.gitWorktrees(worktreeAnchor).then((list) => {
-      if (!alive) return;
-      const next = Array.isArray(list) ? list : [];
-      setGitWorktrees((current) => {
-        if (current.has(worktreeAnchor) && JSON.stringify(current.get(worktreeAnchor)) === JSON.stringify(next)) return current;
-        const map = new Map(current);
-        map.set(worktreeAnchor, next);
-        return map;
-      });
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [worktreeAnchor, nativeAvailable]);
+  }, [gitTarget, worktreeAnchor, nativeAvailable, gitReadSeq]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
   // The dialog launches on the selected run location, so its prompts come from that host.
   const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
@@ -1374,30 +1371,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
   }
 
-  async function switchWorktree(session: WorkbenchSession, worktree: WorkbenchWorktree) {
+  /**
+   * Open the same CLI in another checkout. A running CLI cannot be moved: the session runs the
+   * CLI itself, not a shell, so typing `cd` would only send the agent a prompt and its own
+   * working directory would stay put. A new session in the chosen worktree is the honest move.
+   */
+  async function openInWorktree(session: WorkbenchSession, worktree: WorkbenchWorktree) {
     setWorktreeMenuOpen(false);
     if (worktree.current || !worktree.path) return;
-    // Running sessions move by a shell `cd`; integration (OSC 7) then reports the
-    // new directory, which refreshes the branch/worktree hint. A quoted, newline-
-    // terminated path keeps spaces and avoids injecting extra commands.
-    if (session.running) {
-      setSwitchingWorktree(true);
-      try {
-        const quoted = worktree.path.replace(/"/g, '\\"');
-        await sendToSession(session, `cd "${quoted}"\r`);
-      } finally {
-        setSwitchingWorktree(false);
-      }
-      return;
-    }
-    // An ended session has no shell to move; record the directory directly so a
-    // relaunch starts in the chosen worktree.
-    setSwitchingWorktree(true);
-    try {
-      bridge.current.directory(session.id, worktree.path);
-    } finally {
-      setSwitchingWorktree(false);
-    }
+    await restartOrCloneSession({ ...session, directory: worktree.path }, false);
   }
 
   async function submitComposer() {
@@ -1810,10 +1792,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const remoteProject = remote ? remoteProjects.find((project) => `remote:${project.id}` === current?.projectId) : undefined;
           const remoteHost = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined;
           const hostLabel = remote ? remoteHost?.name ?? 'SSH' : t('common.host.local');
-          // Offer a switcher only when the repository actually has more than one checkout.
-          const worktreeAnchorPath = current && !remote ? projects.find((item) => item.id === current.projectId)?.path ?? null : null;
-          const worktrees = worktreeAnchorPath ? gitWorktrees.get(worktreeAnchorPath) ?? [] : [];
+          // Offer the worktree menu only when the repository actually has more than one checkout.
+          const worktrees = current?.id === gitTarget && worktreeAnchor ? gitWorktrees.get(worktreeAnchor) ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
+          const gitChipTitle = [gitTitle, t('sessions.gitScopeHint')].filter(Boolean).join('\n');
           return <div className={styles.window} hidden={!current} data-split={split ? 'true' : undefined} data-tone={tone}>
             {current && <header className={styles.stageBar} onDoubleClick={(event) => {
               // Double-clicking the bare title bar toggles focus mode, like maximizing a window.
@@ -1827,7 +1809,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(current)}</span>}
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(current)}</span></button>
-                    {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}><Icon name="sparkle" size={11} />{modeLabel(current.mode)}</span>}
+                    {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
                     {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={12} />{elapsed}</span>}
                     {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>
@@ -1912,18 +1894,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
-                    and a caret only when there are other checkouts to switch to. */}
-                {(gitLabel || canSwitchWorktree) && (canSwitchWorktree && current ? <span className={styles.worktreeSwitch}>
-                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.switchWorktree')].filter(Boolean).join(' · ')} title={[gitTitle, t('sessions.switchWorktree')].filter(Boolean).join(' · ')} disabled={switchingWorktree} onClick={() => setWorktreeMenuOpen((value) => !value)}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
-                  {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.switchWorktree')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
-                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.switchWorktree')}</span><em>{worktrees.length}</em></div>
-                    {worktrees.map((tree) => <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} disabled={tree.current || switchingWorktree} title={tree.path} onClick={() => void switchWorktree(current, tree)}>
+                    and a caret only when there are other checkouts to open a session in. */}
+                {(gitLabel || canSwitchWorktree) && (canSwitchWorktree && current ? <span className={styles.worktreeSwitch} onKeyDown={(event) => { if (event.key === 'Escape' && worktreeMenuOpen) { event.stopPropagation(); setWorktreeMenuOpen(false); } }}>
+                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
+                  {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.worktreeMenu')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
+                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeMenu')}</span><em>{worktrees.length}</em></div>
+                    {worktrees.map((tree) => <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
                       <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} />
                       <span className={styles.worktreeName}>{tree.name}</span>
                       {tree.branch && <span className={styles.worktreeBranch}>{tree.branch}</span>}
+                      {!tree.current && <Icon name="plus" size={12} className={styles.worktreeOpen} />}
                     </button>)}
                   </div>}
-                </span> : <span className={styles.gitChip} title={gitTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
+                </span> : <span className={styles.gitChip} title={gitChipTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
                 {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
                 <span ref={linkHintHostRef} className={`${styles.statusSpacer} ${styles.statusLinkHost}`} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}

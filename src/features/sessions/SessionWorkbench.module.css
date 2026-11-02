@@ -493,28 +493,30 @@
 .sessionSub { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 /* One line per fact: the title truncates and the full text lives in the tooltip. */
 .sessionTop strong { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-/* Time and the hover actions share one right-hand slot, centered on the row like the icon. */
-.sessionTime { align-self: center; min-width: 28px; color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-.sessionTime[data-tone='bell'] { color: var(--warning); font-weight: var(--fw-semibold); }
-.row:hover .sessionTime,
-.row:focus-within .sessionTime,
-.row[data-selected] .sessionTime { visibility: hidden; }
-.yoloBadge { position: absolute; top: -4px; left: -4px; display: grid; place-items: center; width: 10px; height: 10px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--warning); color: var(--surface); box-sizing: content-box; }
-.yoloBadge > :global(svg) { width: 7px; height: 7px; }
-.session[aria-selected='true'] .yoloBadge { border-color: var(--wb-row-selected); }
-.rail[data-slim] .yoloBadge { top: -2px; left: -2px; }
-.yoloTag { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--warning) 13%, transparent); color: var(--warning); font-size: 10px; font-weight: var(--fw-semibold); letter-spacing: .02em; line-height: 16px; }
+/* State and run time share one right-hand slot with the hover actions: what the session is
+   doing now on top, how long it has run below. Only a state that asks for you takes color. */
+.sessionMeta { display: grid; justify-items: end; align-self: center; gap: 1px; min-width: 28px; color: var(--text-3); font-size: var(--fs-micro); line-height: 1.4; text-align: right; white-space: nowrap; }
+.sessionState { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--fw-medium); }
+.sessionTime { font-variant-numeric: tabular-nums; opacity: .85; }
+.sessionMeta[data-tone='live'] .sessionState { color: var(--success); }
+.sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: wbBlink 1.2s ease-in-out infinite; }
+.sessionMeta[data-tone='bell'] .sessionState { padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); font-weight: var(--fw-semibold); }
+.sessionMeta[data-tone='error'] .sessionState { color: var(--danger); }
+.sessionMeta[data-tone='pending'] .sessionState { color: var(--warning); }
+.row:hover .sessionMeta,
+.row:focus-within .sessionMeta,
+.row[data-selected] .sessionMeta { visibility: hidden; }
 .slimNotice { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--accent); box-sizing: content-box; }
 .slimNotice[data-attention] { background: var(--warning); animation: wbPulse 1.8s var(--ease) infinite; }
 .unreadDot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
-.sessionPlace { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.modeTag,
+.sessionPlace { display: flex; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; white-space: nowrap; }
+/* Middle truncation: the shared head folds to an ellipsis long before the distinguishing tail. */
+.sessionTop strong.placeLine { display: flex; text-overflow: clip; }
+.placeHead { flex: 0 1000 auto; min-width: 1.6em; overflow: hidden; text-overflow: ellipsis; }
+.placeTail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .exitTag,
-.attentionTag,
 .paneTag { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); padding: 0 var(--space-1); border-radius: var(--radius-xs); font-size: var(--fs-micro); line-height: 17px; white-space: nowrap; }
-.modeTag[data-mode='yolo'] { padding: 0; background: transparent; color: var(--warning); }
 .exitTag { background: var(--danger-soft); color: var(--danger); font-variant-numeric: tabular-nums; }
-.attentionTag { background: var(--warning-soft); color: var(--warning); font-weight: var(--fw-semibold); }
 .paneTag { background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
 .pinBadge { display: inline-flex; flex: none; color: var(--accent); }
 .rowActions { position: absolute; top: 50%; right: 6px; display: flex; align-items: center; gap: 1px; opacity: 0; transform: translateY(-50%); transition: opacity var(--fast) var(--ease); pointer-events: none; }
@@ -559,7 +561,8 @@
 .rail[data-slim] .groupLabel { width: 20px; min-height: 0; height: 1px; margin: var(--space-2) 0; padding: 0; overflow: hidden; background: var(--wb-divider); color: transparent; }
 .rail[data-slim] .sessionGroup:first-child .groupLabel { display: none; }
 /* Each session is one tile: the tool mark, a state badge bottom-right, an unread/bell dot
-   top-right. YOLO is an amber ring around the tile instead of a third badge. */
+   top-right. The tile's ring carries the state: a soft breathing ring while output streams,
+   a steady amber ring when the session waits for you. */
 .rail[data-slim] .row { width: 44px; }
 .rail[data-slim] .session { display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px; padding: 0 !important; border-radius: var(--radius-lg); }
 .rail[data-slim] .session[aria-selected='true'],
@@ -568,8 +571,9 @@
 .rail[data-slim] .sessionIconWrap { width: 38px; height: 38px; border-radius: var(--radius-lg); background: transparent; box-shadow: none; }
 .rail[data-slim] .session:hover:not(:disabled) .sessionIconWrap { background: var(--wb-row-hover); transform: none; }
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-sm); }
-.rail[data-slim] .row[data-yolo] .sessionIconWrap { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warning) 70%, transparent); }
-.rail[data-slim] .row[data-yolo] .session[aria-selected='true'] .sessionIconWrap { box-shadow: inset 0 0 0 1.5px var(--warning), var(--shadow-sm); }
+.rail[data-slim] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 55%, transparent); animation: wbTileBreathe 2.4s var(--ease) infinite; }
+.rail[data-slim] .session[aria-selected='true'] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 70%, transparent), var(--shadow-sm); }
+.rail[data-slim] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1.5px var(--warning); }
 .rail[data-slim] .row[data-attention] .session:not([aria-selected='true']) { background: transparent; box-shadow: none; }
 .rail[data-slim] .row[data-attention] .sessionIconWrap { background: color-mix(in srgb, var(--warning-soft) 80%, transparent); }
 .rail[data-slim] .row[data-on-screen] .session:not([aria-selected='true']) { box-shadow: none; }
@@ -578,11 +582,13 @@
 .rail[data-slim] .session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-rail-bg); background: var(--wb-rail-bg); }
 .rail[data-slim] .slimNotice { top: 1px; right: 1px; }
 .rail[data-slim] .sessionBody,
-.rail[data-slim] .sessionTime,
+.rail[data-slim] .sessionMeta,
 .rail[data-slim] .rowActions { display: none; }
 .rail[data-slim] .railFoot { justify-content: center; padding: var(--space-1); }
 
 @keyframes wbBreathe { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 6%, transparent); } }
+@keyframes wbTileBreathe { 50% { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 25%, transparent), 0 0 0 4px color-mix(in srgb, var(--success) 9%, transparent); } }
+@keyframes wbBlink { 50% { opacity: .35; } }
 
 /* Stage chrome ------------------------------------------------------- */
 .stageBar,
@@ -754,7 +760,8 @@
 .pathChip > :global(svg) { flex: none; }
 .pathChip:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 .modeChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); color: var(--term-text-3); white-space: nowrap; }
-.modeChip[data-mode='yolo'] { height: 20px; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--term-warning) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-warning) 24%, transparent); color: var(--term-warning); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .02em; }
+/* YOLO is a fact about how the session was launched, not a state: it reads like the other meta. */
+.modeChip[data-mode='yolo'] { font-size: var(--fs-micro); font-weight: var(--fw-medium); letter-spacing: .04em; }
 .sessionElapsed { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); color: var(--term-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .exitCode { flex: none; color: var(--term-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .exitCode[data-failed] { color: var(--term-danger); }
@@ -1229,7 +1236,12 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .worktreeItem:disabled:not([data-current]) { opacity: 0.55; cursor: default; }
 .worktreeItem > :global(svg) { flex: none; }
 .worktreeName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.worktreeBranch { flex: none; margin-left: auto; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-3); font-size: 10px; font-family: var(--font-mono); }
+.worktreeBranch { flex: 0 1 auto; min-width: 0; max-width: 60%; margin-left: auto; overflow: hidden; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-3); font-size: 10px; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+/* Other checkouts open a new session; the plus appears with the hover so the list stays calm. */
+.worktreeOpen { margin-left: auto; color: var(--term-accent); opacity: 0; transition: opacity var(--fast) var(--ease); }
+.worktreeBranch + .worktreeOpen { margin-left: 0; }
+.worktreeItem:hover .worktreeOpen,
+.worktreeItem:focus-visible .worktreeOpen { opacity: 1; }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
 .statusBar .statusButton[data-size] { flex: none; min-height: 0; height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-sm); color: var(--term-text-3); font-size: var(--fs-micro); }
 .statusBar .statusButton[data-variant]:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
@@ -1543,6 +1555,8 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .endedBar,
   .railAttention,
   .liveDot[data-live],
+  .sessionIconWrap,
+  .sessionMeta .sessionState::before,
   .slimNotice,
   .emptyGlyph,
   .window[data-tone='live'] .stageBar::after,
@@ -1578,7 +1592,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .rail[data-strip] .sessionIconWrap { width: 28px; height: 28px; border-radius: var(--radius-sm); }
 .rail[data-strip] .sessionTop strong { font-size: var(--fs-caption); }
 .rail[data-strip] .sessionSub { min-height: 17px; }
-.rail[data-strip] .sessionTime { display: none; }
+.rail[data-strip] .sessionMeta { display: none; }
 .rail[data-strip] .session[aria-selected='true']::before { top: auto; right: 12px; bottom: -1px; left: 12px; width: auto; height: 2px; border-radius: var(--radius-pill); }
 .rail[data-strip] .rowActions { display: none; }
 .root[data-narrow] .toolButton[data-tool='split'] { display: none; }

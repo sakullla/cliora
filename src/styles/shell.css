@@ -314,8 +314,10 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-sidebar-collapsed="true"] .theme-switch { display: none; }
   .shell[data-sidebar-collapsed="true"] .theme-cycle { display: grid; }
   .shell[data-sidebar-collapsed="true"] .sidebar-status { justify-content: center; padding: var(--space-1) 0; }
-  /* Wide enough that the sidebar edge never cuts through the traffic lights. */
-  html[data-native="macos"] .shell[data-sidebar-collapsed="true"] { grid-template-columns: 88px minmax(0, 1fr); }
+  /* The traffic lights sit in the 28px title band, above the canvas, so the folded sidebar
+     does not have to be as wide as the three buttons. A few extra pixels keep the icon column
+     visually under the buttons without wasting room beside the terminal. */
+  html[data-native="macos"] .shell[data-sidebar-collapsed="true"] { grid-template-columns: 64px minmax(0, 1fr); }
 }
 .shell[data-sidebar-collapsed="true"] .brand-name,
 .shell[data-sidebar-collapsed="true"] .nav-text,
@@ -330,7 +332,7 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 @media (min-width: 761px) {
   .shell[data-context="workbench"] { grid-template-columns: minmax(232px, var(--rail-w, 272px)) minmax(0, 1fr); }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] { grid-template-columns: 60px minmax(0, 1fr); }
-  html[data-native="macos"] .shell[data-context="workbench"][data-sidebar-collapsed="true"] { grid-template-columns: 88px minmax(0, 1fr); }
+  html[data-native="macos"] .shell[data-context="workbench"][data-sidebar-collapsed="true"] { grid-template-columns: 64px minmax(0, 1fr); }
   .shell[data-context="workbench"] .sidebar { padding-bottom: var(--space-2_5); }
   .shell[data-context="workbench"] .nav { flex: none; }
   .shell[data-context="workbench"] .nav-group[data-group="settingsGroup"] { margin-top: 0; padding-top: 0; }
