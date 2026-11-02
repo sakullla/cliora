@@ -258,6 +258,8 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   }, [saved]);
   function chooseTheme(next: Theme) {
     if (next === theme) return;
+    // Browser preview has no native store; it may switch the view, never claim a write.
+    if (!nativeAvailable) { setSaved(null); onThemeChange(next); return; }
     pendingSave.current = { kind: 'theme', value: next, target: 'settings-interface', text: t('settings.saved.theme') };
     setSaved(null);
     onThemeChange(next);
@@ -310,8 +312,8 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       <TerminalSettings />
       <RemoteSshSettings enabled={remoteSshEnabled} busy={busy} onChange={onRemoteSshChange} showHosts={false} onOpenHosts={onOpenHosts} />
     </section>}
-    <section className={styles.cluster} aria-label={t('settings.sections.other')}>
-      <p className={styles.clusterTitle}>{t('settings.sections.other')}</p>
+    <section className={styles.cluster} aria-label={t('settings.clusters.other')}>
+      <p className={styles.clusterTitle}>{t('settings.clusters.other')}</p>
       <p className={styles.clusterHint}>{t('settings.clusters.otherHint')}</p>
       <section className="settings-group" id="settings-other">
         <div className="setting-intro"><h2>{t('settings.sections.other')}</h2></div>

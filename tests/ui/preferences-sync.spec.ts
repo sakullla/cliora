@@ -45,6 +45,15 @@ test('a delayed sync refresh cannot undo a newer theme choice', async ({ page })
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
+// R7: browser preview can switch the view but cannot claim a persisted setting.
+test('browser preview changes the theme without claiming it was saved', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByText('主题已保存。')).toHaveCount(0);
+});
+
 // R7: the General tab groups everyday choices by task, each ordinary write says whether it
 // landed, and the dangerous quit action asks first. Anything unconfirmed stays silent.
 test('settings group preferences by task, confirm each save, and confirm the quit action', async ({ page }) => {
@@ -85,7 +94,7 @@ test('settings group preferences by task, confirm each save, and confirm the qui
   await expect(page.getByRole('region', { name: '工具', exact: true })).toBeVisible();
   await expect(preferences.getByRole('radiogroup', { name: '主题' })).toBeVisible();
   await expect(page.getByRole('region', { name: '终端与远程', exact: true }).getByRole('combobox', { name: '启动终端', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: '其它', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '更多', exact: true }).locator('#settings-other')).toBeVisible();
 
   // A theme write is announced only once the stored preference comes back.
   await preferences.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色', exact: true }).click();
