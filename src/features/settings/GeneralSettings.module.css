@@ -1,12 +1,12 @@
 /* General settings: clustered groups, the anchors beside them, the update card. */
 .general { display: block; min-width: 0; }
-.sections { display: grid; gap: var(--space-6); min-width: 0; }
+.sections { display: grid; gap: var(--space-8); min-width: 0; }
 .anchors { display: none; }
 
 /* A cluster names one task area and holds the cards that belong to it. */
-.cluster { display: grid; gap: var(--space-2); min-width: 0; }
-.clusterTitle { margin: 0; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); letter-spacing: .01em; }
-.clusterHint { margin: calc(var(--space-1) * -1) 0 var(--space-2); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
+.cluster { display: grid; gap: var(--space-2_5); min-width: 0; }
+.clusterTitle { margin: 0; color: var(--text); font-size: var(--fs-heading); font-weight: var(--fw-bold); letter-spacing: -.01em; }
+.clusterHint { margin: calc(var(--space-2) * -1) 0 var(--space-1); color: var(--text-3); font-size: var(--fs-control); line-height: 1.5; }
 .cluster > .settings-group { margin-bottom: 0; }
 
 /* "Saved" only appears after the preference handed back matches what was requested. */
@@ -26,19 +26,20 @@
 }
 
 @media (min-width: 900px) {
-  .general { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
-  .anchors { position: sticky; top: 0; display: grid; gap: var(--space-0_5); padding-top: var(--space-1); }
+  .general { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: var(--space-8); align-items: start; }
+  /* The section index floats as a glass card beside the settings. */
+  .anchors { position: sticky; top: 0; display: grid; gap: var(--space-0_5); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface-glass); box-shadow: var(--shadow-card); backdrop-filter: blur(16px); }
 }
-.anchorsTitle { margin: 0 0 var(--space-1_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.anchorsTitle { margin: var(--space-1) 0 var(--space-1); padding: 0 var(--space-2_5); color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-bold); }
 .anchors ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
-.anchorsGroup { margin: var(--space-2) 0 var(--space-0_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .06em; text-transform: uppercase; }
-.anchorsGroup:first-child { margin-top: 0; }
+.anchorsGroup { margin: var(--space-3) 0 var(--space-0_5); padding: 0 var(--space-2_5); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .06em; text-transform: uppercase; }
+.anchorsGroup:first-child { margin-top: var(--space-1); }
 .anchors a {
   display: block;
   min-height: var(--row-h-compact);
   padding: var(--space-1_5) var(--space-2_5);
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   color: var(--text-2);
   font-size: var(--fs-control);
   font-weight: var(--fw-medium);
@@ -48,12 +49,12 @@
   white-space: nowrap;
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.anchors a:hover { background: var(--surface-3); color: var(--text); }
-.anchors a[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
+.anchors a:hover { background: var(--row-hover); color: var(--text); text-decoration: none; }
+.anchors a[aria-current="true"] { background: var(--surface); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--accent-line); }
 
 /* ---------- App update card ---------- */
 .update { display: flex; align-items: center; gap: var(--space-4); min-width: 0; padding: var(--space-4) var(--space-5); }
-.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--accent-line); border-radius: var(--radius-xl); background: radial-gradient(circle at 30% 20%, var(--surface), var(--accent-soft)); box-shadow: var(--glow-accent); }
 .updateMark > img { width: 32px; height: 32px; object-fit: contain; }
 .updateBadge { position: absolute; right: -5px; bottom: -5px; display: grid; place-items: center; width: 20px; height: 20px; border: 2px solid var(--surface); border-radius: 50%; background: var(--accent); color: var(--on-accent); animation: reveal var(--medium) var(--ease); }
 .update[data-tone='error'] .updateBadge { background: var(--danger); color: var(--on-danger); }

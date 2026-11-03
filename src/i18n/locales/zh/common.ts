@@ -239,6 +239,7 @@ export default {
     workspace: '工作区',
     tools: '工具',
     recordsGroup: '记录',
+    manage: '管理',
     settingsGroup: '设置',
     itemTitle: '{{label}}（{{shortcut}}）',
     more: '更多页面',

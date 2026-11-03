@@ -7,7 +7,7 @@
 .overviewHead p { margin-top: var(--space-0_5); color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .overviewHead > button { flex: none; }
 /* Range, filters and their chips share one filter bar. */
-.header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 74%, var(--surface-2)); box-shadow: var(--shadow-xs); }
+.header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface-2); }
 .headerFilters { display: flex; flex-wrap: wrap; gap: var(--space-1_5); }
 .headerFilters > * { width: 138px; }
 .subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); margin-top: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
@@ -85,7 +85,7 @@ button.boundaryChip:hover:not(:disabled) { border-color: var(--warning-line); ba
 .staleRead > button { flex: none; margin-left: auto; }
 
 /* Cards */
-.card { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
+.card { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .analysisGrid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-4); }
 .cardHint { margin: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
 .cardHead + .cardHint { margin-top: 0; }

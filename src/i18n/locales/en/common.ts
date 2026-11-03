@@ -239,6 +239,7 @@ export default {
     workspace: 'Workspace',
     tools: 'Tools',
     recordsGroup: 'Records',
+    manage: 'Manage',
     settingsGroup: 'Settings',
     itemTitle: '{{label}} ({{shortcut}})',
     more: 'More pages',

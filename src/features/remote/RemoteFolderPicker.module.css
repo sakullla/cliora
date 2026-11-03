@@ -35,7 +35,7 @@
 /* Two panes: places on the left, folders on the right */
 .body { display: grid; flex: 1 1 auto; grid-template-columns: 208px minmax(0, 1fr); min-height: 0; }
 .places { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; padding: var(--space-3) var(--space-2_5); overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-2); }
-.host { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-xs); }
+.host { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
 .hostGlyph { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent); }
 .hostCopy { display: grid; min-width: 0; }
 .hostCopy strong, .hostCopy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -22,9 +22,9 @@
   min-width: 0;
   padding: var(--space-1_5);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-card);
 }
 .listHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 36px; padding: var(--space-2) var(--space-2) var(--space-1); }
 .listHead strong { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: .3px; }
@@ -76,7 +76,7 @@
 .muted > .state { margin-right: var(--space-2); vertical-align: 1px; }
 .list small.mono { font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .list small.pluginName { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
-.list > .active { background: var(--selection); box-shadow: inset 2px 0 0 var(--accent); }
+.list > .active { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .list > .active:hover:not(:disabled) { background: var(--surface-3); }
 .list > .active strong { color: var(--text); }
 .list small { max-width: 100%; overflow: hidden; color: var(--text-2); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }

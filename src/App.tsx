@@ -28,6 +28,7 @@ import type { WorkbenchRailLayout } from './features/sessions/SessionWorkbench';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { OnboardingCard } from './features/home/OnboardingCard';
+import { RecentSessions } from './features/home/RecentSessions';
 import { ONBOARDING_LAUNCHED_EVENT, completeOnboarding, readOnboardingComplete, readOnboardingLaunched, reopenOnboarding } from './lib/onboarding';
 const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
@@ -51,6 +52,12 @@ import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
 
 type Page = 'home' | 'sessions' | 'connections' | 'library' | 'records' | 'settings';
+
+/** Time-of-day greeting key for the home hero. */
+function greetingPart(): 'morning' | 'afternoon' | 'evening' | 'night' {
+  const hour = new Date().getHours();
+  return hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : hour < 23 ? 'evening' : 'night';
+}
 type SettingsTab = 'general' | 'hosts' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
@@ -87,7 +94,7 @@ const themes: { id: Theme; glyph: IconName }[] = [
 ];
 
 export default function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [bootstrap, setBootstrap] = useState<Bootstrap>(() => browserBootstrap());
   const [catalog, setCatalog] = useState<AdapterCatalog | null>(null);
   const [loading, setLoading] = useState(nativeAvailable);
@@ -510,20 +517,23 @@ export default function App() {
     void go('sessions');
   }
 
-  async function resumePaletteSession(id: string) {
+  /** Resume an indexed conversation; the palette and the home recents share this flow. */
+  async function resumePaletteSession(id: string, knownToolId?: string): Promise<'workbench' | 'terminal' | 'failed'> {
     try {
       const result = await native.resumeHistorySession(id, 'normal');
       const opened = workbenchSessionId(result);
-      if (opened) { openWorkbenchSession(opened); return; }
+      if (opened) { openWorkbenchSession(opened); return 'workbench'; }
+      return 'terminal';
     } catch (value) {
-      const toolId = paletteSessions.find((item) => item.id === id)?.toolId;
+      const toolId = knownToolId ?? paletteSessions.find((item) => item.id === id)?.toolId;
       const desktop = (catalog?.registered ?? []).find((item) => item.id === toolId)?.launchForm === 'desktop';
       if (await failedInWorkbench(desktop)) {
         openWorkbenchFailure({ detail: formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')), retry: { kind: 'resume', id, mode: 'normal' } });
-        return;
+        return 'failed';
       }
       const detail = launchFailureDetail(value);
       setError(detail ? { code: 'terminal_command_too_long', message: detail, action: '', data_directory: null } : value as ApiError);
+      return 'failed';
     }
   }
 
@@ -685,7 +695,7 @@ export default function App() {
       <div className="sidebar-primary">
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
       <nav ref={navRef} className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {(railDocked ? [{ label: 'workspace', pages: dockedNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
+        {(railDocked ? [{ label: 'workspace', pages: dockedNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{!railDocked && group.label !== 'settingsGroup' && <span className="nav-caption" aria-hidden="true">{t(group.label === 'tools' ? 'common.nav.manage' : `common.nav.${group.label}`)}</span>}{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
         {railDocked && overflowNavPages.length > 0 && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{overflowNavPages.map((item) => { const shortcut = pages.indexOf(item); return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={`${modAria}+${shortcut + 1}`} onClick={() => { void go(item.id); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{`${modLabel}+${shortcut + 1}`}</kbd></button>; })}</RowMenu></div>}
       </nav>
       </div>
@@ -701,7 +711,8 @@ export default function App() {
     <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}${page === 'sessions' ? ' content-workbench' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      {page !== 'sessions' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
+      {page === 'home' && <PageHeader variant="hero" title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={t('home.hero.newSessionTitle')} onClick={() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { targetId: remoteTargetId } }))}>{t('home.hero.newSession')}</Button> : undefined} />}
+      {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}
@@ -713,7 +724,8 @@ export default function App() {
           onClose={closeOnboarding}
         />}
         {page === 'home' && <div className="home-band">
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          <section className="home-tools">
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
+          <section className="home-tools">
             <div className="section-heading"><h2>{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             {visible.length ? nativeAvailable ? <ManagedTools key={remoteIdentity} visible={page === 'home'} tools={visibleDescriptors} remoteTargetId={remoteTargetId} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><Button size="sm" className="tool-row-action" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></Button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => go('settings')}>{t('common.goSettings')}</Button>} />}
           </section>

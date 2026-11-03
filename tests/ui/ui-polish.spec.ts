@@ -167,8 +167,10 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   const nav = page.getByRole('navigation', { name: '页面' });
 
   await expectBodyText(page.locator('.nav button.active .nav-text'));
+  // The current page lights its icon tile with the brand gradient; the glyph is white ink on it.
   const glyph = await paint(page.locator('.nav button.active .nav-glyph'));
-  expect(channels(glyph.color), JSON.stringify(glyph)).toBe(channels(glyph.accent));
+  expect(channels(glyph.color), JSON.stringify(glyph)).toBe('255,255,255');
+  expect(await page.locator('.nav button.active .nav-glyph').evaluate((el) => getComputedStyle(el).backgroundImage)).toContain('gradient');
   await nav.getByRole('button', { name: '设置' }).hover();
   await expectBodyText(nav.getByRole('button', { name: '设置' }).locator('.nav-text'));
 
@@ -329,9 +331,20 @@ async function shellInk(page: Page, selectors: string[]) {
         ratios[`${inkName}/${surfaceName}`] = ratio(inkColor, surfaceColor);
       }
     }
+    // Resolve the elevation tokens the same way the browser serialises a computed shadow.
+    const shadowToken = (name: string) => {
+      const probe = document.createElement('span');
+      probe.style.boxShadow = `var(${name})`;
+      document.body.append(probe);
+      const shadow = getComputedStyle(probe).boxShadow;
+      probe.remove();
+      return shadow;
+    };
+    const softShadows = new Set([shadowToken('--shadow-xs'), shadowToken('--shadow-sm')]);
     const elevation = list.map((selector) => {
       const node = document.querySelector<HTMLElement>(selector);
-      return { selector, shadow: node ? getComputedStyle(node).boxShadow : 'missing' };
+      const shadow = node ? getComputedStyle(node).boxShadow : 'missing';
+      return { selector, shadow, soft: shadow === 'none' || softShadows.has(shadow) };
     });
     return {
       ratios,
@@ -342,14 +355,14 @@ async function shellInk(page: Page, selectors: string[]) {
   }, selectors);
 }
 
-/** The shared notice geometry: one radius, one padding, one leading tone edge, no gradient. */
+/** The shared notice geometry: one radius, one padding, one hairline in the tone, one soft tone wash. */
 async function noticeShape(locator: Locator) {
   return locator.evaluate((el) => {
     const style = getComputedStyle(el);
     const root = getComputedStyle(document.documentElement);
     return {
       radius: style.borderTopLeftRadius,
-      radiusToken: root.getPropertyValue('--radius').trim(),
+      radiusToken: root.getPropertyValue('--radius-lg').trim(),
       padTop: style.paddingTop,
       padLeft: style.paddingLeft,
       fontSize: style.fontSize,
@@ -367,22 +380,25 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
   const nav = page.getByRole('navigation', { name: '页面' });
-  // Quiet shell controls carry no resting elevation; the current page is marked by fill and the
-  // leaf marker, not by a second border.
+  // Shell controls rest on the shared soft elevation tokens only: no ad-hoc or heavy drops.
+  // The current page is marked by its raised fill and the brand-lit icon tile.
   const quietControls = ['.sidebar-command', '.theme-switch button:not([aria-pressed="true"])', '[data-variant="secondary"]', '.nav button.active'];
 
   const themeSwitch = page.getByRole('group', { name: '切换主题' });
   for (const [label, attribute] of [['浅色主题', 'light'], ['深色主题', 'dark']] as const) {
     await themeSwitch.getByRole('button', { name: label, exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', attribute);
+    // Shadows ease between themes; read them once the switch has settled.
+    await expect.poll(async () => (await shellInk(page, quietControls)).elevation.every((item) => item.soft)).toBe(true);
     const ink = await shellInk(page, quietControls);
     for (const [pair, value] of Object.entries(ink.ratios)) {
       expect(value, `${attribute} ${pair}`).toBeGreaterThanOrEqual(4.5);
     }
     // Frame, canvas and paper stay three distinct layers in both themes.
     expect(new Set(ink.layers).size, attribute).toBe(3);
-    for (const item of ink.elevation) expect(item.shadow, `${attribute} ${item.selector}`).toBe('none');
-    expect(ink.canvasImage, attribute).toBe('none');
+    for (const item of ink.elevation) expect(item.soft, `${attribute} ${item.selector} ${item.shadow}`).toBe(true);
+    // The canvas carries only its faint top glow.
+    expect(ink.canvasImage, attribute).toContain('radial-gradient');
   }
 
   // A failed write raises the one global notice: same shape as the environment notice, tone only.
@@ -396,8 +412,8 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   await expect(error).toHaveAttribute('role', 'alert');
   const failure = await noticeShape(error);
   expect(failure.radius).toBe(failure.radiusToken);
-  expect(failure.image).toBe('none');
-  expect(failure.edge).toBe('2px');
+  expect(failure.image).toContain('linear-gradient');
+  expect(failure.edge).toBe('1px');
 
   // Browser preview has no native storage, so the shell adds its environment notice there.
   const previewContext = await browser.newContext({ locale: 'zh-CN', reducedMotion: 'reduce' });
@@ -413,6 +429,6 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   expect(previewNotice.padLeft).toBe(failure.padLeft);
   expect(previewNotice.fontSize).toBe(failure.fontSize);
   expect(previewNotice.edge).toBe(failure.edge);
-  expect(previewNotice.image).toBe('none');
+  expect(previewNotice.image).toContain('linear-gradient');
   expect(previewNotice.edgeColor).not.toBe(failure.edgeColor);
 });

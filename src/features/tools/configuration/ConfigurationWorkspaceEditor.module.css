@@ -7,7 +7,7 @@
 .tabs button { position: relative; min-height: 34px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius); background: none; box-shadow: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
 .tabs button::after { display: none; }
 .tabs button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 70%, transparent); border-color: transparent; color: var(--text); }
-.tabs [aria-pressed='true'] { color: var(--text); background: var(--surface); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
+.tabs [aria-pressed='true'] { color: var(--text); background: var(--surface); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm); }
 /* Profile name: the identity of the whole configuration, above the tabs. */
 .name { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-3); padding: var(--space-1) 0 var(--space-0_5); }
 .name > label { display: inline-flex !important; align-items: center; gap: var(--space-0_5); color: var(--text); font-size: var(--fs-body) !important; font-weight: var(--fw-medium); white-space: nowrap; }

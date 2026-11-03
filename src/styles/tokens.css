@@ -12,72 +12,89 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Palette: clean neutrals with the faintest leaf undertone, around the brandmark (#366b49).
-     The accent is the leaf green; success leans teal so status stays distinct from brand. */
+  /* Palette: "soft light". A cool, airy neutral with a mint undertone; the window frame
+     carries a faint aurora (emerald, sky, lilac) that the glass sidebar lets through, and
+     pages sit on a bright canvas with paper cards that float on soft, layered shadows.
+     The accent stays the leaf green of the brandmark, lifted toward emerald. */
 
   /* Surfaces. The window frame (--sidebar) holds the navigation; pages sit on a lighter
      canvas (--bg) that floats inside the frame; cards are white paper on that canvas. */
-  --bg: #f7f8f6;
-  --sidebar: #e7eae5;
+  --bg: #f7f9f8;
+  --sidebar: #e8eeeb;
   --surface: #ffffff;
-  --surface-2: #f1f3ef;
-  --surface-3: #e6e9e4;
-  --overlay: rgb(12 18 14 / 34%);
-  --wash-a: rgb(31 122 79 / 4%);
-  --wash-b: rgb(78 116 160 / 3%);
-  --surface-glass: rgb(255 255 255 / 80%);
+  --surface-2: #f2f5f4;
+  --surface-3: #e7ecea;
+  --overlay: rgb(16 24 22 / 28%);
+  --wash-a: rgb(16 163 106 / 7%);
+  --wash-b: rgb(59 130 246 / 5%);
+  --surface-glass: rgb(255 255 255 / 66%);
+  --surface-raised: rgb(255 255 255 / 86%);
+  /* Window backdrop: the aurora the sidebar sits on. */
+  --aurora-1: rgb(16 185 129 / 22%);
+  --aurora-2: rgb(56 189 248 / 16%);
+  --aurora-3: rgb(167 139 250 / 13%);
+  --frame: #e6ecea;
+  /* The canvas keeps a faint glow along its top edge. */
+  --canvas-glow: radial-gradient(1100px 280px at 18% -120px, rgb(16 185 129 / 9%), transparent 70%), radial-gradient(900px 260px at 92% -140px, rgb(56 189 248 / 8%), transparent 70%);
 
   /* Text */
-  --text: #131715;
-  --text-2: #3b443e;
-  --text-3: #5b665e;
+  --text: #0f1614;
+  --text-2: #3a4541;
+  --text-3: #5f6b67;
 
   /* Lines */
-  --line: #e3e7e2;
-  --line-strong: #c5cdc7;
+  --line: #e6ebe9;
+  --line-strong: #c9d2ce;
   /* Control outlines sit between the hairline and the strong line. */
-  --control-line: #d2d8d3;
-  --control-line-hover: #a9b2ab;
+  --control-line: #d5ddd9;
+  --control-line-hover: #aeb9b4;
 
   /* Interaction tints. Derived from the text color so a hover reads the same on the
      canvas, the sidebar and paper surfaces. --row-hover stays translucent on purpose:
      rows and menu items sit on whatever surface owns them. */
-  --surface-hover: color-mix(in srgb, var(--text) 5%, var(--surface));
-  --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
-  --row-hover: color-mix(in srgb, var(--text) 6%, transparent);
+  --surface-hover: color-mix(in srgb, var(--text) 4%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 8%, var(--surface));
+  --row-hover: color-mix(in srgb, var(--text) 5%, transparent);
 
   /* Brand */
-  --accent: #0f7148;
-  --accent-hover: #0b5d3b;
-  --accent-bright: #22a06b;
-  --on-accent: #f6fcf8;
-  --accent-soft: #e5f3eb;
-  --accent-line: #bddfca;
-  --accent-ring: rgb(15 113 72 / 16%);
-  --selection: #d3e8dc;
+  --accent: #0a784e;
+  --accent-hover: #086a45;
+  --accent-bright: #12b37a;
+  --on-accent: #ffffff;
+  --accent-soft: #e4f6ee;
+  --accent-line: #b6e3cd;
+  --accent-ring: rgb(16 163 106 / 18%);
+  --selection: #d6f2e4;
   /* A slightly deeper edge for filled accent buttons. */
-  --accent-border: color-mix(in srgb, var(--accent) 86%, black);
+  --accent-border: color-mix(in srgb, var(--accent) 80%, black);
+  /* Filled primary actions carry a gentle top-lit gradient. */
+  --accent-fill: linear-gradient(180deg, #14a46c 0%, #0b8556 100%);
+  --accent-fill-hover: linear-gradient(180deg, #119560 0%, #08744a 100%);
+  /* Decorative brand gradient for marks, rings and glows. */
+  --brand-gradient: linear-gradient(135deg, #16b981 0%, #0ea5a5 52%, #3b82f6 100%);
 
   /* Status */
-  --danger: #a62f2a;
-  --danger-soft: #fcecea;
-  --danger-line: #f0c6c0;
+  --danger: #b4322b;
+  --danger-soft: #fdeeec;
+  --danger-line: #f3c9c3;
   /* Label ink on a filled --danger surface. */
   --on-danger: #fff;
-  --warning: #744700;
-  --warning-soft: #fbf3e2;
-  --warning-line: #ebd29b;
-  --success: #0b6b52;
-  --success-soft: #e0f3ec;
-  --success-line: #b5dcca;
-  --info: #245c8c;
-  --info-soft: #e7f0f8;
-  --info-line: #bed3e6;
+  --warning: #7a4b00;
+  --warning-soft: #fdf5e3;
+  --warning-line: #efd79f;
+  --success: #08725a;
+  --success-soft: #e0f5ee;
+  --success-line: #b3e0cf;
+  --info: #22609b;
+  --info-soft: #e8f2fc;
+  --info-line: #bfd7ee;
 
   /* Fixed inks */
   --switch-thumb: #fff;
+  /* Ink on the brand gradient tiles (same in both themes). */
+  --on-brand: #fff;
   /* Light tile behind tool artwork drawn for a pale background. */
-  --tool-logo-pale: #f5f7f2;
+  --tool-logo-pale: #f5f8f6;
 
   /* Type scale. Whole pixels only: fractional sizes blur CJK glyphs on Windows.
      Each step pairs with an icon size so glyphs sit on the text's cap height. */
@@ -86,8 +103,8 @@
   --fs-control: 13px;  /* buttons, tabs, labels, table heads     · icon 14 */
   --fs-body: 14px;     /* reading text, inputs, nav, menus       · icon 16 */
   --fs-title: 15px;    /* section and card titles                · icon 16 */
-  --fs-heading: 16px;  /* dialog and detail headings             · icon 18 */
-  --fs-page: 24px;     /* page title                             · icon 20+ */
+  --fs-heading: 17px;  /* dialog and detail headings             · icon 18 */
+  --fs-page: 28px;     /* page title                             · icon 20+ */
 
   /* Weights: Microsoft YaHei / PingFang only ship 400 and 700 (plus 500/600 on macOS),
      so steps in between render inconsistently for CJK. Keep to four. */
@@ -104,27 +121,35 @@
 
   /* Shape */
   --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 14px;
-  --radius-2xl: 18px;
+  --radius-sm: 9px;
+  --radius: 11px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 22px;
   --radius-pill: 999px;
   /* App-icon tiles keep the squircle proportion of the brand artwork at every size. */
   --radius-logo: 27%;
   /* The floating page canvas inside the window frame. */
-  --canvas-gap: 8px;
-  --canvas-radius: 16px;
+  --canvas-gap: 10px;
+  --canvas-radius: 20px;
 
-  /* Elevation: hairline + soft ambient, never a heavy drop. */
-  --shadow-xs: 0 1px 1px rgb(16 24 20 / 4%);
-  --shadow-sm: 0 1px 2px rgb(16 24 20 / 4%), 0 2px 8px -3px rgb(16 24 20 / 7%);
-  --shadow-md: 0 12px 28px -14px rgb(13 24 18 / 18%), 0 2px 6px rgb(13 24 18 / 4%);
+  /* Elevation: soft, layered and diffuse; light comes from above. */
+  --shadow-xs: 0 1px 2px rgb(16 32 26 / 5%);
+  --shadow-sm: 0 1px 2px rgb(16 32 26 / 4%), 0 4px 14px -6px rgb(16 32 26 / 10%);
+  --shadow-md: 0 2px 4px rgb(16 32 26 / 3%), 0 14px 34px -14px rgb(16 32 26 / 18%);
   /* Floating surfaces draw their own hairline border, so the shadow never repeats it. */
-  --shadow-lg: 0 28px 70px -24px rgb(9 20 14 / 28%), 0 10px 28px -14px rgb(9 20 14 / 16%);
-  --shadow-accent: 0 1px 2px rgb(15 113 72 / 22%), 0 4px 12px -6px rgb(15 113 72 / 40%);
-  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 14%);
-  --shadow-canvas: 0 0 0 1px var(--line), 0 1px 2px rgb(16 24 20 / 3%), 0 12px 32px -26px rgb(16 24 20 / 16%);
+  --shadow-lg: 0 32px 80px -28px rgb(12 28 22 / 30%), 0 12px 32px -16px rgb(12 28 22 / 16%);
+  --shadow-accent: 0 1px 2px rgb(8 110 70 / 24%), 0 6px 16px -6px rgb(16 163 106 / 45%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 22%);
+  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 70%), 0 1px 2px rgb(16 32 26 / 4%), 0 18px 48px -30px rgb(16 32 26 / 26%);
+  /* Cards: a hairline plus a soft lift; hover lifts a little further. */
+  --shadow-card: 0 1px 2px rgb(16 32 26 / 4%), 0 6px 20px -12px rgb(16 32 26 / 12%);
+  --shadow-card-hover: 0 2px 4px rgb(16 32 26 / 5%), 0 16px 36px -16px rgb(16 32 26 / 22%);
+  /* Recessed wells (switch tracks, segmented tracks). */
+  --shadow-well: inset 0 1px 2px rgb(16 32 26 / 10%);
+  --shadow-well-soft: inset 0 1px 2px rgb(16 32 26 / 3%);
+  /* Glow behind accent marks. */
+  --glow-accent: 0 0 0 1px rgb(16 163 106 / 16%), 0 8px 24px -8px rgb(16 163 106 / 40%);
 
   /* Brand-artwork and focus ink */
   --shadow-brandmark: 0 3px 6px rgb(14 60 36 / 16%);
@@ -133,6 +158,8 @@
 
   /* Spacing scale (px): 2 4 6 8 10 12 16 20 24 32 40 48. */
   --space-0_5: 2px;
+  /* Inset of segmented tracks: the selected pill floats 3px inside its well. */
+  --space-0_75: 3px;
   --space-1: 4px;
   --space-1_5: 6px;
   --space-2: 8px;
@@ -159,62 +186,72 @@
   --row-h: 40px;
   --row-h-compact: 32px;
   --ease: cubic-bezier(.2, .7, .2, 1);
-  --fast: 120ms;
-  --medium: 200ms;
+  --spring: cubic-bezier(.34, 1.4, .64, 1);
+  --fast: 140ms;
+  --medium: 220ms;
   /* Dialog entrance and exit only. */
   --slow: 280ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%233b443e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235b665e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%233a4541' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6b67' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #161a18;
-  --sidebar: #0c0f0d;
-  --surface: #1a1e1c;
-  --surface-2: #202522;
-  --surface-3: #272d29;
-  --overlay: rgb(0 0 0 / 60%);
-  --wash-a: rgb(94 219 154 / 4%);
-  --wash-b: rgb(108 154 210 / 3%);
-  --surface-glass: rgb(23 27 25 / 82%);
+  --bg: #111615;
+  --sidebar: #0a0e0d;
+  --surface: #171d1b;
+  --surface-2: #1d2421;
+  --surface-3: #252d2a;
+  --overlay: rgb(0 0 0 / 56%);
+  --wash-a: rgb(52 211 153 / 7%);
+  --wash-b: rgb(96 165 250 / 5%);
+  --surface-glass: rgb(22 28 26 / 62%);
+  --surface-raised: rgb(28 35 32 / 84%);
+  --aurora-1: rgb(16 185 129 / 22%);
+  --aurora-2: rgb(56 140 248 / 16%);
+  --aurora-3: rgb(139 92 246 / 14%);
+  --frame: #0b0f0e;
+  --canvas-glow: radial-gradient(1100px 300px at 18% -130px, rgb(52 211 153 / 9%), transparent 70%), radial-gradient(900px 260px at 92% -140px, rgb(96 165 250 / 8%), transparent 70%);
 
-  --text: #edf2ee;
-  --text-2: #c5cec8;
-  --text-3: #99a39c;
+  --text: #eef4f1;
+  --text-2: #c3cdc9;
+  --text-3: #95a29d;
 
-  --line: #262d29;
-  --line-strong: #444f48;
-  --control-line: #333b36;
-  --control-line-hover: #56625a;
+  --line: #242c29;
+  --line-strong: #3e4945;
+  --control-line: #313a37;
+  --control-line-hover: #52605b;
 
   --surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 10%, var(--surface));
-  --row-hover: color-mix(in srgb, var(--text) 8%, transparent);
+  --row-hover: color-mix(in srgb, var(--text) 7%, transparent);
 
-  --accent: #6fdc9f;
-  --accent-hover: #95ebbb;
-  --accent-bright: #b4f4cf;
-  --on-accent: #05120a;
-  --accent-soft: #15291e;
-  --accent-line: #2a5039;
-  --accent-ring: rgb(111 220 159 / 24%);
-  --selection: #19382d;
+  --accent: #5fe0a2;
+  --accent-hover: #8debbd;
+  --accent-bright: #b0f5d2;
+  --on-accent: #04130c;
+  --accent-soft: #13291f;
+  --accent-line: #24533c;
+  --accent-ring: rgb(95 224 162 / 24%);
+  --selection: #1a3d2f;
+  --accent-fill: linear-gradient(180deg, #6ee7ac 0%, #3fcf8b 100%);
+  --accent-fill-hover: linear-gradient(180deg, #8bf0bf 0%, #55da9a 100%);
+  --brand-gradient: linear-gradient(135deg, #34d399 0%, #2dd4bf 52%, #60a5fa 100%);
 
-  --danger: #fcd6d0;
-  --danger-soft: #3a2422;
-  --danger-line: #6b3a33;
+  --danger: #fdd3cd;
+  --danger-soft: #3a2220;
+  --danger-line: #6e3a33;
   --on-danger: #2b1b18;
-  --warning: #eed294;
-  --warning-soft: #3a3120;
+  --warning: #f0d394;
+  --warning-soft: #362d1c;
   --warning-line: #6a5629;
-  --success: #a3e2cb;
-  --success-soft: #173228;
-  --success-line: #2b5546;
-  --info: #bcd8f3;
-  --info-soft: #1c2a38;
-  --info-line: #35506a;
+  --success: #a3e6cd;
+  --success-soft: #142f25;
+  --success-line: #2a5646;
+  --info: #bfdaf6;
+  --info-soft: #18283a;
+  --info-line: #34506e;
 
   --chart-input: #7fb0e0;
   --chart-output: #8fb59a;
@@ -222,13 +259,16 @@
   --chart-write: #b5a1e0;
 
   --shadow-xs: 0 1px 2px rgb(0 0 0 / 34%);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 36%), 0 3px 10px -2px rgb(0 0 0 / 32%);
-  --shadow-md: 0 14px 32px -14px rgb(0 0 0 / 62%), 0 2px 8px rgb(0 0 0 / 26%);
-  --shadow-lg: 0 36px 90px -30px rgb(0 0 0 / 80%), 0 8px 28px -12px rgb(0 0 0 / 40%);
-  --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 6px 16px -10px rgb(123 227 167 / 40%);
-  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 6%);
-  --shadow-canvas: 0 0 0 1px var(--line), 0 12px 36px -28px rgb(0 0 0 / 80%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 36%), 0 4px 14px -4px rgb(0 0 0 / 40%);
+  --shadow-md: 0 16px 36px -14px rgb(0 0 0 / 64%), 0 2px 8px rgb(0 0 0 / 26%);
+  --shadow-lg: 0 40px 96px -30px rgb(0 0 0 / 82%), 0 10px 30px -12px rgb(0 0 0 / 46%);
+  --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 22px -10px rgb(95 224 162 / 50%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 26%);
+  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 5%), 0 20px 50px -30px rgb(0 0 0 / 90%);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 3%), 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px -14px rgb(0 0 0 / 60%);
+  --shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 4%), 0 2px 4px rgb(0 0 0 / 30%), 0 18px 40px -16px rgb(0 0 0 / 70%);
+  --glow-accent: 0 0 0 1px rgb(95 224 162 / 18%), 0 8px 26px -8px rgb(95 224 162 / 36%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a39c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c3cdc9' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2395a29d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }

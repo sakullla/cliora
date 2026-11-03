@@ -6,7 +6,7 @@
   min-height: var(--control-h);
   padding: 0 var(--space-4);
   border: 1px solid var(--control-line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-control);
@@ -15,19 +15,21 @@
   white-space: nowrap;
   /* Resting buttons are flat. Elevation belongs to surfaces that float, and a filled
      primary reads as the one emphasised action through color alone. */
-  box-shadow: none;
-  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+  box-shadow: var(--shadow-xs);
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease), filter var(--fast) var(--ease);
 }
 .button[data-size="sm"] { min-height: var(--control-h-sm); padding: 0 var(--space-3); }
-.button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--control-line-hover); }
-.button:active:not(:disabled) { background: var(--surface-pressed); box-shadow: none; }
+.button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--control-line-hover); box-shadow: var(--shadow-sm); }
+.button:active:not(:disabled) { background: var(--surface-pressed); box-shadow: none; transform: translateY(.5px); }
 .button:disabled { cursor: not-allowed; opacity: .5; }
 .button[aria-busy="true"] { cursor: progress; }
 
-.button[data-variant="primary"] { border-color: var(--accent-border); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+.button[data-variant="primary"] { border-color: var(--accent-border); background: var(--accent-fill) var(--accent); color: var(--on-accent); font-weight: var(--fw-semibold); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-border); background: var(--accent-fill-hover) var(--accent-hover); box-shadow: var(--shadow-accent), var(--inner-highlight), 0 0 0 3px var(--accent-ring); }
+.button[data-variant="primary"]:active:not(:disabled) { background: var(--accent-fill-hover) var(--accent-hover); box-shadow: var(--inner-highlight); }
 
 .button[data-variant="ghost"] { border-color: transparent; background: transparent; color: var(--text-2); box-shadow: none; }
+.button[data-variant="ghost"]:hover:not(:disabled) { box-shadow: none; }
 .button[data-variant="ghost"]:active:not(:disabled) { background: var(--surface-pressed); }
 .button[data-variant="ghost"]:hover:not(:disabled) { border-color: transparent; background: var(--row-hover); color: var(--text); }
 

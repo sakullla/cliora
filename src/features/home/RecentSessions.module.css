@@ -1,0 +1,36 @@
+/* Recent conversations: a card wall of the latest indexed sessions with one resume action each. */
+.recent { min-width: 0; container-type: inline-size; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 68px;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease);
+  animation: reveal var(--medium) var(--ease) both;
+}
+.card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--brand-gradient); opacity: 0; transition: opacity var(--medium) var(--ease); }
+.card:hover, .card:focus-within { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
+.card:hover::before, .card:focus-within::before { opacity: 1; }
+.icon { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.copy { display: grid; gap: var(--space-0_5); min-width: 0; }
+.copy strong { overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.meta { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
+.meta > * + *::before { content: '·'; margin-right: var(--space-1_5); }
+.path { min-width: 0; overflow: hidden; font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; }
+.meta time { flex: none; }
+.resume { opacity: .9; }
+.card:hover .resume, .card:focus-within .resume { opacity: 1; border-color: var(--accent-line); color: var(--accent); }
+@container (max-width: 420px) {
+  .card { grid-template-columns: auto minmax(0, 1fr); }
+  .resume { grid-column: 2; justify-self: start; }
+}

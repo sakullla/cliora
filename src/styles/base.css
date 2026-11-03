@@ -7,7 +7,12 @@ html, body, #root { height: 100%; margin: 0; min-height: 0; overflow: hidden; }
 #root { display: flow-root; }
 body {
   color: var(--text);
-  background: var(--sidebar);
+  /* The window frame: a soft aurora under the glass sidebar and around the page canvas. */
+  background:
+    radial-gradient(520px 420px at -6% -4%, var(--aurora-1), transparent 70%),
+    radial-gradient(460px 380px at 4% 108%, var(--aurora-2), transparent 70%),
+    radial-gradient(640px 420px at 100% 104%, var(--aurora-3), transparent 72%),
+    var(--frame);
 }
 h1, h2, h3, p { margin: 0; }
 /* Display faces carry their own generous leading; keep headings tight so a section title
@@ -58,7 +63,7 @@ kbd { display: inline-block; min-width: 19px; padding: 0 var(--space-1); border:
   appearance: none;
   -webkit-appearance: none;
   border: 1px solid var(--control-line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-control);
@@ -73,9 +78,9 @@ kbd { display: inline-block; min-width: 19px; padding: 0 var(--space-1); border:
 
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
   min-height: var(--control-h);
-  padding: 0 var(--space-2_5);
+  padding: 0 var(--space-3);
   border: 1px solid var(--control-line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
   font-size: var(--fs-body);
@@ -124,6 +129,7 @@ input[type="checkbox"][role="switch"],
   height: 20px;
   border-radius: var(--radius-pill);
   background: var(--line-strong);
+  box-shadow: var(--shadow-well);
   transition: background-color var(--medium) var(--ease);
 }
 input[type="checkbox"][role="switch"]::after {
@@ -136,9 +142,9 @@ input[type="checkbox"][role="switch"]::after {
   border-radius: 50%;
   background: var(--switch-thumb);
   box-shadow: var(--shadow-thumb);
-  transition: transform var(--medium) var(--ease);
+  transition: transform var(--medium) var(--spring);
 }
-input[type="checkbox"][role="switch"]:checked { background: var(--accent); }
+input[type="checkbox"][role="switch"]:checked { background: var(--accent-fill) var(--accent); box-shadow: var(--inner-highlight); }
 input[type="checkbox"][role="switch"]:checked::after { transform: translateX(16px); }
 :root[data-theme="dark"] input[type="checkbox"][role="switch"]:checked::after { background: var(--on-accent); }
 input[type="checkbox"][role="switch"]:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
@@ -169,8 +175,8 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
 /* ---------- Motion ----------------------------------------------------- */
 
 @keyframes reveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-@keyframes page-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -200% 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }

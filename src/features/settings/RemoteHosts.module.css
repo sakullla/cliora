@@ -13,7 +13,7 @@
 .empty > button { margin-top: var(--space-2_5); }
 
 /* Host list */
-.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .list > li + li { border-top: 1px solid var(--line); }
 .host { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: calc(var(--row-h) + var(--space-5)); padding: var(--space-3) var(--space-4); transition: background-color var(--fast) var(--ease); }
 .host:hover { background: var(--surface-2); }

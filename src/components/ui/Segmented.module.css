@@ -3,10 +3,10 @@
   align-items: center;
   gap: var(--space-0_5);
   max-width: 100%;
-  padding: var(--space-0_5);
+  padding: var(--space-0_75);
   overflow-x: auto;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface-2);
   scrollbar-width: none;
 }
@@ -18,7 +18,7 @@
   min-height: var(--row-h-compact);
   padding: 0 var(--space-3);
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text-2);
@@ -27,9 +27,9 @@
   white-space: nowrap;
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.segmented > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.segmented > button:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
 .segmented > button[aria-checked="true"],
-.segmented > button[aria-checked="true"]:hover:not(:disabled) { border-color: var(--line); background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
+.segmented > button[aria-checked="true"]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--line) 60%, transparent); background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm); }
 .segmented > button:focus-visible { outline-offset: -2px; }
 .segmented > button:disabled { cursor: not-allowed; opacity: .5; }
 .segmented[data-size="sm"] > button { min-height: var(--control-h-sm); padding: 0 var(--space-2_5); font-size: var(--fs-caption); }

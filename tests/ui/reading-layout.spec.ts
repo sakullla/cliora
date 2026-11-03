@@ -449,7 +449,7 @@ for (const theme of ['light', 'dark'] as const) {
       const fieldStyle = field ? getComputedStyle(field) : null;
       const primaryStyle = primary ? getComputedStyle(primary) : null;
       return {
-        radius: root.getPropertyValue('--radius-sm').trim(),
+        radius: root.getPropertyValue('--radius').trim(),
         surface: root.getPropertyValue('--surface').trim(),
         accent: root.getPropertyValue('--accent').trim(),
         onAccent: root.getPropertyValue('--on-accent').trim(),

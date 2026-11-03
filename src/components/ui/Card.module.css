@@ -2,13 +2,14 @@
   display: grid;
   gap: var(--space-3);
   min-width: 0;
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 .card[data-padding="compact"] { gap: var(--space-2); padding: var(--space-3); }
 .card[data-padding="none"] { gap: 0; padding: 0; }
-.card[data-interactive="true"] { transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.card[data-interactive="true"]:hover { border-color: var(--line-strong); }
+.card[data-interactive="true"] { transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease), transform var(--medium) var(--ease); }
+.card[data-interactive="true"]:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
 .card[data-selected="true"] { border-color: var(--accent-line); background: var(--accent-soft); }

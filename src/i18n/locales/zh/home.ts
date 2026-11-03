@@ -1,4 +1,22 @@
 export default {
+  recent: {
+    title: '最近会话',
+    viewAll: '全部记录',
+    resume: '继续',
+    resumeAria: '继续会话「{{title}}」',
+    untitled: '未命名会话',
+    justNow: '刚刚',
+    terminalRequested: '已请求外部终端恢复会话。',
+  },
+  hero: {
+    morning: '早上好',
+    afternoon: '下午好',
+    evening: '晚上好',
+    night: '夜深了',
+    newSession: '新建会话',
+    newSessionTitle: '在工作台中新建会话',
+    palette: '快速前往',
+  },
   managed: {
     title: '管理中的工具',
     adjust: '调整工具',

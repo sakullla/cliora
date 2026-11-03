@@ -1,4 +1,22 @@
 export default {
+  recent: {
+    title: 'Recent sessions',
+    viewAll: 'All records',
+    resume: 'Continue',
+    resumeAria: 'Continue session "{{title}}"',
+    untitled: 'Untitled session',
+    justNow: 'just now',
+    terminalRequested: 'Asked the external terminal to resume the session.',
+  },
+  hero: {
+    morning: 'Good morning',
+    afternoon: 'Good afternoon',
+    evening: 'Good evening',
+    night: 'Working late',
+    newSession: 'New session',
+    newSessionTitle: 'Start a new session in the workbench',
+    palette: 'Go to',
+  },
   managed: {
     title: 'Managed tools',
     adjust: 'Adjust tools',

@@ -13,7 +13,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-xs), 0 0 0 var(--space-2) var(--bg);
+  box-shadow: var(--shadow-card), 0 0 0 var(--space-2) var(--bg);
 }
 .chromeTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 48px; margin: 0; padding: var(--space-2) var(--space-3) var(--space-1_5); font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; line-height: 1.3; }
 .chromeTitle > strong { min-width: 0; overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
@@ -51,7 +51,7 @@
   white-space: nowrap;
   transition: color var(--fast) var(--ease), background-color var(--fast) var(--ease);
 }
-.views button::after { content: ''; position: absolute; right: 12px; bottom: 5px; left: 12px; height: 2px; border-radius: var(--radius-xs); background: var(--accent); transform: scaleX(0); transition: transform var(--medium) var(--ease); }
+.views button::after { content: ''; position: absolute; right: 12px; bottom: 4px; left: 12px; height: 2px; border-radius: var(--radius-xs); background: var(--brand-gradient); transform: scaleX(0); transition: transform var(--medium) var(--spring); }
 .views button:hover { color: var(--text); background: color-mix(in srgb, var(--surface-3) 55%, transparent); }
 .views .selected { color: var(--text); font-weight: var(--fw-semibold); }
 .views .selected::after { transform: scaleX(1); }
@@ -201,7 +201,7 @@ div > .feedback { margin-bottom: var(--space-3); }
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 .listHeading { flex: none; padding: var(--space-2_5) var(--space-3) var(--space-2_5) var(--space-4); border-bottom: 1px solid var(--line); }
 .boardBody { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
@@ -236,16 +236,15 @@ div > .feedback { margin-bottom: var(--space-3); }
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
+  min-height: 34px;
+  padding: var(--space-2_5) var(--space-4) var(--space-1);
+  background: transparent;
 }
-.groupLabel > strong { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: 0; }
+.groupLabel > strong { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-bold); letter-spacing: .06em; text-transform: uppercase; }
 .groupLabel > small { overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 .profileRow:hover { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
 .profileRow[data-active="true"],
-.profileRow[data-active="true"]:hover { background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
+.profileRow[data-active="true"]:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 80%, var(--surface)), var(--surface) 70%); box-shadow: inset 3px 0 0 var(--accent-bright); }
 .profileRow > span:not(.profileActions),
 .profileHead > .profileMain { display: grid; gap: var(--space-0_5); min-width: 0; justify-items: start; }
 .profileActions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
@@ -358,5 +357,5 @@ div > .feedback { margin-bottom: var(--space-3); }
   .pathControl > summary::before { order: 3; }
 }
 
-.contextState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.contextState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .contextState > p { margin: 0; color: var(--text-2); }

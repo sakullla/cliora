@@ -2,7 +2,7 @@
    prose, code and tables comparable. The transcript itself never scrolls on its own so
    the detail column owns the scroll position. */
 .reader { flex: none; min-width: 0; overflow: visible; }
-.readerToolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-2) var(--space-6); border-bottom: 1px solid var(--line); background: var(--surface); }
+.readerToolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-2) var(--space-6); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(14px) saturate(1.2); }
 .readerTitle { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
 .readerTitle strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); }
 .readerTitle > span { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
@@ -27,8 +27,8 @@
 .dayDivider { display: flex; align-items: center; gap: var(--space-2_5); margin: var(--space-5) 0 var(--space-1); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .dayDivider::before, .dayDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .message { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; scroll-margin: 145px 0 24px; }
-.avatar { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
-.message[data-role="user"] .avatar { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.avatar { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
+.message[data-role="user"] .avatar { border-color: transparent; background: var(--brand-gradient); color: var(--on-brand); box-shadow: var(--glow-accent); }
 .messageContent { flex: 1; min-width: 0; }
 .messageHead { display: flex; align-items: center; gap: var(--space-2); min-height: 28px; margin-bottom: var(--space-1); }
 .messageHead strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); }
@@ -37,7 +37,7 @@
 .messageHead button { min-height: 26px; padding: 0 var(--space-1_5); border: 0; background: transparent; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); box-shadow: none; }
 .messageHead button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .prose { min-width: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.8; overflow-wrap: anywhere; cursor: text; -webkit-user-select: text; user-select: text; }
-.message[data-role="user"] .prose { padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.message[data-role="user"] .prose { padding: var(--space-2_5) var(--space-3); border: 1px solid var(--accent-line); border-radius: var(--radius-xs) var(--radius-xl) var(--radius-xl) var(--radius-xl); background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, var(--surface))); }
 .message[data-current-match] .prose { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: var(--radius-xs); }
 .prose p { margin: 0 0 var(--space-3); }
 .prose > :last-child { margin-bottom: 0; }

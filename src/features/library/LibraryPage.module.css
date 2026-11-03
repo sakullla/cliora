@@ -27,14 +27,25 @@
 /* Resource rows: one column, like the MCP list, so a long title keeps its line and
    tags wrap underneath instead of squeezing the card. */
 .layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
-.list { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
+.list { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
+/* Wide pages lay resources out as a two-column card wall; narrow ones keep one column. */
+@container (min-width: 960px) {
+  .list:not(:has(> :global(.empty-state))) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .list .cardTitle { flex-basis: 120px; }
+}
 .list > .card {
   position: relative;
   display: grid;
-  gap: var(--space-1_5);
-  padding: var(--space-3) var(--space-4);
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  overflow: hidden;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease);
   animation: reveal var(--medium) var(--ease) backwards;
 }
+.list > .card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--brand-gradient); opacity: 0; transition: opacity var(--medium) var(--ease); }
+.list > .card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
+.list > .card:hover::before, .list > .card:focus-within::before { opacity: 1; }
 .list > .card:focus-within { border-color: var(--accent-line); }
 .list > .card:has(.cardTitle:focus-visible) { outline: var(--focus-ring); outline-offset: -1px; }
 /* Source, tags and time read as one quiet line under the summary. */
@@ -57,14 +68,15 @@
   color: var(--text);
   font-family: var(--font-display);
   font-size: var(--fs-heading);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-bold);
+  letter-spacing: -.01em;
   line-height: 1.4;
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .cardTitle::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
-.cardTitle:hover:not(:disabled) { border: 0; background: none; box-shadow: none; color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.cardTitle:hover:not(:disabled) { border: 0; background: none; box-shadow: none; color: var(--text); }
 .cardTitle:active:not(:disabled) { transform: none; }
 .cardTitle:focus-visible { outline: none; }
 .cardBody {
@@ -95,7 +107,7 @@
 .list > :global(.empty-state) { grid-column: 1 / -1; }
 
 /* Distribution outcome: each target keeps its own success or failure line. */
-.result { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.result { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .resultHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .resultHead > svg { flex: none; color: var(--success); }
 .result[data-tone="warning"] .resultHead > svg { color: var(--warning); }

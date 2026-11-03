@@ -1,8 +1,8 @@
 /* Settings: the shared group card and setting row used by every General section. */
-.settings-group { margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); scroll-margin-top: var(--space-5); }
+.settings-group { margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); scroll-margin-top: var(--space-5); }
 .settings-group > .setting-row:first-child { border-top: 0; }
-.setting-intro { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); }
-.setting-intro h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); line-height: 1.35; }
+.setting-intro { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line); background: radial-gradient(420px 120px at 0% 0%, var(--wash-a), transparent 70%), var(--surface); }
+.setting-intro h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-bold); line-height: 1.35; }
 .setting-intro p { margin-top: var(--space-0_5); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.55; }
 
 /* One setting per row: label and hint on the left, the control on the right. */
@@ -56,7 +56,7 @@ label.setting-row:hover { background: var(--surface-2); }
   margin: 0;
   padding: var(--space-1) var(--space-2_5) var(--space-1) var(--space-2);
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
   font-size: var(--fs-body);
   font-weight: var(--fw-medium);
@@ -66,7 +66,7 @@ label.setting-row:hover { background: var(--surface-2); }
 .managed-checks label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .managed-checks label input[type=checkbox] { margin: 0 0 0 auto; flex: none; }
 .managed-checks label:hover:not(:has(input:checked)) { border-color: var(--line-strong); background: var(--surface-2); }
-.managed-checks label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
+.managed-checks label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: var(--shadow-xs); }
 .managed-checks label:has(input:checked):hover { border-color: var(--accent); }
 .managed-checks label:has(input:focus-visible) { outline: var(--focus-ring); outline-offset: 2px; }
 .managed-checks label input:focus-visible { outline: none; }

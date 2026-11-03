@@ -10,7 +10,7 @@
   padding: 0;
   border: 1px solid var(--control-line);
   border-left-width: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
   background: var(--surface);
   color: var(--text-2);
 }
@@ -21,8 +21,8 @@
 .split[data-split-variant="primary"] > :last-child > button {
   border-color: var(--accent-border);
   border-left: 1px solid color-mix(in srgb, var(--on-accent) 28%, transparent);
-  background: var(--accent);
+  background: var(--accent-fill) var(--accent);
   color: var(--on-accent);
   box-shadow: var(--shadow-accent), var(--inner-highlight);
 }
-.split[data-split-variant="primary"] > :last-child > button:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
+.split[data-split-variant="primary"] > :last-child > button:hover:not(:disabled) { background: var(--accent-fill-hover) var(--accent-hover); color: var(--on-accent); }

@@ -28,7 +28,8 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery'].includes(arg));
+const quickCapture=process.argv.includes('--quick');
+const fullCapture=!quickCapture&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery'].includes(arg));
 const captureMode=process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
 const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
@@ -753,6 +754,16 @@ for(const width of widths)for(const theme of themes){
   await page.close(); continue;
  }
  await capture('home');
+ if(quickCapture){
+  // --quick: one screen per page, for fast visual iteration.
+  await nav.getByRole('button',{name:'工具与连接'}).click();await page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表').waitFor();await capture('tools');
+  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
+  await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
+  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
+  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.waitForTimeout(600);await capture('settings');
+  await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');
+  await page.close();continue;
+ }
  await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await profiles.getByRole('button',{name:'修改'}).nth(1).click();await page.getByRole('dialog').waitFor();await capture('config-form');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
