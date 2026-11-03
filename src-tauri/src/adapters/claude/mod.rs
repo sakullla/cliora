@@ -555,6 +555,13 @@ impl CliAdapter for Claude {
         }
         Ok(args)
     }
+    fn assigned_session_args(&self, version: &str, id: &str) -> Option<Vec<String>> {
+        // `--session-id <uuid>` names the new conversation. Claude Code writes
+        // its transcript only after the first message, so start-time matching
+        // cannot separate tabs opened together in one directory.
+        (self.history_resume_version_supported(version) && uuid::Uuid::parse_str(id).is_ok())
+            .then(|| vec!["--session-id".into(), id.into()])
+    }
     fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
         REMOTE_NATIVE_DOCUMENTS
     }
@@ -855,6 +862,14 @@ fn merge_catalog_rows(native_rows: &[Value], ours: &[Value]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assigned_session_requires_a_verified_version_and_uuid() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(Claude.assigned_session_args("2.1.0", id), Some(vec!["--session-id".into(), id.into()]));
+        assert_eq!(Claude.assigned_session_args("1.0.0", id), None);
+        assert_eq!(Claude.assigned_session_args("2.1.0", "not-a-uuid"), None);
+    }
 
     #[test]
     fn remote_native_documents_name_the_settings_files() {

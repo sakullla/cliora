@@ -1072,6 +1072,14 @@ pub trait CliAdapter: Sync {
         let _ = version;
         self.launch_args(session, mode)
     }
+    /// Arguments that start a new conversation under a caller-chosen native
+    /// id, so the launcher knows the exact conversation to resume later.
+    /// `None` means this CLI/version has no verified flag; callers then fall
+    /// back to history matching.
+    fn assigned_session_args(&self, version: &str, id: &str) -> Option<Vec<String>> {
+        let _ = (version, id);
+        None
+    }
     /// Resume the latest session in the working directory. This is not a
     /// session id and must not be combined with `launch_args`'s session flag.
     /// The default has no verified flag.

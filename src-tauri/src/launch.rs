@@ -189,6 +189,8 @@ pub struct LaunchCredential {
 
 #[derive(Clone, Debug)]
 pub struct LaunchPlan {
+    /// Native conversation this launch resumes, or the id assigned to a new
+    /// workbench conversation through `assigned_session_args`.
     pub resume_native_id: Option<String>,
     pub account_version: Option<u32>,
     pub account_context: Option<(String, crate::accounts::NativeContext)>,
@@ -1265,6 +1267,22 @@ fn plan_with_stage_at(
             args
         }
     };
+    let terminal = match launch_form {
+        LaunchForm::Terminal => session_terminal(db)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
+        LaunchForm::Desktop => TerminalId::Desktop,
+    };
+    // Workbench tabs are restored after a restart. Naming a new conversation
+    // up front keeps tabs opened in the same directory from becoming
+    // indistinguishable in history; CLIs without a verified flag keep matching.
+    let mut native_id = request.session_id.clone();
+    if terminal == TerminalId::Workbench && native_id.is_none() && !request.resume_latest {
+        let id = uuid::Uuid::new_v4().to_string();
+        if let Some(args) = adapter.assigned_session_args(version, &id) {
+            cli_args.extend(args);
+            native_id = Some(id);
+        }
+    }
     if let Some((_, context)) = &account_context { cli_args.splice(0..0, context.cli_args.clone()); }
     if let Some(project) = &project {
         let model = project
@@ -1295,7 +1313,7 @@ fn plan_with_stage_at(
         directory
     };
     Ok(LaunchPlan {
-        resume_native_id: request.session_id.clone(),
+        resume_native_id: native_id,
         account_version: account_context.as_ref().map(|(id,_)|crate::accounts::get(db,id).map(|account|account.version)).transpose().map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
         account_context,
         tool_id: request.tool_id,
@@ -1312,11 +1330,7 @@ fn plan_with_stage_at(
             adapter.session_env_markers()
         },
         credential,
-        terminal: match launch_form {
-            LaunchForm::Terminal => session_terminal(db)
-                .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
-            LaunchForm::Desktop => TerminalId::Desktop,
-        },
+        terminal,
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
@@ -2294,6 +2308,28 @@ mod installed_desktop_launch {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None,
         }
+    }
+
+    #[test]
+    fn workbench_launch_names_a_new_claude_conversation_for_restore() {
+        let (temp, db, _) = fresh();
+        let registry = Registry::builtins().with_fixture_installation("claude_code", "2.1.0").with_fixture_installation("codex", "0.165.0");
+        let fresh_plan = plan(&db, &registry, temp.path(), direct("claude_code")).unwrap();
+        assert_eq!(fresh_plan.terminal, TerminalId::Workbench);
+        let id = fresh_plan.resume_native_id.clone().expect("assigned native id");
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        let flag = fresh_plan.cli_args.iter().position(|arg| arg == "--session-id").unwrap();
+        assert_eq!(fresh_plan.cli_args[flag + 1], id);
+        let other = plan(&db, &registry, temp.path(), direct("claude_code")).unwrap();
+        assert_ne!(other.resume_native_id, fresh_plan.resume_native_id);
+        // Resuming keeps the requested conversation and never adds a new name.
+        index_session(&db, "claude_code", &id, temp.path());
+        let resumed = plan(&db, &registry, temp.path(), LaunchRequest { session_id: Some(id.clone()), ..direct("claude_code") }).unwrap();
+        assert_eq!(resumed.resume_native_id.as_deref(), Some(id.as_str()));
+        assert!(resumed.cli_args.iter().all(|arg| arg != "--session-id"));
+        // CLIs without a verified flag keep history matching.
+        let codex = plan(&db, &registry, temp.path(), direct("codex")).unwrap();
+        assert!(codex.resume_native_id.is_none());
     }
 
     #[test]

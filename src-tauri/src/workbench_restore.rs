@@ -110,10 +110,21 @@ fn matching_until(session: &SavedSession, sessions: &[SavedSession], now: u64) -
         .min().unwrap_or(now).min(session.stopped_at.unwrap_or(now))
 }
 
+/// Time-window matching for a tab without a native id. Conversations already
+/// named by another tab belong to that tab and are never ambiguous here.
+fn matches(session: &SavedSession, parsed: &crate::history::ParsedSession, saved: &[SavedSession], known: &[SavedSession], now: u64) -> bool {
+    if session.native_id.is_none() && parsed.native_id.is_some() && known.iter().any(|other| other.id != session.id
+        && other.tool_id == session.tool_id && other.context_id == session.context_id && other.native_id == parsed.native_id) {
+        return false;
+    }
+    candidate(session, parsed, matching_until(session, saved, now))
+}
+
 pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<RestoreReport, String> {
     let _guard = RESTORING.lock().map_err(|_| "工作台恢复正在结束，请重试")?;
     let live: HashSet<_> = crate::session_host::list().into_iter().map(|session| session.id).collect();
-    let saved: Vec<_> = list(db)?.into_iter().filter(|session| !live.contains(&session.id)).collect();
+    let all = list(db)?;
+    let saved: Vec<_> = all.iter().filter(|session| !live.contains(&session.id)).cloned().collect();
     let mut report = RestoreReport::default();
     // Discovery is shared by tabs with the same adapter and account context.
     let mut histories: HashMap<(String, Option<String>), Result<Vec<crate::history::ParsedSession>, String>> = HashMap::new();
@@ -142,13 +153,13 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
                     })
                 }).collect()
             }).as_ref().map_err(Clone::clone)?;
-            let candidates: Vec<_> = history.iter().filter(|parsed| candidate(session, parsed, matching_until(session, &saved, until))).collect();
+            let candidates: Vec<_> = history.iter().filter(|parsed| matches(session, parsed, &saved, &all, until)).collect();
             if candidates.len() != 1 { return Err(if candidates.is_empty() { "尚未找到原生会话记录；可重试恢复，或从新会话启动" } else { "发现多条可能的会话，未自动选择；请到记录页选择原会话" }.into()); }
             let parsed = candidates[0];
             let native = parsed.native_id.clone().ok_or("原会话缺少恢复 ID")?;
             // Two tabs launched together must never both attach to the same
             // ambiguous history record, even if only one has written a file.
-            if saved.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && candidate(other, parsed, matching_until(other, &saved, until))).count() != 1 {
+            if saved.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && matches(other, parsed, &saved, &all, until)).count() != 1 {
                 return Err("多个终端对应同一条可能的会话；请到记录页明确选择".into());
             }
             if !claimed.insert((key, native.clone())) { return Err("此会话已经恢复".into()); }
@@ -205,6 +216,23 @@ mod tests {
         let exact = SavedSession { native_id: Some("one".into()), ..saved };
         assert!(candidate(&exact, &parsed, 20_000));
         parsed.cwd = Some("/other".into()); assert!(!candidate(&exact, &parsed, 20_000));
+    }
+    #[test]
+    fn conversation_named_by_another_tab_is_not_ambiguous() {
+        // Claude writes a transcript only after the first message, so a tab
+        // opened earlier can see a sibling's conversation inside its window.
+        let legacy = SavedSession { id: "legacy".into(), tool_id: "claude".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None };
+        let named = SavedSession { id: "named".into(), native_id: Some("two".into()), started_at: 9_000, ..legacy.clone() };
+        let all = [named.clone(), legacy.clone()];
+        let session = |id: &str, at: i64| { let mut parsed = crate::history::ParsedSession::new(); parsed.cwd = Some("/work".into()); parsed.native_id = Some(id.into()); parsed.started_at = Some(at); parsed };
+        let (one, two) = (session("one", 12_000), session("two", 13_000));
+        assert!(matches(&legacy, &one, &all, &all, 20_000));
+        assert!(!matches(&legacy, &two, &all, &all, 20_000));
+        assert!(matches(&named, &two, &all, &all, 20_000));
+        assert!(!matches(&named, &one, &all, &all, 20_000));
+        // Without the sibling's name both conversations stay ambiguous.
+        let unnamed = [SavedSession { native_id: None, ..named }, legacy.clone()];
+        assert!(matches(&legacy, &two, &unnamed, &unnamed, 20_000));
     }
 
     #[cfg(windows)]
