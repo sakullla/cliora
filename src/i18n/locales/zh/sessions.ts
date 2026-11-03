@@ -61,6 +61,7 @@ export default {
   sessionMenu: '{{name}} 会话操作',
   pinSession: '置顶',
   unpinSession: '取消置顶',
+  kbReorder: '在会话栏中上移/下移（也可按住拖动）',
   removeSession: '移除会话',
   summary: '{{running}} 运行中 · {{ended}} 已结束',
   quickTools: '直接启动 CLI',

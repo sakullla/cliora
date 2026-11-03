@@ -118,6 +118,19 @@ function toggleInSet(current: Set<string>, id: string, present: boolean): Set<st
 
 type RailArrangement = { pinned: string[]; order: string[] };
 const RAIL_ARRANGE_KEY = 'cliora:workbench-rail-arrange';
+/** Ranks kept for sessions that are not on screen (waiting for a restore) are capped here. */
+const RAIL_ORDER_LIMIT = 200;
+
+/** Carry ranks across a restore: each restored session takes its old id's place. A new id
+ *  that was already ranked (listed before the report arrived) gives up that later slot. */
+export function remapArrangement(current: RailArrangement, restored: Record<string, string>): RailArrangement {
+  const fresh = new Set(Object.values(restored));
+  const remap = (ids: string[]) => {
+    const mapped = ids.map((id) => restored[id] ?? (fresh.has(id) ? null : id)).filter((id): id is string => id !== null);
+    return mapped.filter((id, index) => mapped.indexOf(id) === index);
+  };
+  return { pinned: remap(current.pinned), order: remap(current.order) };
+}
 
 function readRailArrangement(): RailArrangement {
   try {
@@ -406,7 +419,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!report || !report.restored || !Array.isArray(report.failures)) return;
       setRestoreFailures(report.failures);
       if (!Object.keys(report.restored).length) return;
-      setArrangement(current => ({ pinned: current.pinned.map(id => report.restored[id] ?? id), order: current.order.map(id => report.restored[id] ?? id) }));
+      setArrangement(current => remapArrangement(current, report.restored));
       const listed = await native.listWorkbenchSessions();
       applyListedSessions(listed);
       setSelectedId(current => {
@@ -1463,17 +1476,38 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const pinnedSet = new Set(pinned);
     const rest = filteredSessions.filter((session) => !pinnedSet.has(session.id));
     const rank = new Map(arrangement.order.map((id, index) => [id, index]));
+    // Sessions the user never placed keep their natural order after the arranged ones,
+    // so a newly started session joins the end of its group instead of jumping to the top.
     rest.sort((a, b) => {
       const ra = rank.get(a.id);
       const rb = rank.get(b.id);
       if (ra === rb) return 0;
-      if (ra === undefined) return -1;
-      if (rb === undefined) return 1;
+      if (ra === undefined) return 1;
+      if (rb === undefined) return -1;
       return ra - rb;
     });
     const byId = new Map(filteredSessions.map((session) => [session.id, session]));
     return [...pinned.map((id) => byId.get(id)!), ...rest];
   }, [filteredSessions, arrangement]);
+
+  // Every session holds an explicit rank, not only the ones moved by hand. A restart restores
+  // sessions under new ids and maps the ranks across, so the rail comes back in the same order;
+  // a session that only restores on a later retry still returns to its old place.
+  useEffect(() => {
+    setArrangement((current) => {
+      const ranked = new Set([...current.order, ...current.pinned]);
+      const missing = sessions.filter((session) => !ranked.has(session.id)).map((session) => session.id);
+      if (!missing.length) return current;
+      const live = new Set(sessions.map((session) => session.id));
+      // Ranks of sessions not on screen wait for a restore that may never come; keep the list
+      // bounded by dropping those, never a rank that belongs to a session on screen.
+      let order = [...current.order, ...missing];
+      for (let index = order.length - 1; order.length > RAIL_ORDER_LIMIT && index >= 0; index -= 1) {
+        if (!live.has(order[index])) order = [...order.slice(0, index), ...order.slice(index + 1)];
+      }
+      return { pinned: current.pinned, order };
+    });
+  }, [sessions]);
 
   useEffect(() => {
     try { localStorage.setItem(RAIL_ARRANGE_KEY, JSON.stringify(arrangement)); } catch { /* Storage is optional. */ }
@@ -1485,6 +1519,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setArrangement((current) => current.pinned.includes(id)
       ? { pinned: current.pinned.filter((item) => item !== id), order: current.order }
       : { pinned: [...current.pinned, id], order: current.order.filter((item) => item !== id) });
+  }
+
+  /** A rail group was rearranged by dragging: `ids` is that group's new visible order.
+   *  Pinned sessions keep their own list; every other group shares one rank list, and ids
+   *  outside the group keep their relative order behind it. */
+  function reorderSessions(group: string, ids: string[]) {
+    const moved = new Set(ids);
+    setArrangement((current) => group === 'pinned'
+      ? { pinned: [...ids, ...current.pinned.filter((id) => !moved.has(id))], order: current.order }
+      : { pinned: current.pinned, order: [...ids, ...current.order.filter((id) => !moved.has(id))] });
   }
 
   function stepSession(step: 1 | -1) {
@@ -1743,7 +1787,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (focusTerminal) requestAnimationFrame(() => {
         if (selectedIdRef.current === id) handles.current.get(id)?.focus();
       });
-    }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} />;
+    }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} onReorder={reorderSessions} />;
 
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-docked={railDocked || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}

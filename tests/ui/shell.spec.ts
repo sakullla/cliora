@@ -781,12 +781,34 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(claude).toContainText('YOLO');
   await expect(claude).toContainText('beta-work');
 
-  // Cards only switch sessions; drag gestures and synthetic drag events never reorder them.
+  // Pressing a card and dragging it up or down reorders the rail; the release does not reselect it.
   const railList = page.getByRole('tablist', { name: '会话列表' });
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
   await expect(railList.locator('[draggable="true"]')).toHaveCount(0);
-  await claude.dragTo(codex);
+  const selectedBefore = await railList.getByRole('tab', { selected: true }).getAttribute('data-session-id');
+  const from = (await claude.boundingBox())!;
+  const to = (await codex.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 12, { steps: 3 });
+  await expect(railList.locator('[data-dragging]')).toHaveCount(1);
+  await page.mouse.move(to.x + to.width / 2, to.y + 6, { steps: 6 });
+  await expect(railList.locator('[data-drop="before"] [data-session-id="s1"]')).toHaveCount(1);
+  await page.mouse.up();
+  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  await expect(railList.locator('[data-dragging]')).toHaveCount(0);
+  await expect(railList.getByRole('tab', { selected: true })).toHaveAttribute('data-session-id', selectedBefore!);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange') ?? 'null')?.order?.slice(0, 2))).toEqual(['s2', 's1']);
+  // A short press without travel stays a plain click.
+  await codex.click();
+  await expect(codex).toHaveAttribute('aria-selected', 'true');
+  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  // The keyboard twin moves the focused card back down.
+  await claude.focus();
+  await page.keyboard.press('Alt+Shift+ArrowDown');
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
+  await expect(claude).toBeFocused();
+  // Native HTML5 drag events are not a reorder path.
   await page.evaluate(() => {
     const source = document.querySelector('[data-session-id="s2"]')!.parentElement!;
     const target = document.querySelector('[data-session-id="s1"]')!.parentElement!;

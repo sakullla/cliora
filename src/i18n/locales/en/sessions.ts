@@ -61,6 +61,7 @@ export default {
   sessionMenu: '{{name}} session actions',
   pinSession: 'Pin to top',
   unpinSession: 'Unpin',
+  kbReorder: 'Move up/down in the session list (or drag it)',
   removeSession: 'Remove session',
   summary: '{{running}} running · {{ended}} ended',
   quickTools: 'Start a CLI',

@@ -1446,6 +1446,31 @@ test('restoration keeps selected and pinned sessions and runs once across page s
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
 });
 
+test('restored sessions come back in the rail order they had before the restart', async ({ page }) => {
+  await page.addInitScript(() => {
+    // Before the restart Claude Code sat above Codex; the restore hands both new ids, and the
+    // list already contains them (in launch order) before the report arrives.
+    const reloaded = !!sessionStorage.getItem('seeded');
+    // After a plain reload the sessions are still live, so there is nothing left to restore.
+    Object.assign(window, { __twoSessions: true, __restoreReport: { restored: reloaded ? {} : { 'old-codex': 's1', 'old-claude': 's2' }, failures: [] } });
+    if (!reloaded) {
+      sessionStorage.setItem('seeded', '1');
+      localStorage.setItem('cliora:workbench-rail-arrange', JSON.stringify({ pinned: [], order: ['old-claude', 'old-codex', 's1', 's2'] }));
+    }
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const tabs = page.getByRole('tablist', { name: '会话列表' }).getByRole('tab');
+  await expect(tabs).toHaveCount(2);
+  await expect(tabs.first()).toHaveText(/Claude Code/);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange')!).order)).toEqual(['s2', 's1']);
+  // A session that was never moved by hand is ranked too, so the next restart keeps it in place.
+  await page.reload();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(tabs.first()).toHaveText(/Claude Code/);
+});
+
 test('unresolved restoration stays visible and can be dismissed explicitly', async ({ page }) => {
   await page.addInitScript(() => Object.assign(window, { __restoreReport: { restored: {}, failures: [{ session: { id: 'missing', toolId: 'codex', directory: 'C:/work' }, detail: '原会话不存在' }] } }));
   await openWorkbench(page);

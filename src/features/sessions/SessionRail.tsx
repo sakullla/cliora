@@ -1,5 +1,6 @@
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent, PointerEvent } from 'react';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -37,12 +38,28 @@ function PlaceLabel({ text, parts }: { text: string; parts?: PlaceParts }) {
   return <><span className={styles.placeHead}>{parts.head}</span><span className={styles.placeTail}>{parts.tail}</span></>;
 }
 
+/** Pointer travel before a press on a session becomes a drag instead of a click. */
+const DRAG_THRESHOLD = 5;
+/** Distance from the list edge where a drag scrolls the list. */
+const DRAG_EDGE = 28;
+
+type DragPress = { id: string; group: string; pointerId: number; startY: number; startScroll: number; node: HTMLElement; active: boolean };
+type DragView = { id: string; group: string; offset: number; target: string | null; after: boolean };
+
+/** Insert `id` before or after `target` inside `ids`; null target means the end. */
+export function moveWithin(ids: string[], id: string, target: string | null, after: boolean): string[] {
+  const rest = ids.filter((item) => item !== id);
+  if (target === null || !rest.includes(target)) return [...rest, id];
+  const index = rest.indexOf(target) + (after ? 1 : 0);
+  return [...rest.slice(0, index), id, ...rest.slice(index)];
+}
+
 /** True when a double-click landed on a session's tool icon (the rail toggle target). */
 function onIcon(event: MouseEvent<HTMLElement>): boolean {
   return event.target instanceof Element && !!event.target.closest('[data-rail-icon]');
 }
 
-export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, docked = false, busy, canLaunch, endedCollapsed, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded }: {
+export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, docked = false, busy, canLaunch, endedCollapsed, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded, onReorder }: {
   sessions: RailSession[];
   total: number;
   running: number;
@@ -65,8 +82,17 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   onClearEnded: () => void;
   onToggleSlim: () => void;
   onToggleEnded: () => void;
+  /** A vertical list was rearranged inside one group; `ids` is the group's new order. */
+  onReorder?: (group: string, ids: string[]) => void;
 }) {
   const { t } = useTranslation();
+  const listRef = useRef<HTMLDivElement>(null);
+  const press = useRef<DragPress | null>(null);
+  const swallowClick = useRef(false);
+  const [drag, setDrag] = useState<DragView | null>(null);
+  // Dragging reorders the visible vertical list only: the narrow strip scrolls sideways and a
+  // filtered list hides sessions whose place would be ambiguous.
+  const canDrag = !!onReorder && !narrow && !search.trim();
   const compact = slim && !narrow;
   const showSearch = !compact && !narrow && (total >= RAIL_SEARCH_MIN || !!search);
   const toggleLabel = compact ? t('sessions.railExpand') : t('sessions.railCollapse');
@@ -81,6 +107,21 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   };
 
   function onListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape' && press.current?.active) { event.preventDefault(); cancelDrag(); return; }
+    // Alt+Shift+Up/Down moves the focused session inside its group, the keyboard twin of dragging.
+    if (canDrag && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      const id = (document.activeElement as HTMLElement | null)?.dataset.sessionId;
+      const group = groups.find((item) => item.items.some((entry) => entry.session.id === id));
+      if (!id || !group || group.items.length < 2) return;
+      event.preventDefault();
+      const ids = group.items.map((item) => item.session.id);
+      const index = ids.indexOf(id);
+      const next = index + (event.key === 'ArrowUp' ? -1 : 1);
+      if (next < 0 || next >= ids.length) return;
+      onReorder?.(group.key, moveWithin(ids, id, ids[next], event.key === 'ArrowDown'));
+      requestAnimationFrame(() => listRef.current?.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(id)}"]`)?.focus());
+      return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)')];
@@ -111,7 +152,62 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     { key: 'ended', label: t('sessions.ended'), items: endedVisible, count: endedSessions.length },
   ].filter((group) => group.count > 0);
 
-  const renderSession = (item: RailSession) => {
+  function cancelDrag() {
+    const current = press.current;
+    if (current?.active && current.node.hasPointerCapture(current.pointerId)) current.node.releasePointerCapture(current.pointerId);
+    press.current = null;
+    setDrag(null);
+  }
+
+  function onPressStart(event: PointerEvent<HTMLButtonElement>, id: string, group: string) {
+    if (!canDrag || event.button !== 0 || !event.isPrimary || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if ((groups.find((item) => item.key === group)?.items.length ?? 0) < 2) return;
+    press.current = { id, group, pointerId: event.pointerId, startY: event.clientY, startScroll: listRef.current?.scrollTop ?? 0, node: event.currentTarget, active: false };
+  }
+
+  function onPressMove(event: PointerEvent<HTMLButtonElement>) {
+    const current = press.current;
+    const list = listRef.current;
+    if (!current || !list || event.pointerId !== current.pointerId) return;
+    if (!current.active) {
+      if (Math.abs(event.clientY - current.startY) < DRAG_THRESHOLD) return;
+      current.active = true;
+      current.node.setPointerCapture(current.pointerId);
+    }
+    event.preventDefault();
+    const box = list.getBoundingClientRect();
+    if (event.clientY < box.top + DRAG_EDGE) list.scrollTop -= 8;
+    else if (event.clientY > box.bottom - DRAG_EDGE) list.scrollTop += 8;
+    // The drop slot is the first sibling whose middle sits below the pointer.
+    const rows = [...list.querySelectorAll<HTMLElement>(`[data-drag-group="${current.group}"]`)].filter((row) => row.dataset.dragId !== current.id);
+    let target: string | null = null;
+    let after = false;
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (event.clientY < rect.top + rect.height / 2) { target = row.dataset.dragId ?? null; break; }
+    }
+    if (target === null && rows.length) { target = rows[rows.length - 1].dataset.dragId ?? null; after = true; }
+    setDrag({ id: current.id, group: current.group, offset: event.clientY - current.startY + list.scrollTop - current.startScroll, target, after });
+  }
+
+  function onPressEnd(event: PointerEvent<HTMLButtonElement>) {
+    const current = press.current;
+    if (!current || event.pointerId !== current.pointerId) return;
+    if (current.active && drag && drag.id === current.id) {
+      const group = groups.find((item) => item.key === current.group);
+      if (group) {
+        const ids = group.items.map((item) => item.session.id);
+        const next = moveWithin(ids, current.id, drag.target, drag.after);
+        if (next.join('\n') !== ids.join('\n')) onReorder?.(current.group, next);
+      }
+      // The release still dispatches a click on the dragged card; it must not reselect.
+      swallowClick.current = true;
+      window.setTimeout(() => { swallowClick.current = false; }, 0);
+    }
+    cancelDrag();
+  }
+
+  const renderSession = (item: RailSession, group: string) => {
     const { session } = item;
     const selected = session.id === selectedId;
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
@@ -123,8 +219,18 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     // A running session that is only waiting for input already reads that way from its tool icon
     // and quiet state dot; repeating the label on every row would spend the room titles need.
     const quietState = !pending && item.tone === 'idle';
-    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}>
+    const dragging = drag?.id === session.id;
+    const dropMark = drag && !dragging && drag.group === group && drag.target === session.id ? (drag.after ? 'after' : 'before') : undefined;
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
+      data-drag-group={group} data-drag-id={session.id} data-dragging={dragging || undefined} data-drop={dropMark}
+      style={dragging ? { transform: `translateY(${drag.offset}px)` } : undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
+        onPointerDown={(event) => onPressStart(event, session.id, group)}
+        onPointerMove={onPressMove}
+        onPointerUp={onPressEnd}
+        onPointerCancel={cancelDrag}
+        onLostPointerCapture={() => { if (press.current?.active) cancelDrag(); }}
+        onClickCapture={(event) => { if (swallowClick.current) { swallowClick.current = false; event.preventDefault(); event.stopPropagation(); } }}
         onClick={() => onSelect(session.id)}
         onDoubleClick={(event) => { if (!narrow && onIcon(event)) { event.preventDefault(); onToggleSlim(); } }}
         // Middle-click closes like a browser tab; a running session still asks before ending.
@@ -195,7 +301,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
       </div>}
     </div>
 
-    <div className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} onKeyDown={onListKeyDown}>
+    <div ref={listRef} className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} data-dragging={drag ? '' : undefined} onKeyDown={onListKeyDown}>
       {groups.map((group) => <div key={group.key} className={styles.sessionGroup} role="presentation" data-group={group.key}>
         {(groups.length > 1 || group.key === 'ended' || docked) && <div className={styles.groupLabel} role="presentation">
           {group.key === 'ended' && !compact && !narrow
@@ -203,7 +309,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             : <>{group.key === 'running' && !compact && <span className={styles.liveDot} data-live="" aria-hidden="true" />}<span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
           {group.key === 'ended' && !compact && !narrow && <button type="button" className={styles.groupAction} disabled={busy} aria-label={t('sessions.clearEnded')} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEndedShort')}</span></button>}
         </div>}
-        {group.items.map(renderSession)}
+        {group.items.map((item) => renderSession(item, group.key))}
       </div>)}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.railNoMatchClear} onClick={() => onSearch('')}>{t('sessions.clearFilter')}</button></div>}
     </div>

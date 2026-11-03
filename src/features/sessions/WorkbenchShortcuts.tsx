@@ -33,6 +33,7 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
       { keys: [['Alt', 'N']], label: t('sessions.shortcutNew') },
       { keys: [['Alt', '↑'], ['Alt', '↓']], label: t('sessions.shortcutSwitch') },
       { keys: [['Ctrl', 'Tab']], label: t('sessions.kbCycle') },
+      { keys: [['Alt', 'Shift', '↑'], ['Alt', 'Shift', '↓']], label: t('sessions.kbReorder') },
       { keys: [[modLabel, 'Shift', 'D']], label: t('sessions.splitView') },
       { keys: [[modLabel, 'Shift', 'B']], label: t('sessions.kbToggleRail') },
     ] },
