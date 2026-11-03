@@ -915,6 +915,7 @@ export default {
     liveInvalid: '已失效',
     liveInvalidMissing: '已应用的配置已不存在',
     liveInvalidNote: '需要重新应用才会生效',
+    liveReapply: '重新应用',
     liveInvalidHint: '应用的记录与当前配置不一致（版本、公共配置或绑定已失效），需要重新应用。',
     liveUnconfirmed: '无法确认',
     liveUnconfirmedValue: '远程目标没有绑定记录',

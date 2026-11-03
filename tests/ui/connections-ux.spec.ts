@@ -26,7 +26,7 @@ async function mockWorkspace(page: Page, count = 20, options: { stale?: boolean;
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'get_registered_tool_workspace') return workspace(args?.scope ?? 'global', args?.projectPath ?? null);
-        if (command === 'apply_registered_native_profile') { applied.id = args?.profileId ?? applied.id; return { transactionId: '1', changedFiles: [], status: 'written_for_next_session' }; }
+        if (command === 'apply_registered_native_profile') { applied.id = args?.profileId ?? applied.id; ((window as unknown as { __applyCalls?: string[] }).__applyCalls ??= []).push(applied.id); return { transactionId: '1', changedFiles: [], status: 'written_for_next_session' }; }
         if (command === 'inspect_registered_native_draft') return { connection: null, reasoningEffort: null };
         return null;
       } },
@@ -106,6 +106,14 @@ test('a stale binding is reported as no longer in effect, never as in effect', a
     probe.remove();
     return value;
   }));
+});
+
+test('a stale binding offers to apply the same configuration again from the live strip', async ({ page }) => {
+  await mockWorkspace(page, 3, { stale: true });
+  const live = page.getByRole('region', { name: '工具与连接' }).locator('[data-tools-live]');
+  await expect(live).toHaveAttribute('data-live-state', 'invalid');
+  await live.getByRole('button', { name: '重新应用', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __applyCalls?: string[] }).__applyCalls ?? [])).toEqual(['p0']);
 });
 
 test('a project scope without its own binding says so and never claims a configuration', async ({ page }) => {

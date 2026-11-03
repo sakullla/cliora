@@ -1419,8 +1419,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .launcherCopy { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .launcherCopy strong { overflow: hidden; color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .launcherCopy small { overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
-.launcherTools { display: flex; flex: none; align-items: center; padding-left: var(--space-1_5); }
-.launcherTools > span { display: grid; place-items: center; width: 26px; height: 26px; margin-left: calc(var(--space-1_5) * -1); border: 2px solid var(--surface); border-radius: 50%; background: var(--surface-2); box-shadow: var(--shadow-xs); }
 .launcherKeys { display: inline-flex; flex: none; gap: var(--space-0_5); padding-left: var(--space-1); }
 .launcherKeys kbd { min-width: 22px; padding: 0 var(--space-1); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-xs); background: var(--surface-2); color: var(--text-3); font-family: var(--font-sans); font-size: var(--fs-micro); line-height: 18px; text-align: center; box-shadow: none; }
 .emptyKbd { margin-left: var(--space-1); padding: 0 var(--space-1); border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent); border-radius: var(--radius-xs); background: transparent; color: inherit; font-family: var(--font-sans); font-size: var(--fs-micro); line-height: 16px; opacity: .8; box-shadow: none; }
@@ -1660,7 +1658,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .actionGroup { gap: 0; }
 .root[data-compact] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
 .root[data-compact] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
-.root[data-compact] .launcherTools { display: none; }
 .root[data-compact] .terminalActions .toolButton[data-size] { width: 26px; }
 .root[data-compact] .composerTrigger[data-size] { width: 26px; padding: 0; }
 .root[data-compact] .composerTrigger .toolLabel { display: none; }

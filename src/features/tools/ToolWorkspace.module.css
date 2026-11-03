@@ -342,6 +342,7 @@ div > .feedback { margin-bottom: var(--space-3); }
 .liveLabel { flex: none; color: var(--text-3); font-weight: var(--fw-medium); }
 .liveNote { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; color: var(--warning); text-overflow: ellipsis; white-space: nowrap; }
 .liveStrip > strong { min-width: 0; overflow: hidden; color: var(--text); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.liveStrip > .liveAction[data-size] { flex: none; min-height: 26px; margin: calc(var(--space-1) * -1) calc(var(--space-1_5) * -1) calc(var(--space-1) * -1) 0; padding: 0 var(--space-2_5); font-size: var(--fs-caption); }
 .boardNote { display: flex; align-items: flex-start; gap: var(--space-1_5); margin: var(--space-2) var(--space-3) 0; padding: 0 var(--space-1); color: var(--warning); font-size: var(--fs-caption); line-height: 1.5; }
 .boardNote > svg { flex: none; margin-top: 1px; }
 

@@ -915,6 +915,7 @@ export default {
     liveInvalid: 'No longer in effect',
     liveInvalidMissing: 'The applied profile no longer exists',
     liveInvalidNote: 'Apply it again to take effect',
+    liveReapply: 'Apply again',
     liveInvalidHint: 'The applied record no longer matches the saved configuration (version, common settings or binding). Apply it again.',
     liveUnconfirmed: 'Unconfirmed',
     liveUnconfirmedValue: 'The remote target returned no binding record',

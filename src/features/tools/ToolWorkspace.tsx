@@ -548,6 +548,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
           <span className={styles.liveLabel}>{liveText.label}</span>
           {liveText.value && <strong title={liveText.value}>{liveText.value}</strong>}
           {liveText.note && <span className={styles.liveNote}>{liveText.note}</span>}
+          {/* The strip names the problem, so it also carries the one fix: re-apply the same configuration. */}
+          {live.state === 'invalid' && live.profile && workspace.probe.nativeWrites.state === 'supported' && <Button size="sm" className={styles.liveAction} disabled={busy || !!applying} onClick={() => void apply(live.profile!)}>{applying === live.profile.id ? t('tools.workspace.applying') : t('tools.workspace.liveReapply')}</Button>}
         </div>
         {workspace.probe.nativeWrites.state !== 'supported' && <p className={styles.boardNote}><Icon name="lock" size={14} />{t('tools.workspace.applyBlocked')}{workspace.probe.nativeWrites.reason ? ` · ${workspace.probe.nativeWrites.reason}` : ''}</p>}
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><Button variant="ghost" size="sm" onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</Button></div>}

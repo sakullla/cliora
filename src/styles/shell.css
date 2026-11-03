@@ -269,15 +269,15 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .content-inner > :not(:where(.environment-banner, .error-banner, .status-banner, .empty-state)) { animation: page-in 240ms var(--ease); }
 .content-inner > div:not(.environment-banner) { min-width: 0; }
 
-.page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-5); margin-bottom: var(--space-6); }
+.page-head { display: flex; flex: none; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-5); margin-bottom: var(--space-6); }
 .page-head > * { min-width: 0; }
 .page-head h1 { font-size: var(--fs-page); line-height: 1.2; letter-spacing: -.03em; font-weight: var(--fw-bold); }
 .page-head h1:focus { outline: none; }
 .page-head > div { position: relative; }
 .page-head p { margin-top: var(--space-1_5); max-width: 62ch; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
+/* Dense pages give back space under the header only; the title itself keeps one size on
+   every page so switching pages never makes it jump. */
 .page-head[data-compact] { align-items: center; margin-bottom: var(--space-4); }
-.page-head[data-compact] h1 { font-size: 24px; letter-spacing: -.02em; }
-.page-head[data-compact] p { margin-top: var(--space-0_5); font-size: var(--fs-body); }
 
 /* ---------- Responsive shell ------------------------------------------ */
 

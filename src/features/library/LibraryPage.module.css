@@ -100,6 +100,14 @@
 .scopeName { flex: none; max-width: 120px; }
 .cardActions { position: relative; z-index: 1; display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-0_5); margin-left: auto; }
 .cardActions [data-copied="true"], .cardActions [data-copied="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+/* At rest the card leads with its title and summary; the secondary actions recede and
+   come forward when the pointer or focus reaches the card. They stay in place, so the
+   layout never shifts and every action remains reachable by keyboard. */
+@media (hover: hover) {
+  .cardActions > [data-variant="ghost"]:not([data-copied="true"]) { color: var(--text-3); transition: color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+  .list > .card:is(:hover, :focus-within) .cardActions > [data-variant="ghost"]:not([data-copied="true"]) { color: var(--text-2); }
+  .list > .card .cardActions > [data-variant="ghost"]:hover:not(:disabled) { color: var(--text); }
+}
 .danger, .danger:hover:not(:disabled) { color: var(--danger); }
 .danger:hover:not(:disabled) { background: var(--danger-soft); }
 

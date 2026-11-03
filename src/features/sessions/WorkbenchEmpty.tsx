@@ -39,7 +39,6 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         {tools.length > 0 && <button type="button" className={styles.launcherBar} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={() => onNewSession()}>
           <span className={styles.launcherGlyph} aria-hidden="true"><Icon name="plus" size={18} /></span>
           <span className={styles.launcherCopy}><strong>{t('sessions.newSession')}</strong><small>{t('sessions.launcherHint')}</small></span>
-          <span className={styles.launcherTools} aria-hidden="true">{quickTools.slice(0, 4).map((tool) => <span key={tool.id}><ToolIcon toolId={tool.id} size={14} /></span>)}</span>
           <span className={styles.launcherKeys} aria-hidden="true"><kbd>Alt</kbd><kbd>N</kbd></span>
         </button>}
         <div className={styles.emptyActions}>
@@ -75,7 +74,8 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
       </section>}
 
       <footer className={styles.emptyFoot}>
-        <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}><kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span><span className={styles.shortcutSep} aria-hidden="true">·</span><kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span></span>
+        {/* Alt+N already sits on the launcher bar; the footer only teaches switching. */}
+        <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}>{tools.length === 0 && <><kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span><span className={styles.shortcutSep} aria-hidden="true">·</span></>}<kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span></span>
         {remoteEnabled ? <HostSwitcher variant="chip" targets={remoteTargets} value={activeTargetId} onChange={(targetId) => onTargetChange?.(targetId)} onManage={onManageHosts} /> : <span className={styles.localOnly}><Icon name="lock" size={12} />{t('sessions.localSessions')}</span>}
       </footer>
     </div>

@@ -136,7 +136,9 @@
 }
 .list > button:hover:not(:disabled) { background: var(--surface); border-color: var(--line); }
 .list > button:focus-visible { border-color: var(--accent); }
-.list > button.selected, .list > button.selected:hover:not(:disabled) { background: var(--surface); border-color: var(--accent-line); box-shadow: var(--shadow-card), 0 0 0 3px var(--accent-ring); }
+/* The selected record reads as a lifted card with an accent edge; the halo ring is left to
+   keyboard focus so the two states never look alike. */
+.list > button.selected, .list > button.selected:hover:not(:disabled) { background: var(--surface); border-color: var(--accent-line); box-shadow: inset 3px 0 0 var(--accent), var(--shadow-card); }
 .list > button strong,
 .list > button:hover strong,
 .list > button.selected strong,

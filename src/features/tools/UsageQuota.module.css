@@ -12,8 +12,10 @@
 .queryTitle { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2); min-width: 0; }
 .queryTitle > span { color: var(--text-2); font-weight: var(--fw-semibold); overflow-wrap: anywhere; font-size: var(--fs-caption); }
 .queryTitle small { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); }
-.query[data-stale="true"] .refresh:not(:disabled) { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
-.quota .query > small.staleSummary { margin-top: calc(-1 * var(--space-1)); color: var(--warning); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; overflow-wrap: anywhere; }
+/* Stale data is already flagged by its badge; the refresh button invites the fix in the
+   brand tint instead of repeating the warning, and the explanation stays quiet. */
+.query[data-stale="true"] .refresh:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.quota .query > small.staleSummary { margin-top: calc(-1 * var(--space-1)); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; overflow-wrap: anywhere; }
 .summaryMetrics { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 @container (min-width: 680px) {
   .summaryMetrics { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: var(--space-3) var(--space-5); }
