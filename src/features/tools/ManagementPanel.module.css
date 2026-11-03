@@ -27,9 +27,11 @@
 .compatibility summary { cursor: pointer; font-size: var(--fs-body); }
 .compatibility p { margin: var(--space-2) 0 0; line-height: 1.6; overflow-wrap: anywhere; }
 .list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
-.list > li { display: grid; gap: var(--space-2_5); border: 0; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); min-width: 0; transition: background-color var(--fast) var(--ease); }
+.list > li { display: grid; gap: var(--space-1_5); border: 0; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); min-width: 0; transition: background-color var(--fast) var(--ease); }
 .list > li:hover { background: color-mix(in srgb, var(--surface-2) 85%, var(--surface)); }
 .list > li > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.list > li > p { margin: 0; color: var(--text-2); font-size: var(--fs-control); overflow-wrap: anywhere; }
+.list > li > details:not([open]) { margin-top: var(--space-0_5); }
 .list details { font-size: var(--fs-body); color: var(--text-2); overflow-wrap: anywhere; }
 .list details > p { margin-top: var(--space-2); }
 .list label:has(input:not([type=checkbox])) > button { min-height: var(--control-h); }

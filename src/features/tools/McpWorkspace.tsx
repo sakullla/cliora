@@ -299,10 +299,12 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
           </> : undefined}
           tools={<>
             {nativeOrigin && <ModeSwitch mode={mode} editable disabled={busy || !!preview} onChange={setMode} />}
-            {openedLibrary && onOpenLibrary && <button type="button" onClick={() => onOpenLibrary(openedLibrary.id)}><Icon name="library" size={14} />{t('tools.mcp.openLibrary')}</button>}
-            {nativeOrigin && <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removeNative(nativeOrigin)}><Icon name="trash" size={14} />{t('tools.mcp.removeFromTool')}</button>}
             <IconButton size="sm" className={doc.iconButton} aria-label={t('common.dialog.close')} title={t('common.dialog.close')} onClick={() => void closeCompose()} icon={<Icon name="close" size={15} />} />
           </>}
+          metaActions={(openedLibrary && onOpenLibrary) || nativeOrigin ? <>
+            {openedLibrary && onOpenLibrary && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="accent" onClick={() => onOpenLibrary(openedLibrary.id)}><Icon name="library" size={13} />{t('tools.mcp.openLibrary')}</Button>}
+            {nativeOrigin && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="danger" disabled={busy} onClick={() => void removeNative(nativeOrigin)}><Icon name="trash" size={13} />{t('tools.mcp.removeFromTool')}</Button>}
+          </> : undefined}
         />
         {editing ? <>
           <div className={doc.scroll}>

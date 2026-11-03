@@ -1498,7 +1498,8 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .modeCardCheck { display: inline-flex; flex: none; color: var(--accent); opacity: 0; }
 .modeCard[aria-checked='true'] .modeCardCheck { opacity: 1; }
 .checkboxRow { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--row-h-compact); color: var(--text-2); font-size: var(--fs-control); cursor: pointer; }
-.dialogTextarea { width: 100%; min-height: 82px; font-family: var(--font-mono); font-size: var(--fs-control); line-height: 1.6; }
+/* The first prompt is prose, so it reads in the UI face rather than the terminal face. */
+.dialogTextarea { width: 100%; min-height: 82px; font-family: var(--font-sans); font-size: var(--fs-body); line-height: 1.6; resize: vertical; }
 .dialogPrompts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
 .dialogPromptLabel { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); margin-right: var(--space-0_5); color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .dialogPrompts .promptPill { border-color: var(--line); background: var(--surface); color: var(--text-2); }

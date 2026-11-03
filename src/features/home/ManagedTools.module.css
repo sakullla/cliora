@@ -1,7 +1,8 @@
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;
-  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr) repeat(4, auto);
+  /* The name column sizes to the longest name (capped), so the profile chips get the rest. */
+  grid-template-columns: fit-content(280px) minmax(0, 1fr) repeat(4, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;

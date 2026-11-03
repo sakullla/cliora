@@ -13,7 +13,7 @@
 .queryTitle > span { color: var(--text-2); font-weight: var(--fw-semibold); overflow-wrap: anywhere; font-size: var(--fs-caption); }
 .queryTitle small { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); }
 .query[data-stale="true"] .refresh:not(:disabled) { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
-.staleSummary { color: var(--warning); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; overflow-wrap: anywhere; }
+.quota .query > small.staleSummary { margin-top: calc(-1 * var(--space-1)); color: var(--warning); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; overflow-wrap: anywhere; }
 .summaryMetrics { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); align-items: start; }
 @container (min-width: 680px) {
   .summaryMetrics { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: var(--space-3) var(--space-5); }

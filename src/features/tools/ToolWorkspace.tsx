@@ -476,9 +476,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
   // One statement about this exact scope, judged from the same binding the rows read.
   const live = configurationLiveState(workspace?.binding, workspace?.profiles ?? [], workspace?.common, scope, isRemote);
-  const liveCopy: Record<ConfigurationLiveState, { label: string; value: string; title: string }> = {
+  const liveCopy: Record<ConfigurationLiveState, { label: string; value: string; title: string; note?: string }> = {
     applied: { label: t('tools.workspace.liveNow'), value: live.profile?.name ?? '', title: t('tools.workspace.liveHint') },
-    invalid: { label: t('tools.workspace.liveInvalid'), value: live.profile?.name ?? t('tools.workspace.liveInvalidMissing'), title: t('tools.workspace.liveInvalidHint') },
+    invalid: { label: t('tools.workspace.liveInvalid'), value: live.profile?.name ?? t('tools.workspace.liveInvalidMissing'), title: t('tools.workspace.liveInvalidHint'), note: t('tools.workspace.liveInvalidNote') },
     unconfirmed: { label: t('tools.workspace.liveUnconfirmed'), value: t('tools.workspace.liveUnconfirmedValue'), title: t('tools.workspace.liveUnconfirmedHint') },
     unapplied: { label: t('tools.workspace.liveUnapplied'), value: '', title: t('tools.workspace.liveUnappliedHint') },
     project_unbound: { label: t('tools.workspace.liveProjectUnbound'), value: '', title: t('tools.workspace.liveProjectUnboundHint') },
@@ -547,6 +547,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
           <span className={styles.liveDot} aria-hidden="true" />
           <span className={styles.liveLabel}>{liveText.label}</span>
           {liveText.value && <strong title={liveText.value}>{liveText.value}</strong>}
+          {liveText.note && <span className={styles.liveNote}>{liveText.note}</span>}
         </div>
         {workspace.probe.nativeWrites.state !== 'supported' && <p className={styles.boardNote}><Icon name="lock" size={14} />{t('tools.workspace.applyBlocked')}{workspace.probe.nativeWrites.reason ? ` · ${workspace.probe.nativeWrites.reason}` : ''}</p>}
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><Button variant="ghost" size="sm" onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</Button></div>}

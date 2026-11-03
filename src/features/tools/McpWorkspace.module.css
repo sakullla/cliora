@@ -24,6 +24,4 @@
 .results p[data-status='failed'] { color: var(--danger); }
 .error { margin: 0; color: var(--danger); white-space: pre-wrap; }
 .notice { margin: 0; color: var(--success); }
-.dangerQuiet, .dangerQuiet:hover:not(:disabled) { display: inline-flex; align-items: center; gap: var(--space-1_5); border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
-.dangerQuiet:hover:not(:disabled) { background: var(--danger-soft); }
 @media (max-width: 640px) { .options, .diff { grid-template-columns: minmax(0, 1fr); } }
