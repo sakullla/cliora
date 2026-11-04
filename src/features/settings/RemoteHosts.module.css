@@ -3,7 +3,8 @@
 .head h2 { font-size: var(--fs-heading); font-weight: var(--fw-semibold); }
 .head p { margin-top: var(--space-0_5); max-width: 64ch; color: var(--text-2); font-size: var(--fs-body); }
 .hostCount { color: var(--text-3) !important; font-size: var(--fs-caption) !important; font-weight: var(--fw-medium); }
-.error { padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); }
+.error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); }
+.error > span { min-width: 0; overflow-wrap: anywhere; }
 
 /* Empty */
 .empty { display: grid; justify-items: center; gap: var(--space-1_5); padding: var(--space-10) var(--space-6); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); text-align: center; }
@@ -13,7 +14,7 @@
 .empty > button { margin-top: var(--space-2_5); }
 
 /* Host list */
-.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; }
 .list > li + li { border-top: 1px solid var(--line); }
 .host { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: calc(var(--row-h) + var(--space-5)); padding: var(--space-3) var(--space-4); transition: background-color var(--fast) var(--ease); }
 .host:hover { background: var(--surface-2); }

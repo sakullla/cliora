@@ -27,8 +27,8 @@
 
 @media (min-width: 900px) {
   .general { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: var(--space-8); align-items: start; }
-  /* The section index floats as a glass card beside the settings. */
-  .anchors { position: sticky; top: 0; display: grid; gap: var(--space-0_5); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface-glass); box-shadow: var(--shadow-card); backdrop-filter: blur(16px); }
+  /* A quiet, opaque index stays available without competing with the settings. */
+  .anchors { position: sticky; top: 0; display: grid; gap: var(--space-0_5); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; }
 }
 .anchorsTitle { margin: var(--space-1) 0 var(--space-1); padding: 0 var(--space-2_5); color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-bold); }
 .anchors ul { display: grid; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; }
@@ -50,11 +50,11 @@
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .anchors a:hover { background: var(--row-hover); color: var(--text); text-decoration: none; }
-.anchors a[aria-current="true"] { background: var(--surface); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--accent-line); }
+.anchors a[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: inset 0 0 0 1px var(--accent-line); }
 
 /* ---------- App update card ---------- */
 .update { display: flex; align-items: center; gap: var(--space-4); min-width: 0; padding: var(--space-4) var(--space-5); }
-.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--accent-line); border-radius: var(--radius-xl); background: radial-gradient(circle at 30% 20%, var(--surface), var(--accent-soft)); box-shadow: var(--glow-accent); }
+.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); box-shadow: none; }
 .updateMark > img { width: 32px; height: 32px; object-fit: contain; }
 .updateBadge { position: absolute; right: -5px; bottom: -5px; display: grid; place-items: center; width: 20px; height: 20px; border: 2px solid var(--surface); border-radius: 50%; background: var(--accent); color: var(--on-accent); animation: reveal var(--medium) var(--ease); }
 .update[data-tone='error'] .updateBadge { background: var(--danger); color: var(--on-danger); }

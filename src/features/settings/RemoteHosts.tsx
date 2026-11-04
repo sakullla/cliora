@@ -125,8 +125,8 @@ export function RemoteHosts() {
       {targets.length > 0 && !adding && <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => setEditing({ ...emptyDraft })}>{t('settings.remoteSsh.addHost')}</Button>}
     </header>
     {notice && <StatusBanner tone="success" autoDismissMs={5000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
-    {loadError && <p className={styles.error} role="alert">{loadError}</p>}
-    {loaded && !targets.length && !adding && <div className={styles.empty}>
+    {loadError && <div className={styles.error} role="alert"><span>{loadError}</span><Button size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void reload()}>{t('settings.remoteSsh.retry')}</Button></div>}
+    {loaded && !loadError && !targets.length && !adding && <div className={styles.empty}>
       <span className={styles.emptyGlyph} aria-hidden="true"><Icon name="server" size={22} /></span>
       <strong>{t('settings.remoteSsh.emptyTitle')}</strong>
       <p>{t('settings.remoteSsh.emptyDetail')}</p>

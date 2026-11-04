@@ -75,7 +75,7 @@ export default {
     statusUntested: '未测试',
     statusOk: '连接正常',
     statusFailed: '连接失败',
-    loadFailed: '无法读取远程主机列表。', saveFailed: '无法保存远程主机。', testFailed: '远程连接测试失败。', passwordTestHint: '密码登录会在工作台或终端中提示输入密码。请直接启动一次连接进行验证。', manageHosts: '远程主机', manageHostsHint: '添加服务器、保存密码并测试连接。', openHosts: '管理主机',
+    loadFailed: '无法读取远程主机列表。', saveFailed: '无法保存远程主机。', testFailed: '远程连接测试失败。', retry: '重试', passwordTestHint: '密码登录会在工作台或终端中提示输入密码。请直接启动一次连接进行验证。', manageHosts: '远程主机', manageHostsHint: '添加服务器、保存密码并测试连接。', openHosts: '管理主机',
   },
   icons: {
     updated: '工具图标已更新。',
@@ -127,6 +127,8 @@ export default {
   },
   webdav: {
     statusFailed: '无法读取同步状态',
+    statusLoading: '正在读取同步状态…',
+    statusUnknownHint: '连接状态未知。本机资料与加密配置包仍可使用；请先重试读取，再修改连接。',
     configured: '连接已验证，凭据保存在本机凭据库中。',
     configureFailed: 'WebDAV 配置失败',
     toggleFailed: '无法修改同步状态',
@@ -396,7 +398,7 @@ export default {
   },
   onboarding: {
     label: '重新查看上手引导',
-    hint: '回看首页页的首次使用三步清单',
+    hint: '回看首页的首次使用三步清单',
     action: '重新查看 →',
   },
 };

@@ -95,6 +95,12 @@ test('settings group preferences by task, confirm each save, and confirm the qui
   await expect(preferences.getByRole('radiogroup', { name: '主题' })).toBeVisible();
   await expect(page.getByRole('region', { name: '终端与远程', exact: true }).getByRole('combobox', { name: '启动终端', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: '更多', exact: true }).locator('#settings-other')).toBeVisible();
+  await expect(page.getByText('回看首页的首次使用三步清单', { exact: true })).toBeVisible();
+  const surface = await page.locator('#settings-interface').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { shadow: style.boxShadow, background: style.backgroundImage };
+  });
+  expect(surface).toEqual({ shadow: 'none', background: 'none' });
 
   // A theme write is announced only once the stored preference comes back.
   await preferences.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色', exact: true }).click();

@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 async function install(page: Page) {
   await page.addInitScript(() => {
     const targets = ['key', 'password'].map((authMethod, index) => ({ id: `host-${index}`, name: `${authMethod} fixture`, host: `${authMethod}.invalid`, port: 22, user: 'fixture', authMethod, defaultPath: `/fixture/${authMethod}`, enabled: true, createdAt: 1, updatedAt: 1 }));
-    const state = { hold: '', failure: '', response: '', createOutcome: '', generation: '', savedRevision: 0, replaceHost: () => {}, reads: [] as string[], readOperations: [] as unknown[], cancelled: 0, writes: [] as string[], release: () => {}, releases: [] as Array<() => void> };
+    const state = { hold: '', failure: '', response: '', createOutcome: '', generation: '', hostListFailure: false, savedRevision: 0, replaceHost: () => {}, reads: [] as string[], readOperations: [] as unknown[], cancelled: 0, writes: [] as string[], release: () => {}, releases: [] as Array<() => void> };
     const savedHost = localStorage.getItem('fixture:replaced-host');
     if (savedHost) Object.assign(targets[0], JSON.parse(savedHost));
     state.replaceHost = () => { targets[0].updatedAt++; targets[0].host = 'replacement.invalid'; localStorage.setItem('fixture:replaced-host', JSON.stringify(targets[0])); state.generation = 'replacement-'; window.dispatchEvent(new Event('cliora:remote-targets-changed')); };
@@ -19,6 +19,7 @@ async function install(page: Page) {
           if (backend && ['list_remote_directory_receipts', 'save_remote_directory_receipt', 'create_remote_directory'].includes(command)) return backend(command, args);
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: true }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [descriptor], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_remote_targets' && state.hostListFailure) throw { message: 'host list unavailable' };
           if (command === 'list_remote_targets') return targets.map(item => ({ ...item }));
           if (command === 'list_remote_saved_passwords') return ['host-1'];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
@@ -598,6 +599,20 @@ async function hosts(page: Page) {
   await page.getByRole('button', { name: '管理主机', exact: true }).click();
   return page.getByRole('region', { name: '远程主机', exact: true });
 }
+
+test('a host list read failure is not an empty inventory and can retry in place', async ({ page }) => {
+  await install(page); await page.goto('/');
+  await page.evaluate(() => { (window as any).__remoteFixture.hostListFailure = true; });
+  const panel = await hosts(page);
+  await expect(panel.getByRole('alert')).toContainText('无法读取远程主机列表');
+  await expect(panel.getByText('还没有远程主机', { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: '添加主机', exact: true })).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__remoteFixture.hostListFailure = false; });
+  await panel.getByRole('alert').getByRole('button', { name: '重试', exact: true }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(panel.getByText('共 2 台主机')).toBeVisible();
+  await expect(panel.getByRole('button', { name: '编辑 key fixture', exact: true })).toBeVisible();
+});
 
 test('a name-only host save keeps its connection revision and remains renamed after re-entering settings', async ({ page }) => {
   await install(page); await page.goto('/');

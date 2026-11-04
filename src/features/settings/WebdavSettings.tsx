@@ -226,6 +226,14 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     } catch { /* The action error stays visible when status cannot be refreshed. */ }
   }
 
+  async function retryStatus() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { setStatus(await native.getWebdavStatus()); }
+    catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.statusFailed')); }
+    finally { if (mounted.current) setBusy(false); }
+  }
+
   async function retryNative(blocker: RestoreBlocker) {
     if (busy) return;
     setBusy(true); setError(''); setMessage('');
@@ -477,7 +485,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
           <div><dt>{t('settings.webdav.diagReceipt')}</dt><dd>{status.receipt ? t('settings.webdav.diagReceiptValue', { compared: status.receipt.compared, downloaded: status.receipt.downloaded, uploaded: status.receipt.uploaded }) : t('settings.webdav.diagReceiptNone')}</dd></div>
         </dl>
       </details>
-    </Card> : <Card className={styles.hero} data-tone="idle" data-intro="">
+    </Card> : status ? <Card className={styles.hero} data-tone="idle" data-intro="">
       <div className={styles.heroTop}>
         <span className={styles.glyph} data-tone="idle" aria-hidden="true"><Icon name="cloud" size={24} /></span>
         <div className={styles.heroCopy}>
@@ -494,6 +502,15 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         {itemIssues ? readiness : <small className={styles.footHint}>{t('settings.webdav.notConnectedHint')}</small>}
         <span className={styles.actions}><Button variant="primary" icon={<Icon name="link" size={14} />} onClick={() => onEdit(true)}>{t('settings.webdav.configure')}</Button></span>
       </div>
+    </Card> : <Card className={styles.hero} data-tone={error ? 'danger' : 'idle'}>
+      <div className={styles.heroTop}>
+        <span className={styles.glyph} data-tone={error ? 'danger' : 'idle'} aria-hidden="true"><Icon name="cloud" size={24} /></span>
+        <div className={styles.heroCopy}>
+          <div className={styles.heroTitle}><h2>{t('settings.webdav.title')}</h2><Badge tone={error ? 'danger' : 'neutral'}>{error ? t('settings.webdav.statusFailed') : t('settings.webdav.statusLoading')}</Badge></div>
+          <p className={styles.heroLead}>{error ? t('settings.webdav.statusUnknownHint') : t('settings.webdav.statusLoading')}</p>
+        </div>
+      </div>
+      {error && <div className={styles.heroFoot}><span className={styles.footHint}>{t('settings.webdav.statusFailed')}</span><Button variant="primary" loading={busy} icon={<Icon name="refresh" size={14} />} onClick={() => void retryStatus()}>{t('settings.webdav.retry')}</Button></div>}
     </Card>}
 
     {error && <Notice tone="error" onDismiss={() => setError('')}>{error}</Notice>}

@@ -7,6 +7,8 @@ const option = (flag, fallback) => { const index = process.argv.indexOf(flag); r
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 const sizeOption = option('--size', 'all');
+const languageOption = option('--language', 'zh');
+const languages = languageOption === 'all' ? ['zh', 'en'] : [languageOption];
 // The General tab is captured too when asked, so the settings grouping has browser evidence.
 const withGeneral = process.argv.includes('--general');
 const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
@@ -56,11 +58,12 @@ function installMock(seed) {
     { key: 'account:1', kind: 'account', label: '工作账号', status: 'available', pendingFields: [] },
     { key: 'project:1', kind: 'project', label: '栖点', status: 'available', pendingFields: [] },
   ];
+  localStorage.setItem('cliora:language', control.language ?? 'zh');
   Object.assign(window, {
     isTauri: true,
     __sync: control,
     __TAURI_INTERNALS__: { invoke: async (command, args = {}) => {
-      if (command === 'get_bootstrap' || command === 'set_language' || command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: control.theme, remote_ssh_enabled: !!control.remoteSsh, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+      if (command === 'get_bootstrap' || command === 'set_language' || command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: control.theme, language: control.language ?? 'zh', remote_ssh_enabled: !!control.remoteSsh, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
       if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], projectModelOverride: false, yoloAvailable: true, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
       if (command === 'list_projects') return control.projects;
       if (command === 'list_remote_targets' || command === 'list_remote_saved_passwords') return [];
@@ -106,9 +109,9 @@ function findOverflow() {
 
 const shots = [];
 const failures = [];
-async function openSync(page) {
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+async function openSync(page, language) {
+  await page.getByRole('navigation', { name: language === 'en' ? 'Pages' : '页面' }).getByRole('button', { name: language === 'en' ? 'Settings' : '设置', exact: true }).click();
+  await page.getByRole('tab', { name: language === 'en' ? 'Migration & sync' : '迁移与同步' }).click();
 }
 // Run-level failures (preview not ready, browser launch) are recorded as failures instead of
 // crashing, so the gallery, manifest and README are always written and the exit code is 1.
@@ -116,39 +119,39 @@ let browser = null;
 try {
 if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}`);
 browser = await chromium.launch();
-for (const theme of themes) for (const width of widths) {
+for (const theme of themes) for (const width of widths) for (const language of languages) {
   for (const [name, seed] of Object.entries(scenarios)) {
     let page = null;
     try {
       page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
-      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, message: error.message }));
-      await page.addInitScript(installMock, { ...seed, theme, sampleTransfers: transfers });
+      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, language, message: error.message }));
+      await page.addInitScript(installMock, { ...seed, theme, language, sampleTransfers: transfers });
       const shot = async (label) => {
-        const file = `${theme}-${width}-${label}.png`;
+        const file = `${language}-${theme}-${width}-${label}.png`;
         await page.screenshot({ path: `${out}/${file}`, fullPage: true });
-        shots.push({ name: label, scenario: name, theme, width, file });
+        shots.push({ name: label, scenario: name, theme, width, language, file });
         const over = await page.evaluate(findOverflow);
-        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
+        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, language, over });
         console.log(`${out}/${file}`);
       };
       await page.goto(previewUrl);
-      await openSync(page);
+      await openSync(page, language);
       await page.waitForTimeout(1000);
       await shot(name);
       if (width === 1360 || width === 640) {
         if (name === 'unconnected') {
-          await page.getByRole('button', { name: '配置 WebDAV' }).first().click();
+          await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV' }).first().click();
           await page.waitForTimeout(700); await shot('connect-dialog');
           await page.keyboard.press('Escape');
-          await page.getByRole('button', { name: '导出加密配置包' }).first().click();
+          await page.getByRole('button', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包' }).first().click();
           await page.waitForTimeout(700); await shot('export-dialog');
           await page.keyboard.press('Escape');
-          await page.getByRole('button', { name: '从配置包恢复' }).first().click();
+          await page.getByRole('button', { name: language === 'en' ? 'Restore from a bundle' : '从配置包恢复' }).first().click();
           await page.waitForTimeout(700); await shot('import-dialog');
           await page.keyboard.press('Escape');
         }
         if (name === 'attention') {
-          const choose = page.getByRole('button', { name: '选择版本' });
+          const choose = page.getByRole('button', { name: language === 'en' ? 'Choose version' : '选择版本' });
           if (await choose.count()) {
             await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-center');
             await page.keyboard.press('Escape'); await page.waitForTimeout(300);
@@ -156,19 +159,19 @@ for (const theme of themes) for (const width of widths) {
         }
         if (name === 'healthy') {
           await page.evaluate(() => { window.__sync.hang = true; });
-          await page.getByRole('button', { name: '立即同步' }).first().click();
+          await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
           await page.waitForTimeout(400); await shot('sync-running');
           await page.evaluate(() => { window.__sync.hang = false; });
           await page.reload();
-          await openSync(page);
-          await page.getByRole('button', { name: '立即同步' }).first().click();
+          await openSync(page, language);
+          await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
           await page.waitForTimeout(900); await shot('sync-result');
         }
       }
     } catch (error) {
       const message = String(error?.message ?? error).split('\n')[0];
-      failures.push({ type: 'scenario', name, theme, width, message });
-      console.error(`${name}/${theme}/${width}: ${message}`);
+      failures.push({ type: 'scenario', name, theme, width, language, message });
+      console.error(`${name}/${theme}/${width}/${language}: ${message}`);
     } finally { await page?.close().catch(() => {}); }
   }
   if (withGeneral) {
@@ -176,21 +179,21 @@ for (const theme of themes) for (const width of widths) {
     let page = null;
     try {
       page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
-      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, message: error.message }));
-      await page.addInitScript(installMock, { ...scenarios.attention, theme, remoteSsh: true, sampleTransfers: transfers });
+      page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, language, message: error.message }));
+      await page.addInitScript(installMock, { ...scenarios.attention, theme, language, remoteSsh: true, sampleTransfers: transfers });
       const shot = async (label) => {
-        const file = `${theme}-${width}-${label}.png`;
+        const file = `${language}-${theme}-${width}-${label}.png`;
         await page.screenshot({ path: `${out}/${file}`, fullPage: true });
-        shots.push({ name: label, scenario: 'general', theme, width, file });
+        shots.push({ name: label, scenario: 'general', theme, width, language, file });
         const over = await page.evaluate(findOverflow);
-        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, over });
+        if (over.length) failures.push({ type: 'overflow', name: label, theme, width, language, over });
         console.log(`${out}/${file}`);
       };
       await page.goto(previewUrl);
-      await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+      await page.getByRole('navigation', { name: language === 'en' ? 'Pages' : '页面' }).getByRole('button', { name: language === 'en' ? 'Settings' : '设置', exact: true }).click();
       await page.waitForTimeout(900);
       await shot('settings-general');
-      const hostsTab = page.getByRole('tab', { name: '主机管理' });
+      const hostsTab = page.getByRole('tab', { name: language === 'en' ? 'Host management' : '主机管理' });
       if (await hostsTab.count()) {
         await hostsTab.click();
         await page.waitForTimeout(500);
@@ -198,8 +201,8 @@ for (const theme of themes) for (const width of widths) {
       }
     } catch (error) {
       const message = String(error?.message ?? error).split('\n')[0];
-      failures.push({ type: 'scenario', name: 'general', theme, width, message });
-      console.error(`general/${theme}/${width}: ${message}`);
+      failures.push({ type: 'scenario', name: 'general', theme, width, language, message });
+      console.error(`general/${theme}/${width}/${language}: ${message}`);
     } finally { await page?.close().catch(() => {}); }
   }
 }
@@ -213,8 +216,8 @@ for (const theme of themes) for (const width of widths) {
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
-fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths }, scenarios: [...Object.keys(scenarios), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
-const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
-fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\` 与 \`--size 1360,900,640\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...Object.keys(scenarios), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
+const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.language} ${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
+fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,640\` 与 \`--language all|zh|en\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));
 if (failures.length) process.exitCode = 1;

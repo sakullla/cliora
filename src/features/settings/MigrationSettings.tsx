@@ -143,7 +143,6 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   const dialogError = error || (operation === 'export' ? listError : '');
 
   return <div className={styles.page}>
-    {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
     <div className={styles.layout}>
       <WebdavSettings active={active} editing={operation === 'webdav'} onEdit={setWebdavEditing} revision={syncRevision} />
       <aside className={styles.aside}>
@@ -152,6 +151,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
             <span className={styles.backupGlyph} aria-hidden="true"><Icon name="archive" size={22} /></span>
             <div><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p></div>
           </header>
+          {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
           {listReady && items.length > 0 && <div className={styles.inventory}>
             <small>{t('settings.migration.inventory', { count: items.length })}</small>
             {inventory}

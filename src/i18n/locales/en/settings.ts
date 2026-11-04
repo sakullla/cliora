@@ -75,7 +75,7 @@ export default {
     statusUntested: 'Not tested',
     statusOk: 'Connection OK',
     statusFailed: 'Connection failed',
-    loadFailed: 'Unable to load remote hosts.', saveFailed: 'Unable to save remote host.', testFailed: 'Remote connection test failed.', passwordTestHint: 'Password sign-in asks in the workbench or terminal. Start a connection once to verify it.', manageHosts: 'Remote hosts', manageHostsHint: 'Add, edit, and test connection hosts.', openHosts: 'Manage hosts',
+    loadFailed: 'Unable to load remote hosts.', saveFailed: 'Unable to save remote host.', testFailed: 'Remote connection test failed.', retry: 'Retry', passwordTestHint: 'Password sign-in asks in the workbench or terminal. Start a connection once to verify it.', manageHosts: 'Remote hosts', manageHostsHint: 'Add, edit, and test connection hosts.', openHosts: 'Manage hosts',
   },
   icons: {
     updated: 'Tool icon updated.',
@@ -127,6 +127,8 @@ export default {
   },
   webdav: {
     statusFailed: 'Could not read sync status',
+    statusLoading: 'Reading sync status…',
+    statusUnknownHint: 'The connection is unknown. Local data and the encrypted bundle tools remain available; retry before changing the connection.',
     configured: 'Connection verified. Credentials are stored in the local credential store.',
     configureFailed: 'WebDAV configuration failed',
     toggleFailed: 'Could not change sync state',

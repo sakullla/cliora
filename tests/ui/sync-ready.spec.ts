@@ -15,6 +15,7 @@ type SyncSeed = {
   badPassword?: boolean;
   corrupt?: boolean;
   cancelOpen?: boolean;
+  statusFailure?: boolean;
 };
 
 async function install(page: Page, seed: SyncSeed = {}) {
@@ -49,6 +50,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
       storedReceipt: null as unknown,
       installReady: false,
       loginReady: false,
+      statusFailure: false,
       ...initial,
     };
     const remembered = (() => {
@@ -86,6 +88,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
         if (command === 'get_tray_status') return { available: true, error: null };
         if (command === 'list_portable_items') return control.items;
+        if (command === 'get_webdav_status' && control.statusFailure) throw { message: '同步状态服务暂时不可用' };
         if (command === 'get_webdav_status' || command === 'set_webdav_enabled') return status();
         if (command === 'configure_webdav') {
           control.lastConfigure = args.setup;
@@ -198,6 +201,21 @@ async function openMigration(page: Page) {
 const portableItem = (key: string, label: string, status = 'available') => ({ key, kind: 'profile', label, status, pendingFields: [], toolId: 'codex', localPreview: null, incomingPreview: '' });
 const project = (id: string, name: string, path: string, available: boolean) => ({ id, name, path, available, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} });
 
+test('an unknown sync status never looks unconnected and retries without hiding bundle tools', async ({ page }) => {
+  await install(page, { statusFailure: true, items: [portableItem('profile:1', '默认配置')] });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.getByText('无法读取同步状态', { exact: true }).first()).toBeVisible();
+  await expect(webdav.getByText('连接状态未知。本机资料与加密配置包仍可使用；请先重试读取，再修改连接。')).toBeVisible();
+  await expect(webdav.getByText('尚未连接', { exact: true })).toHaveCount(0);
+  await expect(webdav.getByRole('button', { name: '配置 WebDAV' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '加密配置包' }).getByText('可迁移 1 项')).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { __syncReady: { statusFailure: boolean } }).__syncReady.statusFailure = false; });
+  await webdav.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(webdav.getByText('尚未连接', { exact: true })).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '配置 WebDAV' })).toBeVisible();
+});
+
 test('export uses one passphrase for every item and rejects a short one', async ({ page }) => {
   await install(page, { items: [portableItem('profile:1', '默认配置'), portableItem('library:1', '提示')] });
   await openMigration(page);
@@ -214,7 +232,7 @@ test('export uses one passphrase for every item and rejects a short one', async 
   await expect(dialog.getByRole('button', { name: '导出配置包', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: '导出配置包', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastExport: { destination: string; password: string; selected: string[] } | null } }).__syncReady.lastExport)).toEqual({ destination: 'C:/backup.cliora', password: '123456789012', selected: [] });
-  await expect(page.getByText('已导出 2 项。')).toBeVisible();
+  await expect(page.getByRole('region', { name: '加密配置包' }).getByRole('status')).toContainText('已导出 2 项。');
   await expect(page.getByText('重新绑定', { exact: true })).toHaveCount(0);
   await expect(page.getByText('稍后应用', { exact: true })).toHaveCount(0);
 });

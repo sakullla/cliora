@@ -24,7 +24,7 @@
 }
 .railItem:hover:not(:disabled) { background: var(--surface); }
 .railItem:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
-.railItem[data-selected] { border-color: var(--accent-line); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
+.railItem[data-selected] { border-color: var(--accent-line); background: var(--surface); box-shadow: inset 3px 0 0 var(--accent); }
 .railIcon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-top: 1px; border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); }
 .railBody { display: grid; gap: var(--space-0_5); min-width: 0; }
 .railTitle { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
@@ -76,9 +76,9 @@
 }
 .option:hover:not(:disabled) { border-color: var(--line-strong); }
 .option:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
-.option[data-selected] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.option[data-selected] { border-color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .option[data-deleted] { border-style: dashed; border-color: var(--danger-line); background: var(--danger-soft); }
-.option[data-deleted][data-selected] { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
+.option[data-deleted][data-selected] { border-color: var(--danger); box-shadow: inset 3px 0 0 var(--danger); }
 
 .radio { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-top: var(--space-0_5); border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: border-color var(--fast) var(--ease); }
 .radioDot { width: 8px; height: 8px; border-radius: 50%; background: transparent; transition: background-color var(--fast) var(--ease); }
