@@ -225,7 +225,7 @@ const manifest = [];
 const runErrors = [];
 let browser = null;
 async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
-  if (!onlyPattern.test(name)) return;
+  if (!onlyPatterns.some((pattern) => pattern.test(name))) return;
   const errors = [];
   let actionError = null;
   let overflow = null;
@@ -248,7 +248,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
     actionError = String(error?.message ?? error).split('\n')[0];
     console.error(name + ': ' + actionError);
   } finally { await page?.close().catch(() => {}); }
-  manifest.push({ name, theme, width, pageErrors: errors, overflow, actionError, resourceObservation });
+  manifest.push({ name, theme, width, locale, pageErrors: errors, overflow, actionError, resourceObservation });
 }
 
 const option = (flag, fallback) => {
@@ -265,7 +265,7 @@ const widths = sizeOption === 'all' ? [1360, 900, 640] : [...new Set(sizeOption.
 if (!widths.length || widths.some((width) => ![1360, 900, 640].includes(width))) throw new Error('Invalid --size; use 1360,900,640');
 
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
-const onlyPattern = new RegExp('^' + option('--only', '*').split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+const onlyPatterns = option('--only', '*').split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
 try {
 if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
@@ -628,7 +628,7 @@ for (const width of widths) {
 }
 
 const failed = manifest.filter((item) => item.pageErrors.length || item.overflow || item.actionError);
-fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, success: failed.length === 0 && runErrors.length === 0, runErrors, shots: manifest }, null, 2));
+fs.writeFileSync(out + '/capture-workbench-manifest.json', JSON.stringify({ generatedAt: new Date().toISOString(), synthetic: true, acceptance, previewUrl, locale, imageCount: manifest.length, success: failed.length === 0 && runErrors.length === 0, runErrors, shots: manifest }, null, 2));
 
 const cards = manifest.map((item) => '    <figure><a href="' + item.name + '.png"><img src="' + item.name + '.png" loading="lazy" alt="' + item.name + '"></a><figcaption>' + item.name + '</figcaption></figure>').join('\n');
 fs.writeFileSync(out + '/index.html', [

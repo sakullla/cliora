@@ -96,6 +96,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
     const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: (window as unknown as { __oldSessions?: boolean }).__oldSessions ? 1 : Date.now() }];
     if ((window as unknown as { __twoSessions?: boolean }).__twoSessions) sessions.push({ id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/a-long-project-directory/for-the-second-session', mode: 'yolo', running: true, exitCode: null, startedAt: Date.now() });
+    if ((window as unknown as { __emptySessions?: boolean }).__emptySessions) sessions.length = 0;
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const writes: string[] = [];
     const writeBytes: number[][] = [];
@@ -802,6 +803,62 @@ test('find opens over the terminal without resizing the PTY canvas', async ({ pa
   const after = await screen.boundingBox();
   expect(after!.width).toBe(before!.width);
   expect(after!.height).toBe(before!.height);
+});
+
+test('terminal content dominates quiet, opaque find and composer surfaces', async ({ page }) => {
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const share = await stage.evaluate((element) => {
+    const screen = element.querySelector('.xterm-screen');
+    if (!screen) return 0;
+    return screen.getBoundingClientRect().height / element.getBoundingClientRect().height;
+  });
+  expect(share).toBeGreaterThan(0.65);
+
+  await stage.getByRole('button', { name: '查找输出', exact: true }).click();
+  const findStyle = await stage.getByRole('search').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { backdrop: style.backdropFilter, background: style.backgroundImage };
+  });
+  expect(findStyle).toEqual({ backdrop: 'none', background: 'none' });
+  await page.keyboard.press('Escape');
+
+  await stage.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = stage.getByRole('region', { name: '多行输入与提示词投递' });
+  const input = composer.getByRole('textbox');
+  await expect(input).toBeFocused();
+  // The accent ring is the intentional focus state; the resting card itself stays flat.
+  expect(await composer.locator(':scope > div').evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe('none');
+  await input.evaluate((element) => element.blur());
+  await expect.poll(() => composer.locator(':scope > div').evaluate((element) => getComputedStyle(element).boxShadow)).toBe('none');
+  expect(await composer.evaluate((element) => getComputedStyle(element).backgroundImage)).toBe('none');
+  expect(await writes(page)).toEqual([]);
+});
+
+test('the empty launchpad keeps every entry without decorative motion or floating cards', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __emptySessions: true }); });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
+  const launcher = stage.getByRole('button', { name: '新建会话', exact: true });
+  await expect(launcher).toBeVisible();
+  await expect(stage.getByRole('region', { name: '直接启动 CLI' })).toBeVisible();
+  await expect(stage.getByRole('region', { name: '最近项目' })).toHaveCount(0);
+  const surfaces = await launcher.evaluate((element) => {
+    const empty = element.closest('[class*="emptyShell"]')?.parentElement;
+    const glyph = empty?.querySelector('[class*="emptyGlyph"]');
+    return {
+      launcherShadow: getComputedStyle(element).boxShadow,
+      emptyBackground: empty ? getComputedStyle(empty).backgroundImage : '',
+      glyphMotion: glyph ? getComputedStyle(glyph).animationName : '',
+    };
+  });
+  expect(surfaces).toEqual({ launcherShadow: 'none', emptyBackground: 'none', glyphMotion: 'none' });
+  await page.setViewportSize({ width: 640, height: 760 });
+  await expect(launcher).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test('font zoom, terminal colours, and a page that never scrolls sideways', async ({ page }) => {
