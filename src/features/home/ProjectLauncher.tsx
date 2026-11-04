@@ -66,6 +66,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const launchPending = useRef(false);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
   const repairToolSelect = useRef<HTMLButtonElement>(null);
+  const editToolSelect = useRef<HTMLButtonElement>(null);
   const repairCard = useRef<HTMLElement>(null);
   const focusedRepair = useRef(0);
   const latestProjects = useRef(projects); latestProjects.current = projects;
@@ -226,15 +227,19 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     finally { setBusy(''); }
   }
 
-  /** Saves the project's tool; resolves false when the save failed and the page error is shown. */
+  /** Saves in the editor or launch menu without moving its error outside the active context. */
   async function updateTool(project: Project, toolId: string): Promise<boolean> {
+    const inEditor = editingId === project.id;
     begin(project.id);
     try {
       const updated = await native.setProjectTool(project.id, toolId || null);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
       return true;
-    } catch (value) { showPageError(value); return false; }
-    finally { setBusy(''); }
+    } catch (value) { if (inEditor) showDialogError(value); else showPageError(value); return false; }
+    finally {
+      setBusy('');
+      if (inEditor) requestAnimationFrame(() => (repair?.projectId === project.id ? repairToolSelect : editToolSelect).current?.focus());
+    }
   }
 
   /** The launch menu: another tool is saved to the project first, then launched with its own mode. */
@@ -407,7 +412,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
           <div className={styles.editSections}>
           <section className={styles.editSection} aria-labelledby={`${project.id}-basics`}>
             <h3 id={`${project.id}-basics`}>{t('home.launcher.sectionBasics')}</h3>
-            <div className={styles.editField}><span>{t('home.launcher.toolFor', { name: project.name })}</span><FilterSelect label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} /></div>
+            <div className={styles.editField}><span>{t('home.launcher.toolFor', { name: project.name })}</span><FilterSelect label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : editToolSelect} /></div>
             <label className={styles.editField}><span>{t('home.launcher.nameLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} onKeyDown={event => { if (event.key === 'Enter' && names[project.id]?.trim() && !busy) { event.preventDefault(); void rename(project); } }} /><Button disabled={!!busy || !names[project.id]?.trim() || names[project.id]?.trim() === project.name} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</Button></span></label>
             {descriptor?.projectModelOverride && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /><Button disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</Button></span></label>}
           </section>

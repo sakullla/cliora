@@ -367,15 +367,17 @@ test('an English takeover error opens the comparison by error code alone', async
   expect(compared).toHaveLength(1);
 });
 
-test('a project tool is searched and switched from the card', async ({ page }) => {
+test('project tool keyboard selection keeps failures in the dialog and restores focus on failure and success', async ({ page }) => {
   await page.addInitScript(() => {
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const ids = Object.keys(names);
     let preferred = 'codex';
+    let failNext = false;
     const project = () => ({ id: 'demo', name: 'Demo', path: 'C:/demo', available: true, preferredTool: preferred, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} });
     Object.assign(window, {
       isTauri: true,
       __toolCalls: [] as unknown[],
+      __failNextTool: () => { failNext = true; },
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system' }, tools: ids.map((id) => ({ id, name: names[id] })) };
         if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true })), managedIds: ids, preservedUnknown: [] };
@@ -384,7 +386,12 @@ test('a project tool is searched and switched from the card', async ({ page }) =
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'normal', projectMode: 'normal' };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'set_project_tool') { preferred = args.toolId; (window as unknown as { __toolCalls: unknown[] }).__toolCalls.push(args); return project(); }
+        if (command === 'set_project_tool') {
+          (window as unknown as { __toolCalls: unknown[] }).__toolCalls.push(args);
+          if (failNext) { failNext = false; throw { message: '项目工具保存被拒绝' }; }
+          preferred = args.toolId;
+          return project();
+        }
         return null;
       } },
     });
@@ -396,16 +403,36 @@ test('a project tool is searched and switched from the card', async ({ page }) =
   const editor = page.getByRole('dialog', { name: '修改Demo' });
   const trigger = editor.getByRole('button', { name: 'Demo 的工具' });
   await expect(trigger).toContainText('Codex');
-  await trigger.click();
+  await page.evaluate(() => (window as unknown as { __failNextTool: () => void }).__failNextTool());
+  await trigger.focus();
+  await page.keyboard.press('Enter');
   const list = page.getByRole('listbox', { name: 'Demo 的工具' });
   await expect(list.getByRole('option')).toHaveCount(6);
   const search = page.getByLabel('搜索工具');
   await expect(search).toBeFocused();
   await search.fill('gr');
   await expect(list.getByRole('option')).toHaveCount(1);
-  await list.getByRole('option', { name: 'Grok' }).click();
-  await expect(trigger).toContainText('Grok');
+  await page.keyboard.press('Enter');
+
+  await expect(editor.getByRole('alert')).toContainText('项目工具保存被拒绝');
+  await expect(editor).toBeVisible();
+  await expect(trigger).toContainText('Codex');
+  await expect(trigger).toBeFocused();
+  await expect(page.locator('.home-launcher > div[role="alert"]')).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __toolCalls: unknown[] }).__toolCalls)).toEqual([{ projectId: 'demo', toolId: 'grok' }]);
+
+  // Retrying the same choice uses the same IPC and returns focus after the successful save too.
+  await page.keyboard.press('Enter');
+  await expect(search).toBeFocused();
+  await search.fill('gr');
+  await page.keyboard.press('Enter');
+  await expect(trigger).toContainText('Grok');
+  await expect(trigger).toBeFocused();
+  await expect(editor.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __toolCalls: unknown[] }).__toolCalls)).toEqual([
+    { projectId: 'demo', toolId: 'grok' },
+    { projectId: 'demo', toolId: 'grok' },
+  ]);
 });
 
 /** Two tools that differ in YOLO support; the project default mode is YOLO, so the mode follows the launched tool. */
