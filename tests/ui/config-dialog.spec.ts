@@ -31,8 +31,8 @@ test('new configuration dialog has one save action', async ({ page }) => {
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await expect(page.getByRole('heading', { name: '工具' })).toBeVisible();
   await expect(page.getByText('安装与更新')).toBeVisible();
   const installSummary = page.locator('summary').filter({ hasText: '安装与更新' });
   await expect(installSummary).toHaveCSS('display', 'flex');
@@ -107,7 +107,7 @@ test('install panel updates the active source and can switch to the native CLI',
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByText('安装与更新').click();
   await expect(page.getByText('按官方文档更新')).toHaveCount(0);
   await expect(page.getByText('npm 命令入口需要 Node.js')).toHaveCount(0);
@@ -154,7 +154,7 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await expect(page.getByRole('button', { name: '安装', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '安装 npm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '安装', exact: true }).click();
@@ -186,7 +186,7 @@ test('saving a configuration closes the dialog', async ({ page }) => {
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
@@ -218,7 +218,7 @@ test('enabling a saved profile opens a comparison when the native file differs',
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '使用' }).click();
   const comparison = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(comparison).toBeVisible();
@@ -268,7 +268,7 @@ test('subscription profiles are grouped apart and quota is added from the row me
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   const subscription = page.locator('[data-group="subscription"]');
   const other = page.locator('[data-group="other"]');
   await expect(subscription.getByText('订阅套餐', { exact: true })).toBeVisible();
@@ -306,7 +306,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('button', { name: '新配置 更多操作' }).click();
   const menu = page.getByRole('menu');
   await expect(menu.getByRole('menuitem', { name: '复制配置' })).toBeVisible();
@@ -362,7 +362,7 @@ test('a long configuration list scrolls with the page and can be searched', asyn
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   const group = page.getByRole('list', { name: '配置项' });
   await expect(page.getByLabel('搜索配置')).toBeVisible();
   // Cards flow with the page. A long list must not bring back the old 406px inner scroller.
@@ -492,8 +492,8 @@ async function installConnectionHarness(page: Page, options: { piPresets?: boole
 async function openConnections(page: Page) {
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await expect(page.getByRole('heading', { name: '工具' })).toBeVisible();
 }
 
 async function replaceNumber(field: ReturnType<Page['locator']>, value: string) {

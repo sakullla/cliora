@@ -5,7 +5,7 @@ export default {
   },
   clusters: {
     tools: '工具',
-    toolsHint: '决定哪些 CLI 出现在快速开始、工具与连接和使用记录里。',
+    toolsHint: '决定哪些 CLI 出现在首页、工具和记录里。',
     preferences: '常规偏好',
     preferencesHint: '主题、语言与应用更新，改完立即生效。',
     terminal: '终端与远程',
@@ -44,7 +44,7 @@ export default {
   },
   managed: {
     title: '管理的 CLI',
-    description: '首页、工具页与使用记录只显示勾选的工具。关闭管理不会删除已有配置。',
+    description: '首页、工具页与记录只显示勾选的工具。关闭管理不会删除已有配置。',
     more: '更多（{{count}}）',
     less: '收起',
     preservedUnknown: '未安装适配器，保留 {{count}} 份配置，只读',
@@ -322,7 +322,7 @@ export default {
     saveTitle: '保存加密配置包',
     openTitle: '打开加密配置包',
     bundleName: '栖点加密配置包',
-    exported: '已导出 {{count}} 项。请另行保存这一套口令。会话正文和使用记录不在配置包中。',
+    exported: '已导出 {{count}} 项。请另行保存这一套口令。会话正文和记录不在配置包中。',
     exportFailed: '导出配置包失败',
     exportFailedNext: '可再次点击导出配置包。',
     importFailed: '恢复配置包失败',
@@ -341,7 +341,7 @@ export default {
     exportAll: '将导出全部 {{count}} 项可迁移资料。',
     selectAll: '全选',
     deselectAll: '全不选',
-    exportEmpty: '当前没有可带走的资料。请先在快速开始、工具与连接或资料库中产生配置或资料。',
+    exportEmpty: '当前没有可带走的资料。请先在首页、工具或资料库中产生配置或资料。',
     password: '配置包口令',
     passwordPlaceholder: '至少 12 位',
     exportBundle: '导出配置包',
@@ -354,7 +354,7 @@ export default {
     inventory: '可迁移 {{count}} 项',
     exportTile: '保存为 .cliora 文件，可带到任意设备',
     importTile: '打开 .cliora 文件，写回这台设备',
-    cardLocal: '会话正文和使用记录不会离开这台设备。',
+    cardLocal: '会话正文和记录不会离开这台设备。',
     exportKeep: '口令无法找回。忘记口令将无法打开这个配置包，请另外妥善保存。',
     importNote: '恢复会把配置包内容写入本机。与本机不同的同名项先保留本机，恢复后再决定用哪个版本。',
     file: '配置包文件',
@@ -396,7 +396,7 @@ export default {
   },
   onboarding: {
     label: '重新查看上手引导',
-    hint: '回看快速开始页的首次使用三步清单',
+    hint: '回看首页页的首次使用三步清单',
     action: '重新查看 →',
   },
 };

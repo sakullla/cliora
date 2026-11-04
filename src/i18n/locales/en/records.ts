@@ -147,7 +147,7 @@ export default {
     trail: 'Child session levels',
   },
   page: {
-    remoteSubtitle: 'Usage records for the selected host.',
+    remoteSubtitle: 'Records for the selected host.',
     copiedCommand: 'Native resume command copied. Paste it into a terminal to run.',
     next: 'Refresh local records or adjust the filters.',
     operationFailed: 'Usage record operation failed',
@@ -193,7 +193,7 @@ export default {
     chipTime: 'Time: {{name}}',
     nativeTitle: 'Local usage records',
     nativeDetail: 'Read native CLI sessions in the desktop app. Browser preview does not show local history.',
-    label: 'Usage records content',
+    label: 'Records content',
     typesAria: 'Usage record types',
     sessions: 'Sessions',
     usage: 'Usage',

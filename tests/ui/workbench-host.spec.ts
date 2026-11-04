@@ -181,7 +181,7 @@ test('a remote session composer lists that host library, not this computer', asy
   await input.fill('keep-composer-draft');
   await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
   const navigation = page.getByRole('navigation', { name: '页面' });
-  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '首页', exact: true }).click();
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
   await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
@@ -361,12 +361,12 @@ test('the home tool row launches on a host with the same steps as this computer'
   expect((await independentRequests(page))[0]).toMatchObject({ toolId: 'codex', projectId: 'remote:same-project', sessionId: null, remoteIntent: { kind: 'new' }, directory: null });
   await expect(page.getByRole('region', { name: '当前会话' })).toBeVisible();
   // The folder is remembered: the next launch starts at once.
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await launch.click();
   await expect.poll(() => independentRequests(page)).toHaveLength(2);
   await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
   // Right-click chooses another folder, and cancelling it launches nothing.
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await launch.click({ button: 'right' });
   const picker = page.getByRole('dialog', { name: '选择远程文件夹' });
   await expect(picker).toBeVisible();
@@ -549,7 +549,7 @@ test('an older event cache cannot replace a newer listed state when an earlier l
     harness.__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 }, false);
     harness.__independentFreshList = true;
   });
-  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '首页', exact: true }).click();
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   await page.locator('[data-session-id="original-a"]').click();
   const stage = page.getByRole('region', { name: '当前会话' });

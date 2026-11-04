@@ -1095,7 +1095,7 @@ test('a wrapped terminal URL opens in full and its hint is cleaned up with the s
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   await page.getByRole('tab', { name: /Codex/ }).click();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
 });
 
@@ -1441,7 +1441,7 @@ test('restoration keeps selected and pinned sessions and runs once across page s
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange')!).pinned)).toEqual(['s2']);
-  await navigation.getByRole('button', { name: '快速开始', exact: true }).click();
+  await navigation.getByRole('button', { name: '首页', exact: true }).click();
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
 });
@@ -1609,7 +1609,7 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   expect(navBox.height).toBeLessThan(48);
   expect(railBox.y).toBeGreaterThan(navBox.y + navBox.height - 1);
   // The expanded sidebar has room for every page icon, so nothing is folded into the more menu.
-  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) await expect(nav.getByRole('button', { name, exact: true })).toBeVisible();
+  for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) await expect(nav.getByRole('button', { name, exact: true })).toBeVisible();
   await expect(nav.getByRole('button', { name: '工作台', exact: true }).locator('.nav-text')).toBeHidden();
   const more = nav.getByRole('button', { name: '更多页面' });
   const moreMenu = page.getByRole('menu', { name: '更多页面' });
@@ -1642,7 +1642,7 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   const shown = await nav.locator('button[aria-current], button:not([aria-haspopup])').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
   await more.click();
   const folded = (await moreMenu.getByRole('menuitem').allTextContents()).map((text) => text.replace(/Ctrl\+\d$/, ''));
-  expect([...shown, ...folded]).toEqual(['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']);
+  expect([...shown, ...folded]).toEqual(['首页', '工作台', '工具', '资料库', '记录', '设置']);
   expect(folded.length).toBeGreaterThan(0);
   await page.keyboard.press('Escape');
   await expect(moreMenu).toHaveCount(0);
@@ -1674,10 +1674,10 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
 
   // Any page is one click away; other pages get the labelled list back without the sessions.
   await expect(more).toHaveCount(0);
-  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
+  await nav.getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '记录', exact: true })).toBeVisible();
   await expect(rail).toHaveCount(0);
-  await expect(nav.getByRole('button', { name: '使用记录', exact: true }).locator('.nav-text')).toBeVisible();
+  await expect(nav.getByRole('button', { name: '记录', exact: true }).locator('.nav-text')).toBeVisible();
   await nav.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toBeVisible();
 

@@ -524,7 +524,7 @@ export default {
     detailReveal: 'Show the value of {{key}}',
     detailHide: 'Hide the value of {{key}}',
     openLibrary: 'Open in library',
-    returnConnections: 'Back to Tools & connections',
+    returnConnections: 'Back to Tools',
     stale: 'The last read failed; the list below may be out of date.',
     previewLabel: 'MCP write preview',
     previewTitle: 'Confirm the candidate content and write results',

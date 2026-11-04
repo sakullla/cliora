@@ -524,7 +524,7 @@ export default {
     detailReveal: '显示 {{key}} 的值',
     detailHide: '隐藏 {{key}} 的值',
     openLibrary: '在资料库中打开',
-    returnConnections: '返回工具与连接',
+    returnConnections: '返回工具',
     stale: '最近一次读取失败，以下列表可能已过期。',
     previewLabel: 'MCP 写入预览',
     previewTitle: '确认候选内容与写入结果',

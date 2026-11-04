@@ -55,7 +55,7 @@ async function setup(page: Page, automatic = false) {
     } } });
   }, automatic);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await expect(page.getByText(automatic ? '官方套餐' : '测试套餐', { exact: true })).toBeVisible();
 }
 const harness = (page: Page, action: string) => page.evaluate(action);
@@ -94,7 +94,7 @@ test('quota polling joins slow reads, skips unchanged histories and stops when h
   await page.waitForTimeout(50);
   await page.clock.fastForward(4000);
   await expect.poll(() => harness(page, 'window.pollProbe.histories')).toBe(1);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   const count = await harness(page, 'window.pollProbe.queries');
   await page.clock.fastForward(12000);
   expect(await harness(page, 'window.pollProbe.queries')).toBe(count);

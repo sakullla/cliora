@@ -333,7 +333,7 @@ test('the onboarding config entry routes to setup while no CLI is managed yet', 
   // instead of landing on the empty tools page.
   await card.getByRole('button', { name: '去创建', exact: true }).click();
   await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '工具', level: 1 })).toHaveCount(0);
 });
 
 test('an English takeover error opens the comparison by error code alone', async ({ page }) => {
@@ -850,7 +850,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await projectEdit.getByRole('button', { name: '关闭', exact: true }).click();
 
   await cursor.getByRole('button', { name: '去安装 →', exact: true }).click();
-  const workspace = page.getByRole('region', { name: '工具与连接' });
+  const workspace = page.getByRole('region', { name: '工具' });
   await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
   await expect(cliSwitcher(page)).toHaveAccessibleName('Cursor，切换 CLI');
   const guide = workspace.getByRole('link', { name: '官方安装说明 ↗' });
@@ -875,7 +875,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   expect(toolRequests.at(-2)?.directory).toBeNull();
 
   await page.evaluate(() => { (window as unknown as { __desktop: { cursorInstalled: boolean } }).__desktop.cursorInstalled = true; });
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await launchDirect('Cursor', 'cursor');
   await openCli(page, 'Cursor');
   await expect(workspace.getByRole('heading', { level: 2, name: 'Cursor' })).toBeVisible();
@@ -942,19 +942,19 @@ test('the fresh onboarding checklist checks its steps and retires once complete'
   // Step 1: the entry reaches the managed-CLI checkboxes; checking one marks the step.
   await card.getByRole('button', { name: '去勾选', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(card.locator('li[data-done]')).toHaveCount(1);
 
   // Step 2: the entry opens the new-profile dialog. Close it before navigating
   // home, then simulate a saved profile to check the onboarding progress.
   await card.getByRole('button', { name: '去创建', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
   const profileDialog = page.getByRole('dialog', { name: '新建配置', exact: true });
   await expect(profileDialog).toBeVisible();
   await profileDialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(profileDialog).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __fresh: { profiles: Array<{ id: string; name: string }> } }).__fresh.profiles = [{ id: 'daily', name: '日常' }]; });
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(card.locator('li[data-done]')).toHaveCount(2);
 
   // Step 3: one launch through the app finishes the guide and records both markers.
@@ -978,7 +978,7 @@ test('closing the onboarding checklist keeps it away and settings reopens it', a
 
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   await page.getByRole('button', { name: '重新查看 →' }).click();
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await expect(card).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-complete'))).toBeNull();
 });
@@ -1046,22 +1046,22 @@ test('workbench launch opens the page, external and desktop launches do not, and
   // Normal mode is the quiet default: the title bar only calls out YOLO.
   await expect(stage.getByText('YOLO', { exact: true })).toHaveCount(0);
   await expect(page.getByText('已向外部终端')).toHaveCount(0);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await setMode('external');
   await projects.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await expect(projects.getByRole('status')).toContainText('已向外部终端发送启动请求');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await setMode('desktop');
   const cursor = page.locator('[data-tool-row]', { hasText: 'Cursor' });
   await cursor.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await expect(cursor.getByRole('status')).toContainText('已请求启动桌面应用');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await setMode('fail');
   await projects.getByRole('button', { name: '启动', exact: true }).click();
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { cliSwitcher, openCli } from './cli-switcher';
 
-// The CLI is picked from the 工具与连接 header: the h2 is a searchable switcher, and the sidebar\n// keeps only the six pages so it never grows with the managed list.
+// The CLI is picked from the 工具 header: the h2 is a searchable switcher, and the sidebar\n// keeps only the six pages so it never grows with the managed list.
 const tools = [
   ['codex', 'Codex'],
   ['claude_code', 'Claude Code'],
@@ -83,7 +83,7 @@ test('the header switcher lists every managed CLI and the sidebar keeps only the
   await expect(nav.getByRole('button')).toHaveCount(6);
   await expect(nav.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
 
-  await nav.getByRole('button', { name: '工具与连接', exact: true }).click();
+  await nav.getByRole('button', { name: '工具', exact: true }).click();
   const heading = page.getByRole('heading', { name: 'Codex', level: 2 });
   await expect(heading).toBeVisible();
   const picker = cliSwitcher(page);

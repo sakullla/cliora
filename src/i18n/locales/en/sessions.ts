@@ -13,7 +13,7 @@ export default {
   terminalLabel: '{{tool}} terminal',
   emptyTitle: 'No session in progress',
   emptyDetail: 'Each CLI runs in its own terminal. Switch between them any time or put two side by side; input goes only to the selected session.',
-  openHome: 'Go to Quick start',
+  openHome: 'Go to Home',
   ended: 'Ended',
   end: 'End this session',
   endShort: 'End',
@@ -106,7 +106,7 @@ export default {
   startInWorkbench: 'Launch session',
   launchSummary: 'Starts {{tool}} in {{place}} with {{mode}} mode',
   startingSession: 'Launching…',
-  noTerminalTools: 'No terminal-capable managed CLI tools yet. Enable one in Quick start or Settings.',
+  noTerminalTools: 'No terminal-capable managed CLI tools yet. Enable one in Home or Settings.',
 
   restartSession: 'Restart',
   restarting: 'Restarting…',

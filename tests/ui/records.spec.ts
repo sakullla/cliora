@@ -65,7 +65,7 @@ test('records show the index before scanning and reuse a fresh usage report unti
     return { scans: state.scans, reports: state.reports };
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('heading', { name: '正在加载会话…' })).toBeVisible();
   expect(await probe()).toEqual({ scans: 0, reports: 0 });
   await page.evaluate(() => (window as unknown as { __loadProbe: { releaseList: () => void } }).__loadProbe.releaseList());
@@ -116,7 +116,7 @@ test('a recent saved scan index skips the opening scan', async ({ page }) => {
     });
   }, { scannedAt: Date.now() - 5_000 });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('button', { name: /Indexed session/ })).toBeVisible();
   await page.waitForTimeout(400);
   expect(await page.evaluate(() => (window as unknown as { __scanProbe: { scans: number } }).__scanProbe.scans)).toBe(0);
@@ -144,7 +144,7 @@ test('an expired saved scan index still discovers new native logs', async ({ pag
     });
   }, { scannedAt: Date.now() - 60_000 });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __scanProbe: { scans: number } }).__scanProbe.scans)).toBe(1);
 });
 
@@ -168,7 +168,7 @@ test('records only lists managed CLIs and scopes session reads to them', async (
     });
   }, emptyReport());
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByLabel('筛选工具').click();
   const list = page.getByRole('listbox', { name: '筛选工具' });
   await expect(list.getByRole('option')).toHaveCount(2);
@@ -229,7 +229,7 @@ test('records keep search, show native resume command and only launch on request
   }, todayReport());
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: '页面' });
-  await navigation.getByRole('button', { name: '使用记录' }).click();
+  await navigation.getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('button', { name: /Review change/ })).toBeVisible();
   await expect(page.getByText('全部会话')).toBeVisible();
   const listLayout = await page.evaluate(() => {
@@ -321,8 +321,8 @@ test('records keep search, show native resume command and only launch on request
   await page.getByRole('button', { name: '在外部终端继续' }).click();
   expect(await page.evaluate(() => (window as typeof window & { __recordLaunches: Array<Record<string, unknown>> }).__recordLaunches)).toEqual([{ id: 'record-a', mode: 'yolo' }]);
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Review');
-  await navigation.getByRole('button', { name: '快速开始' }).click();
-  await navigation.getByRole('button', { name: '使用记录' }).click();
+  await navigation.getByRole('button', { name: '首页' }).click();
+  await navigation.getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('Review');
   await expect(page.getByText('命中 1 / 共 18')).toBeVisible();
   await page.getByRole('tab', { name: '用量' }).click();
@@ -371,7 +371,7 @@ test('records count never shows more hits than the total when a filtered batch o
     });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Session');
   await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
 });
@@ -401,7 +401,7 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
     });
   }, todayReport());
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   const first = page.getByRole('button', { name: /First session/ });
   const second = page.getByRole('button', { name: /Second session/ });
   await expect(first).toBeVisible();
@@ -515,7 +515,7 @@ test('usage refresh failure keeps the last read visible and can retry with the s
     (window as typeof window & { __usageFailure: { fail: boolean } }).__usageFailure.fail = value;
   }, fail);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('tab', { name: '用量' }).click();
   await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
   // Enter a model filter with a successful read, then fail a refresh of that same filter.
@@ -561,7 +561,7 @@ test('usage failure with no earlier reading clears the dashboard and reloads in 
     });
   }, todayReport());
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('tab', { name: '用量' }).click();
   // Nothing was read before, so the dashboard shows the failure instead of stale or empty figures.
   await expect(page.getByRole('heading', { name: '用量暂时没有读取成功' })).toBeVisible();
@@ -595,7 +595,7 @@ test('filter scope bars keep their exit reachable at 900 and 640', async ({ page
   }, todayReport());
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('textbox', { name: '搜索会话' }).fill('First');
   await page.getByRole('button', { name: '只看收藏' }).click();
   const clearAll = page.getByRole('button', { name: '清除全部筛选' });
@@ -651,7 +651,7 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
     });
   }, { sum, report: { ...emptyReport(), totals: sum } });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('button', { name: /Token 核对示例/ }).click();
   const usage = page.getByRole('region', { name: '会话 Token 用量' });
   await expect(usage).toHaveCount(0);
@@ -716,7 +716,7 @@ test('all-time trend averages include only dated elapsed buckets for tokens and 
     });
   }, report);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('tab', { name: '用量' }).click();
   await page.getByRole('radio', { name: '全部', exact: true }).click();
   const overview = page.getByRole('region', { name: '用量概览' });
@@ -733,7 +733,7 @@ test('all-time trend averages include only dated elapsed buckets for tokens and 
 test('native credits retain billing groups and unknown tokens across detail, report and filters', async ({ page }) => {
   await page.addInitScript(qoderHistoryFixtures);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
   const detail = page.getByRole('tabpanel', { name: /^会话/ });
   const native = detail.getByRole('region', { name: 'CLI 自带计量' });
@@ -769,7 +769,7 @@ test('native credits retain billing groups and unknown tokens across detail, rep
 test('known Qoder request with unknown credits and tokens stays visible as one call', async ({ page }) => {
   await page.addInitScript(qoderHistoryFixtures, { unknownAmounts: true });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
   const detail = page.getByRole('tabpanel', { name: /^会话/ });
   await expect(detail).toContainText('1 条记录没有 token');
@@ -869,7 +869,7 @@ test('session detail shows a child on the chat timeline and opens one level at a
     Object.assign(window, { __associationReads: reads });
   }, emptyReport());
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   const reader = page.getByLabel('会话正文');
   await expect(reader).toContainText('PARENT_ONLY');
   await expect(reader.getByRole('article', { name: '子会话 Reviewer' })).toContainText('CHILD_BODY');
@@ -974,25 +974,25 @@ test('resuming into the workbench opens that session and an external resume does
     });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
   await page.getByRole('button', { name: '在外部终端继续' }).click();
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('project');
   await expect(page.getByText('已请求外部终端恢复会话')).toHaveCount(0);
   // The expanded workbench sidebar has room for every page icon.
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
   await page.evaluate(() => { (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = true; });
   await page.getByRole('button', { name: '在外部终端继续' }).click();
-  await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
   await expect(page.getByText('已请求外部终端恢复会话。')).toBeVisible();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
   // The expanded workbench sidebar has room for every page icon.
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
   await page.evaluate(() => { (window as unknown as { __resumeMode: { fail: boolean; external: boolean } }).__resumeMode.fail = true; (window as unknown as { __resumeMode: { external: boolean } }).__resumeMode.external = false; });
   await page.getByRole('button', { name: '在外部终端继续' }).click();
-  await expect(page.getByRole('heading', { name: '使用记录', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('无法恢复');
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
 });
@@ -1028,7 +1028,7 @@ test('CLI-reported units stay quiet when the scope also has tokens', async ({ pa
   });
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   const usage = page.getByRole('tabpanel', { name: '用量', exact: true });
 
@@ -1078,19 +1078,19 @@ test('hidden records release message DOM, ignore late detail reads and restore t
   });
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: '页面' });
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toBeVisible();
   await page.getByText('会话选项', { exact: true }).click();
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
-  await nav.getByRole('button', { name: '快速开始' }).click();
+  await nav.getByRole('button', { name: '首页' }).click();
   await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toHaveCount(0);
   await page.evaluate(() => { (window as any).recordMemoryProbe.hold = true; });
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).recordMemoryProbe.reads)).toBe(2);
-  await nav.getByRole('button', { name: '快速开始' }).click();
+  await nav.getByRole('button', { name: '首页' }).click();
   await page.evaluate(() => { (window as any).recordMemoryProbe.release(); (window as any).recordMemoryProbe.hold = false; });
   await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toHaveCount(0);
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).recordMemoryProbe.reads)).toBe(3);
   await page.getByText('会话选项', { exact: true }).click();
@@ -1125,7 +1125,7 @@ test('a failed session refresh keeps the list readable, marks the scope and retr
     });
   }, emptyReport());
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('button', { name: /Alpha session/ })).toBeVisible();
   await page.evaluate(() => { (window as typeof window & { __recordFailure: { fail: boolean } }).__recordFailure.fail = true; });
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Alpha');
@@ -1169,7 +1169,7 @@ test('usage data boundaries keep unknown, partial and unpriced figures apart', a
     });
   }, report);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   const boundaries = page.getByRole('group', { name: '数据边界' });
   await expect(boundaries).toBeVisible();

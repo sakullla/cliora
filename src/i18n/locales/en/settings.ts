@@ -5,7 +5,7 @@ export default {
   },
   clusters: {
     tools: 'Tools',
-    toolsHint: 'Which CLIs appear in Quick start, Tools & connections, and Usage records.',
+    toolsHint: 'Which CLIs appear in Home, Tools, and Records.',
     preferences: 'Preferences',
     preferencesHint: 'Theme, language, and app updates apply immediately.',
     terminal: 'Terminal & remote',
@@ -341,7 +341,7 @@ export default {
     exportAll: 'All {{count}} migratable items will be exported.',
     selectAll: 'Select all',
     deselectAll: 'Deselect all',
-    exportEmpty: 'Nothing to take yet. Create configuration or data in Quick start, Tools & connections, or Library first.',
+    exportEmpty: 'Nothing to take yet. Create configuration or data in Home, Tools, or Library first.',
     password: 'Bundle passphrase',
     passwordPlaceholder: 'At least 12 characters',
     exportBundle: 'Export bundle',
@@ -396,7 +396,7 @@ export default {
   },
   onboarding: {
     label: 'View the first-run guide',
-    hint: 'Reopen the three-step getting-started list on Quick start',
+    hint: 'Reopen the three-step getting-started list on Home',
     action: 'View again →',
   },
 };

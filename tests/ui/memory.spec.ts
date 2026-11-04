@@ -146,8 +146,8 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
 async function openWorkspace(page: Page) {
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await expect(page.getByRole('heading', { name: '工具' })).toBeVisible();
 }
 
 async function openMemory(page: Page, tool = 'Alpha') {

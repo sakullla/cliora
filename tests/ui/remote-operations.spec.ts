@@ -77,9 +77,9 @@ test('remote records retain a readable source and display the specific failed so
     });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
-  await expect(page.getByRole('region', { name: '使用记录内容' }).getByText('成功来源的对话', { exact: true }).first()).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('region', { name: '记录内容' }).getByText('成功来源的对话', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Claude Code: fixture source permission failure')).toBeVisible();
   await expect(page.getByText('成功来源的正文')).toBeVisible();
-  await expect(page.getByText('已刷新当前主机的使用记录。', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('已刷新当前主机的记录。', { exact: true })).toHaveCount(0);
 });

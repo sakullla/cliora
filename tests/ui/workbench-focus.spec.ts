@@ -62,7 +62,7 @@ test('returning to the workbench keeps the session the user selected', async ({ 
   await expect(git).not.toContainText('工作树');
   // A session outside a saved project still reads its own repository's checkouts.
   await expect(git).toHaveAttribute('aria-haspopup', 'menu');
-  await nav.getByRole('button', { name: '快速开始' }).click();
+  await nav.getByRole('button', { name: '首页' }).click();
   await nav.getByRole('button', { name: '工作台', exact: true }).click();
   await expect(earlier).toHaveAttribute('aria-selected', 'true');
   await expect(launched).toHaveAttribute('aria-selected', 'false');

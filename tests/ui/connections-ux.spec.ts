@@ -34,7 +34,7 @@ async function mockWorkspace(page: Page, count = 20, options: { stale?: boolean;
   }, { count, stale: !!options.stale, projects: options.projects ?? [] });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }
 
 test('configuration search matches models, explains an empty result and clears with Escape', async ({ page }) => {
@@ -58,7 +58,7 @@ test('configuration search matches models, explains an empty result and clears w
 
 test('the configuration board states the applied profile of the current scope', async ({ page }) => {
   await mockWorkspace(page, 3);
-  const region = page.getByRole('region', { name: '工具与连接' });
+  const region = page.getByRole('region', { name: '工具' });
   const live = region.locator('[data-tools-live]');
   await expect(live).toContainText('当前生效');
   await expect(live).toContainText('Plan A');
@@ -86,7 +86,7 @@ test('the configuration board states the applied profile of the current scope', 
 
 test('a stale binding is reported as no longer in effect, never as in effect', async ({ page }) => {
   await mockWorkspace(page, 3, { stale: true });
-  const live = page.getByRole('region', { name: '工具与连接' }).locator('[data-tools-live]');
+  const live = page.getByRole('region', { name: '工具' }).locator('[data-tools-live]');
   await expect(live).toHaveAttribute('data-live-tone', 'warning');
   await expect(live).toHaveAttribute('data-live-state', 'invalid');
   await expect(live).toContainText('已失效');
@@ -110,7 +110,7 @@ test('a stale binding is reported as no longer in effect, never as in effect', a
 
 test('a stale binding offers to apply the same configuration again from the live strip', async ({ page }) => {
   await mockWorkspace(page, 3, { stale: true });
-  const live = page.getByRole('region', { name: '工具与连接' }).locator('[data-tools-live]');
+  const live = page.getByRole('region', { name: '工具' }).locator('[data-tools-live]');
   await expect(live).toHaveAttribute('data-live-state', 'invalid');
   await live.getByRole('button', { name: '重新应用', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __applyCalls?: string[] }).__applyCalls ?? [])).toEqual(['p0']);
@@ -118,7 +118,7 @@ test('a stale binding offers to apply the same configuration again from the live
 
 test('a project scope without its own binding says so and never claims a configuration', async ({ page }) => {
   await mockWorkspace(page, 3, { projects: [{ id: 'project-1', name: '测试项目', path: '/tmp/project', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }] });
-  const live = page.getByRole('region', { name: '工具与连接' }).locator('[data-tools-live]');
+  const live = page.getByRole('region', { name: '工具' }).locator('[data-tools-live]');
   await expect(live).toHaveAttribute('data-live-tone', 'success');
   const appliedDot = await live.evaluate((node) => getComputedStyle(node.querySelector('span')!).backgroundColor);
   await page.getByRole('button', { name: '配置范围' }).click();
@@ -141,7 +141,7 @@ test('a project scope without its own binding says so and never claims a configu
 test('the configuration board stays inside a 640px window and keeps row actions reachable', async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 900 });
   await mockWorkspace(page, 8);
-  const region = page.getByRole('region', { name: '工具与连接' });
+  const region = page.getByRole('region', { name: '工具' });
   await expect(region.getByLabel('配置列表')).toBeVisible();
   const row = page.locator('[data-profile-id="p0"]');
   await expect(row.locator('[data-tools-row-actions]')).toBeVisible();
@@ -249,12 +249,12 @@ async function mockRemoteWorkspace(page: Page) {
   });
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }
 
 test('a remote target is unconfirmed instead of empty or in effect', async ({ page }) => {
   await mockRemoteWorkspace(page);
-  const live = page.getByRole('region', { name: '工具与连接' }).locator('[data-tools-live]');
+  const live = page.getByRole('region', { name: '工具' }).locator('[data-tools-live]');
   await expect(live).toHaveAttribute('data-live-state', 'unconfirmed');
   await expect(live).toHaveAttribute('data-live-tone', 'unknown');
   await expect(live).toContainText('无法确认');

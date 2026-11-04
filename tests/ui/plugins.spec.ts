@@ -113,7 +113,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       return null;
     } } });
   }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource });
-  await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace && !emptyEntries && !(deferFull && noPreview)) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
 }

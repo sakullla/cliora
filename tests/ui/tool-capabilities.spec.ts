@@ -22,7 +22,7 @@ async function setup(page: Page) {
     } } });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }
 
 test('unsupported management tabs are hidden and switching tools leaves no unsupported scan', async ({ page }) => {

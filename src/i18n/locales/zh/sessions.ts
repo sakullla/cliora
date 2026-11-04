@@ -13,7 +13,7 @@ export default {
   terminalLabel: '{{tool}} 的终端',
   emptyTitle: '还没有进行中的会话',
   emptyDetail: '每个 CLI 在独立终端中运行，可以随时切换、分屏并排查看。键盘输入只发给当前选中的会话。',
-  openHome: '去快速开始',
+  openHome: '去首页',
   ended: '已结束',
   end: '结束此会话',
   endShort: '结束',
@@ -106,7 +106,7 @@ export default {
   startInWorkbench: '启动会话',
   launchSummary: '将在{{place}}内以{{mode}}模式启动 {{tool}}',
   startingSession: '正在启动…',
-  noTerminalTools: '暂无可在终端运行的已托管 CLI 工具，请先在快速开始或设置中启用。',
+  noTerminalTools: '暂无可在终端运行的已托管 CLI 工具，请先在首页或设置中启用。',
 
   restartSession: '重新启动',
   restarting: '正在重启…',

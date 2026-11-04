@@ -43,7 +43,7 @@ async function setup(page: Page) {
     } } });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }
 
 test('global scope shows agents and plugins tabs while the memory entry stays hidden without scans', async ({ page }) => {

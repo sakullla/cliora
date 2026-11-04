@@ -128,7 +128,7 @@ async function mockRemoteSkills(page: Page, versions = false) {
 
 async function openSkills(page: Page) {
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   return page.getByRole('navigation', { name: 'Skill 列表' });
 }

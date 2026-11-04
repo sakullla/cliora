@@ -47,7 +47,7 @@ test.beforeEach(async ({ page }) => {
     });
   });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect(page.getByLabel('会话正文')).toBeVisible();
 });
 

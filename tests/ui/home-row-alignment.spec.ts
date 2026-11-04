@@ -42,8 +42,13 @@ test('project cards keep one launch action and home never scrolls sideways', asy
       { id: 'desk', name: '栖点 · 桌面工具', path: 'C:\\Projects\\cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: { codex: 'daily' }, appliedProfiles: { codex: 'daily' } },
       { id: 'site', name: '个人网站', path: 'C:\\Projects\\personal-site', available: true, preferredTool: 'kimi_code', lastOpened: 1790028800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} },
     ];
+    let theme = 'light';
+    let remoteSshEnabled = false;
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: catalog.map((item) => item[0]), theme, remote_ssh_enabled: remoteSshEnabled }, tools: catalog.map(([id, name]) => ({ id, name })) });
     Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
-      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: catalog.map((item) => item[0]), theme: 'light' }, tools: catalog.map(([id, name]) => ({ id, name })) };
+      if (command === 'get_bootstrap') return bootstrap();
+      if (command === 'set_theme') { theme = args.theme; return bootstrap(); }
+      if (command === 'set_remote_ssh_enabled') { remoteSshEnabled = args.enabled; return bootstrap(); }
       if (command === 'list_cli_adapters') return { registered: catalog.map(([id, name]) => ({ id, name, interfaceFormats: ['openai_responses'] })), managedIds: catalog.map((item) => item[0]), preservedUnknown: [] };
       if (command === 'get_registered_tool_workspace') {
         const installed = catalog.find((item) => item[0] === args.toolId)?.[2];
@@ -75,6 +80,84 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   const heights = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(new Set(heights).size).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+  // Both split-button halves use the color tokens as backgrounds, not as invalid background images.
+  const expectSplitPaint = async () => {
+    const split = cards.first().locator('[data-split-variant="primary"]');
+    const buttons = split.getByRole('button');
+    await expect(buttons).toHaveCount(2);
+    await buttons.nth(1).hover();
+    const paint = await split.evaluate((element) => {
+      const resolve = (token: string) => {
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = `var(${token})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      const main = element.querySelector<HTMLElement>('[data-variant="primary"]')!;
+      const menu = element.querySelector<HTMLElement>(':scope > div:last-child > button')!;
+      const mainStyle = getComputedStyle(main);
+      const menuStyle = getComputedStyle(menu);
+      return {
+        main: mainStyle.backgroundColor,
+        menu: menuStyle.backgroundColor,
+        mainImage: mainStyle.backgroundImage,
+        menuImage: menuStyle.backgroundImage,
+        mainInk: mainStyle.color,
+        menuInk: menuStyle.color,
+        fill: resolve('--accent-fill'),
+        hover: resolve('--accent-fill-hover'),
+        ink: resolve('--on-accent'),
+      };
+    });
+    expect(paint.main).toBe(paint.fill);
+    await expect.poll(() => buttons.nth(1).evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(paint.hover);
+    expect(paint.mainImage).toBe('none');
+    expect(paint.menuImage).toBe('none');
+    expect(paint.mainInk).toBe(paint.ink);
+    expect(paint.menuInk).toBe(paint.ink);
+    await page.mouse.move(0, 0);
+  };
+  await expectSplitPaint();
+
+  // The same color token drives a checked switch track; its thumb remains distinguishable.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const remoteSwitch = page.getByRole('switch').first();
+  await expect(remoteSwitch).toBeVisible();
+  const offTrack = await remoteSwitch.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await remoteSwitch.click();
+  await expect(remoteSwitch).toBeChecked();
+  const expectSwitchPaint = async () => {
+    const paint = await remoteSwitch.evaluate((element) => {
+      const resolve = (token: string) => {
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = `var(${token})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      const dark = document.documentElement.dataset.theme === 'dark';
+      return {
+        track: getComputedStyle(element).backgroundColor,
+        thumb: getComputedStyle(element, '::after').backgroundColor,
+        fill: resolve('--accent-fill'),
+        thumbToken: resolve(dark ? '--on-accent' : '--switch-thumb'),
+      };
+    });
+    expect(paint.track).toBe(paint.fill);
+    expect(paint.thumb).toBe(paint.thumbToken);
+    expect(paint.track).not.toBe(offTrack);
+    expect(paint.track).not.toBe(paint.thumb);
+  };
+  await expectSwitchPaint();
+  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expectSwitchPaint();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
+  await expectSplitPaint();
 
   // At 640 the tool rows still share one launch column and nothing spills sideways.
   await page.setViewportSize({ width: 640, height: 900 });

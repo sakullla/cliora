@@ -76,7 +76,7 @@ async function setup(page: Page, inherited = false) {
   }, inherited);
   await installConfigurationProtocol(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }
 
 test('account panel distinguishes pending, cancel, reauthentication, logout and native adoption', async ({ page }) => {

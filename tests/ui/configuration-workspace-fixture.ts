@@ -189,5 +189,5 @@ export async function installConfigurationWorkspace(page: Page, toolId = 'kimi_c
 export async function setupConfigurationWorkspace(page: Page, toolId = 'kimi_code', apiWritable = true, appliedOld = false, toolIds = [toolId], providerUnsupported = false, apiKeyUnsupported = false) {
   await installConfigurationWorkspace(page, toolId, apiWritable, appliedOld, toolIds, providerUnsupported, apiKeyUnsupported);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
 }

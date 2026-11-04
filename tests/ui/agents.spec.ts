@@ -64,7 +64,7 @@ async function setup(page: Page, holdScan = false, emptyEntries = false, support
       return null;
     } } });
   }, { holdScan, emptyEntries, supported, longBody, remote });
-  await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   if (!holdScan && !emptyEntries && supported) await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
 }

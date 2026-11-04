@@ -139,7 +139,7 @@ input[type="checkbox"][role="switch"]::after {
   box-shadow: var(--shadow-thumb);
   transition: transform var(--medium) var(--spring);
 }
-input[type="checkbox"][role="switch"]:checked { background: var(--accent-fill) var(--accent); box-shadow: var(--inner-highlight); }
+input[type="checkbox"][role="switch"]:checked { background-color: var(--accent-fill); box-shadow: var(--inner-highlight); }
 input[type="checkbox"][role="switch"]:checked::after { transform: translateX(16px); }
 :root[data-theme="dark"] input[type="checkbox"][role="switch"]:checked::after { background: var(--on-accent); }
 input[type="checkbox"][role="switch"]:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }

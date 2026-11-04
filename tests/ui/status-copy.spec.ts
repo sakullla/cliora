@@ -126,9 +126,9 @@ test('empty export says nothing can be taken and points at existing pages', asyn
   await page.getByRole('tab', { name: '迁移与同步' }).click();
   await page.getByRole('button', { name: '导出加密配置包' }).click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog.getByText('当前没有可带走的资料。请先在快速开始、工具与连接或资料库中产生配置或资料。')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '快速开始' })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '工具与连接' })).toHaveCount(0);
+  await expect(dialog.getByText('当前没有可带走的资料。请先在首页、工具或资料库中产生配置或资料。')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '首页' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '工具' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '资料库' })).toHaveCount(0);
 });
 
@@ -186,8 +186,8 @@ test('project launch success and failure replace each other', async ({ page }) =
 test('record copy and resume replace the previous result', async ({ page }) => {
   await install(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
-  const records = page.getByRole('region', { name: '使用记录内容' });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const records = page.getByRole('region', { name: '记录内容' });
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
   await records.getByText('会话选项', { exact: true }).click();
   await records.getByRole('button', { name: '复制命令' }).click();
@@ -312,8 +312,8 @@ test('project edit failure stays inside the dialog', async ({ page }) => {
 test('saved price stays visible when the following usage read fails', async ({ page }) => {
   await install(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
-  const records = page.getByRole('region', { name: '使用记录内容' });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const records = page.getByRole('region', { name: '记录内容' });
   await records.getByRole('tab', { name: '用量' }).click();
   await expect(records.getByRole('button', { name: '设置估算价格' })).toBeVisible();
   await expect(records.getByText('正在筛选已缓存记录…')).toHaveCount(0);
@@ -396,7 +396,7 @@ test('page search answers Ctrl+F and slash, and Escape clears it', async ({ page
   await page.keyboard.press('Escape');
   await expect(search).toHaveValue('');
   await expect(library.getByRole('button', { name: '发布检查' })).toBeVisible();
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   await page.keyboard.press('/');
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toBeFocused();
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
@@ -405,8 +405,8 @@ test('page search answers Ctrl+F and slash, and Escape clears it', async ({ page
 test('the automatic record scan stays quiet and a manual refresh reports', async ({ page }) => {
   await install(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
-  const records = page.getByRole('region', { name: '使用记录内容' });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const records = page.getByRole('region', { name: '记录内容' });
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
   await expect(records.getByText('已刷新本机记录。')).toHaveCount(0);
   await records.getByRole('button', { name: '刷新本机记录' }).click();
@@ -451,7 +451,7 @@ test('an empty workbench follows the light and dark theme and offers a next step
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   const stage = page.getByRole('region', { name: '当前会话' });
   await expect(stage.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
-  await expect(stage.getByRole('button', { name: '去快速开始' })).toBeVisible();
+  await expect(stage.getByRole('button', { name: '去首页' })).toBeVisible();
   const color = () => stage.evaluate((element) => {
     const probe = document.createElement('span');
     probe.style.background = 'var(--bg)';
@@ -468,6 +468,6 @@ test('an empty workbench follows the light and dark theme and offers a next step
   await expect.poll(async () => { const current = await color(); return current.actual === current.expected; }).toBe(true);
   const dark = await color();
   expect(dark.actual).not.toBe(light.actual);
-  await stage.getByRole('button', { name: '去快速开始' }).click();
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await stage.getByRole('button', { name: '去首页' }).click();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
 });

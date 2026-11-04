@@ -40,7 +40,7 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
     });
   }, { supported, currentVersion, latestVersion, majorUpgrade });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByText('安装与更新', { exact: true }).click();
 }
 

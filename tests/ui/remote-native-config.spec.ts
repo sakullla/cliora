@@ -96,7 +96,7 @@ test('remote claude can open and apply the native file in use', async ({ page })
   await install(page);
   await page.goto('/');
   await expect(page.locator('.sidebar-host').getByRole('button', { name: '运行位置：原生配置主机' })).toBeVisible();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await expect(page.getByRole('button', { name: '正在使用的文件' })).toBeVisible();
   const use = page.getByRole('button', { name: '使用', exact: true });
   await expect(use).toBeEnabled();
@@ -122,7 +122,7 @@ test('remote claude can open and apply the native file in use', async ({ page })
 test('confirmed missing remote CLI stays warm on focus and retains installation and configuration', async ({ page }) => {
   await install(page, { probe: missingProbe });
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await expect(page.getByRole('button', { name: '安装', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: '网关', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '正在使用的文件' })).toBeVisible();
@@ -148,7 +148,7 @@ for (const reason of ['authentication', 'permission', 'connect'] as const) {
     };
     await install(page, { probeFailure: failure });
     await page.goto('/');
-    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
     await expect(page.getByText(`fixture ${reason} failure`, { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '重试读取配置', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '安装', exact: true })).toHaveCount(0);

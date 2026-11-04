@@ -21,8 +21,8 @@
 .split[data-split-variant="primary"] > :last-child > button {
   border-color: var(--accent-border);
   border-left: 1px solid color-mix(in srgb, var(--on-accent) 28%, transparent);
-  background: var(--accent-fill) var(--accent);
+  background-color: var(--accent-fill);
   color: var(--on-accent);
   box-shadow: var(--shadow-accent), var(--inner-highlight);
 }
-.split[data-split-variant="primary"] > :last-child > button:hover:not(:disabled) { background: var(--accent-fill-hover) var(--accent-hover); color: var(--on-accent); }
+.split[data-split-variant="primary"] > :last-child > button:hover:not(:disabled) { background-color: var(--accent-fill-hover); color: var(--on-accent); }
