@@ -59,7 +59,7 @@ async function readRemoteSkillStores(targetId: string, toolIds: string[], reader
 
 /** Skill library section. MCP lives in LibraryMcp. */
 export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; remoteTargetId?: string | null }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const contextLabel = useAccountLabels(!!remoteTargetId);
   const remoteTools = tools.filter(tool => tool.remoteSkillDirectories ? tool.remoteSkillDirectories.length > 0 : tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
   const remoteWritableTools = remoteTools.filter(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true);
@@ -328,14 +328,15 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       {libraryPackages.length ? libraryPackages.map((item) => {
         return <Card className={styles.card} interactive key={item.id} data-skill-id={item.id} data-source={sourceOf(item)}>
           <div className={styles.cardHead}>
-            <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+            <button className={styles.cardTitle} type="button" data-card-title onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
             {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
-            <div className={styles.cardActions}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
+            <div className={styles.cardActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardMeta}>
             <Badge className={styles.metaBadge} tone={sourceOf(item) === 'remoteReadOnly' ? 'warning' : sourceOf(item) === 'remote' ? 'info' : 'neutral'} dot>{sourceLabel(item)}</Badge>
             <span>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
+            {!!item.updatedAt && <span className={styles.cardTime} title={new Date(item.updatedAt * 1000).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN')}><Icon name="clock" size={12} />{new Date(item.updatedAt * 1000).toLocaleDateString(i18n.language === 'en' ? 'en-US' : 'zh-CN')}</span>}
           </div>
           {packageWritable(item) ? <div className={styles.cardFoot}>
             <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {

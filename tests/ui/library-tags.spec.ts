@@ -58,9 +58,19 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   const savedCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '发布检查', exact: true }) });
   await expect(savedCard.getByText('文档', { exact: true })).toBeVisible();
   await expect(savedCard.getByRole('group', { name: '发布检查 的 CLI · 全局', exact: true })).toBeVisible();
+  await expect(savedCard.getByRole('group', { name: '发布检查 的复用操作', exact: true })).toBeVisible();
+  await expect(page.locator('[data-library-context]')).toContainText('长期规则');
   await page.getByRole('button', { name: '标签筛选' }).click();
   await page.getByRole('option', { name: '写作' }).click();
   await expect(page.getByRole('button', { name: '已有规则' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
+  // Ordinary reading does not reset the active filter; Escape returns to the same card title.
+  const existing = page.getByRole('button', { name: '已有规则', exact: true });
+  await existing.click();
+  await expect(page.getByRole('dialog', { name: '修改规则' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(existing).toBeFocused();
+  await expect(page.getByRole('button', { name: '标签筛选' })).toContainText('写作');
   await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
 });
 
@@ -221,7 +231,7 @@ test('library rows lead with the title, name their source, and stay inside 640',
   const card = page.getByRole('article').filter({ hasText: '超长提示词标题' }).first();
   await expect(card).toHaveAttribute('data-source', 'global');
   // The card names where these items live, next to the result count.
-  await expect(page.getByText('本机资料库', { exact: true })).toBeVisible();
+  await expect(page.locator('[class*="resultNote"]').filter({ hasText: '本机资料库' })).toBeVisible();
   // Title and its actions share the first line; the summary and metadata follow it.
   expect(await card.evaluate((node) => {
     const head = node.firstElementChild as HTMLElement;

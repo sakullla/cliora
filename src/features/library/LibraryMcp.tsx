@@ -417,7 +417,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
                 if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
                 return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               }} />
-              <div className={styles.rowActions}>
+              <div className={styles.rowActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}>
               <Button variant="ghost" size="sm" disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => editMcp(item)}>{t('library.resources.edit')}</Button>
               <RowMenu label={t('library.resources.rowMenu', { name: item.name })}>
                 <button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={14} /><span>{t('library.resources.duplicate')}</span></button>

@@ -26,28 +26,32 @@
 
 /* Resource rows: one column, like the MCP list, so a long title keeps its line and
    tags wrap underneath instead of squeezing the card. */
+.sectionContext { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; padding: var(--space-2) var(--space-3); border-left: 2px solid var(--accent); background: var(--surface-2); }
+.sectionContextIcon { display: grid; place-items: center; flex: none; color: var(--accent); }
+.sectionContextCopy { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.sectionContextCopy strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
+.sectionContextCopy small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; overflow-wrap: anywhere; }
+.sectionContext > [data-tone] { flex: none; }
 .layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
-.list { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
-/* Wide pages lay resources out as a two-column card wall; narrow ones keep one column. */
-@container (min-width: 960px) {
-  .list:not(:has(> :global(.empty-state))) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .list .cardTitle { flex-basis: 120px; }
-}
+.list { display: grid; align-content: start; gap: 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .list > .card {
   position: relative;
   display: grid;
   align-content: start;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   overflow: hidden;
-  transition: border-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  transition: background-color var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) backwards;
 }
-.list > .card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--brand-gradient); opacity: 0; transition: opacity var(--medium) var(--ease); }
-.list > .card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
-.list > .card:hover::before, .list > .card:focus-within::before { opacity: 1; }
-.list > .card:focus-within { border-color: var(--accent-line); }
-.list > .card:has(.cardTitle:focus-visible) { outline: var(--focus-ring); outline-offset: -1px; }
+.list > .card:first-child { border-top: 0; }
+.list > .card:hover { background: var(--surface-2); }
+.list > .card:focus-within { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
+.list > .card:has(.cardTitle:focus-visible) { outline: var(--focus-ring); outline-offset: -2px; }
 /* Source, tags and time read as one quiet line under the summary. */
 .cardMeta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .metaBadge { flex: none; max-width: 160px; }
@@ -137,6 +141,7 @@
 .bodyHead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2_5); }
 .charCount { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
+.groupTitle { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .fields label, .tags, .body { display: grid; gap: var(--space-1_5); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .fields input, .fields select, .fields textarea { width: 100%; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .fields textarea, .body textarea { width: 100%; font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }

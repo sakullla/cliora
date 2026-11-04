@@ -456,6 +456,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['mcp', 'connections', 'MCP'],
     ['skill', 'package', 'Skill'],
   ];
+  const activeSection = sectionTabs.find(([id]) => id === section)!;
   return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><RemoteReadStatus state={remoteReads} /><ToastScope toasts={toasts}>
     <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
@@ -466,6 +467,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </button>)}
       </div>
     </Toolbar>
+    <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span><Badge>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</Badge></div>
     {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
     {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
     {(section === 'prompt' || section === 'rule') && <>
@@ -498,7 +500,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
             const next = titles[titles.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)];
             if (next) { event.preventDefault(); next.focus(); }
           }}>{item.title}</button>
-            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
+            <div className={styles.cardActions} role="group" aria-label={t('library.page.itemActions', { title: item.title })}>{copiedId === item.id && toasts.notice?.text === copiedText()
               ? <Button variant="ghost" size="sm" aria-label={t('library.page.copy')} data-copied="true" icon={<Icon name="check" size={14} />} onClick={() => void copy(item.body, 'page', item.id)}>{t('home.launcher.copied')}</Button>
               : <Button variant="ghost" size="sm" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</Button>}{kind === 'prompt' && <Button size="sm" onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</Button>}<Button variant="ghost" size="sm" onClick={() => choose(item)}>{t('tools.workspace.edit')}</Button></div>
           </div>
@@ -527,7 +529,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         {draft.kind === 'rule' && bindingFeedback()}
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
-        <div className={styles.fields}>
+        <section className={styles.fields}>
+          <h3 className={styles.groupTitle}>{t('library.page.editorDetails')}</h3>
           <label>{t('library.page.title')}<input disabled={busy} autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
           <label>{t('library.page.project')}<FilterSelect disabled={busy} label={t('library.page.project')} value={draft.projectId ?? ''} options={[{ value: '', label: t('tools.apply.global') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
           <div className={styles.tags}>{t('library.page.tags')}
@@ -537,7 +540,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
             </div>
             {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
           </div>
-        </div>
+        </section>
         <label className={styles.body}><span className={styles.bodyHead}>{t('library.page.body')}<span className={styles.charCount}>{t('library.page.charCount', { count: draft.body.length })}</span></span><CodeEditor readOnly={busy} key={draft.id ?? 'new'} label={t('library.page.bodyEditorLabel')} format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? t('library.page.bodyPromptPlaceholder') : t('library.page.bodyRulePlaceholder')} /></label>
         <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{busy ? t('library.page.processing') : dirty ? t('library.page.dirtyState') : t('tools.config.statusSaved')}</span><span className="dialog-footer-gap" /><Button onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>{t('library.page.copy')}</Button>{draft.id && <Button variant="ghost" className={styles.danger} onClick={() => void remove()} disabled={busy}>{t('tools.agents.delete')}</Button>}<Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.title.trim() || (draft.kind === 'rule' && !bindingsKnown)} onClick={() => void save()}>{t('home.launcher.save')}</Button></div>
       </div>}
