@@ -379,7 +379,7 @@ for (const width of widths) {
         if (surface === 'composer') {
           await stage.getByRole('region', { name: copy('多行输入与提示词投递', 'Multi-line input & library prompts') }).getByRole('textbox').fill('保留当前会话的输入草稿');
           const navigation = page.getByRole('navigation', { name: copy('页面', 'Pages') });
-          await navigation.getByRole('button', { name: copy('快速开始', 'Quick start'), exact: true }).click();
+          await navigation.getByRole('button', { name: copy('首页', 'Home'), exact: true }).click();
           await navigation.getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
         }
       }
