@@ -1,6 +1,6 @@
 /* Accounts board: the same framed surface as the other capability tabs. The header
    carries the title and the add action; sections inside are tinted, not bordered. */
-.panel { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-sm); }
+.panel { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; }
 .panel > .header { flex: none; align-items: center; padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
 .body { display: grid; flex: 1 1 auto; align-content: start; gap: var(--space-4); min-width: 0; padding: var(--space-4); }
 .panel h2, .panel h3, .panel p { margin: 0; }

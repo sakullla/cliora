@@ -1,12 +1,12 @@
-/** Synthetic memory screens (工具与连接 → 记忆) for visual inspection; never platform acceptance evidence. */
+/** Synthetic memory screens (工具 → 记忆) for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
-// CLIs are chosen from the h2 switcher in the 工具与连接 header (a single managed CLI has no switcher).
+// CLIs are chosen from the h2 switcher in the 工具 header (a single managed CLI has no switcher).
 async function openCli(page, name) {
-  const region = page.getByRole('region', { name: '工具与连接' });
-  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  const region = page.getByRole('region', { name: '工具' });
+  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
   const title = region.locator('[data-workspace-chrome] h2');
   await title.waitFor();
   const picker = title.getByRole('button', { name: /，切换 CLI$/ });

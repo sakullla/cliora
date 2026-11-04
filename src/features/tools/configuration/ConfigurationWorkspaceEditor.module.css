@@ -2,6 +2,12 @@
 .scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--space-1) var(--space-8); overscroll-behavior: contain; }
 .scroll > div:not([hidden]) { display: grid; gap: var(--space-4); }
 .shell [hidden] { display: none !important; }
+.editorContext { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-width: 0; margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3); border-left: 2px solid var(--line-strong); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); }
+.editorContext > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editorContext > strong { flex: none; max-width: 60%; color: var(--text-2); font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+.editorContext[data-tone='ok'] { border-left-color: var(--success); }
+.editorContext[data-tone='warn'] { border-left-color: var(--warning); }
+.editorContext[data-tone='error'] { border-left-color: var(--danger); }
 .tabs, .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .tabs { position: sticky; top: 0; z-index: 2; display: inline-flex; align-items: center; width: fit-content; max-width: 100%; gap: var(--space-1); flex-wrap: nowrap; margin: 0 0 var(--space-2_5); padding: var(--space-1); background: color-mix(in srgb, var(--surface-2) 82%, transparent); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: none; }
 .tabs button { position: relative; min-height: 34px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius); background: none; box-shadow: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }

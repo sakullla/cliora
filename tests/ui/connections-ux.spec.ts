@@ -60,6 +60,9 @@ test('the configuration board states the applied profile of the current scope', 
   await mockWorkspace(page, 3);
   const region = page.getByRole('region', { name: '工具' });
   const live = region.locator('[data-tools-live]');
+  const context = region.locator('[data-tools-context]');
+  await expect(context).toContainText('本机');
+  await expect(context).toContainText('配置 · 全局配置');
   await expect(live).toContainText('当前生效');
   await expect(live).toContainText('Plan A');
   await expect(live).toHaveAttribute('data-live-profile', 'p0');
@@ -97,6 +100,10 @@ test('a stale binding is reported as no longer in effect, never as in effect', a
   const row = page.locator('[data-profile-id="p0"]');
   await expect(row).not.toHaveAttribute('data-active', 'true');
   await expect(row).toContainText('已保存，待使用');
+  // Version/apply history stays available without adding permanent detail copy to every row.
+  await expect(row.getByText(/最后使用版本 0/)).toBeHidden();
+  await row.locator('summary').filter({ hasText: '版本与应用详情' }).click();
+  await expect(row.getByText(/最后使用版本 0/)).toBeVisible();
   const dot = await live.evaluate((node) => getComputedStyle(node.querySelector('span')!).backgroundColor);
   expect(dot).toBe(await page.evaluate(() => {
     const probe = document.createElement('span');
@@ -123,6 +130,7 @@ test('a project scope without its own binding says so and never claims a configu
   const appliedDot = await live.evaluate((node) => getComputedStyle(node.querySelector('span')!).backgroundColor);
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '测试项目' }).click();
+  await expect(page.getByRole('region', { name: '工具' }).locator('[data-tools-context]')).toContainText('配置 · 测试项目');
   await expect(live).toHaveAttribute('data-live-state', 'project_unbound');
   await expect(live).toHaveAttribute('data-live-tone', 'neutral');
   await expect(live).toContainText('未设置项目绑定');
@@ -196,9 +204,12 @@ test('configuration dialog names the profile, marks the preview tab and reports 
   await page.getByRole('button', { name: '修改', exact: true }).last().click();
   const dialog = page.getByRole('dialog', { name: /^修改配置 · / });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('没有未保存的修改', { exact: true })).toBeVisible();
+  await expect(dialog.locator('[data-config-context]')).toContainText('全局');
+  await expect(dialog.locator('[data-config-context]')).toContainText('没有未保存的修改');
+  await expect(dialog.getByText('没有未保存的修改', { exact: true }).last()).toBeVisible();
   await dialog.getByLabel('配置名称').fill('改名后的配置');
-  await expect(dialog.getByText('有未保存的修改', { exact: true })).toBeVisible();
+  await expect(dialog.locator('[data-config-context]')).toContainText('有未保存的修改');
+  await expect(dialog.getByText('有未保存的修改', { exact: true }).last()).toBeVisible();
   await dialog.getByLabel('配置名称').fill('');
   await expect(dialog.getByLabel('配置名称')).toHaveAttribute('aria-invalid', 'true');
   await dialog.getByLabel('配置名称').fill('改名后的配置');
@@ -254,6 +265,7 @@ async function mockRemoteWorkspace(page: Page) {
 
 test('a remote target is unconfirmed instead of empty or in effect', async ({ page }) => {
   await mockRemoteWorkspace(page);
+  await expect(page.getByRole('region', { name: '工具' }).locator('[data-tools-context]')).toContainText('远程主机');
   const live = page.getByRole('region', { name: '工具' }).locator('[data-tools-live]');
   await expect(live).toHaveAttribute('data-live-state', 'unconfirmed');
   await expect(live).toHaveAttribute('data-live-tone', 'unknown');
