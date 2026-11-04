@@ -211,6 +211,8 @@ export default {
     toolFilter: 'Filter by tool',
     allTools: 'All tools',
     filterBarAria: 'Session filters',
+    moreFilters: 'More filters',
+    moreFiltersHint: 'Time, project, and model',
     project: 'Project',
     projectFilter: 'Filter by project',
     allProjects: 'All projects',

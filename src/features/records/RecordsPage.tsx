@@ -549,6 +549,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   }, [toolId, tab, search, favoriteOnly, projectId, model, rangeKey, projects, dates, tools]);
   // The favorite toggle in the filter bar shows and clears its own state; the rest read as chips.
   const filterChips = activeFilters.filter((item) => item.key !== 'favorite');
+  const advancedFilterCount = [projectId, model, rangeKey !== 'all'].filter(Boolean).length;
   function clearAllFilters() {
     setToolId(''); setSearch(''); setFavoriteOnly(false); setProjectId(''); setModel(''); setRangeKey('all');
   }
@@ -573,10 +574,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={16} />{t('records.page.usage')}</button>
     </div>{tab === 'sessions' && <div className={styles.filterBar} role="group" aria-label={t('records.page.filterBarAria')}>
       <button type="button" className={styles.favoriteToggle} aria-pressed={favoriteOnly} onClick={() => setFavoriteOnly((value) => !value)}><span aria-hidden="true">{favoriteOnly ? '★' : '☆'}</span>{t('records.page.favoriteOnly')}</button>
-      <DateRangeFilter value={rangeKey} customFrom={customFrom} customTo={customTo} presets={rangePresets()} onChange={setRangeKey}
-        onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRangeKey('custom'); }} />
-      <FilterSelect className={styles.barSelect} label={t('records.page.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.unclassified') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
-      <FilterSelect className={styles.barSelect} label={t('records.page.modelFilter')} value={model} options={[{ value: '', label: t('records.page.allModels') }, { value: '__unknown__', label: t('records.page.modelUnknown') }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} />
+      <details className={styles.advancedFilters}><summary title={t('records.page.moreFiltersHint')}><Icon name="sliders" size={14} />{t('records.page.moreFilters')}{advancedFilterCount > 0 && <Badge>{advancedFilterCount}</Badge>}</summary><div className={styles.advancedContent}>
+        <DateRangeFilter value={rangeKey} customFrom={customFrom} customTo={customTo} presets={rangePresets()} onChange={setRangeKey}
+          onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRangeKey('custom'); }} />
+        <FilterSelect className={styles.barSelect} label={t('records.page.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.unclassified') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
+        <FilterSelect className={styles.barSelect} label={t('records.page.modelFilter')} value={model} options={[{ value: '', label: t('records.page.allModels') }, { value: '__unknown__', label: t('records.page.modelUnknown') }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} />
+      </div></details>
     </div>}<Button className={styles.refresh} size="sm" icon={<Icon name="refresh" size={16} />} loading={scanning} disabled={backgroundScanning} aria-label={t('records.page.refreshAria')} onClick={() => void refresh()}><span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></Button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><Button size="sm" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</Button></p>}
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
@@ -642,7 +645,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><h3>{t('records.page.pickSessionTitle')}</h3><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
-    <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
+    <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} onSearchChange={setSearch} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
       scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
     </div>
   </section>;

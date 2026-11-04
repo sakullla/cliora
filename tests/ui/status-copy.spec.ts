@@ -299,7 +299,8 @@ test('project edit failure stays inside the dialog', async ({ page }) => {
   await install(page, { withProject: true });
   await page.goto('/');
   const region = page.getByRole('region', { name: '项目与启动' });
-  await region.getByRole('button', { name: '修改' }).click();
+  await region.getByRole('button', { name: '示例项目 的更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: '示例项目 的更多操作', exact: true }).getByRole('menuitem', { name: '修改', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('示例项目 项目名称').fill('新名字');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { renameFails: boolean } }).__statusCopy.renameFails = true; });
@@ -337,7 +338,8 @@ test('dialog launch success stays with the list failure after the dialog closes'
   await install(page, { withProject: true });
   await page.goto('/');
   const region = page.getByRole('region', { name: '项目与启动' });
-  await region.getByRole('button', { name: '修改' }).click();
+  await region.getByRole('button', { name: '示例项目 的更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: '示例项目 的更多操作', exact: true }).getByRole('menuitem', { name: '修改', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { projectsFail: boolean } }).__statusCopy.projectsFail = true; });
   await dialog.getByRole('button', { name: 'YOLO' }).click();

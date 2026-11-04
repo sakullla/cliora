@@ -246,12 +246,13 @@ test('records keep search, show native resume command and only launch on request
   expect(listLayout.minHeight).toBeGreaterThan(48);
   expect(listLayout.titleLines).toBeGreaterThan(1);
   expect(listLayout.titleLines).toBeLessThanOrEqual(2.05);
-  // The session filters are one visible row under the tab: favorite, time, project, model.
+  // The common filter stays directly reachable; the advanced controls open on request.
   await expect(page.locator('details').filter({ has: page.locator('summary', { hasText: /^筛选/ }) })).toHaveCount(0);
   const filterBar = page.getByRole('group', { name: '会话筛选' });
   await expect(filterBar.getByRole('button', { name: '只看收藏', exact: true })).toHaveAttribute('aria-pressed', 'false');
   const filterRow = await filterBar.evaluate((bar) => {
-    const controls = [...bar.querySelectorAll<HTMLElement>('[aria-pressed], button[data-select-trigger]')];
+    const controls = [...bar.querySelectorAll<HTMLElement>('[aria-pressed], button[data-select-trigger]')]
+      .filter((control) => { const box = control.getBoundingClientRect(); return box.width > 0 && box.height > 0; });
     const barBox = bar.getBoundingClientRect();
     const boxes = controls.map((control) => control.getBoundingClientRect());
     return {
@@ -261,7 +262,12 @@ test('records keep search, show native resume command and only launch on request
       inside: boxes.every((box) => box.left >= barBox.left - 1 && box.right <= barBox.right + 1),
     };
   });
-  expect(filterRow).toEqual({ names: ['只看收藏', '时间范围', '筛选项目', '筛选模型'], oneRow: true, leftToRight: true, inside: true });
+  expect(filterRow).toEqual({ names: ['只看收藏'], oneRow: true, leftToRight: true, inside: true });
+  const advanced = filterBar.locator('details').filter({ has: filterBar.page().getByText('更多筛选', { exact: true }) });
+  await advanced.locator('summary').click();
+  await expect(advanced.getByRole('button', { name: '时间范围', exact: true })).toBeVisible();
+  await expect(advanced.getByRole('button', { name: '筛选项目', exact: true })).toBeVisible();
+  await expect(advanced.getByRole('button', { name: '筛选模型', exact: true })).toBeVisible();
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
   await expect(page.getByLabel('原生恢复命令')).toBeHidden();
   await page.getByText('会话选项', { exact: true }).click();
@@ -678,6 +684,12 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
     const filters = (window as typeof window & { __accuracyFilters: Array<{ search: string; favoriteOnly: boolean }> }).__accuracyFilters;
     return filters.at(-1);
   })).toMatchObject({ search: 'Token', favoriteOnly: true });
+  // Search can be edited directly from Usage without losing the shared filter context.
+  const usageSearch = page.getByRole('textbox', { name: '搜索会话', exact: true });
+  await expect(usageSearch).toBeVisible();
+  await usageSearch.fill('Token 核对');
+  await expect(page.getByText('筛选：搜索「Token 核对」 · 只看收藏', { exact: true })).toBeVisible();
+  await usageSearch.fill('Token');
   if (process.env.HISTORY_ACCURACY_SCREENSHOTS) {
     await page.screenshot({ path: 'docs/verification/history-accuracy/grok-usage.png', fullPage: true });
   }

@@ -211,6 +211,8 @@ export default {
     toolFilter: '筛选工具',
     allTools: '全部工具',
     filterBarAria: '会话筛选',
+    moreFilters: '更多筛选',
+    moreFiltersHint: '时间、项目与模型',
     project: '项目',
     projectFilter: '筛选项目',
     allProjects: '全部项目',

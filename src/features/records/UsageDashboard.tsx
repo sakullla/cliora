@@ -6,6 +6,7 @@ import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryFilter, HistoryPrice, UsageBucket, UsageGroup, UsageReport, UsageTotals } from '../../types/history';
 import { FilterSelect } from '../../components/FilterSelect';
+import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -208,8 +209,8 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
 
 export type UsageNotify = { status: (text: string, protect?: boolean) => void; alert: (value: unknown) => void; readAlert: (value: unknown) => void; clear: () => void };
 
-export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
-  search: string; favoriteOnly: boolean; onClearSearch: () => void; onClearFavoriteOnly: () => void; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
+export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
+  search: string; onSearchChange: (value: string) => void; favoriteOnly: boolean; onClearSearch: () => void; onClearFavoriteOnly: () => void; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
   scanVersion: number; scanning: boolean; lastScanAt: number | null;   onOpenSession: (id: string) => void; notify: UsageNotify;
 }) {
   const { t } = useTranslation();
@@ -352,6 +353,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       <DateRangeFilter variant="toolbar" value={range} customFrom={customFrom} customTo={customTo} presets={ranges()} onChange={setRange}
         onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRange('custom'); }} />
       <div className={styles.headerFilters}>
+        <SearchField className={styles.usageSearch} label={t('records.page.searchLabel')} pageSearch value={search} onChange={onSearchChange} placeholder={t('records.page.searchPlaceholder')} />
         <FilterSelect label={t('records.usage.toolFilter')} value={toolId} options={[{ value: '', label: t('records.page.allTools') }, ...toolOptions(tools)]} onChange={setToolId} />
         <FilterSelect label={t('records.usage.modelFilter')} value={model} options={modelOptions} onChange={setModel} />
         <FilterSelect label={t('records.usage.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.noProject') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />

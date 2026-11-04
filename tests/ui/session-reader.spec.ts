@@ -153,6 +153,7 @@ test('custom dates apply atomically, normalize reversed dates and support keyboa
   await page.clock.setFixedTime(new Date('2026-10-02T12:00:00'));
   const range = page.getByRole('group', { name: '会话筛选' }).getByRole('button', { name: '时间范围', exact: true });
   const pickCustom = async () => { await range.click(); await page.getByRole('listbox', { name: '时间范围' }).getByRole('option', { name: '自定义', exact: true }).click(); };
+  await page.getByRole('group', { name: '会话筛选' }).locator('summary').filter({ hasText: '更多筛选' }).click();
   await pickCustom();
   const dialog = page.getByRole('dialog', { name: '自定义时间范围' });
   await expect(dialog.locator('input[type="date"]')).toHaveCount(0);
@@ -193,6 +194,10 @@ test('the session filter bar applies favorite, time and model filters and shows 
   await favorite.click();
   await expect.poll(async () => (await lastFilter())?.favoriteOnly).toBe(false);
 
+  const more = bar.locator('summary').filter({ hasText: '更多筛选' });
+  await expect(bar.getByRole('button', { name: '时间范围', exact: true })).toBeHidden();
+  await more.click();
+  await expect(bar.getByRole('button', { name: '时间范围', exact: true })).toBeVisible();
   await bar.getByRole('button', { name: '时间范围', exact: true }).click();
   await page.getByRole('listbox', { name: '时间范围' }).getByRole('option', { name: '今天', exact: true }).click();
   await expect.poll(lastFilter).toMatchObject({ fromMs: new Date('2026-10-02T00:00:00').getTime(), toMs: new Date('2026-10-03T00:00:00').getTime() });

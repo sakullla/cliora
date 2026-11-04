@@ -41,7 +41,7 @@ async function expectDirect(control: Locator) {
 test('a failed home probe keeps the error, 重新检测 and 编辑配置 on the row', async ({ page }) => {
   await install(page);
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具', { exact: true });
   const row = tools.locator('[data-tool-row]').filter({ hasText: 'Codex' });
   const alert = tools.getByRole('alert');
   await expect(alert).toContainText('Codex 检测失败');
