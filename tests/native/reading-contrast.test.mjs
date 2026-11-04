@@ -133,7 +133,8 @@ test('danger buttons and icon strokes follow the text colors', () => {
   // Filled danger buttons (the shared Button's danger variant, used by the confirmation dialog) take their label ink from --on-danger in both themes.
   assert.match(button, /\.button\[data-variant="danger"\][^{]*\{[^}]*color:\s*var\(--on-danger\)/);
   assert.equal(/:root\[data-theme="dark"\][^{]*\[data-variant="danger"\]/.test(style + button), false, 'dark danger label overrides --on-danger');
-  assert.equal(light['on-danger'].toLowerCase(), '#fff');
+  // Hex notation is not semantics: the six-digit token and #fff are the same white ink.
+  assert.deepEqual(hexBytes(light['on-danger']), hexBytes('#fff'));
   const darkInkRgb = hexBytes(dark['on-danger']);
   assert.ok(Math.max(...darkInkRgb) <= 80, `dark --on-danger ${dark['on-danger']} is not a dark ink`);
   ratioAtLeast(wcag(hexBytes(light['on-danger']), hexBytes(light.danger)), 4.5, 'light --on-danger on --danger');
@@ -161,23 +162,29 @@ test('badge tones and description text on the raised surface stay at WCAG 4.5:1'
   }
 });
 
-test('charts, font stacks, and theme count stay put', () => {
-  const unchanged = {
+test('Quiet Studio chart colors stay distinct and visible; font stacks and theme count stay put', () => {
+  const palette = {
     light: {
-      'chart-input': '#4a78a8',
-      'chart-output': '#3f8659',
-      'chart-read': '#bd8a33',
-      'chart-write': '#8266a8',
+      'chart-input': '#527b9b',
+      'chart-output': '#3f805e',
+      'chart-read': '#a2782f',
+      'chart-write': '#806b99',
     },
     dark: {
-      'chart-input': '#7fb0e0',
-      'chart-output': '#8fb59a',
-      'chart-read': '#e0b96a',
-      'chart-write': '#b5a1e0',
+      'chart-input': '#8bb4d2',
+      'chart-output': '#94c6a7',
+      'chart-read': '#d7b778',
+      'chart-write': '#bdabd2',
     },
   };
-  for (const [token, value] of Object.entries(unchanged.light)) assert.equal(light[token], value, `light --${token}`);
-  for (const [token, value] of Object.entries(unchanged.dark)) assert.equal(dark[token], value, `dark --${token}`);
+  for (const [name, theme] of themes) {
+    assert.equal(new Set(Object.values(palette[name])).size, 4, `${name} chart colors must be distinct`);
+    for (const [token, value] of Object.entries(palette[name])) {
+      assert.equal(theme[token], value, `${name} --${token}`);
+      // These tokens paint chart marks, not text; WCAG non-text contrast is 3:1.
+      ratioAtLeast(wcag(hexBytes(value), hexBytes(theme.surface)), 3, `${name} --${token} on --surface`);
+    }
+  }
   assert.equal(light['font-sans'], '"Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif');
   assert.equal(light['font-mono'], '"Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", "SFMono-Regular", Menlo, monospace');
   assert.match(style, /font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;/);
@@ -189,40 +196,32 @@ test('static window background matches the declared light page background', () =
   assert.equal(String(background).toLowerCase(), light.bg.toLowerCase());
 });
 
-test('error paths and active line numbers stay readable on their resting tints', () => {
+test('error paths and active line numbers stay readable on their actual surfaces', () => {
   const declaredMix = (css, pattern) => {
     const match = css.match(pattern);
     assert.ok(match, pattern);
     return Number(match[1]) / 100;
   };
-  const dangerMix = declaredMix(style, /\.error-banner code\s*\{[^}]*color-mix\(in srgb, var\(--danger\) ([\d.]+)%/);
   const gutterMix = declaredMix(editor, /\.cm-activeLineGutter\s*\{[^}]*color-mix\(in srgb, var\(--accent\) ([\d.]+)%/);
+  assert.match(style, /\.error-banner\s*\{[^}]*--notice-bg:\s*var\(--danger-soft\)/);
   assert.match(style, /\.error-banner code\s*\{[^}]*color:\s*var\(--text-2\)/);
+  assert.match(style, /\.error-banner code\s*\{[^}]*background:\s*transparent/);
   assert.match(editor, /\.cm-activeLineGutter\s*\{[^}]*color:\s*var\(--text-2\)/);
   for (const [name, theme] of themes) {
-    const path = composite(hexBytes(theme.danger), hexBytes(theme['danger-soft']), dangerMix);
-    ratioAtLeast(wcag(hexBytes(theme['text-2']), path), 4.5, `${name} --text-2 on the error path`);
+    // The error path no longer adds a tint: text sits directly on danger-soft.
+    ratioAtLeast(wcag(hexBytes(theme['text-2']), hexBytes(theme['danger-soft'])), 4.5, `${name} --text-2 on the error path`);
     const gutter = composite(hexBytes(theme.accent), hexBytes(theme['surface-2']), gutterMix);
     ratioAtLeast(wcag(hexBytes(theme['text-2']), gutter), 4.5, `${name} --text-2 on the active line number`);
   }
 });
 
-test('toast icons stay readable on their resting tint', () => {
-  const declaredMix = (pattern) => {
-    const match = style.match(pattern);
-    assert.ok(match, pattern);
-    return Number(match[1]) / 100;
-  };
-  const surfaceMix = declaredMix(/\.toast\s*\{[^}]*color-mix\(in srgb, var\(--surface\) ([\d.]+)%/);
-  const toneMix = declaredMix(/\.toast-icon\s*\{[^}]*color-mix\(in srgb, var\(--toast-tone\) ([\d.]+)%/);
+test('toast icons stay readable on the opaque toast surface', () => {
+  assert.match(style, /\.toast\s*\{[^}]*background:\s*var\(--surface\)/);
   assert.match(style, /\.toast-icon\s*\{[^}]*color:\s*var\(--toast-tone\)/);
   for (const [name, theme] of themes) {
-    for (const backdrop of ['bg', 'surface', 'surface-2', 'surface-3']) {
-      const toast = composite(hexBytes(theme.surface), hexBytes(theme[backdrop]), surfaceMix);
-      for (const tone of ['accent', 'danger', 'warning', 'info']) {
-        const icon = composite(hexBytes(theme[tone]), toast, toneMix);
-        ratioAtLeast(wcag(hexBytes(theme[tone]), icon), 4.5, `${name} --${tone} on the toast icon over --${backdrop}`);
-      }
+    for (const tone of ['accent', 'danger', 'warning', 'info']) {
+      // No second tint remains between the icon and the toast's opaque surface.
+      ratioAtLeast(wcag(hexBytes(theme[tone]), hexBytes(theme.surface)), 4.5, `${name} --${tone} on the toast icon`);
     }
   }
 });

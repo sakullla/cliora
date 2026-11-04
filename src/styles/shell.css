@@ -82,7 +82,7 @@ html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 .host-switcher-trigger .host-switcher-glyph::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 2px solid var(--surface); border-radius: 50%; background: var(--success); }
 .host-switcher-copy { display: grid; flex: 1; min-width: 0; line-height: 1.25; }
 .host-switcher-copy strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
-.host-switcher-copy small { overflow: hidden; margin-top: 2px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.host-switcher-copy small { overflow: hidden; margin-top: var(--space-0_5); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
 .host-switcher-trigger[data-remote] .host-switcher-copy small, .host-switcher-menu .host-switcher-glyph[data-remote] + .host-switcher-copy small { font-family: var(--font-mono); font-size: var(--fs-micro); }
 .host-switcher-caret { flex: none; color: var(--text-3); }
 .host-switcher-trigger[data-variant="chip"],

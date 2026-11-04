@@ -225,7 +225,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await expectBodyText(selectedTitle);
   await expectBodyText(page.getByRole('heading', { level: 2, name: sessionTitle }));
   await expect(page.getByRole('button', { name: '在外部终端继续', exact: true })).toBeVisible();
-  const recordControls = await sharedHeights(page.locator('input[aria-label="搜索会话"], button[aria-label="筛选工具"]'));
+  const recordControls = await sharedHeights(page.locator('input[aria-label="搜索会话"]:visible, button[aria-label="筛选工具"]:visible'));
   expect(recordControls.length).toBe(2);
   expect(Math.max(...recordControls) - Math.min(...recordControls)).toBeLessThanOrEqual(1);
 
