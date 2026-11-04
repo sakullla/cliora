@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { expect } from '@playwright/test';
 
-// CLIs are chosen from the h2 switcher in the 工具与连接 header (a single managed CLI has no switcher).
+// CLIs are chosen from the h2 switcher in the 工具 header (a single managed CLI has no switcher).
 async function openCli(page, name) {
-  const region = page.getByRole('region', { name: '工具与连接' });
-  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  const region = page.getByRole('region', { name: '工具' });
+  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
   const title = region.locator('[data-workspace-chrome] h2');
   await title.waitFor();
   const picker = title.getByRole('button', { name: /，切换 CLI$/ });
@@ -115,7 +115,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
       const dialog = page.locator('dialog.guide-dialog');
       if (action === 'overview') {
         // overview 分支没有其他场景的按钮 auto-wait；等配置列表渲染完成（workspace 加载完成后才出现），避免截到全局加载骨架。
-        await page.getByRole('region', { name: '工具与连接' }).getByLabel('配置列表').waitFor();
+        await page.getByRole('region', { name: '工具' }).getByLabel('配置列表').waitFor();
       }
       if (['accounts', 'impact', 'account-create'].includes(action)) {
         await page.getByRole('tab', { name: '账号', exact: true }).click();
