@@ -162,7 +162,7 @@ test('native settings result drives the home list and empty management stays rec
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByRole('button', { name: '去安装 →' })).toHaveCount(1);
-  await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
+  await expect(page.locator('[aria-label="受管理工具"]')).toContainText('Codex');
 });
 
 test('settings default YOLO mode launches both a CLI and a project', async ({ page }) => {
@@ -195,7 +195,7 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
     });
   });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const projects = page.getByRole('region', { name: '项目与启动' });
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
@@ -315,7 +315,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   });
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: '页面' });
-  const logo = page.getByLabel('管理中的工具').locator('img').first();
+  const logo = page.getByLabel('受管理工具').locator('img').first();
   await expect(logo).toBeVisible();
   const defaultSource = await logo.getAttribute('src');
   await page.getByRole('button', { name: '启动', exact: true }).click();

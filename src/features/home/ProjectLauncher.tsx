@@ -15,8 +15,9 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
+import { RowMenu } from '../../components/RowMenu';
 import { SkeletonRows } from '../../components/Skeleton';
-import { Badge, Button, Card, IconButton, SplitButton, Toolbar } from '../../components/ui';
+import { Badge, Button, Card, SplitButton, Toolbar } from '../../components/ui';
 import { ensureRemoteProject, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
@@ -86,20 +87,18 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     if (!repair?.projectId || focusedRepair.current === repair.sequence) return;
     const project = projects.find((item) => item.id === repair.projectId);
     if (!project) return;
-    if (!project.available) setEditingId(project.id);
+    // Repair now lands in the project editor, where tool, directory and model share one context.
+    setEditingId(project.id);
     repairCard.current?.scrollIntoView({ block: 'center' });
-    if (project.available) {
-      const target = repairToolSelect.current;
-      if (target && !target.disabled) target.focus(); else repairCard.current?.focus();
-      focusedRepair.current = repair.sequence;
-    }
   }, [repair?.sequence, projects]);
   useLayoutEffect(() => {
     if (!repair?.projectId || editingId !== repair.projectId || focusedRepair.current === repair.sequence) return;
-    const target = repairDirectoryInput.current;
-    if (target && !target.disabled) target.focus();
+    const project = projects.find((item) => item.id === repair.projectId);
+    const target = project?.available ? repairToolSelect.current : repairDirectoryInput.current;
+    if (!target || target.disabled) return;
+    target.focus();
     focusedRepair.current = repair.sequence;
-  }, [editingId, repair?.projectId, repair?.sequence]);
+  }, [editingId, repair?.projectId, repair?.sequence, projects]);
   const revealedSpotlight = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!spotlight || revealedSpotlight.current === spotlight.token) return;
@@ -382,15 +381,21 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const marked = repair?.projectId === project.id || spotlight?.id === project.id;
       const pasteExpanded = project.id in pasteOpen ? !!pasteOpen[project.id] : repair?.projectId === project.id;
       const used = lastUsed(project.lastOpened);
+      const profileId = project.selectedProfiles[toolId] ?? project.appliedProfiles[toolId];
       return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
-        <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div><div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div></div>
+        <div className={styles.identity}>
+          <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</div>
+          <div className={styles.contextLine}><span>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileId}>{t('home.launcher.currentProfile', { id: profileId })}</span>}</div>
+          <div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div>
+        </div>
         <div className={styles.controls}>
-          <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} />
           <div className={styles.actions}>
             <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
             {descriptor?.resumeLatestAvailable && <Button size="sm" variant="ghost" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</Button>}
-            <IconButton size="sm" icon={<Icon name="folder" size={16} />} aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)} />
-            <IconButton size="sm" icon={<Icon name="pencil" size={15} />} aria-label={t('home.launcher.edit')} onClick={() => setEditingId(project.id)} />
+            <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
+              <button type="button" role="menuitem" onClick={() => setEditingId(project.id)}><Icon name="pencil" size={14} /><span>{t('home.launcher.edit')}</span></button>
+              <button type="button" role="menuitem" aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="folder" size={14} /><span>{t('home.launcher.openDir')}</span></button>
+            </RowMenu>
           </div>
         </div>
         {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} /></label><Button size="sm" disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</Button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
@@ -402,6 +407,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
           <div className={styles.editSections}>
           <section className={styles.editSection} aria-labelledby={`${project.id}-basics`}>
             <h3 id={`${project.id}-basics`}>{t('home.launcher.sectionBasics')}</h3>
+            <div className={styles.editField}><span>{t('home.launcher.toolFor', { name: project.name })}</span><FilterSelect label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} /></div>
             <label className={styles.editField}><span>{t('home.launcher.nameLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} onKeyDown={event => { if (event.key === 'Enter' && names[project.id]?.trim() && !busy) { event.preventDefault(); void rename(project); } }} /><Button disabled={!!busy || !names[project.id]?.trim() || names[project.id]?.trim() === project.name} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</Button></span></label>
             {descriptor?.projectModelOverride && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /><Button disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</Button></span></label>}
           </section>
@@ -431,12 +437,15 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
         const descriptor = managed.find((tool) => tool.id === toolId);
         const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
         return <Card padding="compact" className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
-          <div className={styles.identity}><div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong><Badge tone="accent">{t('home.remote.badge')}</Badge></div><span title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
+          <div className={styles.identity}>
+            <div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong><Badge tone="accent">{t('home.remote.badge')}</Badge>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</div>
+            <div className={styles.contextLine}><span>{descriptor?.name ?? t('home.launcher.pickTool')}</span></div>
+            <div className={styles.metaLine}><span className={styles.cardPath} title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
+          </div>
           <div className={styles.controls}>
-            <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} />
             <div className={styles.actions}>
               <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
-              <Button size="sm" variant="ghost" onClick={() => void removeRemote(project)}>{t('home.remote.remove')}</Button>
+              <RowMenu label={t('home.launcher.moreActions', { name: project.name })}><button type="button" role="menuitem" data-danger="true" onClick={() => void removeRemote(project)}><Icon name="trash" size={14} /><span>{t('home.remote.remove')}</span></button></RowMenu>
             </div>
           </div>
         </Card>;

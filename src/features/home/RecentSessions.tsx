@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
-import { Button } from '../../components/ui';
+import { Badge, Button } from '../../components/ui';
 import { ToastStack } from '../../components/Toast';
 import { useToasts } from '../../lib/toast';
 import { native, nativeAvailable } from '../../lib/native';
@@ -13,33 +13,36 @@ import styles from './RecentSessions.module.css';
 
 const LIMIT = 6;
 
-/** Recent conversations from the local index, so work can continue straight from home.
- *  Read-only: the list comes from the indexed snapshot and never triggers a scan. Sessions
- *  without a native id or whose CLI is not managed are left out instead of offering a
- *  resume that cannot work; an empty or failed read renders nothing rather than fake recents. */
+/** Indexed local conversations. Reads never trigger a scan, and an empty/failed read is explicit. */
 export function RecentSessions({ tools, active, onResume, onOpenRecords }: { tools: AdapterDescriptor[]; active: boolean; onResume: (session: HistorySession) => Promise<'workbench' | 'terminal' | 'failed'>; onOpenRecords: () => void }) {
   const { t, i18n } = useTranslation();
   const toasts = useToasts();
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [readFailed, setReadFailed] = useState(false);
+  const [reload, setReload] = useState(0);
   const managed = new Map(tools.filter((tool) => tool.launchForm !== 'desktop').map((tool) => [tool.id, tool]));
   const toolKey = [...managed.keys()].join('|');
 
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
+    setLoading(true);
     void native.listHistorySessions({ limit: 24 }).then((result) => {
       if (!live || !Array.isArray(result)) return;
       setSessions(result
         .filter((item) => item.nativeId && managed.has(item.toolId))
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
         .slice(0, LIMIT));
-    }).catch(() => { if (live) setSessions([]); });
+      setReadFailed(false);
+    }).catch(() => { if (live) setReadFailed(true); })
+      .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
     // The managed set is compared by its ids; the map itself is rebuilt every render.
-  }, [active, toolKey]);
+  }, [active, toolKey, reload]);
 
-  if (!sessions.length) return null;
+  if (!nativeAvailable) return null;
   const relative = new Intl.RelativeTimeFormat(i18n.language || 'zh-CN', { numeric: 'auto' });
   const when = (stamp: number | null) => {
     if (!stamp) return null;
@@ -60,30 +63,33 @@ export function RecentSessions({ tools, active, onResume, onOpenRecords }: { too
     } finally { setBusy(null); }
   }
 
-  return <section className={`${styles.recent} home-recent`} aria-labelledby="home-recent-title">
+  return <section className={`${styles.recent} home-recent`} aria-labelledby="home-recent-title" data-home-section="recent">
     <div className="section-heading">
-      <h2 id="home-recent-title">{t('home.recent.title')}</h2>
+      <h2 id="home-recent-title">{t('home.recent.title')}{sessions.length > 0 && <Badge className="heading-count" aria-hidden="true">{sessions.length}</Badge>}</h2>
       <Button variant="ghost" size="sm" onClick={onOpenRecords}>{t('home.recent.viewAll')} <span aria-hidden="true">→</span></Button>
     </div>
-    <ul className={styles.grid}>
-      {sessions.map((session, index) => {
-        const title = session.title.trim() || t('home.recent.untitled');
-        const tool = managed.get(session.toolId);
-        const time = when(session.updatedAt);
-        return <li key={session.id} className={styles.card} style={{ animationDelay: `${index * 30}ms` }}>
-          <span className={styles.icon} aria-hidden="true"><ToolIcon toolId={session.toolId} size={22} /></span>
-          <span className={styles.copy}>
-            <strong title={title}>{title}</strong>
-            <span className={styles.meta}>
-              <span>{tool?.name ?? session.toolId}</span>
-              {time && <time>{time}</time>}
-              {session.cwd && <span className={styles.path} title={session.cwd}>{shortPath(session.cwd)}</span>}
+    {readFailed && <div className={styles.readState} data-tone="error" role="alert"><span>{t(sessions.length ? 'home.recent.refreshFailed' : 'home.recent.loadFailed')}</span><Button size="sm" variant="ghost" loading={loading} onClick={() => setReload((value) => value + 1)}>{t('home.recent.retry')}</Button></div>}
+    {loading && !sessions.length && !readFailed ? <div className={styles.readState} role="status">{t('home.recent.loading')}</div>
+      : sessions.length === 0 && !readFailed ? <div className={styles.readState}><span><strong>{t('home.recent.emptyTitle')}</strong><small>{t('home.recent.emptyDetail')}</small></span></div>
+      : sessions.length > 0 && <ul className={styles.grid}>
+        {sessions.map((session) => {
+          const title = session.title.trim() || t('home.recent.untitled');
+          const tool = managed.get(session.toolId);
+          const time = when(session.updatedAt);
+          return <li key={session.id} className={styles.card}>
+            <span className={styles.icon} aria-hidden="true"><ToolIcon toolId={session.toolId} size={20} /></span>
+            <span className={styles.copy}>
+              <strong title={title}>{title}</strong>
+              <span className={styles.meta}>
+                <span>{tool?.name ?? session.toolId}</span>
+                {time && <time>{time}</time>}
+                {session.cwd && <span className={styles.path} title={session.cwd}>{shortPath(session.cwd)}</span>}
+              </span>
             </span>
-          </span>
-          <Button size="sm" className={styles.resume} icon={<Icon name="play" size={13} />} loading={busy === session.id} disabled={!!busy && busy !== session.id} aria-label={t('home.recent.resumeAria', { title })} title={t('home.recent.resumeAria', { title })} onClick={() => void resume(session)}>{t('home.recent.resume')}</Button>
-        </li>;
-      })}
-    </ul>
+            <Button size="sm" className={styles.resume} icon={<Icon name="play" size={13} />} loading={busy === session.id} disabled={!!busy && busy !== session.id} aria-label={t('home.recent.resumeAria', { title })} title={t('home.recent.resumeAria', { title })} onClick={() => void resume(session)}>{t('home.recent.resume')}</Button>
+          </li>;
+        })}
+      </ul>}
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </section>;
 }

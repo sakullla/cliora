@@ -233,10 +233,10 @@ function countFirstScreen(){
   return rect.top>=top-1&&rect.left>=left-1&&rect.bottom<=bottom+1&&rect.right<=right+1;
  }).length;
 }
-// CLIs are chosen from the h2 switcher in the 工具与连接 header (a single managed CLI has no switcher).
+// CLIs are chosen from the h2 switcher in the 工具 header (a single managed CLI has no switcher).
 async function openCli(page, name) {
-  const region = page.getByRole('region', { name: '工具与连接' });
-  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  const region = page.getByRole('region', { name: '工具' });
+  if (!await region.isVisible()) await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
   const title = region.locator('[data-workspace-chrome] h2');
   await title.waitFor();
   const picker = title.getByRole('button', { name: /，切换 CLI$/ });
@@ -369,7 +369,7 @@ async function captureHistoryFeatures(){
   }
   async function edit(id){await page.locator(`[data-profile-id="${id}"]`).getByRole('button',{name:'修改',exact:true}).click();await dialog.waitFor();}
   try{
-   await nav.getByRole('button',{name:'使用记录'}).click();
+   await nav.getByRole('button',{name:'记录'}).click();
    await page.getByRole('button',{name:/Grok · Token 核对示例/}).click();
    await expect(page.locator('time[title*="按轮次开始时间推断"]')).toContainText('约');
    await capture('grok-precise-detail','history','native timestamp / inferred turn time / no usage summary card');
@@ -406,7 +406,7 @@ async function captureQoderHistoryFeatures(){
   async function capture(name,state){if(selectedScenarios.includes(name))await captureImage(page,name,theme,width,{category:'records',title:name,state});}
   try {
    await page.goto(previewUrl);
-   await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'使用记录'}).click();
+   await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'记录'}).click();
    await page.getByRole('button',{name:/Qoder CN · 原生 Credits 与会话/}).click();
    if(unknownAmounts){
     await expect(page.getByRole('tabpanel',{name:/^会话/})).toContainText('1 条记录没有 token');
@@ -488,7 +488,7 @@ async function captureUsageDetails(page,capture,theme,width){
 async function captureConnectionScreens(page,capture,width){
  const previous=page.viewportSize();
  await page.setViewportSize({width,height:Math.max(1100,previous?.height??1000)});
- const region=page.getByRole('region',{name:'工具与连接'});
+ const region=page.getByRole('region',{name:'工具'});
  const profiles=region.getByLabel('配置列表');
  for(const name of ['Codex','Claude Code','Grok','Pi','OpenCode']){
   await openCli(page,name);
@@ -518,7 +518,7 @@ async function captureConnectionScreens(page,capture,width){
 }
 async function captureMcpScreens(page,capture){
  const nav=page.getByRole('navigation',{name:'页面'});
- await nav.getByRole('button',{name:'工具与连接'}).click();
+ await nav.getByRole('button',{name:'工具'}).click();
  await openCli(page,'Codex');
  await page.getByRole('tab',{name:'MCP',exact:true}).click();
  const tool=page.getByRole('region',{name:'MCP 服务器'});
@@ -640,7 +640,7 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'工作台',exact:true}).click();
   await page.getByRole('region',{name:'当前会话'}).getByRole('button',{name:'写入恢复',exact:true}).waitFor();
   await capture('write-no-session-fault');
-  await nav.getByRole('button',{name:'快速开始',exact:true}).click();
+  await nav.getByRole('button',{name:'首页',exact:true}).click();
   await page.getByRole('button',{name:'写入恢复',exact:true}).click();
   const recovery=page.getByRole('dialog',{name:'远程写入与恢复',exact:true});
   await recovery.getByRole('button',{name:'核查实际结果',exact:true}).click();
@@ -685,7 +685,7 @@ for(const width of widths)for(const theme of themes){
   await page.close();continue;
  }
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
-  await nav.getByRole('button',{name:'使用记录'}).click();
+  await nav.getByRole('button',{name:'记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
   if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
   if(process.argv.includes('--sessions')){await captureSessionReading(page,capture,width);await page.close();continue;}
@@ -695,7 +695,7 @@ for(const width of widths)for(const theme of themes){
   await page.close();continue;
  }
  if(process.argv.includes('--connections')){
-  await nav.getByRole('button',{name:'工具与连接'}).click();
+  await nav.getByRole('button',{name:'工具'}).click();
   await captureConnectionScreens(page,capture,width);
   await page.close(); continue;
  }
@@ -733,7 +733,7 @@ for(const width of widths)for(const theme of themes){
   const dismiss=page.getByRole('button',{name:'关闭提示',exact:true});if(await dismiss.isVisible()){await dismiss.click();await dismiss.waitFor({state:'hidden'});}
   await capture('rules-bindings-ready');
   await page.evaluate(()=>{window.__captureBindings.fail=true;window.__expireBindings();});
-  await nav.getByRole('button',{name:'快速开始',exact:true}).click();await nav.getByRole('button',{name:'资料库',exact:true}).click();
+  await nav.getByRole('button',{name:'首页',exact:true}).click();await nav.getByRole('button',{name:'资料库',exact:true}).click();
   await page.getByText('规则写入状态刷新失败，当前显示上次成功读取的结果。重试成功后可保存和分发规则。',{exact:true}).waitFor();
   await expect(ruleRow.getByRole('button',{name:'Codex · 已生效',exact:true})).toBeDisabled();await capture('rules-bindings-stale');
   await page.evaluate(()=>window.__captureBindings.fail=false);await page.getByRole('button',{name:'重试写入状态',exact:true}).click();
@@ -748,23 +748,23 @@ for(const width of widths)for(const theme of themes){
  }
  if(process.argv.includes('--skills')){
   await page.setViewportSize({width,height:Math.max(1100,page.viewportSize()?.height??1000)});
-  await nav.getByRole('button',{name:'工具与连接'}).click();
-  await page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表').waitFor();
+  await nav.getByRole('button',{name:'工具'}).click();
+  await page.getByRole('region',{name:'工具'}).getByLabel('配置列表').waitFor();
   await captureSkillViews(page,capture);
   await page.close(); continue;
  }
  await capture('home');
  if(quickCapture){
   // --quick: one screen per page, for fast visual iteration.
-  await nav.getByRole('button',{name:'工具与连接'}).click();await page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表').waitFor();await capture('tools');
+  await nav.getByRole('button',{name:'工具'}).click();await page.getByRole('region',{name:'工具'}).getByLabel('配置列表').waitFor();await capture('tools');
   await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
-  await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
+  await nav.getByRole('button',{name:'记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
   await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
   await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.waitForTimeout(600);await capture('settings');
   await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');
   await page.close();continue;
  }
- await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
+ await nav.getByRole('button',{name:'工具'}).click();const profiles=page.getByRole('region',{name:'工具'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await profiles.getByRole('button',{name:'修改'}).nth(1).click();await page.getByRole('dialog').waitFor();await capture('config-form');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  const officialRow=profiles.locator('[data-profile-id="codex-work"]');await officialRow.getByText('25% 已用',{exact:true}).first().waitFor();await officialRow.scrollIntoViewIfNeeded();await capture('quota-results');
@@ -794,7 +794,7 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByLabel('Skill 列表').getByRole('button',{name:'code-review',exact:true}).waitFor();await capture('library-skills');
  await page.getByRole('button',{name:'添加 Skill',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-skill-add');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await captureMcpScreens(page,capture);
- await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
+ await nav.getByRole('button',{name:'记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
  if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
  await captureSessionReading(page,capture,width);
  await page.keyboard.press('Escape');

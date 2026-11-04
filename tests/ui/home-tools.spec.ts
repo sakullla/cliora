@@ -107,7 +107,7 @@ test('launch names the tool, blocks a second click, and ignores a cancelled dire
   await installHome(page);
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const launch = tools.getByRole('button', { name: '启动', exact: true });
   await expect(launch).toBeEnabled();
   await launch.click();
@@ -149,7 +149,7 @@ test('launch names the tool, blocks a second click, and ignores a cancelled dire
 test('launch failure names the tool and replaces the previous success', { tag: '@integration' }, async ({ page }) => {
   await installHome(page);
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await tools.getByRole('button', { name: '启动', exact: true }).click();
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
@@ -172,7 +172,7 @@ test('launch failure names the tool and replaces the previous success', { tag: '
 test('the launch directory is remembered, and right-click picks another', async ({ page }) => {
   await installHome(page);
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const launch = tools.getByRole('button', { name: '启动', exact: true });
   await launch.click();
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
@@ -220,7 +220,7 @@ test('applying a profile reports the native write, and failure keeps the previou
   await installHome(page);
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const group = tools.getByRole('radiogroup', { name: '切换Codex的配置' });
   const daily = group.getByRole('radio', { name: '日常' });
   const work = group.getByRole('radio', { name: '工作' });
@@ -285,7 +285,7 @@ test('a home switch that differs from the file opens the comparison', async ({ p
     };
     state.__comparedCalls = [];
   });
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await tools.getByRole('radio', { name: '工作' }).click();
   const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(dialog).toBeVisible();
@@ -391,7 +391,10 @@ test('a project tool is searched and switched from the card', async ({ page }) =
   });
   await page.goto('/');
   const projects = page.getByRole('region', { name: '项目与启动' });
-  const trigger = projects.getByRole('button', { name: 'Demo 的工具' });
+  await projects.getByRole('button', { name: 'Demo 的更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: 'Demo 的更多操作' }).getByRole('menuitem', { name: '修改', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '修改Demo' });
+  const trigger = editor.getByRole('button', { name: 'Demo 的工具' });
   await expect(trigger).toContainText('Codex');
   await trigger.click();
   const list = page.getByRole('listbox', { name: 'Demo 的工具' });
@@ -465,7 +468,7 @@ test('the project launch menu saves another tool, then launches it with that too
   await expect(menu.getByRole('menuitem', { name: /Codex/ })).toHaveAttribute('aria-current', 'true');
   await expect(menu).not.toContainText('工作台');
   await menu.getByRole('menuitem', { name: /Grok/ }).click();
-  await expect(card.getByRole('button', { name: 'Demo 的工具' })).toContainText('Grok');
+  await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
   await expect(page.getByRole('region', { name: '项目与启动' }).getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
   expect(await splitCalls(page)).toEqual([
     ['set_project_tool', { projectId: 'demo', toolId: 'grok' }],
@@ -495,7 +498,7 @@ test('a failed tool save from the launch menu shows the page error and does not 
   const alert = projects.getByRole('alert');
   await expect(alert).toContainText('项目文件被占用');
   await expect(projects.getByRole('status')).toHaveCount(0);
-  await expect(card.getByRole('button', { name: 'Demo 的工具' })).toContainText('Codex');
+  await expect(card.locator('[class*="contextLine"]')).toContainText('Codex');
   await expect(card.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
   expect(await splitCalls(page)).toEqual([['set_project_tool', { projectId: 'demo', toolId: 'grok' }]]);
 });
@@ -510,7 +513,7 @@ test('a remote project launches another tool from the menu without saving it', a
   await expect(card.locator('[data-variant="primary"]')).toHaveCount(1);
   await card.getByRole('button', { name: '用其他工具启动 远程仓库' }).click();
   await page.getByRole('menu', { name: '用其他工具启动 远程仓库' }).getByRole('menuitem', { name: /Grok/ }).click();
-  await expect(card.getByRole('button', { name: '远程仓库 的工具' })).toContainText('Grok');
+  await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
   await expect.poll(() => splitCalls(page)).toEqual([
     ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null, remoteIntent: { kind: 'new' } }],
   ]);
@@ -520,7 +523,7 @@ test('detection failure names the tool and points at edit or reread', async ({ p
   await installHome(page, true);
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const alert = tools.getByRole('alert');
   await expect(alert).toHaveText('Codex 检测失败。可重新检测或编辑配置。 找不到 Codex 可执行文件');
   await expect(tools.getByRole('status')).toHaveCount(0);
@@ -564,7 +567,7 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   });
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await expect(tools.getByRole('radiogroup')).toHaveCount(0);
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
   await expect(menu).toContainText('日常');
@@ -634,7 +637,7 @@ test('a short profile menu is one line, switches with arrow keys and keeps the m
   });
   await page.setViewportSize({ width: 1360, height: 768 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
   await expect(menu).toHaveText('Plan B');
   await expect(menu).toHaveAttribute('title', /Plan B · model-b/);
@@ -688,7 +691,7 @@ test('a transient version failure automatically rechecks and enables launch', as
   await page.clock.install();
   await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'failed'; });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await expect(tools).toContainText('版本检测失败');
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
   await expect(tools.getByRole('button', { name: '重新检测', exact: true })).toBeVisible();
@@ -705,7 +708,7 @@ test('missing installations do not loop and a manual recheck discovers a new ins
   await page.clock.install();
   await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'absent'; });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await expect(tools).toContainText('未发现安装');
   await page.clock.fastForward(30_000);
   expect(await page.evaluate(() => (window as unknown as { __probeCalls: unknown[] }).__probeCalls.length)).toBe(1);
@@ -777,7 +780,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   });
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const row = (name: string) => tools.locator('[data-tool-row]').filter({ hasText: name });
   const dialogs = () => page.evaluate(() => (window as unknown as { __desktop: { dialogs: unknown[] } }).__desktop.dialogs.length);
   const requests = () => page.evaluate(() => (window as unknown as { __desktop: { launchRequests: Array<{ toolId: string; projectId: string | null; sessionId: string | null; directory: string | null; mode: string }> } }).__desktop.launchRequests);
@@ -844,7 +847,8 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   expect(await dialogs()).toBe(0);
   const projectRequest = (await requests()).find((item) => item.projectId === 'proj-1');
   expect(projectRequest).toMatchObject({ toolId: 'zcode', projectId: 'proj-1', sessionId: null, directory: null, mode: 'normal' });
-  await projects.getByRole('button', { name: '修改', exact: true }).click();
+  await projects.getByRole('button', { name: '演示项目 的更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: '演示项目 的更多操作' }).getByRole('menuitem', { name: '修改', exact: true }).click();
   const projectEdit = page.getByRole('dialog');
   await expect(projectEdit.getByRole('button', { name: '这次用 YOLO', exact: true })).toHaveCount(0);
   await projectEdit.getByRole('button', { name: '关闭', exact: true }).click();
@@ -958,7 +962,7 @@ test('the fresh onboarding checklist checks its steps and retires once complete'
   await expect(card.locator('li[data-done]')).toHaveCount(2);
 
   // Step 3: one launch through the app finishes the guide and records both markers.
-  await page.getByLabel('管理中的工具').getByRole('button', { name: '启动', exact: true }).click();
+  await page.getByLabel('受管理工具').getByRole('button', { name: '启动', exact: true }).click();
   await expect(card).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-complete'))).toBe('true');
   expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-launched'))).toBe('true');
@@ -1180,11 +1184,11 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   });
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   const rows = tools.locator('[data-tool-row]');
   // R2: continue working is the first band, tool management follows it.
   const launcher = page.getByRole('region', { name: '项目与启动' });
-  await expect(launcher.getByRole('heading', { name: '继续工作', exact: true })).toBeVisible();
+  await expect(launcher.getByRole('heading', { name: '项目与快速启动', exact: true })).toBeVisible();
   expect((await launcher.boundingBox())!.y).toBeLessThan((await tools.boundingBox())!.y);
 
   // Only the configured tool is listed; the other seven fold behind one toggle.
@@ -1270,7 +1274,7 @@ test('a failed compared apply explains itself in the dialog and retries with a f
       files: [{ role: 'settings', format: 'toml', current: 'model = "old"', proposed: { model: 'new' }, proposedText: 'model = "new"\n' }],
     };
   });
-  const tools = page.getByLabel('管理中的工具');
+  const tools = page.getByLabel('受管理工具');
   await tools.getByRole('radio', { name: '工作' }).click();
   const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(dialog).toBeVisible();
@@ -1327,9 +1331,9 @@ test('continue working leads home and every project keeps one launch entry', asy
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto('/');
   const launcher = page.getByRole('region', { name: '项目与启动' });
-  const tools = page.getByLabel('管理中的工具');
-  await expect(launcher.getByRole('heading', { name: '继续工作', exact: true })).toBeVisible();
-  await expect(launcher).toContainText('工具和配置沿用卡片上的选择');
+  const tools = page.getByLabel('受管理工具');
+  await expect(launcher.getByRole('heading', { name: '项目与快速启动', exact: true })).toBeVisible();
+  await expect(launcher).toContainText('工具和配置沿用项目选择');
   const cards = launcher.locator('[data-project-id]');
   await expect(cards).toHaveCount(2);
   // R2: the project band is authored after the tools list but reads first.
@@ -1350,7 +1354,7 @@ test('an empty project list offers the next step without hiding the tools band',
   await expect(launcher.getByRole('button', { name: '添加项目', exact: true })).toBeVisible();
   await expect(launcher).toContainText('添加本机目录后，每个项目都会带着自己的工具与配置出现在这里');
   // The already-managed tools stay reachable below the empty project band.
-  await expect(page.getByLabel('管理中的工具').getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
+  await expect(page.getByLabel('受管理工具').getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
 });
 
 test('a failed project read keeps its message and reloads the list in place', async ({ page }) => {
@@ -1388,5 +1392,54 @@ test('a failed project read shows the error alone and reports a failed retry', a
   await reload.click();
   await expect(launcher.getByRole('alert')).toHaveCount(1);
   await expect(launcher.getByRole('alert')).toContainText('再次读取仍然失败');
+});
+
+test('recent sessions expose empty and failed reads, then recover to a resumable long-text list', async ({ page }) => {
+  await page.addInitScript(() => {
+    const resumes: unknown[] = [];
+    const sessions = [
+      { id: 'recent-1', nativeId: 'native-1', toolId: 'codex', title: '一段很长的中英文混合会话标题，用于确认窄窗口不会挤压恢复操作或产生横向滚动', cwd: 'C:/Projects/a-very-long-project-directory', updatedAt: 2000000000000, projectId: null },
+      { id: 'recent-2', nativeId: 'native-2', toolId: 'codex', title: '第二个最近会话', cwd: null, updatedAt: 1999999990000, projectId: null },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __recentResumes: resumes,
+      __setRecentMode: (mode: string) => sessionStorage.setItem('test.recent-mode', mode),
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_history_sessions') {
+          const mode = sessionStorage.getItem('test.recent-mode') ?? 'fail';
+          if (mode === 'fail') throw new Error('synthetic recent read failure');
+          return mode === 'empty' ? [] : sessions;
+        }
+        if (command === 'resume_history_session') { resumes.push(args); return { status: 'terminal_requested', mode: args.mode }; }
+        if (command.startsWith('list_') || command.startsWith('plugin:event|')) return [];
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  const recent = page.getByRole('region', { name: '最近会话', exact: true });
+  await expect(recent.getByRole('alert')).toContainText('无法读取最近会话');
+  await page.evaluate(() => (window as unknown as { __setRecentMode: (mode: string) => void }).__setRecentMode('empty'));
+  await recent.getByRole('button', { name: '重试读取', exact: true }).click();
+  await expect(recent).toContainText('还没有可恢复的最近会话');
+  await expect(recent.getByRole('alert')).toHaveCount(0);
+
+  await page.evaluate(() => (window as unknown as { __setRecentMode: (mode: string) => void }).__setRecentMode('ready'));
+  await page.reload();
+  await expect(recent.getByRole('listitem')).toHaveCount(2);
+  await recent.getByRole('button', { name: /继续会话「一段很长/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __recentResumes: unknown[] }).__recentResumes)).toEqual([{ id: 'recent-1', mode: 'normal' }]);
+  await expect(page.getByRole('status').filter({ hasText: '已请求外部终端恢复会话。' })).toBeVisible();
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+    await expect(recent.getByRole('button', { name: /继续会话「一段很长/ })).toBeVisible();
+  }
 });
 

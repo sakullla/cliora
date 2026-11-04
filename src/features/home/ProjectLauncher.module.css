@@ -1,113 +1,65 @@
-.workspace {
-  display: grid;
-  align-content: start;
-  gap: var(--space-3);
-  min-width: 0;
-  container-type: inline-size;
-}
+.workspace { display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; container-type: inline-size; }
 
-/* Quick resume by session ID */
-.quick {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
-}
-.quick > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--row-h); padding: 0 var(--space-4); font-size: var(--fs-body); font-weight: var(--fw-semibold); transition: background-color var(--fast) var(--ease); }
-.quick > summary small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+/* Advanced resume by id stays folded behind one disclosure. */
+.quick { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.quick > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--row-h); padding: 0 var(--space-3); font-size: var(--fs-body); font-weight: var(--fw-semibold); transition: background-color var(--fast) var(--ease); }
+.quick > summary small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
 .quick > summary:hover { background: var(--surface-2); }
 .quick[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
 .quickContent { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); }
 .quickContent > div:first-child { display: grid; gap: var(--space-0_5); }
 .quickContent > div:first-child strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.quickContent > div:first-child span { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
-.quickContent input { width: 100%; min-width: 0; }
-.quickContent .quickTool { width: 100%; min-width: 0; }
-.quickContent .quickTool > button { min-height: var(--control-h); }
+.quickContent > div:first-child span { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
+.quickContent input, .quickContent .quickTool { width: 100%; min-width: 0; }
 .quickContent > p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
-.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
 .quickContent .actions { justify-content: flex-start; gap: var(--space-2); }
-
-/* Section heading: one title, one count and one add action for the continue-working band. */
 .heading { min-height: var(--control-h-sm); }
-.sectionHint { margin: calc(var(--space-1) * -1) 0 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
-
+.sectionHint { margin: calc(var(--space-1) * -1) 0 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
 .projectSearch { max-width: 380px; }
 .projectSearch > input { width: 100%; }
-.noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
+.noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); text-align: center; }
 
-/* Project cards: identity, then one control line with the split launch as the card's only primary. */
-.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: var(--space-3); }
-.project {
-  position: relative;
-  overflow: hidden;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease), transform var(--medium) var(--ease);
-  animation: reveal var(--medium) var(--ease) both;
-}
-/* A brand-gradient hairline wakes up along the top edge on hover. */
-.project::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--brand-gradient); opacity: 0; transition: opacity var(--medium) var(--ease); }
-.project:hover::before, .project:focus-within::before { opacity: 1; }
-.project:nth-child(2) { animation-delay: 30ms; }
-.project:nth-child(3) { animation-delay: 60ms; }
-.project:nth-child(4) { animation-delay: 90ms; }
-.project:nth-child(5) { animation-delay: 120ms; }
-.project:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
+/* Identity and current context lead; launch is the only primary action. */
+.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: var(--space-2_5); }
+.project { position: relative; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+.project:hover { border-color: var(--line-strong); }
 .project:focus-visible { outline: var(--focus-ring); outline-offset: -1px; border-color: var(--accent); }
-/* One ring on the card's own edge plus a soft halo, never a second outline floating outside the border. */
-.repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: var(--focus-ring); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
-
-.identity { display: grid; gap: var(--space-0_5); min-width: 0; }
+.repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: var(--focus-ring); outline-offset: -1px; box-shadow: 0 0 0 3px var(--accent-ring); }
+.identity { display: grid; gap: var(--space-1); min-width: 0; }
 .projectTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
-.projectTitle > svg { flex: none; color: var(--text-2); }
-.projectTitle > :first-child { flex: none; }
-.projectTitle strong { overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-bold); letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
-/* Path and last use share one line, so recent work stays identifiable without a taller card. */
-.metaLine { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
-.cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
-.lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-regular); white-space: nowrap; }
+.projectTitle > svg, .projectTitle > :first-child { flex: none; }
+.projectTitle > svg { color: var(--text-2); }
+.projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+.projectTitle > [data-tone] { flex: none; }
+.contextLine, .metaLine { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
+.contextLine { color: var(--text-2); font-size: var(--fs-caption); }
+.contextLine > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contextProfile { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
+.cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .remoteProject { border-color: var(--accent-line); }
-
-.controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; }
-.controls .toolSelect { flex: 1 1 112px; min-width: 0; }
-.controls .toolSelect > button { min-height: var(--control-h-sm); font-size: var(--fs-caption); }
+.controls { display: flex; justify-content: flex-end; min-width: 0; }
 .controls .actions { flex: none; flex-wrap: nowrap; }
+.currentTool { margin-left: auto; padding-left: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); }
 
-/* The launch menu lists managed tools; the current one carries a quiet note. */
-.currentTool { margin-left: auto; padding-left: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
-
-/* No projects yet: one slim row with the add action, the same height as a tool row pair. */
-.emptyProjects {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  min-height: var(--row-h);
-  padding: var(--space-4);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-xl);
-  background: radial-gradient(360px 140px at 0% 0%, var(--wash-a), transparent 70%), var(--surface);
-}
-.emptyIcon { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: var(--radius-lg); background: var(--brand-gradient); color: var(--on-brand); box-shadow: var(--glow-accent), var(--inner-highlight); }
+.emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-height: var(--row-h); padding: var(--space-4); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); }
+.emptyIcon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
 .emptyCopy { display: grid; flex: 1 1 240px; gap: 1px; min-width: 0; }
 .emptyCopy strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.emptyCopy span { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
+.emptyCopy span { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
 .emptyNext { color: var(--text-3); }
 .emptyProjects > button { flex: none; }
-
-.hint { padding-left: var(--space-2); color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.55; box-shadow: inset 2px 0 0 var(--warning); }
-.note { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-
+.hint { padding-left: var(--space-2); color: var(--text); font-size: var(--fs-caption); line-height: 1.55; box-shadow: inset 2px 0 0 var(--warning); }
+.note { margin: 0; color: var(--text); font-size: var(--fs-body); }
 .extra { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .extra[data-tone="pending"] { padding: var(--space-2) var(--space-2_5); border-top: 0; border-radius: var(--radius-sm); background: var(--accent-soft); }
-.extra[data-tone="pending"] > span { padding-left: var(--space-2); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
-.extra > span { flex: 1 1 180px; color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
+.extra[data-tone="pending"] > span { padding-left: var(--space-2); box-shadow: inset 2px 0 0 var(--accent); }
+.extra > span { flex: 1 1 180px; color: var(--text); font-size: var(--fs-caption); line-height: 1.5; }
 .extra label { display: grid; flex: 1 1 100%; gap: var(--space-1_5); min-width: 0; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-medium); }
 .extra input { width: 100%; min-width: 0; flex: 1 1 200px; }
 
-/* Inside the edit dialog: titled sections, one task each; removal sits apart at the end. */
+/* Editor: tool, identity, directory, one-off mode and destructive work stay in sections. */
 .editSections { display: grid; gap: var(--space-4); min-width: 0; }
 .editSections > .error, .editSections > .feedback { margin: 0; }
 .editSection { display: grid; gap: var(--space-2_5); min-width: 0; }
@@ -121,29 +73,27 @@
 .editRow > span:first-child { flex: 1 1 220px; min-width: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; }
 .editRow[data-tone="warning"] > span:first-child { color: var(--warning); font-weight: var(--fw-medium); }
 .editRowActions { display: inline-flex; flex-wrap: wrap; gap: var(--space-1_5); }
-.projectPath { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-2_5); min-width: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); }
+.projectPath { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-2_5); min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); }
 .projectPath > svg { flex: none; }
-.projectPath small { flex: 1 1 200px; min-width: 0; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); overflow-wrap: anywhere; }
+.projectPath small { flex: 1 1 200px; min-width: 0; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .pathActions { display: inline-flex; flex: none; gap: var(--space-1); }
-.dangerZone { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2_5) var(--space-4); padding: var(--space-3) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); }
+.dangerZone { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2_5) var(--space-4); padding: var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); }
 .dangerZone > div { display: grid; gap: var(--space-0_5); flex: 1 1 220px; min-width: 0; }
 .dangerZone h3 { color: var(--danger); }
 .dangerZone p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
 .dangerZone .removeProject, .dangerZone .removeProject:hover:not(:disabled) { border-color: var(--danger-line); color: var(--danger); }
 .dangerZone .removeProject:hover:not(:disabled) { background: var(--danger-soft); }
 
-/* Feedback */
-.error, .feedback { padding: var(--space-2_5) var(--space-3); border: 1px solid; border-radius: var(--radius-sm); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
+.error, .feedback { padding: var(--space-2_5) var(--space-3); border: 1px solid; border-radius: var(--radius-sm); font-size: var(--fs-body); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 .errorText { flex: 1 1 220px; min-width: 0; }
-/* The reload action keeps the failure in this task and reuses the same read command. */
 .errorAction, .errorAction:hover:not(:disabled) { flex: none; border-color: var(--danger-line); color: var(--danger); }
-/* A reload that fails again says so next to the repeated native message. */
 .errorHint { flex: 1 1 auto; min-width: 0; color: var(--text-2); font-size: var(--fs-micro); }
 .feedback { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-
 @container (max-width: 420px) {
   .quick > summary small { display: none; }
+  .contextLine, .metaLine { padding-left: 0; }
+  .controls { justify-content: flex-start; }
 }
 @container (min-width: 620px) {
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

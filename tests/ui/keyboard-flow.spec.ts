@@ -109,15 +109,16 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
     ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
   ]);
 
-  // A dialog opens from its trigger and Escape closes it, returning focus to the trigger.
-  const edit = card.getByRole('button', { name: '修改', exact: true });
-  await edit.focus();
+  // Project editing lives in the more menu; Escape returns focus to its trigger.
+  const more = card.getByRole('button', { name: 'Demo 的更多操作', exact: true });
+  await more.focus();
   await page.keyboard.press('Enter');
+  await page.getByRole('menu', { name: 'Demo 的更多操作' }).getByRole('menuitem', { name: '修改', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '修改Demo' });
   await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expectVisibleFocus(edit);
+  await expectVisibleFocus(more);
 
   // The row menu: Enter opens on the first item, arrows move, Escape returns, Enter runs an item.
   const rowMenu = page.locator('[data-tool-row]').filter({ hasText: 'Codex' }).getByRole('button', { name: 'Codex 的更多操作', exact: true });
