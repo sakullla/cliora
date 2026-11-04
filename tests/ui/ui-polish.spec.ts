@@ -167,10 +167,11 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   const nav = page.getByRole('navigation', { name: '页面' });
 
   await expectBodyText(page.locator('.nav button.active .nav-text'));
-  // The current page lights its icon tile with the brand gradient; the glyph is white ink on it.
+  // The current page uses emerald ink and a flat wash rather than a luminous icon tile.
   const glyph = await paint(page.locator('.nav button.active .nav-glyph'));
-  expect(channels(glyph.color), JSON.stringify(glyph)).toBe('255,255,255');
-  expect(await page.locator('.nav button.active .nav-glyph').evaluate((el) => getComputedStyle(el).backgroundImage)).toContain('gradient');
+  expect(channels(glyph.color), JSON.stringify(glyph)).toBe(channels(glyph.accent));
+  expect(await page.locator('.nav button.active .nav-glyph').evaluate((el) => getComputedStyle(el).backgroundImage)).toBe('none');
+  expect(await page.locator('.nav button.active').evaluate((el) => getComputedStyle(el).boxShadow)).toContain('inset');
   await nav.getByRole('button', { name: '设置' }).hover();
   await expectBodyText(nav.getByRole('button', { name: '设置' }).locator('.nav-text'));
 
@@ -216,7 +217,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   expect(libraryControls.length).toBe(3);
   expect(Math.max(...libraryControls) - Math.min(...libraryControls)).toBeLessThanOrEqual(1);
 
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   const selectedTitle = page.locator('[aria-current="true"] strong');
   await expect(selectedTitle).toHaveText(sessionTitle);
   await expectBodyText(selectedTitle);
@@ -228,7 +229,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   expect(recordControls.length).toBe(2);
   expect(Math.max(...recordControls) - Math.min(...recordControls)).toBeLessThanOrEqual(1);
 
-  await nav.getByRole('button', { name: '工具与连接' }).click();
+  await nav.getByRole('button', { name: '工具' }).click();
   // The page header names the current CLI and switches it; the sidebar keeps only the pages.
   const picker = cliSwitcher(page);
   await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
@@ -259,22 +260,22 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await cardTitle.hover();
   await expectBodyText(cardTitle);
   await expectSearchStroke(page);
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   await expectBodyText(page.locator('[aria-current="true"] strong'));
   await expectBodyText(page.getByRole('heading', { level: 2, name: sessionTitle }));
 
   for (const width of [1360, 640]) {
     await page.setViewportSize({ width, height: 900 });
-    await nav.getByRole('button', { name: '快速开始' }).click();
-    await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+    await nav.getByRole('button', { name: '首页' }).click();
+    await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
     await expect(rows.getByRole('button', { name: '启动', exact: true }).first()).toBeVisible();
     await expect(codexRow.getByRole('button', { name: 'Codex 的更多操作', exact: true })).toBeVisible();
     await expect(rows.getByRole('button', { name: '去安装 →', exact: true }).first()).toBeVisible();
     await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
     await expectNoSideScroll(page);
 
-    await nav.getByRole('button', { name: '工具与连接' }).click();
-    await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+    await nav.getByRole('button', { name: '工具' }).click();
+    await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
     await expect(page.getByRole('button', { name: '新建配置', exact: true }).first()).toBeVisible();
     await expect(cliSwitcher(page)).toBeVisible();    expect(await page.getByLabel('主导航').evaluate((aside) => aside.scrollWidth - aside.clientWidth)).toBeLessThanOrEqual(0);
     await expectNoSideScroll(page);
@@ -283,7 +284,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await expect(page.getByRole('button', { name: '新建提示词', exact: true })).toBeVisible();
     await expectNoSideScroll(page);
 
-    await nav.getByRole('button', { name: '使用记录' }).click();
+    await nav.getByRole('button', { name: '记录' }).click();
     if (width <= 760) await page.getByRole('button', { name: new RegExp(sessionTitle) }).click();
     await expect(page.getByRole('button', { name: '在外部终端继续', exact: true })).toBeVisible();
     await expectNoSideScroll(page);
@@ -380,25 +381,22 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
   const nav = page.getByRole('navigation', { name: '页面' });
-  // Shell controls rest on the shared soft elevation tokens only: no ad-hoc or heavy drops.
-  // The current page is marked by its raised fill and the brand-lit icon tile.
-  const quietControls = ['.sidebar-command', '.theme-switch button:not([aria-pressed="true"])', '[data-variant="secondary"]', '.nav button.active'];
+  // Quiet Studio controls are flat; the active page uses a wash and inset marker.
+  const quietControls = ['.sidebar-command', '.theme-switch button:not([aria-pressed="true"])', '[data-variant="secondary"]'];
 
   const themeSwitch = page.getByRole('group', { name: '切换主题' });
   for (const [label, attribute] of [['浅色主题', 'light'], ['深色主题', 'dark']] as const) {
     await themeSwitch.getByRole('button', { name: label, exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', attribute);
-    // Shadows ease between themes; read them once the switch has settled.
-    await expect.poll(async () => (await shellInk(page, quietControls)).elevation.every((item) => item.soft)).toBe(true);
     const ink = await shellInk(page, quietControls);
     for (const [pair, value] of Object.entries(ink.ratios)) {
       expect(value, `${attribute} ${pair}`).toBeGreaterThanOrEqual(4.5);
     }
-    // Frame, canvas and paper stay three distinct layers in both themes.
+    // Frame, canvas and paper stay three distinct mineral layers in both themes.
     expect(new Set(ink.layers).size, attribute).toBe(3);
-    for (const item of ink.elevation) expect(item.soft, `${attribute} ${item.selector} ${item.shadow}`).toBe(true);
-    // The canvas carries only its faint top glow.
-    expect(ink.canvasImage, attribute).toContain('radial-gradient');
+    for (const item of ink.elevation) expect(item.shadow, `${attribute} ${item.selector}`).toBe('none');
+    expect(ink.canvasImage, attribute).toBe('none');
+    expect(await page.locator('.nav button.active').evaluate((el) => getComputedStyle(el).backgroundImage)).toBe('none');
   }
 
   // A failed write raises the one global notice: same shape as the environment notice, tone only.
@@ -412,8 +410,8 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   await expect(error).toHaveAttribute('role', 'alert');
   const failure = await noticeShape(error);
   expect(failure.radius).toBe(failure.radiusToken);
-  expect(failure.image).toContain('linear-gradient');
-  expect(failure.edge).toBe('1px');
+  expect(failure.image).toBe('none');
+  expect(failure.edge).toBe('3px');
 
   // Browser preview has no native storage, so the shell adds its environment notice there.
   const previewContext = await browser.newContext({ locale: 'zh-CN', reducedMotion: 'reduce' });
@@ -429,6 +427,6 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   expect(previewNotice.padLeft).toBe(failure.padLeft);
   expect(previewNotice.fontSize).toBe(failure.fontSize);
   expect(previewNotice.edge).toBe(failure.edge);
-  expect(previewNotice.image).toContain('linear-gradient');
+  expect(previewNotice.image).toBe('none');
   expect(previewNotice.edgeColor).not.toBe(failure.edgeColor);
 });

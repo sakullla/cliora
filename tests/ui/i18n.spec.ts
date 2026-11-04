@@ -89,10 +89,10 @@ test('切换英文后逐页无残留硬编码中文', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
   const han = /[\u4e00-\u9fff]/;
   const pages: Array<[RegExp, RegExp]> = [
-    [/^(快速开始|Quick start)$/, /Quick start/],
-    [/^(工具与连接|Tools & connections)$/, /Tools & connections/],
+    [/^(首页|Home)$/, /Home/],
+    [/^(工具|Tools)$/, /Tools/],
     [/^(资料库|Library)$/, /Library/],
-    [/^(使用记录|Usage records)$/, /Usage records/],
+    [/^(记录|Records)$/, /Records/],
     [/^(设置|Settings)$/, /Settings/],
   ];
   for (const [button, heading] of pages) {

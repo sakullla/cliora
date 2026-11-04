@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openCli } from './cli-switcher';
 
 // R3: one state reads the same everywhere, each Toolbar/card holds at most one primary action,
 // and the first screen at 1360 shows no fewer entries than before the redesign (02 ADR-2/ADR-7).
@@ -143,20 +142,20 @@ test('one state shares its badge across pages and each Toolbar or card has at mo
   violations.push(...await primaryViolations(page, '首页'));
   badges.push(...(await statusBadges(page)).map((item) => ({ page: '首页', ...item })));
 
-  // 工具与连接: the installed CLI shows a success badge and its version.
-  await openCli(page, 'Codex');
-  const region = page.getByRole('region', { name: '工具与连接' });
+  // 工具: the installed CLI shows a success badge and its version.
+  await nav.getByRole('button', { name: '工具', exact: true }).click();
+  const region = page.getByRole('region', { name: '工具' });
   await expect(region.getByLabel('配置列表')).toBeVisible();
   const installBadge = region.locator('details summary [data-tone]').first();
   await expect(installBadge).toHaveAttribute('data-tone', 'success');
   await expect(region.locator('details summary').first()).toContainText('0.160.0');
   await expect(region.locator('[data-status^="profile."]').first()).toBeVisible();
-  violations.push(...await primaryViolations(page, '工具与连接 · 配置'));
-  badges.push(...(await statusBadges(page)).map((item) => ({ page: '工具与连接', ...item })));
+  violations.push(...await primaryViolations(page, '工具 · 配置'));
+  badges.push(...(await statusBadges(page)).map((item) => ({ page: '工具', ...item })));
   await page.getByRole('tab', { name: '账号', exact: true }).click();
   await expect(page.getByText('开发账号', { exact: true }).first()).toBeVisible();
-  violations.push(...await primaryViolations(page, '工具与连接 · 账号'));
-  badges.push(...(await statusBadges(page)).map((item) => ({ page: '工具与连接', ...item })));
+  violations.push(...await primaryViolations(page, '工具 · 账号'));
+  badges.push(...(await statusBadges(page)).map((item) => ({ page: '工具', ...item })));
   // While the add form is open, 添加并登录 is the panel's only primary; the header toggle steps down.
   const accountsPanel = page.getByRole('region', { name: 'OAuth 账号管理' });
   const primaries = accountsPanel.locator('[data-variant="primary"]:visible');
@@ -179,13 +178,13 @@ test('one state shares its badge across pages and each Toolbar or card has at mo
     violations.push(...await primaryViolations(page, `资料库 · ${tab.source}`));
   }
 
-  // 使用记录: sessions and usage.
-  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
+  // 记录: sessions and usage.
+  await nav.getByRole('button', { name: '记录', exact: true }).click();
   await expect(page.getByLabel('会话列表').getByRole('button').first()).toBeVisible();
-  violations.push(...await primaryViolations(page, '使用记录 · 会话'));
+  violations.push(...await primaryViolations(page, '记录 · 会话'));
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   await expect(page.getByRole('tab', { name: '用量', exact: true })).toHaveAttribute('aria-selected', 'true');
-  violations.push(...await primaryViolations(page, '使用记录 · 用量'));
+  violations.push(...await primaryViolations(page, '记录 · 用量'));
 
   // 设置: general and migration.
   await nav.getByRole('button', { name: '设置', exact: true }).click();
@@ -223,8 +222,8 @@ test('first-screen entry counts at 1360 are not below the pre-redesign baseline'
   await settle();
   counts.home = await page.evaluate(countFirstScreen);
 
-  await nav.getByRole('button', { name: '工具与连接', exact: true }).click();
-  await expect(page.getByRole('region', { name: '工具与连接' }).locator('[data-profile-id]')).toHaveCount(2);
+  await nav.getByRole('button', { name: '工具', exact: true }).click();
+  await expect(page.getByRole('region', { name: '工具' }).locator('[data-profile-id]')).toHaveCount(2);
   await settle();
   counts.tools = await page.evaluate(countFirstScreen);
 
@@ -234,7 +233,7 @@ test('first-screen entry counts at 1360 are not below the pre-redesign baseline'
   await settle();
   counts.library = await page.evaluate(countFirstScreen);
 
-  await nav.getByRole('button', { name: '使用记录', exact: true }).click();
+  await nav.getByRole('button', { name: '记录', exact: true }).click();
   await expect(page.getByLabel('会话列表').getByRole('button')).toHaveCount(3);
   await expect(page.getByRole('button', { name: '复制代码', exact: true })).toBeVisible();
   await settle();

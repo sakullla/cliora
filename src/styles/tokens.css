@@ -1,4 +1,5 @@
-/* Design tokens: semantic colors, type, spacing, shape, elevation, layers and motion. */
+/* Quiet Studio tokens: mineral neutrals, ink typography, emerald identity.
+   Semantic names stay stable so feature modules consume one visual language. */
 
 :root {
   color-scheme: light;
@@ -12,153 +13,118 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Palette: "soft light". A cool, airy neutral with a mint undertone; the window frame
-     carries a faint aurora (emerald, sky, lilac) that the glass sidebar lets through, and
-     pages sit on a bright canvas with paper cards that float on soft, layered shadows.
-     The accent stays the leaf green of the brandmark, lifted toward emerald. */
+  /* Warm mineral canvas, paper surfaces and deep ink. Layers differ in value,
+     not in glass, glow or elevation. */
+  --bg: #f5f5f1;
+  --sidebar: #eeeee9;
+  --surface: #fcfcf9;
+  --surface-2: #f0f0eb;
+  --surface-3: #e5e6df;
+  --overlay: rgb(25 30 26 / 36%);
+  --wash-a: rgb(8 122 85 / 5%);
+  --wash-b: rgb(8 122 85 / 3%);
+  --surface-glass: var(--surface);
+  --surface-raised: var(--surface);
+  --aurora-1: transparent;
+  --aurora-2: transparent;
+  --aurora-3: transparent;
+  --frame: var(--sidebar);
+  --canvas-glow: none;
 
-  /* Surfaces. The window frame (--sidebar) holds the navigation; pages sit on a lighter
-     canvas (--bg) that floats inside the frame; cards are white paper on that canvas. */
-  --bg: #f7f9f8;
-  --sidebar: #e8eeeb;
-  --surface: #ffffff;
-  --surface-2: #f2f5f4;
-  --surface-3: #e7ecea;
-  --overlay: rgb(16 24 22 / 28%);
-  --wash-a: rgb(16 163 106 / 7%);
-  --wash-b: rgb(59 130 246 / 5%);
-  --surface-glass: rgb(255 255 255 / 66%);
-  --surface-raised: rgb(255 255 255 / 86%);
-  /* Window backdrop: the aurora the sidebar sits on. */
-  --aurora-1: rgb(16 185 129 / 22%);
-  --aurora-2: rgb(56 189 248 / 16%);
-  --aurora-3: rgb(167 139 250 / 13%);
-  --frame: #e6ecea;
-  /* The canvas keeps a faint glow along its top edge. */
-  --canvas-glow: radial-gradient(1100px 280px at 18% -120px, rgb(16 185 129 / 9%), transparent 70%), radial-gradient(900px 260px at 92% -140px, rgb(56 189 248 / 8%), transparent 70%);
+  --text: #202521;
+  --text-2: #454c46;
+  --text-3: #626a63;
 
-  /* Text */
-  --text: #0f1614;
-  --text-2: #3a4541;
-  --text-3: #5f6b67;
+  --line: #dedfd8;
+  --line-strong: #c5c9c0;
+  --control-line: #ced2c9;
+  --control-line-hover: #a7afa4;
 
-  /* Lines */
-  --line: #e6ebe9;
-  --line-strong: #c9d2ce;
-  /* Control outlines sit between the hairline and the strong line. */
-  --control-line: #d5ddd9;
-  --control-line-hover: #aeb9b4;
-
-  /* Interaction tints. Derived from the text color so a hover reads the same on the
-     canvas, the sidebar and paper surfaces. --row-hover stays translucent on purpose:
-     rows and menu items sit on whatever surface owns them. */
   --surface-hover: color-mix(in srgb, var(--text) 4%, var(--surface));
-  --surface-pressed: color-mix(in srgb, var(--text) 8%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 7%, var(--surface));
   --row-hover: color-mix(in srgb, var(--text) 5%, transparent);
 
-  /* Brand */
-  --accent: #0a784e;
-  --accent-hover: #086a45;
-  --accent-bright: #12b37a;
+  /* Emerald is reserved for identity, current context, focus and primary work. */
+  --accent: #087a55;
+  --accent-hover: #066849;
+  --accent-bright: #159a6d;
   --on-accent: #ffffff;
-  --accent-soft: #e4f6ee;
-  --accent-line: #b6e3cd;
-  --accent-ring: rgb(16 163 106 / 18%);
-  --selection: #d6f2e4;
-  /* A slightly deeper edge for filled accent buttons. */
-  --accent-border: color-mix(in srgb, var(--accent) 80%, black);
-  /* Filled primary actions carry a gentle top-lit gradient. */
-  --accent-fill: linear-gradient(180deg, #14a46c 0%, #0b8556 100%);
-  --accent-fill-hover: linear-gradient(180deg, #119560 0%, #08744a 100%);
-  /* Decorative brand gradient for marks, rings and glows. */
-  --brand-gradient: linear-gradient(135deg, #16b981 0%, #0ea5a5 52%, #3b82f6 100%);
+  --accent-soft: #e3efe8;
+  --accent-line: #b7d1c3;
+  --accent-ring: rgb(8 122 85 / 16%);
+  --selection: #d3e7dc;
+  --accent-border: var(--accent);
+  --accent-fill: var(--accent);
+  --accent-fill-hover: var(--accent-hover);
+  --brand-gradient: var(--accent);
 
-  /* Status */
-  --danger: #b4322b;
-  --danger-soft: #fdeeec;
-  --danger-line: #f3c9c3;
-  /* Label ink on a filled --danger surface. */
-  --on-danger: #fff;
-  --warning: #7a4b00;
-  --warning-soft: #fdf5e3;
-  --warning-line: #efd79f;
-  --success: #08725a;
-  --success-soft: #e0f5ee;
-  --success-line: #b3e0cf;
-  --info: #22609b;
-  --info-soft: #e8f2fc;
-  --info-line: #bfd7ee;
+  --danger: #a53630;
+  --danger-soft: #f8e9e6;
+  --danger-line: #e4c1bb;
+  --on-danger: #ffffff;
+  --warning: #79520b;
+  --warning-soft: #f7efdd;
+  --warning-line: #dfcda4;
+  --success: #116b50;
+  --success-soft: #e3efe8;
+  --success-line: #b7d1c3;
+  --info: #356589;
+  --info-soft: #e8eff3;
+  --info-line: #c1d2df;
 
-  /* Fixed inks */
-  --switch-thumb: #fff;
-  /* Ink on the brand gradient tiles (same in both themes). */
-  --on-brand: #fff;
-  /* Light tile behind tool artwork drawn for a pale background. */
-  --tool-logo-pale: #f5f8f6;
+  --switch-thumb: #ffffff;
+  --on-brand: #ffffff;
+  --tool-logo-pale: #f4f5f0;
 
-  /* Type scale. Whole pixels only: fractional sizes blur CJK glyphs on Windows.
-     Each step pairs with an icon size so glyphs sit on the text's cap height. */
-  --fs-micro: 11px;    /* axis ticks, kbd, tiny state pills      · icon 12 */
-  --fs-caption: 12px;  /* metadata, counts, chips, helper text   · icon 12–14 */
-  --fs-control: 13px;  /* buttons, tabs, labels, table heads     · icon 14 */
-  --fs-body: 14px;     /* reading text, inputs, nav, menus       · icon 16 */
-  --fs-title: 15px;    /* section and card titles                · icon 16 */
-  --fs-heading: 17px;  /* dialog and detail headings             · icon 18 */
-  --fs-page: 28px;     /* page title                             · icon 20+ */
+  /* Whole-pixel steps keep Chinese glyphs crisp on Windows. */
+  --fs-micro: 11px;
+  --fs-caption: 12px;
+  --fs-control: 13px;
+  --fs-body: 14px;
+  --fs-title: 15px;
+  --fs-heading: 17px;
+  --fs-page: 26px;
 
-  /* Weights: Microsoft YaHei / PingFang only ship 400 and 700 (plus 500/600 on macOS),
-     so steps in between render inconsistently for CJK. Keep to four. */
   --fw-regular: 400;
   --fw-medium: 500;
   --fw-semibold: 600;
   --fw-bold: 700;
 
-  /* Data visualization */
-  --chart-input: #4a78a8;
-  --chart-output: #3f8659;
-  --chart-read: #bd8a33;
-  --chart-write: #8266a8;
+  --chart-input: #527b9b;
+  --chart-output: #3f805e;
+  --chart-read: #a2782f;
+  --chart-write: #806b99;
 
-  /* Shape */
-  --radius-xs: 6px;
-  --radius-sm: 9px;
-  --radius: 11px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
-  --radius-2xl: 22px;
+  /* A restrained radius scale: controls, content groups and overlays. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
   --radius-pill: 999px;
-  /* App-icon tiles keep the squircle proportion of the brand artwork at every size. */
-  --radius-logo: 27%;
-  /* The floating page canvas inside the window frame. */
-  --canvas-gap: 10px;
-  --canvas-radius: 20px;
+  --radius-logo: 24%;
+  --canvas-gap: 0px;
+  --canvas-radius: 0px;
 
-  /* Elevation: soft, layered and diffuse; light comes from above. */
-  --shadow-xs: 0 1px 2px rgb(16 32 26 / 5%);
-  --shadow-sm: 0 1px 2px rgb(16 32 26 / 4%), 0 4px 14px -6px rgb(16 32 26 / 10%);
-  --shadow-md: 0 2px 4px rgb(16 32 26 / 3%), 0 14px 34px -14px rgb(16 32 26 / 18%);
-  /* Floating surfaces draw their own hairline border, so the shadow never repeats it. */
-  --shadow-lg: 0 32px 80px -28px rgb(12 28 22 / 30%), 0 12px 32px -16px rgb(12 28 22 / 16%);
-  --shadow-accent: 0 1px 2px rgb(8 110 70 / 24%), 0 6px 16px -6px rgb(16 163 106 / 45%);
-  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 22%);
-  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 70%), 0 1px 2px rgb(16 32 26 / 4%), 0 18px 48px -30px rgb(16 32 26 / 26%);
-  /* Cards: a hairline plus a soft lift; hover lifts a little further. */
-  --shadow-card: 0 1px 2px rgb(16 32 26 / 4%), 0 6px 20px -12px rgb(16 32 26 / 12%);
-  --shadow-card-hover: 0 2px 4px rgb(16 32 26 / 5%), 0 16px 36px -16px rgb(16 32 26 / 22%);
-  /* Recessed wells (switch tracks, segmented tracks). */
-  --shadow-well: inset 0 1px 2px rgb(16 32 26 / 10%);
-  --shadow-well-soft: inset 0 1px 2px rgb(16 32 26 / 3%);
-  /* Glow behind accent marks. */
-  --glow-accent: 0 0 0 1px rgb(16 163 106 / 16%), 0 8px 24px -8px rgb(16 163 106 / 40%);
-
-  /* Brand-artwork and focus ink */
-  --shadow-brandmark: 0 3px 6px rgb(14 60 36 / 16%);
-  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 22%);
+  /* Ordinary content is flat. Elevation belongs to menus, dialogs and toasts. */
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: 0 12px 30px -18px rgb(25 35 29 / 32%);
+  --shadow-lg: 0 24px 64px -28px rgb(20 28 23 / 42%), 0 8px 24px -16px rgb(20 28 23 / 20%);
+  --shadow-accent: none;
+  --inner-highlight: none;
+  --shadow-canvas: none;
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --shadow-well: none;
+  --shadow-well-soft: none;
+  --glow-accent: none;
+  --shadow-brandmark: none;
+  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 18%);
   --focus-ring: 2px solid var(--accent);
 
-  /* Spacing scale (px): 2 4 6 8 10 12 16 20 24 32 40 48. */
   --space-0_5: 2px;
-  /* Inset of segmented tracks: the selected pill floats 3px inside its well. */
   --space-0_75: 3px;
   --space-1: 4px;
   --space-1_5: 6px;
@@ -171,104 +137,91 @@
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
-  /* The command palette sits a little above the vertical center. */
-  --dialog-top: 13vh;
+  --dialog-top: 12vh;
 
-  /* Layers */
   --z-nav: 2;
   --z-popover: 70;
   --z-toast: 80;
   --z-dialog: 90;
 
-  /* Controls */
   --control-h: 36px;
   --control-h-sm: 32px;
   --row-h: 40px;
   --row-h-compact: 32px;
-  --ease: cubic-bezier(.2, .7, .2, 1);
-  --spring: cubic-bezier(.34, 1.4, .64, 1);
-  --fast: 140ms;
-  --medium: 220ms;
-  /* Dialog entrance and exit only. */
-  --slow: 280ms;
+  --ease: cubic-bezier(.2, .65, .3, 1);
+  --spring: var(--ease);
+  --fast: 120ms;
+  --medium: 180ms;
+  --slow: 220ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%233a4541' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6b67' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23454c46' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23626a63' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111615;
-  --sidebar: #0a0e0d;
-  --surface: #171d1b;
-  --surface-2: #1d2421;
-  --surface-3: #252d2a;
-  --overlay: rgb(0 0 0 / 56%);
-  --wash-a: rgb(52 211 153 / 7%);
-  --wash-b: rgb(96 165 250 / 5%);
-  --surface-glass: rgb(22 28 26 / 62%);
-  --surface-raised: rgb(28 35 32 / 84%);
-  --aurora-1: rgb(16 185 129 / 22%);
-  --aurora-2: rgb(56 140 248 / 16%);
-  --aurora-3: rgb(139 92 246 / 14%);
-  --frame: #0b0f0e;
-  --canvas-glow: radial-gradient(1100px 300px at 18% -130px, rgb(52 211 153 / 9%), transparent 70%), radial-gradient(900px 260px at 92% -140px, rgb(96 165 250 / 8%), transparent 70%);
+  --bg: #181b18;
+  --sidebar: #121512;
+  --surface: #20241f;
+  --surface-2: #272c26;
+  --surface-3: #31372f;
+  --overlay: rgb(0 0 0 / 58%);
+  --wash-a: rgb(98 201 154 / 5%);
+  --wash-b: rgb(98 201 154 / 3%);
+  --surface-glass: var(--surface);
+  --surface-raised: var(--surface);
+  --frame: var(--sidebar);
+  --canvas-glow: none;
 
-  --text: #eef4f1;
-  --text-2: #c3cdc9;
-  --text-3: #95a29d;
+  --text: #eceee9;
+  --text-2: #c4cac1;
+  --text-3: #a1aaa0;
 
-  --line: #242c29;
-  --line-strong: #3e4945;
-  --control-line: #313a37;
-  --control-line-hover: #52605b;
+  --line: #343a32;
+  --line-strong: #4b5449;
+  --control-line: #41493f;
+  --control-line-hover: #647061;
 
   --surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 10%, var(--surface));
   --row-hover: color-mix(in srgb, var(--text) 7%, transparent);
 
-  --accent: #5fe0a2;
-  --accent-hover: #8debbd;
-  --accent-bright: #b0f5d2;
-  --on-accent: #04130c;
-  --accent-soft: #13291f;
-  --accent-line: #24533c;
-  --accent-ring: rgb(95 224 162 / 24%);
-  --selection: #1a3d2f;
-  --accent-fill: linear-gradient(180deg, #6ee7ac 0%, #3fcf8b 100%);
-  --accent-fill-hover: linear-gradient(180deg, #8bf0bf 0%, #55da9a 100%);
-  --brand-gradient: linear-gradient(135deg, #34d399 0%, #2dd4bf 52%, #60a5fa 100%);
+  --accent: #69cea0;
+  --accent-hover: #8addb5;
+  --accent-bright: #a5e7c6;
+  --on-accent: #0b2116;
+  --accent-soft: #203b2d;
+  --accent-line: #3d6650;
+  --accent-ring: rgb(105 206 160 / 22%);
+  --selection: #294b39;
+  --accent-border: var(--accent);
+  --accent-fill: var(--accent);
+  --accent-fill-hover: var(--accent-hover);
+  --brand-gradient: var(--accent);
 
-  --danger: #fdd3cd;
-  --danger-soft: #3a2220;
-  --danger-line: #6e3a33;
-  --on-danger: #2b1b18;
-  --warning: #f0d394;
-  --warning-soft: #362d1c;
-  --warning-line: #6a5629;
-  --success: #a3e6cd;
-  --success-soft: #142f25;
-  --success-line: #2a5646;
-  --info: #bfdaf6;
-  --info-soft: #18283a;
-  --info-line: #34506e;
+  --danger: #f0b7ae;
+  --danger-soft: #422825;
+  --danger-line: #71443e;
+  --on-danger: #2b1512;
+  --warning: #e5c27e;
+  --warning-soft: #3c321f;
+  --warning-line: #665532;
+  --success: #a1dfbf;
+  --success-soft: #203b2d;
+  --success-line: #3d6650;
+  --info: #b4d2e7;
+  --info-soft: #233441;
+  --info-line: #3f5b70;
 
-  --chart-input: #7fb0e0;
-  --chart-output: #8fb59a;
-  --chart-read: #e0b96a;
-  --chart-write: #b5a1e0;
+  --chart-input: #8bb4d2;
+  --chart-output: #94c6a7;
+  --chart-read: #d7b778;
+  --chart-write: #bdabd2;
 
-  --shadow-xs: 0 1px 2px rgb(0 0 0 / 34%);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 36%), 0 4px 14px -4px rgb(0 0 0 / 40%);
-  --shadow-md: 0 16px 36px -14px rgb(0 0 0 / 64%), 0 2px 8px rgb(0 0 0 / 26%);
-  --shadow-lg: 0 40px 96px -30px rgb(0 0 0 / 82%), 0 10px 30px -12px rgb(0 0 0 / 46%);
-  --shadow-accent: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 22px -10px rgb(95 224 162 / 50%);
-  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 26%);
-  --shadow-canvas: 0 0 0 1px rgb(255 255 255 / 5%), 0 20px 50px -30px rgb(0 0 0 / 90%);
-  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 3%), 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px -14px rgb(0 0 0 / 60%);
-  --shadow-card-hover: inset 0 1px 0 rgb(255 255 255 / 4%), 0 2px 4px rgb(0 0 0 / 30%), 0 18px 40px -16px rgb(0 0 0 / 70%);
-  --glow-accent: 0 0 0 1px rgb(95 224 162 / 18%), 0 8px 26px -8px rgb(95 224 162 / 36%);
+  --shadow-md: 0 14px 32px -18px rgb(0 0 0 / 70%);
+  --shadow-lg: 0 28px 68px -28px rgb(0 0 0 / 82%), 0 8px 24px -14px rgb(0 0 0 / 56%);
+  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 40%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c3cdc9' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2395a29d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c4cac1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1aaa0' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }

@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-const pageNames = ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置'] as const;
+const pageNames = ['首页', '工作台', '工具', '资料库', '记录', '设置'] as const;
 
 async function expectPageLanded(page: Page, name: (typeof pageNames)[number]) {
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
@@ -98,10 +98,10 @@ test('full pages are navigable and browser mode never implies native data', asyn
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: /快速前往/ })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' })).toBeFocused();
+  await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' })).toBeFocused();
   await expect(page.locator('.brandmark')).toBeVisible();
   await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
-  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) {
+  for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
     await expectPageLanded(page, name);
     // The window title names the page the sidebar marks as current.
@@ -151,7 +151,7 @@ test('native settings result drives the home list and empty management stays rec
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode']) {
     await page.getByRole('checkbox', { name: new RegExp(name) }).uncheck();
   }
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByText('尚未管理工具')).toBeVisible();
   await page.getByRole('button', { name: '前往设置' }).click();
   await page.getByRole('checkbox', { name: /Codex/ }).check();
@@ -160,7 +160,7 @@ test('native settings result drives the home list and empty management stays rec
   await page.keyboard.press('ArrowRight');
   await expect(themes.getByRole('radio', { name: '深色' })).toBeFocused();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByRole('button', { name: '去安装 →' })).toHaveCount(1);
   await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
 });
@@ -202,7 +202,7 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   await page.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
   await page.getByRole('combobox', { name: '项目默认启动模式' }).selectOption('yolo');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   const toolLaunch = tools.getByRole('button', { name: '启动', exact: true });
@@ -326,7 +326,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await page.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
   await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
-  await nav.getByRole('button', { name: '工具与连接' }).click();
+  await nav.getByRole('button', { name: '工具' }).click();
   await expect(page.locator('[data-workspace-chrome] h2 img').first()).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.reload();
   await expect(logo).toHaveAttribute('src', `data:image/png;base64,${base64}`);
@@ -335,7 +335,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await expect(page.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
   await page.getByText('自定义工具图标', { exact: true }).click();
   await page.getByRole('button', { name: '恢复默认', exact: true }).click();
-  await nav.getByRole('button', { name: '快速开始' }).click();
+  await nav.getByRole('button', { name: '首页' }).click();
   await expect(logo).toHaveAttribute('src', defaultSource!);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
@@ -420,7 +420,7 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '管理的 CLI' }));
   await nav.getByRole('button', { name: '资料库' }).click();
   await expectFullyInFirstScreen(page, page.getByRole('button', { name: '新建提示词', exact: true }));
-  await nav.getByRole('button', { name: '使用记录' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
   const search = page.getByRole('textbox', { name: '搜索会话' });
   const sessions = page.getByRole('tab', { name: '会话' });
   await expect(search.or(sessions).first()).toBeVisible();
@@ -452,8 +452,8 @@ test('sidebar collapse preserves navigation and records use the wide viewport', 
   await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
   await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 999).toBeLessThan(80);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '记录', exact: true })).toBeVisible();
   expect((await page.locator('.content-inner').boundingBox())!.width).toBeGreaterThan(2400);
   await expectNoHorizontalScroll(page);
   await page.reload();
@@ -492,14 +492,19 @@ test('quick jump sits above the page list and leaves the sidebar footer to theme
   expect(collapsed!.height).toBeLessThanOrEqual(48);
 
   await page.setViewportSize({ width: 640, height: 760 });
-  await expect(jump).toBeHidden();
+  // The narrow shell keeps a visible search entry as well as Mod+K.
+  await expect(jump).toBeVisible();
+  expect((await jump.boundingBox())!.width).toBeLessThanOrEqual(40);
+  await jump.click();
+  await expect(page.getByRole('dialog', { name: '快速前往' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+K');
   await expect(page.getByRole('dialog', { name: '快速前往' })).toBeVisible();
 });
 
 test('command palette jumps between pages and the sidebar shortcut collapses navigation', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await expect(dialog).toBeVisible();
@@ -617,7 +622,7 @@ async function installPaletteData(page: Page) {
 test('command palette lists indexed sessions and library entries without scanning', async ({ page }) => {
   await installPaletteData(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await expect(dialog).toBeVisible();
@@ -665,10 +670,10 @@ test('a desktop command-palette resume failure stays on the current page', async
     });
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: /快速前往/ }).click();
   await page.getByRole('dialog', { name: '快速前往' }).getByRole('option', { name: '桌面会话' }).click();
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await expect(page.getByRole('alert').filter({ hasText: '桌面会话没有恢复' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);
   await page.getByRole('button', { name: /快速前往/ }).click();
@@ -680,7 +685,7 @@ test('a desktop command-palette resume failure stays on the current page', async
 test('command palette hides the session and library groups when data is empty', async ({ page }) => {
   await installDesktop(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await expect(dialog).toBeVisible();
@@ -695,7 +700,7 @@ test('command palette hides the session and library groups when data is empty', 
 test('command palette library entry jumps to the library page and opens the item', async ({ page }) => {
   await installPaletteData(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('面板规则2');
@@ -921,10 +926,14 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex).toContainText('已结束');
   await expect(stage).toContainText('已结束');
   const openPage = async (name: string) => {
-    let button = nav.getByRole('button', { name, exact: true });
-    // On the workbench, page icons that do not fit in the sidebar row are in the more menu.
-    if (!await button.count()) {
-      await nav.getByRole('button', { name: '更多页面' }).click();
+    // A workbench re-entry runs its ResizeObserver after the first paint. Wait for two frames
+    // before choosing between a direct icon and the overflow menu, so the target cannot move mid-click.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    let button = nav.getByRole('button', { name, exact: true }).filter({ visible: true });
+    const more = nav.getByRole('button', { name: '更多页面' }).filter({ visible: true });
+    await expect(button.or(more)).toHaveCount(1);
+    if (await more.count()) {
+      await more.click();
       button = page.getByRole('menu', { name: '更多页面' }).getByRole('menuitem', { name: new RegExp(`^${name}`) });
     }
     const discard = page.getByRole('dialog', { name: '放弃未保存修改？' });
@@ -932,9 +941,9 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
     if (await discard.isVisible()) await discard.getByRole('button', { name: '放弃修改' }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
     // Stay until the tools workspace paints. Leaving earlier skips the probe render.
-    if (name === '工具与连接') await expect(page.getByText('安装与更新', { exact: true }).first()).toBeVisible();
+    if (name === '工具') await expect(page.getByText('安装与更新', { exact: true }).first()).toBeVisible();
   };
-  for (const name of ['快速开始', '工作台', '工具与连接', '资料库', '使用记录', '设置']) await openPage(name);
+  for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) await openPage(name);
   await openPage('工作台');
   await expect(codex).toContainText('已结束');
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);

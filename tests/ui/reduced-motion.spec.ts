@@ -52,7 +52,7 @@ test('without a motion preference the dialog and page switch animate', async ({ 
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await install(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   const dialog = await openShortcutHelp(page);
   const opened = await motion(dialog);
   expect(opened.animationName).not.toBe('none');
@@ -67,7 +67,7 @@ test('reduced motion stops dialog, page and control motion', async ({ page }) =>
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await install(page);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   const dialog = await openShortcutHelp(page);
   const opened = await motion(dialog);
   expect(opened.animation, JSON.stringify(opened)).toBeLessThanOrEqual(0.01);
@@ -76,14 +76,14 @@ test('reduced motion stops dialog, page and control motion', async ({ page }) =>
   await expect(dialog).toHaveCount(0);
 
   const nav = page.getByRole('navigation', { name: '页面' });
-  for (const name of ['资料库', '使用记录', '设置', '工具与连接']) {
+  for (const name of ['资料库', '记录', '设置', '工具']) {
     await nav.getByRole('button', { name, exact: true }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
     const switched = await motion(pageContainer(page));
     expect(switched.animation, `${name} ${JSON.stringify(switched)}`).toBeLessThanOrEqual(0.01);
   }
   // Controls keep their hover/press states but drop the transition time.
-  const button = nav.getByRole('button', { name: '快速开始', exact: true });
+  const button = nav.getByRole('button', { name: '首页', exact: true });
   expect((await motion(button)).transition).toBeLessThanOrEqual(0.01);
   const primary = page.locator('[data-variant="primary"]').first();
   await expect(primary).toBeVisible();

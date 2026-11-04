@@ -54,7 +54,7 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await install(page);
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: '页面' });
-  const pagesButton = nav.getByRole('button', { name: '工具与连接', exact: true });
+  const pagesButton = nav.getByRole('button', { name: '工具', exact: true });
   const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="demo"]');
   await expect(card).toBeVisible();
 
@@ -68,7 +68,7 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   expect(reached).toBe(true);
   await expectVisibleFocus(pagesButton);
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
 
   // The header switcher opens from the keyboard; arrows choose and Enter opens the CLI.
   const picker = cliSwitcher(page);
@@ -83,14 +83,14 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'Grok', level: 2 })).toBeVisible();
   await expect(picker).toHaveAccessibleName('Grok，切换 CLI');
-  // Mod+1 returns home, Mod+3 switches to 工具与连接 again, Mod+1 goes back.
+  // Mod+1 returns home, Mod+3 switches to 工具 again, Mod+1 goes back.
   await page.keyboard.press('ControlOrMeta+1');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('ControlOrMeta+3');
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await expect(nav.getByRole('button', { name: '工具与连接', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
+  await expect(nav.getByRole('button', { name: '工具', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.keyboard.press('ControlOrMeta+1');
-  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
 
   // Split button: Tab from the main half to the menu half, Enter opens, arrows choose, Enter launches.
   await card.getByRole('button', { name: '启动', exact: true }).focus();
@@ -139,7 +139,7 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   for (let step = 0; step < 5 && !(await editConfig.evaluate((el) => el === document.activeElement)); step += 1) await page.keyboard.press('ArrowDown');
   await expect(editConfig).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
   await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
 });

@@ -106,7 +106,7 @@
 .optionMarks svg { flex: none; color: var(--accent); }
 .list > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
-.list > button[aria-selected="true"] { background: linear-gradient(90deg, var(--accent-soft) 0%, color-mix(in srgb, var(--accent-soft) 44%, var(--surface)) 100%); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
+.list > button[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
