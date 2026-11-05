@@ -213,10 +213,10 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await projectLaunch.nth(1).click();
   const requests = await page.evaluate(() => (window as typeof window & { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toEqual([
-    { toolId: 'grok', projectId: null, sessionId: null, mode: 'yolo', directory: 'C:/chosen' },
-    { toolId: 'pi', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/chosen' },
-    { toolId: 'grok', projectId: 'desk', sessionId: null, mode: 'yolo', directory: null },
-    { toolId: 'pi', projectId: 'notes', sessionId: null, mode: 'normal', directory: null },
+    { toolId: 'grok', projectId: null, sessionId: null, mode: 'yolo', directory: 'C:/chosen', worktreeIntent: 'given' },
+    { toolId: 'pi', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/chosen', worktreeIntent: 'given' },
+    { toolId: 'grok', projectId: 'desk', sessionId: null, mode: 'yolo', directory: null, worktreeIntent: 'given' },
+    { toolId: 'pi', projectId: 'notes', sessionId: null, mode: 'normal', directory: null, worktreeIntent: 'given' },
   ]);
 });
 
@@ -244,8 +244,8 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
   await page.getByRole('button', { name: 'YOLO 恢复' }).click();
   const requests = await page.evaluate(() => (window as typeof window & { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toEqual([
-    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'normal', directory: null },
-    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'yolo', directory: null },
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'normal', directory: null, worktreeIntent: 'given' },
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'yolo', directory: null, worktreeIntent: 'given' },
   ]);
 });
 
@@ -850,7 +850,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex.locator('strong')).toHaveText('✨ 远端修复');
   await codex.click({ button: 'right' });
   const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
-  await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '同目录新开', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
+  await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '再开一个', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
   await page.keyboard.press('Escape');
   await expect(rowMenu).toHaveCount(0);
   await expect(codex).toBeFocused();
@@ -1036,7 +1036,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('Alpha');
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('YOLO');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches)).toEqual([
-    { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动' },
+    { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动', worktreeIntent: 'preference', taskText: '请审查当前改动' },
   ]);
 
   // Open the docked quick-input composer and send multi-line / prompt text

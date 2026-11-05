@@ -142,7 +142,7 @@ test('launch names the tool, blocks a second click, and ignores a cancelled dire
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(1360);
   expect(await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests)).toEqual([
-    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
+    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work', worktreeIntent: 'given' },
   ]);
 });
 
@@ -181,8 +181,8 @@ test('the launch directory is remembered, and right-click picks another', async 
   await launch.click();
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
   expect(await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests)).toEqual([
-    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
-    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
+    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work', worktreeIntent: 'given' },
+    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work', worktreeIntent: 'given' },
   ]);
 
   await launch.click({ button: 'right' });
@@ -190,7 +190,7 @@ test('the launch directory is remembered, and right-click picks another', async 
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
   let requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toHaveLength(3);
-  expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else' });
+  expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else', worktreeIntent: 'given' });
 
   const dirMenu = tools.getByRole('button', { name: 'Codex 的更多操作' });
   await dirMenu.click();
@@ -204,7 +204,7 @@ test('the launch directory is remembered, and right-click picks another', async 
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
   requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toHaveLength(4);
-  expect(requests[3]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'E:/menu' });
+  expect(requests[3]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'E:/menu', worktreeIntent: 'given' });
 
   await dirMenu.click();
   await page.getByRole('menu', { name: 'Codex 的更多操作' }).getByRole('menuitem', { name: '清除记住的目录' }).click();
@@ -499,7 +499,7 @@ test('the project launch menu saves another tool, then launches it with that too
   await expect(page.getByRole('region', { name: '项目与启动' }).getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
   expect(await splitCalls(page)).toEqual([
     ['set_project_tool', { projectId: 'demo', toolId: 'grok' }],
-    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
+    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null, worktreeIntent: 'given' }],
   ]);
 
   // The primary half keeps launching the project's (now saved) tool; Codex has no YOLO, so it runs normally.
@@ -508,9 +508,9 @@ test('the project launch menu saves another tool, then launches it with that too
   await page.getByRole('menu', { name: '用其他工具启动 Demo' }).getByRole('menuitem', { name: /Codex/ }).click();
   const calls = await splitCalls(page);
   expect(calls.slice(2)).toEqual([
-    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
+    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null, worktreeIntent: 'given' }],
     ['set_project_tool', { projectId: 'demo', toolId: 'codex' }],
-    ['launch_cli', { toolId: 'codex', projectId: 'demo', sessionId: null, mode: 'normal', directory: null }],
+    ['launch_cli', { toolId: 'codex', projectId: 'demo', sessionId: null, mode: 'normal', directory: null, worktreeIntent: 'given' }],
   ]);
 });
 
@@ -556,7 +556,7 @@ test('a remote project launches another tool from the menu without saving it', a
   await page.getByRole('menu', { name: '用其他工具启动 远程仓库' }).getByRole('menuitem', { name: /Grok/ }).click();
   await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
   await expect.poll(() => splitCalls(page)).toEqual([
-    ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null, remoteIntent: { kind: 'new' } }],
+    ['launch_cli', { toolId: 'grok', projectId: 'remote:rp', sessionId: null, mode: 'yolo', directory: null, remoteIntent: { kind: 'new' }, worktreeIntent: 'given' }],
   ]);
 });
 

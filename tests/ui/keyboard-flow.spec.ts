@@ -106,7 +106,7 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await expect(menu).toHaveCount(0);
   await expect.poll(() => calls(page)).toEqual([
     ['set_project_tool', { projectId: 'demo', toolId: 'grok' }],
-    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null }],
+    ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null, worktreeIntent: 'given' }],
   ]);
 
   // Project editing lives in the more menu; Escape returns focus to its trigger.
