@@ -1825,7 +1825,7 @@ test('running duplicate follows the preference, while restart and an existing ch
   await page.getByRole('button', { name: 'Codex 会话操作' }).click();
   const sessionMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
   await expect(sessionMenu.getByRole('menuitemradio', { name: '新建工作树' })).toBeVisible();
-  await sessionMenu.getByRole('menuitem', { name: '同目录新开' }).click();
+  await sessionMenu.getByRole('menuitem', { name: '再开一个' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
     worktreeIntent: 'preference', directory: 'C:/work', taskText: 'feat: hello?',
   });

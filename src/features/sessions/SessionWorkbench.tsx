@@ -1300,9 +1300,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setActionError('');
     setNotice('');
     try {
+      let useWorkbench = launchSettings?.selected === 'workbench';
       if (launchSettings && launchSettings.selected !== 'workbench') {
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
         if (updated) setLaunchSettings(updated);
+        useWorkbench = updated?.selected === 'workbench';
       }
       let projectId = workspaceValue.startsWith('project:') && !activeRemoteTarget
         ? workspaceValue.slice('project:'.length)
@@ -1332,8 +1334,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
-        worktreeIntent: remoteLaunch || resume ? 'given' : 'preference',
-        ...(!remoteLaunch && !resume && taskLine ? { taskText: taskLine } : {}),
+        worktreeIntent: remoteLaunch || resume || !useWorkbench ? 'given' : 'preference',
+        ...(!remoteLaunch && !resume && useWorkbench && taskLine ? { taskText: taskLine } : {}),
       };
       const result = await native.launchCli(request);
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
@@ -1357,16 +1359,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean, directoryIntent?: 'given' | 'preference') {
     if (busy) return;
     const remote = !!session.projectId?.startsWith('remote:');
-    const intent = directoryIntent ?? (!replaceEnded && !remote ? 'preference' : 'given');
-    const taskLine = intent === 'preference' ? firstTaskLine(taskTitle(session)) : null;
+    const wantsNew = directoryIntent === 'given' ? false : !replaceEnded && !remote;
     setBusy(replaceEnded ? `restart:${session.id}` : `clone:${session.id}`);
     setActionError('');
     setNotice('');
     try {
+      let useWorkbench = launchSettings?.selected === 'workbench';
       if (launchSettings && launchSettings.selected !== 'workbench') {
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
         if (updated) setLaunchSettings(updated);
+        useWorkbench = updated?.selected === 'workbench';
       }
+      const intent = wantsNew && useWorkbench ? 'preference' : 'given';
+      const taskLine = intent === 'preference' ? firstTaskLine(taskTitle(session)) : null;
       const result = await native.launchCli({
         toolId: session.toolId,
         projectId: session.projectId,

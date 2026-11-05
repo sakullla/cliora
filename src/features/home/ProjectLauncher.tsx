@@ -5,7 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import type { LaunchRequest, LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
-import { preferredLaunchMode } from '../../types/launch';
+import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -318,7 +318,8 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     if (launchPending.current) return;
     launchPending.current = true;
     begin(projectId ?? 'global');
-    const request: LaunchRequest = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}), ...(resumeLatest ? { resumeLatest: true } : {}) };
+    const desktop = managed.find((item) => item.id === toolId)?.launchForm === 'desktop';
+    const request: LaunchRequest = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}), ...(resumeLatest ? { resumeLatest: true } : {}), worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!projectId?.startsWith('remote:'), resume: resumeLatest || !!resumeId?.trim() }) };
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeLatest || resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
       const result = await native.launchCli(request);

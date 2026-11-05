@@ -115,7 +115,7 @@ export default {
 
   restartSession: '重新启动',
   restarting: '正在重启…',
-  cloneSession: '同目录新开',
+  cloneSession: '再开一个',
   copyPath: '复制工作目录路径',
   pathCopied: '已复制路径',
   openFolder: '打开所在文件夹',

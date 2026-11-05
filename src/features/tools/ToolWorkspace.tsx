@@ -13,7 +13,7 @@ import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject 
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { RemoteCliProbe, RemoteToolStore } from '../../types/remote';
-import { preferredLaunchMode } from '../../types/launch';
+import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import type { UsageQuery } from '../../types/usage';
@@ -300,7 +300,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         if (typeof picked !== 'string') return;
         directory = picked;
       }
-      const request = { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory };
+      const request = { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) };
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
       if (opened) { onWorkbenchSession?.(opened); return; }
@@ -308,7 +308,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     } catch (failure) {
       if (await failedInWorkbench(desktop)) {
         const settings = await native.getLaunchSettings().catch(() => null);
-        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory } } });
+        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) } } });
         return;
       }
       setError(errorText(failure));

@@ -7,6 +7,12 @@ export type TerminalPreset = { id: string; label: string; program: string; args:
 export type WorktreeLaunchMode = 'direct' | 'worktree';
 export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; worktreeLaunch?: WorktreeLaunchMode | null; worktreeLaunchError?: string | null };
 
+/** A new local workbench session may follow the saved worktree preference. */
+export function worktreeIntentForNewWorkbench(settings: LaunchSettings | null | undefined, options?: { desktop?: boolean; remote?: boolean; resume?: boolean }): 'given' | 'preference' {
+  if (options?.desktop || options?.remote || options?.resume || settings?.selected !== 'workbench') return 'given';
+  return 'preference';
+}
+
 export function preferredLaunchMode(settings: LaunchSettings | null, target: 'cli' | 'project', yoloAvailable: boolean): LaunchMode {
   const preferred = target === 'cli' ? settings?.cliMode : settings?.projectMode;
   return preferred === 'yolo' && yoloAvailable ? 'yolo' : 'normal';

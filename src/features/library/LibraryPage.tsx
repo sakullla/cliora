@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
+import { worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RulePlacement } from '../../types/resources';
@@ -374,7 +375,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const projectId = launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null;
     // Desktop apps open without a directory, as on the home page.
     const directory = !desktop && launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null;
-    const request = { toolId: launchTool, projectId, sessionId: null, mode: 'normal' as const, directory, initialPrompt: launchText };
+    const settings = await native.getLaunchSettings().catch(() => null);
+    const request = { toolId: launchTool, projectId, sessionId: null, mode: 'normal' as const, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }) };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);

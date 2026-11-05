@@ -932,8 +932,8 @@ pub fn set_worktree_launch(db: &Database, mode: &str) -> Result<LaunchSettings, 
     settings(db)
 }
 
-/// Directory the session process should use. Preference isolation runs only
-/// for an explicit preference intent; every other launch keeps `directory`.
+/// Directory the session process should use. A missing, unreadable, or
+/// unrecognized preference stays on `directory` and does not rewrite the row.
 fn session_directory_for_launch(
     db: &Database,
     directory: &Path,
@@ -944,8 +944,7 @@ fn session_directory_for_launch(
         return Ok(directory.to_path_buf());
     }
     match stored_worktree_launch(db) {
-        Err(_) | Ok(StoredWorktreeLaunch::Direct) => Ok(directory.to_path_buf()),
-        Ok(StoredWorktreeLaunch::Unrecognized) => Err(WORKTREE_LAUNCH_FORMAT.into()),
+        Err(_) | Ok(StoredWorktreeLaunch::Direct | StoredWorktreeLaunch::Unrecognized) => Ok(directory.to_path_buf()),
         Ok(StoredWorktreeLaunch::Worktree) => match crate::git_worktree::prepare_worktree(db, directory, task_text)? {
             Some(created) => Ok(created.directory),
             None => Ok(directory.to_path_buf()),
@@ -1383,20 +1382,30 @@ fn plan_with_stage_at(
             return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
         }
     }
+    // The terminal is fixed before any worktree is created. Only a local new
+    // session or another session (no session id, not resume) on the workbench
+    // may follow the stored preference. External, desktop, resume, an existing
+    // session, and every non-preference launch keep the selected directory.
+    // Account and skill checks stay on that checkout.
+    let terminal = match launch_form {
+        LaunchForm::Terminal => session_terminal(db)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
+        LaunchForm::Desktop => TerminalId::Desktop,
+    };
+    let task_text = worktree.task_text.as_deref().filter(|text| !text.trim().is_empty()).or(request.initial_prompt.as_deref());
+    let launch_directory = if terminal == TerminalId::Workbench
+        && request.session_id.is_none()
+        && !request.resume_latest
+    {
+        session_directory_for_launch(db, &directory, worktree.intent, task_text)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
+    } else {
+        directory.clone()
+    };
     // A desktop direct launch has neither a request/session directory nor a
     // project. Home stays the global scope root and is not a launch argument.
     // launch_args stays session-less; only a non-empty desktop_launch_args
     // attaches the selected directory.
-    // Account and skill checks stay on the selected checkout. Only the process
-    // directory moves when this launch asked to isolate by preference.
-    let task_text = worktree.task_text.as_deref().filter(|text| !text.trim().is_empty()).or(request.initial_prompt.as_deref());
-    let launch_directory = session_directory_for_launch(
-        db,
-        &directory,
-        if request.resume_latest { WorktreeIntent::Given } else { worktree.intent },
-        task_text,
-    )
-    .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?;
     let selected_directory = directory_override.is_some() || project.is_some();
     let mut attached_desktop_directory = false;
     let mut cli_args = match launch_form {
@@ -1422,11 +1431,6 @@ fn plan_with_stage_at(
             }
             args
         }
-    };
-    let terminal = match launch_form {
-        LaunchForm::Terminal => session_terminal(db)
-            .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
-        LaunchForm::Desktop => TerminalId::Desktop,
     };
     // Workbench tabs are restored after a restart. Naming a new conversation
     // up front keeps tabs opened in the same directory from becoming
@@ -2729,6 +2733,16 @@ mod installed_desktop_launch {
         let direct = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
         assert_eq!(direct.directory, canonical);
         assert!(isolated.directory.is_dir());
+        let parent = canonical.parent().unwrap();
+        let siblings = || std::fs::read_dir(parent).unwrap().count();
+        let before = siblings();
+        set_custom_terminal(&db, std::env::current_exe().unwrap().display().to_string(), vec!["{script}".into()]).unwrap();
+        set_worktree_launch(&db, "worktree").unwrap();
+        let external = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
+        assert_eq!(external.terminal, TerminalId::Custom);
+        assert_eq!(external.directory, canonical);
+        assert_eq!(siblings(), before);
+        assert!(isolated.directory.is_dir());
     }
 
     #[test]
@@ -2792,10 +2806,10 @@ mod installed_desktop_launch {
         let broken = settings(&db).unwrap();
         assert!(broken.worktree_launch.is_none());
         assert_eq!(broken.worktree_launch_error.as_deref(), Some("启动偏好格式无法识别"));
-        let refused = plan_envelope(&db, &registry, temp.path(), envelope).unwrap_err();
-        assert!(refused.message.contains("启动偏好格式无法识别"), "{}", refused.message);
+        let kept_broken = plan_envelope(&db, &registry, temp.path(), envelope).unwrap();
+        assert_eq!(kept_broken.directory, canonical);
         assert_eq!(read_key("worktree_launch").as_deref(), Some("\"sideways\""));
-        assert!(!plain.join("notes-feat-hello").exists());
+        assert!(!temp.path().join("notes-feat-hello").exists());
         db.with_connection(|conn| {
             conn.execute("UPDATE app_settings SET value = '\"worktree\"' WHERE key = 'worktree_launch'", [])
                 .map(|_| ())

@@ -6,7 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
-import { preferredLaunchMode } from '../../types/launch';
+import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace, ToolProbe } from '../../types/native';
 import type { RemoteCliProbe } from '../../types/remote';
 import type { WorkspaceOpenIntent } from '../tools/ToolWorkspace';
@@ -354,7 +354,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
           lastLaunchDirectory = picked;
         }
       }
-      const request = { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory };
+      const request = { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) };
       const result = await native.launchCli(request);
       markRecent(toolId);
       const opened = workbenchSessionId(result);
@@ -364,7 +364,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       clearNoticeLater(toolId, notice);
     } catch (error) {
       if (await failedInWorkbench(desktop)) {
-        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null } } });
+        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) } } });
         setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
         return;
       }

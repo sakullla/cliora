@@ -115,7 +115,7 @@ export default {
 
   restartSession: 'Restart',
   restarting: 'Restarting…',
-  cloneSession: 'Duplicate session',
+  cloneSession: 'Open another',
   copyPath: 'Copy working directory path',
   pathCopied: 'Path copied',
   openFolder: 'Open folder',
