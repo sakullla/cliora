@@ -530,6 +530,20 @@ test('a failed tool save from the launch menu shows the page error and does not 
   expect(await splitCalls(page)).toEqual([['set_project_tool', { projectId: 'demo', toolId: 'grok' }]]);
 });
 
+test('a remote project changes its preferred tool without launching a session', async ({ page }) => {
+  await installSplitLaunch(page, { remote: true });
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="remote:rp"]');
+  const trigger = card.getByRole('button', { name: '远程仓库 的工具' });
+  await expect(trigger).toContainText('Codex');
+  await trigger.click();
+  await page.getByRole('listbox', { name: '远程仓库 的工具' }).getByRole('option', { name: 'Grok' }).click();
+  await expect(trigger).toContainText('Grok');
+  await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
+  await expect(card.getByRole('button', { name: '用其他工具启动 远程仓库' })).toBeEnabled();
+  expect(await splitCalls(page)).toEqual([]);
+});
+
 test('a remote project launches another tool from the menu without saving it', async ({ page }) => {
   await installSplitLaunch(page, { remote: true });
   await page.goto('/');

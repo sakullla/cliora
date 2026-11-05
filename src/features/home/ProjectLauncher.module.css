@@ -39,7 +39,9 @@
 .cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .remoteProject { border-color: var(--accent-line); }
-.controls { display: flex; justify-content: flex-end; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-1_5); min-width: 0; }
+.controls .toolSelect { flex: 1 1 112px; min-width: 0; }
+.controls .toolSelect > button { min-height: var(--control-h-sm); font-size: var(--fs-caption); }
 .controls .actions { flex: none; flex-wrap: nowrap; }
 .currentTool { margin-left: auto; padding-left: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); }
 
