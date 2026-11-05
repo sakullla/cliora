@@ -1326,6 +1326,46 @@ fn ending_a_session_terminates_the_process_tree() {
     }
 }
 
+/// Ending a session stops its process. The working directory, including a
+/// worktree Cliora created, stays on disk.
+#[cfg(test)]
+#[test]
+fn ending_a_session_leaves_its_directory_in_place() {
+    let _guard = lock_for_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("tree");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("keep.txt"), "still\n").unwrap();
+    let (program, args) = if cfg!(windows) {
+        let (program, _) = shell_executable().expect("shell");
+        (program, vec!["/d".into(), "/q".into(), "/c".into(), "ping -n 30 127.0.0.1".into()])
+    } else {
+        (std::path::PathBuf::from("/bin/sh"), vec!["-c".into(), "sleep 30".into()])
+    };
+    let plan = LaunchPlan {
+        resume_native_id: None,
+        account_version: None,
+        account_context: None,
+        tool_id: "cliora-test".into(),
+        project_id: None,
+        mode: LaunchMode::Normal,
+        executable: program,
+        cli_args: args,
+        directory: directory.clone(),
+        terminal: TerminalId::Workbench,
+        session_markers: &[],
+        credential: None,
+        remote_session_id: None,
+        remote_end_args: None,
+        environment: Vec::new(),
+    };
+    let id = start(plan, None).expect("session started").session_id.expect("session id");
+    close(&id).expect("session closed");
+    assert!(directory.is_dir());
+    assert_eq!(std::fs::read(directory.join("keep.txt")).unwrap(), b"still\n");
+    assert!(lookup(&id).is_err());
+}
+
 #[cfg(test)]
 pub(crate) fn lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());

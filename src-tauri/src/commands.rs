@@ -3782,6 +3782,46 @@ pub async fn git_worktrees(directory: String) -> Result<Vec<crate::git_context::
     }).await
 }
 
+#[tauri::command]
+pub async fn worktree_prepare(app: AppHandle, directory: String) -> Result<Option<String>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::git_worktree::read_prepare_command(db, Path::new(&directory)).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_worktree_prepare(app: AppHandle, directory: String, command: String) -> Result<crate::git_worktree::PrepareCommand, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::git_worktree::write_prepare_command(db, Path::new(&directory), &command).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_worktree_ledger(app: AppHandle) -> Result<Vec<crate::git_worktree::WorktreeRecord>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::git_worktree::recorded_worktrees(db).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cleanup_worktree(app: AppHandle, path: String, confirm: bool) -> Result<crate::git_worktree::CleanupReport, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::git_worktree::cleanup_worktree(db, Path::new(&path), confirm).map_err(native_error)
+        })
+    })
+    .await
+}
+
 /// Update the visible local working directory from shell integration (OSC 7 /
 /// OSC 1337). The session host validates and canonicalizes the path.
 #[tauri::command]

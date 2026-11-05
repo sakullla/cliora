@@ -19,7 +19,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeLedgerEntry } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -45,6 +45,11 @@ import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
 import { workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
+
+function sameDirectory(left: string, right: string): boolean {
+  const norm = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  return norm(left) === norm(right) || norm(left).toLowerCase() === norm(right).toLowerCase();
+}
 
 /** A remote session's library prompts come from that host. `null` means the host is not known yet. */
 export function libraryHostId(projectId: string | null | undefined, remoteProjects: RemoteProject[]): string | null {
@@ -323,6 +328,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [launchMenuOpen, setLaunchMenuOpen] = useState(false);
   const [worktreeSaveError, setWorktreeSaveError] = useState('');
   const [worktreeSaving, setWorktreeSaving] = useState(false);
+  const [prepareCommand, setPrepareCommand] = useState('');
+  const [prepareTarget, setPrepareTarget] = useState<string | null>(null);
+  const [prepareError, setPrepareError] = useState('');
+  const [prepareSaving, setPrepareSaving] = useState(false);
+  const [ledger, setLedger] = useState<WorktreeLedgerEntry[]>([]);
+  const [cleanupError, setCleanupError] = useState('');
+  const [cleanupBusy, setCleanupBusy] = useState('');
+  const prepareRequest = useRef(0);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -887,6 +900,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     void native.getLaunchSettings().then((settings) => {
       if (alive && settings) setLaunchSettings(settings);
     }).catch(() => {});
+    void native.listWorktreeLedger().then((rows) => {
+      if (alive) setLedger(Array.isArray(rows) ? rows : []);
+    }).catch(() => {});
     const listedRemoteProjects = remoteSshEnabled ? native.listRemoteProjects().catch(() => [] as RemoteProject[]) : Promise.resolve([] as RemoteProject[]);
     const listedRemoteTargets = remoteSshEnabled ? native.listRemoteTargets().catch(() => null) : Promise.resolve([] as RemoteTarget[]);
     void listedRemoteProjects.then((listed) => {
@@ -1353,7 +1369,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { newLaunchPending.current = false; setLaunchingNew(false); }
+    } finally { newLaunchPending.current = false; setLaunchingNew(false); refreshLedger(); }
   }
 
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean, directoryIntent?: 'given' | 'preference') {
@@ -1397,7 +1413,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
-    } finally { setBusy(''); }
+    } finally { setBusy(''); refreshLedger(); }
   }
 
   async function sendToSession(session: WorkbenchSession, rawText: string): Promise<boolean> {
@@ -1618,11 +1634,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setSelectedId(session.id);
     setAppearanceOpen(false);
     setShortcutsOpen(false);
+    openLocalPrepare(session.projectId?.startsWith('remote:') ? null : session.directory || null);
     setMenu({ kind: 'session', sessionId: session.id, x, y, besideId: previous && previous !== session.id ? previous : null });
   }
 
   function openTerminalMenu(session: WorkbenchSession, x: number, y: number) {
     setAppearanceOpen(false);
+    openLocalPrepare(session.projectId?.startsWith('remote:') ? null : session.directory || null);
     setMenu({ kind: 'terminal', sessionId: session.id, x, y, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
   }
 
@@ -1654,6 +1672,113 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const index = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
     items[next].focus();
+  }
+
+  function refreshLedger() {
+    if (!nativeAvailable) return;
+    void native.listWorktreeLedger().then((rows) => {
+      setLedger(Array.isArray(rows) ? rows : []);
+    }).catch(() => {});
+  }
+
+  function openLocalPrepare(directory: string | null) {
+    const request = ++prepareRequest.current;
+    setPrepareError('');
+    setCleanupError('');
+    refreshLedger();
+    if (!directory) {
+      setPrepareTarget(null);
+      setPrepareCommand('');
+      return;
+    }
+    setPrepareTarget(directory);
+    setPrepareCommand('');
+    void native.worktreePrepare(directory).then((value) => {
+      if (prepareRequest.current !== request) return;
+      setPrepareTarget(directory);
+      setPrepareCommand(typeof value === 'string' ? value : '');
+    }).catch((value) => {
+      if (prepareRequest.current !== request) return;
+      setPrepareError(formatFailure(value, t('sessions.worktreePrepareFailed'), t('sessions.failureHint')));
+    });
+  }
+
+  async function savePrepare(directory: string) {
+    if (prepareSaving) return;
+    setPrepareSaving(true);
+    setPrepareError('');
+    try {
+      const saved = await native.saveWorktreePrepare(directory, prepareCommand);
+      setPrepareTarget(directory);
+      setPrepareCommand(saved.command);
+    } catch (value) {
+      setPrepareError(formatFailure(value, t('sessions.worktreePrepareFailed'), t('sessions.failureHint')));
+    } finally { setPrepareSaving(false); }
+  }
+
+  async function cleanWorktree(row: WorktreeLedgerEntry) {
+    if (cleanupBusy) return;
+    setCleanupBusy(row.worktreePath);
+    setCleanupError('');
+    try {
+      const preview = await native.cleanupWorktree(row.worktreePath, false);
+      if (preview.needsConfirmation) {
+        const accepted = await confirmAction(preview.detail || t('sessions.worktreeCleanupConfirmTitle'), () => true, {
+          title: t('sessions.worktreeCleanupConfirmTitle'),
+          confirmLabel: t('sessions.worktreeCleanupConfirm'),
+          destructive: true,
+        });
+        if (!accepted) return;
+        await native.cleanupWorktree(row.worktreePath, true);
+      }
+      refreshLedger();
+      setMenu(null);
+      setLaunchMenuOpen(false);
+    } catch (value) {
+      setCleanupError(formatFailure(value, t('sessions.worktreeCleanupFailed'), t('sessions.failureHint')));
+    } finally { setCleanupBusy(''); }
+  }
+
+  function environmentUnprepared(session: WorkbenchSession | null | undefined): boolean {
+    if (!session?.directory || session.projectId?.startsWith('remote:')) return false;
+    return ledger.some((row) => row.environment === 'unprepared' && sameDirectory(row.worktreePath, session.directory));
+  }
+
+  function dialogPrepareDirectory(): string | null {
+    if (activeRemoteTarget) return null;
+    if (workspaceValue.startsWith('project:')) return availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.path ?? null;
+    if (workspaceValue.startsWith('custom:')) return workspaceValue.slice('custom:'.length) || null;
+    return null;
+  }
+
+  function worktreeFinishItems(directory: string | null) {
+    const command = directory && prepareTarget && sameDirectory(prepareTarget, directory) ? prepareCommand : '';
+    return <>
+      {directory && <>
+        <span className={styles.menuDivider} role="separator" />
+        <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreePrepare')} onClick={(event) => event.stopPropagation()}>
+          <span className={styles.menuLabel} role="presentation">{t('sessions.worktreePrepare')}</span>
+          {prepareError && <p className={styles.menuError} role="alert">{prepareError}</p>}
+          <label className={styles.menuCommand}>
+            <span className={styles.srOnly}>{t('sessions.worktreePrepare')}</span>
+            <input value={command} placeholder={t('sessions.worktreePreparePlaceholder')} aria-label={t('sessions.worktreePrepare')} onChange={(event) => { setPrepareTarget(directory); setPrepareCommand(event.target.value); }} onKeyDown={(event) => event.stopPropagation()} />
+          </label>
+          <button type="button" role="menuitem" disabled={prepareSaving} onClick={() => void savePrepare(directory)}>{t('sessions.worktreePrepareSave')}</button>
+          <p className={styles.menuHint}>{t('sessions.worktreePrepareHint')}</p>
+        </div>
+      </>}
+      {ledger.length > 0 && <>
+        <span className={styles.menuDivider} role="separator" />
+        <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeCleanup')} onClick={(event) => event.stopPropagation()}>
+          <span className={styles.menuLabel} role="presentation">{t('sessions.worktreeCleanup')}</span>
+          {cleanupError && <p className={styles.menuError} role="alert">{cleanupError}</p>}
+          {ledger.map((row) => <button key={row.worktreePath} type="button" role="menuitem" className={styles.cleanupItem} disabled={cleanupBusy === row.worktreePath} onClick={() => void cleanWorktree(row)}>
+            <span>{t('sessions.worktreeCleanupAction', { branch: row.branch })}</span>
+            <small>{shortPath(displayPath(row.worktreePath))}</small>
+          </button>)}
+        </div>
+      </>}
+    </>;
   }
 
   async function chooseWorktreeLaunch(mode: 'direct' | 'worktree') {
@@ -1932,6 +2057,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.identitySub}>
                     {title && <span className={styles.identityTool}>{toolName(current)}</span>}
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(current)}</span></button>
+                    {environmentUnprepared(current) && <span className={styles.envMark}>{t('sessions.environmentUnprepared')}</span>}
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
                     {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={12} />{elapsed}</span>}
                     {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
@@ -2080,6 +2206,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" onClick={() => setAppearanceOpen(true)}><Icon name="sliders" size={14} /><span>{t('sessions.displaySettings')}</span></button>
           <span className={styles.menuDivider} role="separator" />
           <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
+          {worktreeFinishItems(session.projectId?.startsWith('remote:') ? null : session.directory || null)}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
@@ -2093,6 +2220,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>{t('sessions.openFolder')}</button>}
           <span className={styles.menuDivider} role="separator" />
           <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
+          {worktreeFinishItems(session.projectId?.startsWith('remote:') ? null : session.directory || null)}
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>{session.running ? t('sessions.end') : t('sessions.removeSession')}</button>
         </>}
       </div>, document.body);
@@ -2123,7 +2251,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
-        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><div className={styles.dialogMore}><Button aria-haspopup="menu" aria-expanded={launchMenuOpen} onClick={() => { setWorktreeSaveError(''); setLaunchMenuOpen((open) => !open); }}>{t('sessions.launchMore')}</Button>{launchMenuOpen && <div ref={launchMenuRef} className={styles.dialogLaunchMenu} role="menu" aria-label={t('sessions.worktreeLaunch')} onKeyDown={launchMenuNavigate}>{worktreePreferenceItems()}</div>}</div><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
+        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><div className={styles.dialogMore}><Button aria-haspopup="menu" aria-expanded={launchMenuOpen} onClick={() => { setWorktreeSaveError(''); const next = !launchMenuOpen; setLaunchMenuOpen(next); if (next) openLocalPrepare(dialogPrepareDirectory()); }}>{t('sessions.launchMore')}</Button>{launchMenuOpen && <div ref={launchMenuRef} className={styles.dialogLaunchMenu} role="menu" aria-label={t('sessions.worktreeLaunch')} onKeyDown={launchMenuNavigate}>{worktreePreferenceItems()}{worktreeFinishItems(dialogPrepareDirectory())}</div>}</div><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>
     </GuideDialog>
     {remotePicker.element}

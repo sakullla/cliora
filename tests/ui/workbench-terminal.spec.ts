@@ -150,6 +150,26 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode || 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
           }
           if (command === 'git_worktrees') return (window as unknown as { __worktrees?: unknown[] }).__worktrees ?? [];
+          if (command === 'list_worktree_ledger') return ((window as unknown as { __ledger?: unknown[] }).__ledger ?? []).map((item) => ({ ...(item as object) }));
+          if (command === 'worktree_prepare') {
+            const harness = window as unknown as { __prepareReads?: string[]; __prepareCommand?: string | null };
+            harness.__prepareReads = [...(harness.__prepareReads ?? []), args.directory];
+            return harness.__prepareCommand ?? null;
+          }
+          if (command === 'save_worktree_prepare') {
+            const harness = window as unknown as { __prepareCommand?: string | null; __prepareSaves?: unknown[]; __prepareSaveFails?: boolean };
+            harness.__prepareSaves = [...(harness.__prepareSaves ?? []), { directory: args.directory, command: args.command }];
+            if (harness.__prepareSaveFails) throw new Error('保存失败');
+            harness.__prepareCommand = args.command;
+            return { mainCheckout: args.directory, command: args.command };
+          }
+          if (command === 'cleanup_worktree') {
+            const harness = window as unknown as { __cleanups?: unknown[]; __cleanupError?: string; __cleanupNeedsConfirm?: boolean; __cleanupDetail?: string };
+            harness.__cleanups = [...(harness.__cleanups ?? []), { path: args.path, confirm: args.confirm }];
+            if (harness.__cleanupError) throw new Error(harness.__cleanupError);
+            if (!args.confirm && harness.__cleanupNeedsConfirm) return { removed: false, needsConfirmation: true, detail: harness.__cleanupDetail ?? '将丢弃未提交的改动' };
+            return { removed: true, needsConfirmation: false, detail: '' };
+          }
           if (command === 'workbench_git_context') return (window as unknown as { __gitContext?: unknown }).__gitContext ?? null;
           if (command === 'set_workbench_directory') {
             const session = sessions.find(item => item.id === args.sessionId);
@@ -1864,4 +1884,92 @@ test('an unrecognized worktree preference is shown and is not rewritten', async 
   await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'false');
   await expect(pref.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'false');
   expect(await page.evaluate(() => (window as unknown as { __worktreeSaves?: string[] }).__worktreeSaves ?? [])).toEqual([]);
+});
+
+test('a new worktree without a prepare command is marked, and only ledger worktrees can be removed', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __twoSessions: true,
+      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work', branch: 'feat-hello', environment: 'unprepared' }],
+      __worktrees: [
+        { name: 'repo', branch: 'main', path: 'C:/repo', current: false },
+        { name: 'feat-hello', branch: 'feat-hello', path: 'C:/work', current: true },
+        { name: 'external', branch: 'external', path: 'C:/external', current: false },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage).toContainText('环境未准备');
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await expect(stage).not.toContainText('环境未准备');
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(stage).toContainText('环境未准备');
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  const menu = page.getByRole('menu', { name: '终端操作' });
+  await expect(menu.getByRole('menuitem', { name: /清理 feat-hello/ })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /清理 main/ })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: /清理 external/ })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: /清理 repo/ })).toHaveCount(0);
+  await expect(menu.getByRole('textbox', { name: '环境准备' })).toBeVisible();
+});
+
+test('removing a dirty worktree waits for confirmation and can be cancelled', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
+      __cleanupNeedsConfirm: true,
+      __cleanupDetail: '将丢弃未提交的改动：\n?? note.txt',
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('region', { name: '当前会话' })).not.toContainText('环境未准备');
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  const menu = page.getByRole('menu', { name: '终端操作' });
+  await menu.getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  const confirm = page.getByRole('dialog', { name: '清理这个工作树？' });
+  await expect(confirm).toContainText('note.txt');
+  await confirm.getByRole('button', { name: '取消' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: Array<{ confirm: boolean }> }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  await page.getByRole('dialog', { name: '清理这个工作树？' }).getByRole('button', { name: '丢弃并清理' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: Array<{ confirm: boolean }> }).__cleanups)).toEqual([
+    { path: 'C:/work-task', confirm: false },
+    { path: 'C:/work-task', confirm: false },
+    { path: 'C:/work-task', confirm: true },
+  ]);
+});
+
+test('a git failure while removing a worktree keeps the reason on screen', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
+      __cleanupError: 'Git 无法删除工作树：locked',
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  await expect(page.getByRole('menu', { name: '终端操作' }).getByRole('alert')).toContainText('locked');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
+});
+
+test('the more menu can save one prepare command for the session directory', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  const menu = page.getByRole('menu', { name: '终端操作' });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toContain('C:/work');
+  await menu.getByRole('textbox', { name: '环境准备' }).fill('npm ci');
+  await menu.getByRole('menuitem', { name: '保存', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareSaves?: Array<{ directory: string; command: string }> }).__prepareSaves ?? [])).toEqual([{ directory: 'C:/work', command: 'npm ci' }]);
+  await expect(menu.getByRole('textbox', { name: '环境准备' })).toHaveValue('npm ci');
 });

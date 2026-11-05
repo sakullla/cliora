@@ -946,7 +946,10 @@ fn session_directory_for_launch(
     match stored_worktree_launch(db) {
         Err(_) | Ok(StoredWorktreeLaunch::Direct | StoredWorktreeLaunch::Unrecognized) => Ok(directory.to_path_buf()),
         Ok(StoredWorktreeLaunch::Worktree) => match crate::git_worktree::prepare_worktree(db, directory, task_text)? {
-            Some(created) => Ok(created.directory),
+            Some(created) => {
+                crate::git_worktree::finish_prepare(db, &created)?;
+                Ok(created.directory)
+            }
             None => Ok(directory.to_path_buf()),
         },
     }
@@ -2743,6 +2746,110 @@ mod installed_desktop_launch {
         assert_eq!(external.directory, canonical);
         assert_eq!(siblings(), before);
         assert!(isolated.directory.is_dir());
+    }
+
+    #[test]
+    fn prepare_command_runs_only_after_a_created_worktree_and_failure_is_not_ready() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        set_worktree_launch(&db, "worktree").unwrap();
+        let registry = Registry::builtins().with_fixture_installation("codex", "0.165.0");
+        let main = temp.path().join("shop");
+        std::fs::create_dir_all(&main).unwrap();
+        let git_bin = crate::process_environment::directories().into_iter().find_map(|directory| {
+            let path = directory.join(if cfg!(windows) { "git.exe" } else { "git" });
+            path.is_file().then_some(path)
+        });
+        let Some(git_bin) = git_bin else {
+            eprintln!("git unavailable; skipping prepare launch test");
+            return;
+        };
+        let git = |cwd: &Path, args: &[&str]| {
+            std::process::Command::new(&git_bin).arg("-C").arg(cwd).args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .status().ok().filter(|status| status.success()).is_some()
+        };
+        if !git(&main, &["init", "-q", "-b", "main"]) {
+            eprintln!("git unavailable; skipping prepare launch test");
+            return;
+        }
+        assert!(git(&main, &["config", "user.email", "t@example.com"]));
+        assert!(git(&main, &["config", "user.name", "Test"]));
+        assert!(git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        std::fs::create_dir_all(main.join("node_modules")).unwrap();
+        std::fs::write(main.join("node_modules/keep.json"), "{}\n").unwrap();
+        std::fs::write(main.join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(main.join("dirty.txt"), "keep").unwrap();
+        let canonical = main.canonicalize().unwrap();
+        let envelope = |intent: WorktreeIntent, resume: bool| LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "codex".into(),
+                project_id: None,
+                session_id: None,
+                directory: Some(canonical.display().to_string()),
+                initial_prompt: Some("feat: hello?".into()),
+                mode: LaunchMode::Normal,
+                resume_latest: resume,
+                remote_intent: None,
+            },
+            worktree_intent: intent,
+            task_text: Some("feat: hello?".into()),
+        };
+        let bare = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
+        assert_ne!(bare.directory, canonical);
+        assert!(!bare.directory.join("node_modules").exists());
+        assert!(!bare.directory.join(".env").exists());
+        assert_eq!(std::fs::read(main.join(".env")).unwrap(), b"SECRET=1\n");
+        assert_eq!(std::fs::read(main.join("dirty.txt")).unwrap(), b"keep");
+        let row = crate::git_worktree::recorded_worktrees(&db).unwrap().into_iter().find(|row| row.worktree_path == bare.directory.display().to_string()).unwrap();
+        assert_eq!(row.environment, "unprepared");
+        let fail = if cfg!(windows) { "echo nope>&2& exit /b 9" } else { "echo nope >&2; exit 9" };
+        crate::git_worktree::write_prepare_command(&db, &canonical, fail).unwrap();
+        let failed = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap_err();
+        assert!(failed.message.contains("环境准备失败"), "{}", failed.message);
+        assert!(failed.message.contains("nope"), "{}", failed.message);
+        assert_eq!(failed.stage, LaunchStage::ProjectDirectory);
+        let kept = crate::git_worktree::recorded_worktrees(&db).unwrap();
+        assert!(kept.len() >= 2);
+        assert!(kept.iter().any(|row| Path::new(&row.worktree_path).is_dir() && row.environment == "unprepared" && row.worktree_path != bare.directory.display().to_string()));
+        assert_eq!(std::fs::read(main.join("dirty.txt")).unwrap(), b"keep");
+        assert!(!main.join("ready.txt").exists());
+        let marker = if cfg!(windows) { "echo ready> ready.txt" } else { "printf ready > ready.txt" };
+        crate::git_worktree::write_prepare_command(&db, &canonical, marker).unwrap();
+        let ready = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
+        assert!(ready.directory.join("ready.txt").is_file());
+        assert!(!main.join("ready.txt").exists());
+        assert_eq!(
+            crate::git_worktree::recorded_worktrees(&db).unwrap().iter().find(|row| row.worktree_path == ready.directory.display().to_string()).unwrap().environment,
+            "prepared",
+        );
+        let before = std::fs::read_dir(canonical.parent().unwrap()).unwrap().count();
+        let given = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Given, false)).unwrap();
+        assert_eq!(given.directory, canonical);
+        assert!(!main.join("ready.txt").exists());
+        set_worktree_launch(&db, "direct").unwrap();
+        let direct = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
+        assert_eq!(direct.directory, canonical);
+        assert!(!main.join("ready.txt").exists());
+        set_worktree_launch(&db, "worktree").unwrap();
+        let resume_registry = Registry::builtins().with_fixture_installation("minimax_code", "0.6.8");
+        let resumed = plan_envelope(&db, &resume_registry, temp.path(), LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "minimax_code".into(),
+                resume_latest: true,
+                initial_prompt: None,
+                ..envelope(WorktreeIntent::Preference, false).request
+            },
+            worktree_intent: WorktreeIntent::Preference,
+            task_text: Some("feat: hello?".into()),
+        }).unwrap();
+        assert_eq!(resumed.directory, canonical);
+        assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
+        assert!(!main.join("ready.txt").exists());
+        assert_eq!(std::fs::read_dir(canonical.parent().unwrap()).unwrap().count(), before);
+        assert!(ready.directory.is_dir());
     }
 
     #[test]
