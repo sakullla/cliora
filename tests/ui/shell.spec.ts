@@ -850,7 +850,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await expect(codex.locator('strong')).toHaveText('✨ 远端修复');
   await codex.click({ button: 'right' });
   const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
-  await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '再开一个', '复制输出', '复制工作目录路径', '打开所在文件夹', '结束此会话']);
+  await expect(rowMenu.getByRole('menuitem')).toHaveText(['置顶', '发送中断 (Ctrl+C)', '再开一个', '复制输出', '复制工作目录路径', '打开所在文件夹', '保存', '结束此会话']);
   await page.keyboard.press('Escape');
   await expect(rowMenu).toHaveCount(0);
   await expect(codex).toBeFocused();

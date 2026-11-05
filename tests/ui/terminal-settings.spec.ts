@@ -82,7 +82,8 @@ test('unsaved or system default shows the workbench, and launch modes stay norma
   const select = region.getByRole('combobox', { name: '启动终端', exact: true });
   await expect(select).toHaveValue('workbench');
   await expect(select.locator('option', { hasText: '工作台' })).toHaveCount(1);
-  await expect(region.getByRole('combobox')).toHaveCount(3);
+  await expect(region.getByRole('combobox')).toHaveCount(4);
+  await expect(region.getByRole('combobox', { name: '启动偏好', exact: true })).toHaveValue('direct');
   for (const name of ['CLI 默认启动模式', '项目默认启动模式']) {
     const mode = region.getByRole('combobox', { name });
     await expect(mode.locator('option')).toHaveText(['普通模式', 'YOLO 模式']);
