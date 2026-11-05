@@ -100,6 +100,9 @@ pub struct LaunchSettings {
     pub custom: Option<CustomTerminal>,
     pub cli_mode: LaunchMode,
     pub project_mode: LaunchMode,
+    /// `None` when the stored value cannot be recognized. The row is left unchanged.
+    pub worktree_launch: Option<WorktreeLaunchMode>,
+    pub worktree_launch_error: Option<String>,
 }
 
 /// A saved launch command. `{script}` is replaced with the script file; arguments are not passed through a shell.
@@ -160,6 +163,51 @@ pub struct LaunchRequest {
     pub resume_latest: bool,
     #[serde(default)]
     pub remote_intent: Option<RemoteLaunchIntent>,
+}
+
+/// Whether this launch may create a worktree. Absent and unknown values stay
+/// on the directory the caller already chose.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeIntent {
+    #[default]
+    Given,
+    Preference,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchEnvelope {
+    #[serde(flatten)]
+    pub request: LaunchRequest,
+    #[serde(default)]
+    pub worktree_intent: WorktreeIntent,
+    #[serde(default)]
+    pub task_text: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeLaunchMode {
+    Direct,
+    Worktree,
+}
+
+struct WorktreeLaunch {
+    intent: WorktreeIntent,
+    task_text: Option<String>,
+}
+
+impl WorktreeLaunch {
+    fn given() -> Self {
+        Self { intent: WorktreeIntent::Given, task_text: None }
+    }
+}
+
+impl From<LaunchRequest> for LaunchEnvelope {
+    fn from(request: LaunchRequest) -> Self {
+        Self { request, worktree_intent: WorktreeIntent::Given, task_text: None }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -829,8 +877,37 @@ pub(crate) fn saved_launch_modes(db: &Database) -> Result<(LaunchMode, LaunchMod
     Ok((modes.cli, modes.project))
 }
 
+const WORKTREE_LAUNCH_KEY: &str = "worktree_launch";
+const WORKTREE_LAUNCH_FORMAT: &str = "启动偏好格式无法识别";
+
+enum StoredWorktreeLaunch {
+    Direct,
+    Worktree,
+    Unrecognized,
+}
+
+fn stored_worktree_launch(db: &Database) -> Result<StoredWorktreeLaunch, String> {
+    match read_setting(db, WORKTREE_LAUNCH_KEY)? {
+        None => Ok(StoredWorktreeLaunch::Direct),
+        Some(text) => match serde_json::from_str::<WorktreeLaunchMode>(&text) {
+            Ok(WorktreeLaunchMode::Direct) => Ok(StoredWorktreeLaunch::Direct),
+            Ok(WorktreeLaunchMode::Worktree) => Ok(StoredWorktreeLaunch::Worktree),
+            Err(_) => Ok(StoredWorktreeLaunch::Unrecognized),
+        },
+    }
+}
+
+fn worktree_launch_fields(db: &Database) -> Result<(Option<WorktreeLaunchMode>, Option<String>), String> {
+    match stored_worktree_launch(db)? {
+        StoredWorktreeLaunch::Direct => Ok((Some(WorktreeLaunchMode::Direct), None)),
+        StoredWorktreeLaunch::Worktree => Ok((Some(WorktreeLaunchMode::Worktree), None)),
+        StoredWorktreeLaunch::Unrecognized => Ok((None, Some(WORKTREE_LAUNCH_FORMAT.to_owned()))),
+    }
+}
+
 pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
     let (cli_mode, project_mode) = saved_launch_modes(db)?;
+    let (worktree_launch, worktree_launch_error) = worktree_launch_fields(db)?;
     Ok(LaunchSettings {
         selected: terminal_preference(db)?,
         terminals: terminal_options(),
@@ -838,7 +915,42 @@ pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
         custom: stored_custom(db)?,
         cli_mode,
         project_mode,
+        worktree_launch,
+        worktree_launch_error,
     })
+}
+
+/// Rejects an unknown mode before writing, so a failed save keeps the stored row.
+pub fn set_worktree_launch(db: &Database, mode: &str) -> Result<LaunchSettings, String> {
+    let parsed = match mode {
+        "direct" => WorktreeLaunchMode::Direct,
+        "worktree" => WorktreeLaunchMode::Worktree,
+        _ => return Err("启动偏好无效".into()),
+    };
+    let value = serde_json::to_string(&parsed).map_err(|error| error.to_string())?;
+    write_setting(db, WORKTREE_LAUNCH_KEY, &value)?;
+    settings(db)
+}
+
+/// Directory the session process should use. Preference isolation runs only
+/// for an explicit preference intent; every other launch keeps `directory`.
+fn session_directory_for_launch(
+    db: &Database,
+    directory: &Path,
+    intent: WorktreeIntent,
+    task_text: Option<&str>,
+) -> Result<PathBuf, String> {
+    if intent != WorktreeIntent::Preference {
+        return Ok(directory.to_path_buf());
+    }
+    match stored_worktree_launch(db) {
+        Err(_) | Ok(StoredWorktreeLaunch::Direct) => Ok(directory.to_path_buf()),
+        Ok(StoredWorktreeLaunch::Unrecognized) => Err(WORKTREE_LAUNCH_FORMAT.into()),
+        Ok(StoredWorktreeLaunch::Worktree) => match crate::git_worktree::prepare_worktree(db, directory, task_text)? {
+            Some(created) => Ok(created.directory),
+            None => Ok(directory.to_path_buf()),
+        },
+    }
 }
 
 pub fn set_default_mode(db: &Database, target: &str, mode: LaunchMode) -> Result<LaunchSettings, String> {
@@ -1032,6 +1144,26 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    plan_with_stage_for(db, registry, home, request, WorktreeLaunch::given())
+}
+
+pub fn plan_envelope(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    envelope: LaunchEnvelope,
+) -> Result<LaunchPlan, LaunchPlanError> {
+    let worktree = WorktreeLaunch { intent: envelope.worktree_intent, task_text: envelope.task_text };
+    plan_with_stage_for(db, registry, home, envelope.request, worktree)
+}
+
+fn plan_with_stage_for(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    request: LaunchRequest,
+    worktree: WorktreeLaunch,
+) -> Result<LaunchPlan, LaunchPlanError> {
     if request.resume_latest && request.session_id.is_some() {
         return Err(LaunchPlanError::new(
             LaunchStage::Tool,
@@ -1063,7 +1195,7 @@ pub fn plan_with_stage(
         ));
     }
     let directory = original.or_else(|| request.directory.as_ref().map(PathBuf::from));
-    plan_with_stage_at(db, registry, home, request, directory.as_deref(), None)
+    plan_with_stage_at(db, registry, home, request, directory.as_deref(), None, worktree)
 }
 
 pub fn plan_history(
@@ -1073,11 +1205,11 @@ pub fn plan_history(
     request: LaunchRequest,
     cwd: &Path,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, Some(cwd), None)
+    plan_with_stage_at(db, registry, home, request, Some(cwd), None, WorktreeLaunch::given())
 }
 
 pub fn plan_history_context(db: &Database, registry: &Registry, home: &Path, request: LaunchRequest, cwd: &Path, context: Option<(String, crate::accounts::NativeContext)>) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, Some(cwd), Some(context))
+    plan_with_stage_at(db, registry, home, request, Some(cwd), Some(context), WorktreeLaunch::given())
 }
 
 /// Directory of the desktop executable. A direct launch, or a selected
@@ -1098,6 +1230,7 @@ fn plan_with_stage_at(
     request: LaunchRequest,
     directory_override: Option<&Path>,
     resume_context: Option<Option<(String, crate::accounts::NativeContext)>>,
+    worktree: WorktreeLaunch,
 ) -> Result<LaunchPlan, LaunchPlanError> {
     if let Some(plan) = remote_launch_plan(db, registry, &request)? {
         return Ok(plan);
@@ -1237,10 +1370,33 @@ fn plan_with_stage_at(
             "此 CLI 版本的精确会话恢复命令尚未验证".into(),
         ));
     }
+    // Reject a prompt the launch cannot carry before creating a worktree, so a
+    // known failure does not leave a directory behind.
+    if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        if launch_form == LaunchForm::Desktop {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "桌面应用启动尚无已验证的初始提示词契约".into(),
+            ));
+        }
+        if prompt.chars().count() > 20_000 {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
+        }
+    }
     // A desktop direct launch has neither a request/session directory nor a
     // project. Home stays the global scope root and is not a launch argument.
     // launch_args stays session-less; only a non-empty desktop_launch_args
     // attaches the selected directory.
+    // Account and skill checks stay on the selected checkout. Only the process
+    // directory moves when this launch asked to isolate by preference.
+    let task_text = worktree.task_text.as_deref().filter(|text| !text.trim().is_empty()).or(request.initial_prompt.as_deref());
+    let launch_directory = session_directory_for_launch(
+        db,
+        &directory,
+        if request.resume_latest { WorktreeIntent::Given } else { worktree.intent },
+        task_text,
+    )
+    .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?;
     let selected_directory = directory_override.is_some() || project.is_some();
     let mut attached_desktop_directory = false;
     let mut cli_args = match launch_form {
@@ -1259,7 +1415,7 @@ fn plan_with_stage_at(
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
             if selected_directory {
                 let desktop_args = adapter
-                    .desktop_launch_args(&directory)
+                    .desktop_launch_args(&launch_directory)
                     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
                 attached_desktop_directory = !desktop_args.is_empty();
                 args.extend(desktop_args);
@@ -1310,7 +1466,7 @@ fn plan_with_stage_at(
     let process_directory = if launch_form == LaunchForm::Desktop && !attached_desktop_directory {
         executable_directory(Path::new(selected_path))
     } else {
-        directory
+        launch_directory
     };
     Ok(LaunchPlan {
         resume_native_id: native_id,
@@ -2498,6 +2654,160 @@ mod installed_desktop_launch {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn worktree_preference_intent_moves_only_a_git_plan_and_resume_keeps_the_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        set_worktree_launch(&db, "worktree").unwrap();
+        let registry = Registry::builtins().with_fixture_installation("codex", "0.165.0");
+        let main = temp.path().join("shop");
+        std::fs::create_dir_all(&main).unwrap();
+        let git_bin = crate::process_environment::directories().into_iter().find_map(|directory| {
+            let path = directory.join(if cfg!(windows) { "git.exe" } else { "git" });
+            path.is_file().then_some(path)
+        });
+        let Some(git_bin) = git_bin else {
+            eprintln!("git unavailable; skipping plan worktree test");
+            return;
+        };
+        let git = |args: &[&str]| {
+            std::process::Command::new(&git_bin).args(args).current_dir(&main)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .status().ok().filter(|status| status.success()).is_some()
+        };
+        if !git(&["init", "-q", "-b", "main"]) {
+            eprintln!("git unavailable; skipping plan worktree test");
+            return;
+        }
+        assert!(git(&["config", "user.email", "t@example.com"]));
+        assert!(git(&["config", "user.name", "Test"]));
+        assert!(git(&["commit", "-q", "--allow-empty", "-m", "root"]));
+        std::fs::write(main.join("dirty.txt"), "keep").unwrap();
+        let canonical = main.canonicalize().unwrap();
+        let base = |resume_latest: bool| LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "codex".into(),
+                project_id: None,
+                session_id: None,
+                directory: Some(canonical.display().to_string()),
+                initial_prompt: Some("feat: hello?\nmore".into()),
+                mode: LaunchMode::Normal,
+                resume_latest,
+                remote_intent: None,
+            },
+            worktree_intent: WorktreeIntent::Preference,
+            task_text: None,
+        };
+        let isolated = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
+        assert_ne!(isolated.directory, canonical);
+        assert!(isolated.directory.starts_with(canonical.parent().unwrap()));
+        assert!(isolated.directory.file_name().unwrap().to_string_lossy().contains("feat-hello"));
+        assert_eq!(std::fs::read(main.join("dirty.txt")).unwrap(), b"keep");
+        let kept = plan_envelope(&db, &registry, temp.path(), LaunchEnvelope {
+            worktree_intent: WorktreeIntent::Given,
+            ..base(false)
+        }).unwrap();
+        assert_eq!(kept.directory, canonical);
+        let resume_registry = Registry::builtins().with_fixture_installation("minimax_code", "0.6.8");
+        let resumed = plan_envelope(&db, &resume_registry, temp.path(), LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "minimax_code".into(),
+                resume_latest: true,
+                initial_prompt: None,
+                ..base(false).request
+            },
+            worktree_intent: WorktreeIntent::Preference,
+            task_text: Some("feat: hello?".into()),
+        }).unwrap();
+        assert_eq!(resumed.directory, canonical);
+        assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
+        set_worktree_launch(&db, "direct").unwrap();
+        let direct = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
+        assert_eq!(direct.directory, canonical);
+        assert!(isolated.directory.is_dir());
+    }
+
+    #[test]
+    fn worktree_preference_stays_out_of_preferences_and_a_bad_value_is_kept() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = Registry::builtins().with_fixture_installation("codex", "0.165.0");
+        let plain = temp.path().join("notes");
+        std::fs::create_dir(&plain).unwrap();
+        let canonical = plain.canonicalize().unwrap();
+        let read_key = |key: &str| -> Option<String> {
+            db.with_connection(|conn| {
+                conn.query_row("SELECT value FROM app_settings WHERE key = ?1", [key], |row| row.get(0))
+                    .optional()
+                    .map_err(|error| error.to_string())
+            })
+            .unwrap()
+        };
+        let missing = settings(&db).unwrap();
+        assert_eq!(missing.worktree_launch, Some(WorktreeLaunchMode::Direct));
+        assert!(missing.worktree_launch_error.is_none());
+        assert!(read_key("preferences").is_none());
+        assert!(read_key("worktree_launch").is_none());
+        set_worktree_launch(&db, "worktree").unwrap();
+        assert!(read_key("preferences").is_none());
+        assert_eq!(read_key("worktree_launch").as_deref(), Some("\"worktree\""));
+        let envelope = LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "codex".into(),
+                project_id: None,
+                session_id: None,
+                directory: Some(canonical.display().to_string()),
+                initial_prompt: Some("feat: hello?".into()),
+                mode: LaunchMode::Normal,
+                resume_latest: false,
+                remote_intent: None,
+            },
+            worktree_intent: WorktreeIntent::Preference,
+            task_text: None,
+        };
+        let stayed = plan_envelope(&db, &registry, temp.path(), envelope.clone()).unwrap();
+        assert_eq!(stayed.directory, canonical);
+        assert!(!temp.path().join("notes-feat-hello").exists());
+        let tables: i64 = db.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worktree_ledger'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        }).unwrap();
+        assert_eq!(tables, 0);
+        let invalid = set_worktree_launch(&db, "nope").unwrap_err();
+        assert!(invalid.contains("启动偏好无效"), "{invalid}");
+        assert_eq!(read_key("worktree_launch").as_deref(), Some("\"worktree\""));
+        db.with_connection(|conn| {
+            conn.execute("UPDATE app_settings SET value = '\"sideways\"' WHERE key = 'worktree_launch'", [])
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }).unwrap();
+        let broken = settings(&db).unwrap();
+        assert!(broken.worktree_launch.is_none());
+        assert_eq!(broken.worktree_launch_error.as_deref(), Some("启动偏好格式无法识别"));
+        let refused = plan_envelope(&db, &registry, temp.path(), envelope).unwrap_err();
+        assert!(refused.message.contains("启动偏好格式无法识别"), "{}", refused.message);
+        assert_eq!(read_key("worktree_launch").as_deref(), Some("\"sideways\""));
+        assert!(!plain.join("notes-feat-hello").exists());
+        db.with_connection(|conn| {
+            conn.execute("UPDATE app_settings SET value = '\"worktree\"' WHERE key = 'worktree_launch'", [])
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }).unwrap();
+        let saved = db.update_preferences(|prefs| prefs.theme = crate::domain::Theme::Dark).unwrap();
+        assert_eq!(saved.theme, crate::domain::Theme::Dark);
+        assert_eq!(read_key("worktree_launch").as_deref(), Some("\"worktree\""));
+        assert!(read_key("preferences").unwrap().contains("dark"));
+        set_worktree_launch(&db, "direct").unwrap();
+        assert_eq!(read_key("worktree_launch").as_deref(), Some("\"direct\""));
+        assert!(read_key("preferences").unwrap().contains("dark"));
     }
 }
 

@@ -4,7 +4,8 @@ export type TerminalId = 'auto' | 'workbench' | 'windows_terminal' | 'pwsh' | 'p
 export type TerminalOption = { id: TerminalId; label: string; available: boolean };
 export type CustomTerminal = { program: string; args: string[] };
 export type TerminalPreset = { id: string; label: string; program: string; args: string[] };
-export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode };
+export type WorktreeLaunchMode = 'direct' | 'worktree';
+export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; worktreeLaunch?: WorktreeLaunchMode | null; worktreeLaunchError?: string | null };
 
 export function preferredLaunchMode(settings: LaunchSettings | null, target: 'cli' | 'project', yoloAvailable: boolean): LaunchMode {
   const preferred = target === 'cli' ? settings?.cliMode : settings?.projectMode;
@@ -25,7 +26,7 @@ export type Project = {
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };
-export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent };
+export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: 'given' | 'preference'; taskText?: string | null };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
 /** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
 export type WorkbenchReplay = { dataBase64: string; endOffset: number; cols: number; rows: number };

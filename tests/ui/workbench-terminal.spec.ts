@@ -129,7 +129,28 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           if (command === 'set_language') { language = args.language; return bootstrap(); }
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: args.theme }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
-          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_launch_settings') {
+            const harness = window as unknown as { __worktreeLaunch?: string; __worktreeLaunchError?: string | null };
+            const error = harness.__worktreeLaunchError ?? null;
+            return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal', worktreeLaunch: error ? null : (harness.__worktreeLaunch ?? 'direct'), worktreeLaunchError: error };
+          }
+          if (command === 'set_worktree_launch') {
+            const harness = window as unknown as { __worktreeLaunch?: string; __worktreeLaunchError?: string | null; __worktreeSaves?: string[]; __worktreeSaveFails?: boolean };
+            harness.__worktreeSaves = [...(harness.__worktreeSaves ?? []), args.mode];
+            if (harness.__worktreeSaveFails) throw new Error('保存失败');
+            harness.__worktreeLaunch = args.mode;
+            harness.__worktreeLaunchError = null;
+            return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal', worktreeLaunch: args.mode, worktreeLaunchError: null };
+          }
+          if (command === 'launch_cli') {
+            const harness = window as unknown as { __launches?: unknown[] };
+            harness.__launches = [...(harness.__launches ?? []), args.request];
+            const id = `launched-${harness.__launches.length}`;
+            sessions.unshift({ id, toolId: args.request.toolId, projectId: args.request.projectId, directory: args.request.directory || 'C:/work', mode: args.request.mode || 'normal', running: true, exitCode: null, startedAt: Date.now() });
+            return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode || 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
+          if (command === 'git_worktrees') return (window as unknown as { __worktrees?: unknown[] }).__worktrees ?? [];
+          if (command === 'workbench_git_context') return (window as unknown as { __gitContext?: unknown }).__gitContext ?? null;
           if (command === 'set_workbench_directory') {
             const session = sessions.find(item => item.id === args.sessionId);
             if (session) session.directory = args.directory;
@@ -1743,4 +1764,104 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   await expect(page.locator('[data-term-theme]').getByRole('tablist', { name: '会话列表' })).toBeVisible();
   await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('the new-session dialog can change the launch preference before the first start', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog.getByRole('heading', { name: '新建工作台会话' })).toHaveCount(1);
+  await expect(dialog.locator('[data-variant="primary"]')).toHaveCount(1);
+  await expect(dialog.getByRole('button', { name: '启动会话' })).toHaveAttribute('data-variant', 'primary');
+  await dialog.getByRole('button', { name: '更多', exact: true }).click();
+  const pref = dialog.getByRole('menu', { name: '启动偏好' });
+  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
+  await expect(pref.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'false');
+  await page.evaluate(() => { (window as unknown as { __worktreeSaveFails?: boolean }).__worktreeSaveFails = true; });
+  await pref.getByRole('menuitemradio', { name: '新建工作树' }).click();
+  await expect(pref.getByRole('alert')).toContainText('保存失败');
+  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => (window as unknown as { __worktreeLaunch?: string }).__worktreeLaunch ?? 'direct')).toBe('direct');
+  await page.evaluate(() => { (window as unknown as { __worktreeSaveFails?: boolean }).__worktreeSaveFails = false; });
+  await pref.getByRole('menuitemradio', { name: '新建工作树' }).click();
+  await expect(pref).toBeHidden();
+  await dialog.getByRole('button', { name: '更多', exact: true }).click();
+  await expect(dialog.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByLabel('初始提示词（可选）').fill('feat: hello?\nmore');
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches)).toEqual([
+    expect.objectContaining({ worktreeIntent: 'preference', taskText: 'feat: hello?', initialPrompt: 'feat: hello?\nmore' }),
+  ]);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const setting = page.getByRole('combobox', { name: '启动偏好' });
+  await expect(setting).toHaveValue('worktree');
+  await setting.selectOption('direct');
+  await expect(setting).toHaveValue('direct');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __worktreeSaves: string[] }).__worktreeSaves)).toEqual(['worktree', 'worktree', 'direct']);
+});
+
+test('running duplicate follows the preference, while restart and an existing checkout keep the given directory', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __worktrees: [
+        { name: 'shop', branch: 'main', path: 'C:/work', current: true },
+        { name: 'shop-task', branch: 'task', path: 'C:/work-task', current: false },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b]0;feat: hello?\x07'));
+  await expect(page.getByRole('region', { name: '当前会话' }).locator('h2')).toContainText('feat: hello?');
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  const terminal = page.getByRole('menu', { name: '终端操作' });
+  await expect(terminal.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
+  await expect(terminal.getByRole('menuitemradio', { name: '新建工作树' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Codex 会话操作' }).click();
+  const sessionMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
+  await expect(sessionMenu.getByRole('menuitemradio', { name: '新建工作树' })).toBeVisible();
+  await sessionMenu.getByRole('menuitem', { name: '同目录新开' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
+    worktreeIntent: 'preference', directory: 'C:/work', taskText: 'feat: hello?',
+  });
+  await page.getByRole('button', { name: /在工作树中新开会话/ }).click();
+  await page.getByRole('menu', { name: '在工作树中新开会话' }).getByRole('menuitemradio', { name: /shop-task/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
+    worktreeIntent: 'given', directory: 'C:/work-task',
+  });
+});
+
+test('an ended session restarts in the directory it already had', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.evaluate(() => (window as unknown as { __exit: (code: number) => void }).__exit(0));
+  await page.getByRole('button', { name: '重新启动' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
+    worktreeIntent: 'given', directory: 'C:/work',
+  });
+});
+
+test('an unrecognized worktree preference is shown and is not rewritten', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __worktreeLaunchError: '启动偏好格式无法识别' }); });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const setting = page.getByRole('combobox', { name: '启动偏好' });
+  await expect(setting).toHaveValue('');
+  await expect(page.locator('.setting-row').filter({ hasText: '启动偏好' }).getByRole('alert')).toContainText('格式无法识别');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '更多', exact: true }).click();
+  const pref = page.getByRole('menu', { name: '启动偏好' });
+  await expect(pref.getByRole('alert')).toContainText('格式无法识别');
+  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'false');
+  await expect(pref.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'false');
+  expect(await page.evaluate(() => (window as unknown as { __worktreeSaves?: string[] }).__worktreeSaves ?? [])).toEqual([]);
 });

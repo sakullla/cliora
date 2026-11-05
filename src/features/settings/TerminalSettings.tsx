@@ -6,7 +6,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { Icon } from '../../components/Icon';
 import { Button } from '../../components/ui';
-import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
+import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus, WorktreeLaunchMode } from '../../types/launch';
 import i18n from '../../i18n';
 
 function matchedPreset(current: LaunchSettings | null) {
@@ -57,6 +57,7 @@ export function TerminalSettings() {
   const [argsText, setArgsText] = useState('{script}');
   const [showCustom, setShowCustom] = useState(false);
   const [saved, setSaved] = useState('');
+  const [worktreeError, setWorktreeError] = useState('');
 
   // A write is only announced after the backend returned the stored settings.
   useEffect(() => {
@@ -144,6 +145,19 @@ export function TerminalSettings() {
     finally { setBusy(false); }
   }
 
+  async function chooseWorktree(mode: WorktreeLaunchMode) {
+    setBusy(true);
+    setWorktreeError('');
+    try {
+      setSettings(await native.setWorktreeLaunch(mode));
+      setSaved(t('settings.terminal.saved'));
+    } catch (value) {
+      setSaved('');
+      const raw = value && typeof value === 'object' && 'message' in value ? String((value as { message?: unknown }).message ?? '').trim() : '';
+      setWorktreeError(raw || t('settings.terminal.worktreeSaveFailed'));
+    } finally { setBusy(false); }
+  }
+
   async function chooseMode(target: 'cli' | 'project', mode: LaunchMode) {
     setBusy(true); setError('');
     try {
@@ -168,6 +182,7 @@ export function TerminalSettings() {
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</Button><Button disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</Button></span></span></div>}
     <label className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><select aria-label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('cli', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
     <label className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><select aria-label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('project', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
+    <label className="setting-row"><span><strong>{t('settings.terminal.worktreeLaunch')}</strong><small>{worktreeError || settings?.worktreeLaunchError ? <span role="alert">{worktreeError || t('settings.terminal.worktreeUnrecognized')}</span> : t('settings.terminal.worktreeLaunchHint')}</small></span><select aria-label={t('settings.terminal.worktreeLaunch')} value={settings?.worktreeLaunchError ? '' : (settings?.worktreeLaunch ?? 'direct')} disabled={!nativeAvailable || busy || !settings} onChange={(event) => { const mode = event.target.value; if (mode === 'direct' || mode === 'worktree') void chooseWorktree(mode); }}>{settings?.worktreeLaunchError && <option value="" disabled>{t('settings.terminal.worktreeUnrecognized')}</option>}<option value="direct">{t('settings.terminal.worktreeDirect')}</option><option value="worktree">{t('settings.terminal.worktreeNew')}</option></select></label>
     {error && <p role="alert" className="setting-error">{error}</p>}
     <div className="setting-row"><span><strong>{t('settings.terminal.tray')}</strong><small>{tray?.error ?? (tray?.available ? t('settings.terminal.trayAvailable') : t('settings.terminal.trayChecking'))}</small></span><Button disabled={!nativeAvailable} onClick={() => void quitApp()}>{t('settings.terminal.quit')}</Button></div>
   </section>;

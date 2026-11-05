@@ -194,6 +194,13 @@ type MenuState =
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
+const MENU_ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
+
+function firstTaskLine(text: string | null | undefined): string | null {
+  const line = text?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
+  return line || null;
+}
+
 /** What the shell needs to know about the session list it hosts in the app sidebar. */
 export type WorkbenchRailLayout = { docked: boolean; focus: boolean };
 
@@ -312,6 +319,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const launchMenuRef = useRef<HTMLDivElement>(null);
+  const [launchMenuOpen, setLaunchMenuOpen] = useState(false);
+  const [worktreeSaveError, setWorktreeSaveError] = useState('');
+  const [worktreeSaving, setWorktreeSaving] = useState(false);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -923,6 +934,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           directory: item.directory ?? null,
           initialPrompt: null,
           resumeLatest: false,
+          worktreeIntent: 'given',
         }));
         if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) applyListedSessions(sessions); }).catch(() => {});
       }
@@ -1222,6 +1234,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         directory: null,
         initialPrompt: null,
         resumeLatest: false,
+        worktreeIntent: 'given',
       });
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
@@ -1306,15 +1319,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       }
       const directory = !activeRemoteTarget && workspaceValue.startsWith('custom:') ? workspaceValue.slice('custom:'.length) : null;
       const promptText = initialPrompt.trim() || null;
+      const remoteLaunch = !!projectId?.startsWith('remote:');
+      const resume = !remoteLaunch && resumeLatest && !!selectedLaunchTool?.resumeLatestAvailable;
+      const taskLine = firstTaskLine(promptText);
+      setLaunchMenuOpen(false);
       const request: LaunchRequest = {
         toolId: effectiveLaunchToolId,
         projectId,
         sessionId: null,
-        ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}),
+        ...(remoteLaunch ? { remoteIntent: { kind: 'new' as const } } : {}),
         mode: selectedLaunchTool?.yoloAvailable ? launchMode : 'normal',
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
-        ...(resumeLatest && selectedLaunchTool?.resumeLatestAvailable && !projectId?.startsWith('remote:') ? { resumeLatest: true } : {}),
+        ...(resume ? { resumeLatest: true } : {}),
+        worktreeIntent: remoteLaunch || resume ? 'given' : 'preference',
+        ...(!remoteLaunch && !resume && taskLine ? { taskText: taskLine } : {}),
       };
       const result = await native.launchCli(request);
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
@@ -1335,8 +1354,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     } finally { newLaunchPending.current = false; setLaunchingNew(false); }
   }
 
-  async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean) {
+  async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean, directoryIntent?: 'given' | 'preference') {
     if (busy) return;
+    const remote = !!session.projectId?.startsWith('remote:');
+    const intent = directoryIntent ?? (!replaceEnded && !remote ? 'preference' : 'given');
+    const taskLine = intent === 'preference' ? firstTaskLine(taskTitle(session)) : null;
     setBusy(replaceEnded ? `restart:${session.id}` : `clone:${session.id}`);
     setActionError('');
     setNotice('');
@@ -1351,6 +1373,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         sessionId: null,
         mode: session.mode,
         directory: session.directory || null,
+        worktreeIntent: intent,
+        ...(taskLine ? { taskText: taskLine } : {}),
       });
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
@@ -1392,7 +1416,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   async function openInWorktree(session: WorkbenchSession, worktree: WorkbenchWorktree) {
     setWorktreeMenuOpen(false);
     if (worktree.current || !worktree.path) return;
-    await restartOrCloneSession({ ...session, directory: worktree.path }, false);
+    await restartOrCloneSession({ ...session, directory: worktree.path }, false, 'given');
   }
 
   async function submitComposer() {
@@ -1547,8 +1571,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const left = Math.max(8, Math.min(menu.x, window.innerWidth - node.offsetWidth - 8));
     const top = Math.max(8, Math.min(menu.y, window.innerHeight - node.offsetHeight - 8));
     setMenuBox({ top, left });
-    node.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    node.querySelector<HTMLButtonElement>(MENU_ITEM)?.focus({ preventScroll: true });
   }, [menu]);
+
+  useLayoutEffect(() => {
+    if (!launchMenuOpen) return;
+    launchMenuRef.current?.querySelector<HTMLButtonElement>(MENU_ITEM)?.focus({ preventScroll: true });
+  }, [launchMenuOpen]);
 
   useEffect(() => {
     if (!menu) return;
@@ -1593,7 +1622,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function menuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const items = [...menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
+    const items = [...menuRef.current?.querySelectorAll<HTMLButtonElement>(MENU_ITEM) ?? []];
     if (!items.length) return;
     if (event.key === 'Tab') { event.preventDefault(); setMenu(null); return; }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
@@ -1601,6 +1630,51 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const index = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
     items[next].focus();
+  }
+
+  function launchMenuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setLaunchMenuOpen(false);
+      return;
+    }
+    const items = [...launchMenuRef.current?.querySelectorAll<HTMLButtonElement>(MENU_ITEM) ?? []];
+    if (!items.length || event.key === 'Tab') {
+      if (event.key === 'Tab') { event.preventDefault(); setLaunchMenuOpen(false); }
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next].focus();
+  }
+
+  async function chooseWorktreeLaunch(mode: 'direct' | 'worktree') {
+    if (worktreeSaving) return;
+    setWorktreeSaving(true);
+    setWorktreeSaveError('');
+    try {
+      const next = await native.setWorktreeLaunch(mode);
+      setLaunchSettings(next);
+      setLaunchMenuOpen(false);
+      setMenu(null);
+    } catch (value) {
+      setWorktreeSaveError(formatFailure(value, t('sessions.worktreeLaunchSaveFailed'), t('sessions.failureHint')));
+    } finally { setWorktreeSaving(false); }
+  }
+
+  function worktreePreferenceItems() {
+    const unrecognized = !!launchSettings?.worktreeLaunchError;
+    const mode = unrecognized ? null : (launchSettings?.worktreeLaunch ?? 'direct');
+    const alert = worktreeSaveError || (unrecognized ? launchSettings?.worktreeLaunchError || t('settings.terminal.worktreeUnrecognized') : '');
+    return <>
+      <span className={styles.menuLabel} role="presentation">{t('sessions.worktreeLaunch')}</span>
+      {alert && <p className={styles.menuError} role="alert">{alert}</p>}
+      <button type="button" role="menuitemradio" aria-checked={mode === 'direct'} disabled={worktreeSaving} onClick={(event) => { event.stopPropagation(); void chooseWorktreeLaunch('direct'); }}><span>{t('sessions.worktreeDirect')}</span>{mode === 'direct' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
+      <button type="button" role="menuitemradio" aria-checked={mode === 'worktree'} disabled={worktreeSaving} onClick={(event) => { event.stopPropagation(); void chooseWorktreeLaunch('worktree'); }}><span>{t('sessions.worktreeNew')}</span>{mode === 'worktree' && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
+    </>;
   }
 
   const availableProjects = useMemo(() => projects.filter((item) => item.available && item.path), [projects]);
@@ -2000,6 +2074,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
           <button role="menuitem" onClick={() => setAppearanceOpen(true)}><Icon name="sliders" size={14} /><span>{t('sessions.displaySettings')}</span></button>
           <span className={styles.menuDivider} role="separator" />
+          <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
+          <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
           <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}><Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>{pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
@@ -2010,6 +2086,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>{t('sessions.copyOutput')}</button>
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>{t('sessions.copyPath')}</button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>{t('sessions.openFolder')}</button>}
+          <span className={styles.menuDivider} role="separator" />
+          <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>{session.running ? t('sessions.end') : t('sessions.removeSession')}</button>
         </>}
       </div>, document.body);
@@ -2040,7 +2118,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{t('sessions.launchSummary', { tool: selectedLaunchTool?.name ?? '', place: workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome'), mode: modeLabel(launchMode) })}</span><Icon name="terminal" size={16} /></div>
-        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
+        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><div className={styles.dialogMore}><Button aria-haspopup="menu" aria-expanded={launchMenuOpen} onClick={() => { setWorktreeSaveError(''); setLaunchMenuOpen((open) => !open); }}>{t('sessions.launchMore')}</Button>{launchMenuOpen && <div ref={launchMenuRef} className={styles.dialogLaunchMenu} role="menu" aria-label={t('sessions.worktreeLaunch')} onKeyDown={launchMenuNavigate}>{worktreePreferenceItems()}</div>}</div><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>
     </GuideDialog>
     {remotePicker.element}

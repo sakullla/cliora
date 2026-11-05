@@ -358,6 +358,7 @@ export const native = {
   setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
   setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }),
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
+  setWorktreeLaunch: (mode: 'direct' | 'worktree') => command<LaunchSettings>('set_worktree_launch', { mode }),
   launchCli: async (request: LaunchRequest, options?: RemoteOperationOptions) => {
     let result: LaunchResult;
     if (request.projectId?.startsWith('remote:')) {

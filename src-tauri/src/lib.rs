@@ -85,6 +85,7 @@ pub mod history;
 pub mod launch;
 pub mod library;
 pub mod git_context;
+pub mod git_worktree;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../../tests/platform/macos.rs"]
 mod macos_tests;
@@ -319,6 +320,7 @@ pub fn run() {
             commands::set_preferred_terminal,
             commands::set_custom_terminal,
             commands::set_default_launch_mode,
+            commands::set_worktree_launch,
             commands::launch_cli,
             commands::list_workbench_sessions,
             commands::restore_workbench_sessions,

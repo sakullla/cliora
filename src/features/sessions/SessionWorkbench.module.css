@@ -1455,6 +1455,38 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .contextMenu { min-width: 236px; }
 .menuCheck { display: inline-flex; flex: none; margin-left: auto; color: var(--accent); }
 .menuDivider { display: block; height: 1px; margin: var(--space-1) var(--space-1_5); background: var(--line); }
+.menuGroup { display: grid; }
+.menuLabel { display: block; padding: 4px var(--space-2_5) 2px; color: var(--text-3); font-size: 11px; }
+.menuError { margin: 0; padding: 2px var(--space-2_5) 4px; color: var(--danger); font-size: 12px; }
+.dialogMore { position: relative; }
+.dialogLaunchMenu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  display: grid;
+  min-width: 180px;
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.dialogLaunchMenu button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-2_5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-control);
+  text-align: left;
+}
+.dialogLaunchMenu button:hover:not(:disabled) { background: var(--surface-2); }
 .dialogForm { display: grid; gap: var(--space-4); min-width: min(620px, 78vw); }
 .dialogPrimaryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .dialogField { display: grid; align-content: start; gap: var(--space-1_5); min-width: 0; }

@@ -3623,9 +3623,19 @@ pub async fn launch_cli(
     window: tauri::WebviewWindow,
     operation: Option<crate::remote::operations::Request>,
     app: AppHandle,
-    request: launch::LaunchRequest,
+    request: launch::LaunchEnvelope,
 ) -> Result<launch::LaunchResult, ApiError> {
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || launch_now(&app, request)).await
+}
+
+#[tauri::command]
+pub async fn set_worktree_launch(app: AppHandle, mode: String) -> Result<launch::LaunchSettings, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::set_worktree_launch(db, &mode).map_err(native_error)
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -4282,17 +4292,21 @@ impl LaunchFailure {
 
 pub(crate) fn launch_now(
     app: &AppHandle,
-    request: launch::LaunchRequest,
+    request: impl Into<launch::LaunchEnvelope>,
 ) -> Result<launch::LaunchResult, ApiError> {
     launch_now_with_stage(app, request).map_err(|failure| failure.error)
 }
 
 pub(crate) fn launch_now_with_stage(
     app: &AppHandle,
-    request: launch::LaunchRequest,
+    envelope: impl Into<launch::LaunchEnvelope>,
 ) -> Result<launch::LaunchResult, Box<LaunchFailure>> {
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
+    let envelope = envelope.into();
+    let request = envelope.request;
+    let worktree_intent = envelope.worktree_intent;
+    let task_text = envelope.task_text;
     let project_id = request.project_id.clone();
     let launch_tool_id = request.tool_id.clone();
     let launch_mode = request.mode;
@@ -4340,11 +4354,15 @@ pub(crate) fn launch_now_with_stage(
     let plan = app
         .state::<AppState>()
         .with_database(app, |db| {
-            Ok(launch::plan_with_stage(
+            Ok(launch::plan_envelope(
                 db,
                 &adapters::Registry::builtins(),
                 &home,
-                request,
+                launch::LaunchEnvelope {
+                    request,
+                    worktree_intent,
+                    task_text,
+                },
             ))
         })
         .map_err(|error| LaunchFailure::new(LaunchStage::Tool, error))?
