@@ -614,7 +614,8 @@ async function installPaletteData(page: Page) {
         if (command === 'list_history_sessions') return sessions;
         if (command === 'list_library_items') return args.kind === 'rule' ? rules : prompts;
         if (command === 'resume_history_session') { resumes.push(args); return { mode: args.mode, status: 'terminal_requested' }; }
-        if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_native_mcp' || command === 'list_history_prices' || command === 'list_portable_items') return [];
+        if (command === 'refresh_history') return [];
+        if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_native_mcp' || command === 'list_history_prices' || command === 'list_history_scans' || command === 'list_portable_items') return [];
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
@@ -703,6 +704,8 @@ test('command palette hides the session and library groups when data is empty', 
 });
 
 test('command palette library entry jumps to the library page and opens the item', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
   await installPaletteData(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
@@ -725,6 +728,7 @@ test('command palette library entry jumps to the library page and opens the item
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel('标题')).toHaveValue('面板规则2');
   await expect(editor.getByRole('button', { name: '复制全文' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
 
 test('command palette preserves local navigation when async sources fail and can retry', async ({ page }) => {

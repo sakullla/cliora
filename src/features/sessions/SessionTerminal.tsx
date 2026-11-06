@@ -427,7 +427,7 @@ export function createImeAnchor(term: Terminal, available: () => boolean): ImeAn
   };
 
   const schedule = () => {
-    if (disposed || frame) return;
+    if (disposed || frame || !available()) return;
     frame = requestAnimationFrame(() => { frame = 0; apply(true); });
   };
 
@@ -671,14 +671,13 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     linksRef.current = links;
     void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
 
-    // Batch output bursts into one write per frame; hidden sessions continue on a microtask.
+    // xterm schedules its own render frame. Batch parsing on a timer so each
+    // incoming TUI update does not create an additional animation sequence.
     const frameChunks: Uint8Array[] = [];
     let flushScheduled = false;
-    let flushFrame = 0;
     let flushTimer = 0;
     const flushWrites = () => {
       flushScheduled = false;
-      cancelAnimationFrame(flushFrame);
       window.clearTimeout(flushTimer);
       if (disposed || !frameChunks.length) return;
       const merged = frameChunks.length === 1 ? frameChunks[0] : concatBytes(frameChunks);
@@ -691,14 +690,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       frameChunks.push(bytes);
       if (flushScheduled) return;
       flushScheduled = true;
-      if (document.visibilityState === 'visible' && activeRef.current) {
-        flushFrame = requestAnimationFrame(flushWrites);
-        flushTimer = window.setTimeout(flushWrites, 50);
-      } else {
-        // A hidden session still has to parse output, but a burst can share one
-        // write instead of a microtask per chunk.
-        flushTimer = window.setTimeout(flushWrites, 16);
-      }
+      // Parsing must continue while hidden, including terminal protocol replies.
+      flushTimer = window.setTimeout(flushWrites, 16);
     };
     const markLiveOutput = () => {
       if (disposed || !runningRef.current) return;
@@ -891,13 +884,21 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       event.preventDefault();
       return false;
     });
+    let scrollSnapshot = '';
     const reportScroll = () => {
       if (disposed) return;
       ime.schedule();
-      if (!scrollUiFrame && activeRef.current) {
+      const buffer = term.buffer.active;
+      const snapshot = `${buffer.type}:${buffer.baseY}:${buffer.viewportY}:${term.rows}:${viewportRef.current?.clientHeight ?? 0}`;
+      // A spinner redraw usually leaves the scroll geometry unchanged. Avoid
+      // scheduling a React commit for every parsed output chunk in that case.
+      if (activeRef.current && snapshot !== scrollSnapshot && !scrollUiFrame) {
         scrollUiFrame = requestAnimationFrame(() => {
           scrollUiFrame = 0;
-          if (!disposed) setScrollVersion((version) => version + 1);
+          if (!disposed) {
+            scrollSnapshot = snapshot;
+            setScrollVersion((version) => version + 1);
+          }
         });
       }
       // The public buffer reports the virtual viewport's authoritative position.
@@ -933,7 +934,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     };
     const scrollSub = term.onScroll(reportScroll);
     const parsedSub = term.onWriteParsed(() => {
-      if (activeRef.current && !awayFromBottom) scrollToLatest();
+      // Do not start a second animation frame when xterm already follows the
+      // last row. Keep the deferred correction for a genuinely moved viewport.
+      if (activeRef.current && !awayFromBottom && term.buffer.active.viewportY < term.buffer.active.baseY) scrollToLatest();
       reportScroll();
       bridge.current.outputWritten(sessionId);
     });

@@ -443,7 +443,7 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('animated output\r\n'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
-  await expect(statusIcon.locator('svg')).not.toHaveCSS('animation-name', 'none');
+  await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
@@ -1544,6 +1544,46 @@ test('switching back to a session does not resend its unchanged grid', async ({ 
 });
 
 test.describe('session switching with the production renderer', () => {
+  test('synchronized TUI redraws keep status decorations still and avoid redundant frame scheduling', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      const request = window.requestAnimationFrame.bind(window);
+      (window as any).__requestedFrames = 0;
+      window.requestAnimationFrame = callback => {
+        (window as any).__requestedFrames++;
+        return request(callback);
+      };
+    });
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toBeVisible();
+    await resetWrites(page);
+    const frames = await page.evaluate(async () => {
+      const w = window as any;
+      w.__requestedFrames = 0;
+      for (let index = 0; index < 90; index++) {
+        // CodeBuddy 2.181 uses this DEC synchronized-update envelope and a
+        // 30 FPS render limit. The fixture contains no user's terminal content.
+        w.__output(`\x1b[?2026h\x1b[?25l\r\x1b[2Ktask ${index}\r\n\x1b[2Kstatus\x1b[1A\r\x1b[?25h\x1b[?2026l`);
+        await new Promise(resolve => setTimeout(resolve, 33));
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+      return w.__requestedFrames as number;
+    });
+    expect(frames).toBeLessThan(90 * 4);
+    for (const icon of await page.locator('[data-activity-icon="live"] svg').all()) {
+      await expect(icon).toHaveCSS('animation-name', 'none');
+    }
+    expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.effect?.getTiming().iterations === Infinity).length)).toBe(0);
+    await page.evaluate(() => (window as any).__output('\x1b[6n'));
+    await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+    await page.getByRole('button', { name: '查找输出', exact: true }).click();
+    await page.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('task 89');
+    await expect(page.getByRole('region', { name: '当前会话' })).toContainText('1 / 1');
+  });
+
   test.use({
     deviceScaleFactor: 1.25,
   });
