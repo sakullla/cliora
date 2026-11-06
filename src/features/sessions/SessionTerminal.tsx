@@ -286,7 +286,11 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
 type XtermCore = {
   _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
   _syncTextArea?: () => void;
-  _compositionHelper?: { updateCompositionElements?: (dontRecurse?: boolean) => void };
+  _compositionHelper?: {
+    isComposing?: boolean;
+    keydown?: (event: KeyboardEvent) => boolean;
+    updateCompositionElements?: (dontRecurse?: boolean) => void;
+  };
   coreService?: { isCursorHidden?: boolean };
 };
 
@@ -324,23 +328,43 @@ export function createImeAnchor(term: Terminal, available: () => boolean): ImeAn
     return { width: screen.clientWidth / term.cols, height: screen.clientHeight / term.rows };
   };
 
-  // Agents built on Ink hide the real cursor and draw their own as one inverse cell. When the
-  // real cursor is hidden and exactly one such cell is on screen, input lands there.
+  // Full-screen CLIs hide the hardware cursor and draw their own. A highlight bar is a run of
+  // inverse cells; the cursor is the one isolated inverse or blinking cell. Any second run used
+  // to abandon the scan, leaving the parked hardware cursor at the top-left.
   const drawnCursor = (): { col: number; row: number } | null => {
     const buffer = term.buffer.active;
     const cell = buffer.getNullCell();
-    let found: { col: number; row: number } | null = null;
-    for (let row = term.rows - 1; row >= 0; row -= 1) {
+    const side = buffer.getNullCell();
+    let inverse: { col: number; row: number } | null = null;
+    let blink: { col: number; row: number } | null = null;
+    let inverseCount = 0;
+    let blinkCount = 0;
+    for (let row = term.rows - 1; row >= 0 && (inverseCount < 2 || blinkCount < 2); row -= 1) {
       const line = buffer.getLine(buffer.viewportY + row);
       if (!line) continue;
       for (let col = 0; col < term.cols; col += 1) {
-        if (!line.getCell(col, cell)?.isInverse()) continue;
-        const next = line.getCell(col + 1, cell);
-        if (found || (next && next.isInverse() && col + 1 < term.cols)) return null;
-        found = { col, row };
+        const current = line.getCell(col, cell);
+        if (!current) continue;
+        const blinking = current.isBlink() !== 0;
+        const marked = current.isInverse() !== 0;
+        if (!blinking && !marked) continue;
+        const left = col > 0 ? line.getCell(col - 1, side) : null;
+        const leftBlink = !!left?.isBlink();
+        const leftInverse = !!left?.isInverse();
+        const right = col + 1 < term.cols ? line.getCell(col + 1, side) : null;
+        if (blinking && !leftBlink && !right?.isBlink()) {
+          blinkCount += 1;
+          if (blinkCount === 1) blink = { col, row };
+        }
+        if (marked && !leftInverse && !right?.isInverse()) {
+          inverseCount += 1;
+          if (inverseCount === 1) inverse = { col, row };
+        }
       }
     }
-    return found;
+    if (blinkCount === 1) return blink;
+    if (inverseCount === 1) return inverse;
+    return null;
   };
 
   const inputCell = (scan: boolean) => {
@@ -393,7 +417,13 @@ export function createImeAnchor(term: Terminal, available: () => boolean): ImeAn
     textarea.style.height = `${cell.height}px`;
     textarea.style.lineHeight = `${cell.height}px`;
     textarea.style.fontSize = `${term.options.fontSize ?? 14}px`;
-    textarea.style.zIndex = '-5';
+    // WebView2 puts the candidate window at the window origin when this field is
+    // opacity:0 or z-index:-5. Keep it on the input cell, with the text itself invisible.
+    textarea.style.opacity = '1';
+    textarea.style.color = 'transparent';
+    textarea.style.caretColor = 'transparent';
+    textarea.style.backgroundColor = 'transparent';
+    textarea.style.zIndex = '1';
   };
 
   const schedule = () => {
@@ -404,6 +434,23 @@ export function createImeAnchor(term: Terminal, available: () => boolean): ImeAn
   // xterm calls these on cursor moves and on every render; route both through one placement.
   if (core && typeof core._syncTextArea === 'function') core._syncTextArea = () => { if (!composing) schedule(); };
   const helper = core?._compositionHelper;
+  let commitTimer = 0;
+  if (helper?.keydown) {
+    const originalKeydown = helper.keydown.bind(helper);
+    helper.keydown = (event: KeyboardEvent) => {
+      const code = event.keyCode;
+      const commit = !!helper.isComposing && code !== 229 && code !== 20 && code !== 16 && code !== 17 && code !== 18;
+      if (!commit) return originalKeydown(event);
+      // Space, Enter, or a candidate number makes xterm send the word from keydown and
+      // again from compositionend (升级升级). Leave the commit to compositionend.
+      // If that event never arrives, send on the next turn while composition is still open.
+      window.clearTimeout(commitTimer);
+      commitTimer = window.setTimeout(() => {
+        if (!disposed && helper.isComposing) originalKeydown(event);
+      }, 0);
+      return false;
+    };
+  }
   if (helper && typeof helper.updateCompositionElements === 'function') helper.updateCompositionElements = () => { if (composing) apply(false); };
 
   return {
@@ -426,6 +473,7 @@ export function createImeAnchor(term: Terminal, available: () => boolean): ImeAn
     },
     dispose: () => {
       disposed = true;
+      window.clearTimeout(commitTimer);
       cancelAnimationFrame(frame);
     },
   };

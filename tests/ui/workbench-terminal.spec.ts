@@ -69,6 +69,59 @@ test.describe('product WebGL input integration', () => {
     await expect.poll(async () => (await writes(page)).join('')).toBe('你好7，');
     expect(await textarea.evaluate(input => document.activeElement === input)).toBe(true);
   });
+
+  test('confirming an IME candidate sends each word once and keeps the candidate on the input cell', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    await resetWrites(page);
+    const commit = (word: string, key: string, keyCode: number) => input.evaluate((node, payload) => {
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      textarea.value += payload.word;
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: payload.word, bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: payload.key, keyCode: payload.keyCode, bubbles: true }));
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { data: payload.word, bubbles: true }));
+      textarea.dispatchEvent(new InputEvent('input', { data: payload.word, inputType: 'insertText', bubbles: true }));
+    }, { word, key, keyCode });
+    await commit('升级', ' ', 32);
+    await expect.poll(async () => (await writes(page)).join('')).toBe('升级');
+    await commit('审计', '1', 49);
+    await expect.poll(async () => (await writes(page)).join('')).toBe('升级审计');
+    await commit('哈', ' ', 32);
+    await commit('哈', ' ', 32);
+    await expect.poll(async () => (await writes(page)).join('')).toBe('升级审计哈哈');
+
+    await page.evaluate(async () => {
+      (window as unknown as { __output: (text: string) => void }).__output('\x1b[?25l\x1b[3;1H\x1b[7mHIGHLIGHT\x1b[0m\x1b[8;10H\x1b[7m \x1b[0m\x1b[1;1H');
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    });
+    const anchor = await input.evaluate(node => {
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      const screen = textarea.closest('.xterm')?.querySelector('.xterm-screen');
+      const screenRect = screen?.getBoundingClientRect();
+      const style = getComputedStyle(textarea);
+      return {
+        top: Number.parseFloat(textarea.style.top),
+        left: Number.parseFloat(textarea.style.left),
+        screenHeight: screenRect?.height ?? 0,
+        opacity: style.opacity,
+        zIndex: textarea.style.zIndex,
+      };
+    });
+    expect(anchor.opacity).toBe('1');
+    expect(anchor.zIndex).not.toBe('-5');
+    expect(anchor.screenHeight).toBeGreaterThan(80);
+    // Row 8, column 10 of the hidden-cursor screen, not the parked hardware cursor at 0,0.
+    expect(anchor.top).toBeGreaterThan(40);
+    expect(anchor.top).toBeLessThan(anchor.screenHeight);
+    expect(anchor.left).toBeGreaterThan(30);
+  });
 });
 
 test('terminal code loads on demand and an opening request survives the first module load', async ({ page }) => {

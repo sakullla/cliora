@@ -1035,6 +1035,13 @@
 .terminalHost :global(.xterm) { height: 100%; padding: 0; }
 .terminalHost :global(.xterm:focus),
 .terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; }
+/* WebView2 anchors the IME at the window origin while this field stays opacity:0. */
+.terminalHost :global(.xterm .xterm-helper-textarea) {
+  opacity: 1;
+  color: transparent;
+  caret-color: transparent;
+  background-color: transparent;
+}
 .terminalHost :global(.xterm .xterm-viewport),
 .terminalHost :global(.xterm-scrollable-element) { background: var(--term-bg); }
 .terminalHost :global(.xterm-scrollable-element > .scrollbar) { display: none; }
