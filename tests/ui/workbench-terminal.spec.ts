@@ -1488,6 +1488,38 @@ test.describe('session switching with the production renderer', () => {
     await page.setViewportSize({ width: 1100, height: 720 });
     await expect.poll(async () => (await grids()).at(-1)?.cols).toBeLessThan(settled.at(-1)!.cols);
   });
+
+  test('leaving the workbench releases WebGL while retaining output and protocol replies', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    const navigation = page.getByRole('navigation', { name: '页面' });
+    const terminal = page.locator('[data-pane-session="s1"]');
+    const canvas = terminal.locator('.xterm-screen canvas:not(.xterm-link-layer)');
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+      await expect(canvas).toBeVisible();
+      await expect(terminal.locator('textarea')).toBeEnabled();
+      await navigation.getByRole('button', { name: '首页', exact: true }).click();
+      await expect(canvas).toHaveCount(0);
+      await expect(terminal.locator('textarea')).toBeDisabled();
+      await expect(terminal.locator('[data-blink]')).toHaveCount(0);
+      await resetWrites(page);
+      await page.evaluate(cycle => (window as unknown as { __output: (text: string) => void }).__output(`\r\nhidden-output-${cycle}\r\n\x1b[?12h\x1b[6n`), cycle);
+      await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+      await expect(canvas).toHaveCount(0);
+    }
+    await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+    await expect(canvas).toBeVisible();
+    await page.getByRole('button', { name: '查找输出', exact: true }).click();
+    await page.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('hidden-output-');
+    await expect(page.getByRole('region', { name: '当前会话' })).toContainText('1 / 3');
+    await page.keyboard.press('Escape');
+    await terminal.locator('textarea').focus();
+    await resetWrites(page);
+    await page.keyboard.type('after-return');
+    await expect.poll(async () => (await writes(page)).join('')).toBe('after-return');
+  });
 });
 
 test('hidden live terminals answer cursor queries without accepting keyboard input', async ({ page }) => {

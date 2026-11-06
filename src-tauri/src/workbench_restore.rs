@@ -120,6 +120,21 @@ fn matches(session: &SavedSession, parsed: &crate::history::ParsedSession, saved
     candidate(session, parsed, matching_until(session, saved, now))
 }
 
+fn history_identities(adapter: &dyn crate::adapters::CliAdapter, sources: &[crate::history::HistorySource]) -> Result<Vec<crate::history::ParsedSession>, String> {
+    sources.iter().filter_map(|source| {
+        let parsed = match adapter.parse_history(source) {
+            Ok(parsed) => parsed,
+            Err(error) if error == crate::history::EMPTY_SESSION => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        // Matching needs identity only. Release transcripts after each parse.
+        Some(Ok(crate::history::ParsedSession {
+            native_id: parsed.native_id, cwd: parsed.cwd, started_at: parsed.started_at,
+            ..Default::default()
+        }))
+    }).collect()
+}
+
 pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<RestoreReport, String> {
     let _guard = RESTORING.lock().map_err(|_| "工作台恢复正在结束，请重试")?;
     let live: HashSet<_> = crate::session_host::list().into_iter().map(|session| session.id).collect();
@@ -143,15 +158,7 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
             let key = (session.tool_id.clone(), session.context_id.clone());
             let history = histories.entry(key.clone()).or_insert_with(|| {
                 let sources = adapter.history_sources(home)?;
-                sources.iter().map(|source| {
-                    let parsed = adapter.parse_history(source)?;
-                    // Matching needs identity only. Release transcripts after
-                    // each parse instead of retaining every conversation.
-                    Ok(crate::history::ParsedSession {
-                        native_id: parsed.native_id, cwd: parsed.cwd, started_at: parsed.started_at,
-                        ..Default::default()
-                    })
-                }).collect()
+                history_identities(adapter, &sources)
             }).as_ref().map_err(Clone::clone)?;
             let candidates: Vec<_> = history.iter().filter(|parsed| matches(session, parsed, &saved, &all, until)).collect();
             if candidates.len() != 1 { return Err(if candidates.is_empty() { "尚未找到原生会话记录；可重试恢复，或从新会话启动" } else { "发现多条可能的会话，未自动选择；请到记录页选择原会话" }.into()); }
@@ -188,6 +195,30 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn codebuddy_empty_logs_do_not_block_restore_but_read_errors_do() {
+        use crate::adapters::CliAdapter;
+        let temp = tempfile::tempdir().unwrap();
+        let logs = temp.path().join(".codebuddy/projects/fixture");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("11111111-1111-4111-8111-111111111111.jsonl"), "").unwrap();
+        std::fs::write(logs.join("22222222-2222-4222-8222-222222222222.jsonl"), "{\"type\":\"file-history-snapshot\",\"snapshot\":{}}\n").unwrap();
+        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/history/codebuddy-2.161.1-session.jsonl"), logs.join("01a0c8f7-ef95-76a2-9503-6dbc8341a38f.jsonl")).unwrap();
+        let adapter = &crate::adapters::CODEBUDDY;
+        let sources = adapter.history_sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 3);
+        let identities = history_identities(adapter, &sources).unwrap();
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].native_id.as_deref(), Some("01a0c8f7-ef95-76a2-9503-6dbc8341a38f"));
+        assert!(identities[0].messages.is_empty());
+        let saved = SavedSession { id: "tab".into(), tool_id: "codebuddy".into(), project_id: None,
+            directory: identities[0].cwd.clone().unwrap(), mode: LaunchMode::Normal,
+            started_at: 0, stopped_at: None, native_id: identities[0].native_id.clone(), account_id: None, context_id: None };
+        assert!(candidate(&saved, &identities[0], now()));
+        std::fs::remove_file(&sources[0].path).unwrap();
+        let error = history_identities(adapter, &sources).unwrap_err();
+        assert_ne!(error, crate::history::EMPTY_SESSION);
+    }
     #[test]
     fn checkpoint_metadata_round_trips_without_launch_secrets() {
         let temp = tempfile::tempdir().unwrap();

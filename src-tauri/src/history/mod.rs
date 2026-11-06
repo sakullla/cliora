@@ -753,6 +753,7 @@ pub struct HistoryFilter {
     pub search: Option<String>,
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
+    #[serde(default)]
     pub favorite_only: bool,
     pub tools: Option<Vec<String>>,
     /// Optional result cap for lightweight consumers such as the command palette.

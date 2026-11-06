@@ -224,6 +224,112 @@ fn body(db: &Database) -> Option<String> {
     })
     .unwrap()
 }
+
+#[test]
+fn webdav_projects_and_project_configuration_stay_local_with_legacy_heads() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("existing"));
+    let fresh = database(&temp.path().join("fresh"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    db.with_connection(|conn| {
+        for id in ["same", "deleted"] {
+            conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES (?1,'Local',?2,NULL,0)", params![id, format!(r"C:\work\{id}")]).unwrap();
+        }
+        Ok(())
+    }).unwrap();
+    configure(&db, &store, setup(&server)).unwrap();
+    let config = read_config(&db).unwrap().unwrap();
+    let dav = Dav::new(endpoint(&config.endpoint).unwrap(), &config.username, &store.get(&config.auth_secret_id).unwrap()).unwrap();
+    let (space, key) = read_space(&dav, "secret-passphrase").unwrap().unwrap();
+    let (mut manifest, etag) = read_manifest(&dav, &space, &key).unwrap().unwrap();
+    dav.mkdir_versions().unwrap();
+    let binding = super::super::PortableBinding {
+        scope_key: format!("project:/Users/other/{}", "long-path/".repeat(30)), tool: "codex".into(), profile_id: "missing-profile".into(), context_id: None,
+    };
+    let deployment = super::super::resources::PortableDeployment {
+        resource_kind: "mcp".into(), resource_id: "missing-mcp".into(), tool: "codex".into(), scope_key: "project:/Users/other/project".into(), enabled: true,
+    };
+    let deployment_key = format!("deployment:{}", deployment.id());
+    let mut legacy = vec![
+        PortableEntity { id: super::super::binding_id(&binding.tool, &binding.scope_key), payload: PortablePayload::Binding(binding) },
+        PortableEntity { id: deployment.id(), payload: PortablePayload::Deployment(deployment) },
+    ];
+    for id in ["same", "foreign"] {
+        legacy.push(PortableEntity { id: id.into(), payload: PortablePayload::Project(super::super::PortableProject {
+            id: id.into(), name: "Remote".into(), path: Some("/Users/other/project".into()), model_overrides: BTreeMap::new(),
+        }) });
+    }
+    let mut ignored = BTreeSet::new();
+    for entity in legacy {
+        let entity_key = entity.key();
+        ignored.insert(entity_key.clone());
+        let head = Version { id: Uuid::new_v4().to_string(), parents: vec![], digest: entity.digest().unwrap(), deleted: false, at: now() };
+        write_version(&dav, &key, &space, &entity_key, &head, Some(entity)).unwrap();
+        manifest.heads.insert(entity_key, vec![head]);
+    }
+    let deleted = Version { id: Uuid::new_v4().to_string(), parents: vec![], digest: "0".repeat(64), deleted: true, at: now() };
+    write_version(&dav, &key, &space, "project:deleted", &deleted, None).unwrap();
+    manifest.heads.insert("project:deleted".into(), vec![deleted]);
+    ignored.insert("project:deleted".into());
+    assert!(save_manifest(&dav, &manifest, &key, Some(&etag)).unwrap());
+    let remote_before = server.state.lock().unwrap().files["/dav/manifest.cliora"].0.clone();
+    for entity_key in &ignored {
+        save_state(&db, entity_key, "old-digest", &["previous-head".into()], false).unwrap();
+        db.with_connection(|conn| super::super::remember_outbox(conn, entity_key)).unwrap();
+    }
+    let conflicts: Vec<_> = ignored.iter().map(|entity_key| SyncConflict {
+        key: entity_key.clone(), local_key: None, label: "Legacy".into(), local_present: true, local_digest: "old-digest".into(),
+        remote_versions: 1, remote_deleted: false, versions: vec![],
+    }).collect();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO app_settings(key,value) VALUES ('sync_conflicts',?1)", [serde_json::to_string(&conflicts).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let result = run(&db, &store, &registry, false).unwrap();
+    assert_eq!((result.uploaded, result.downloaded, result.pending_changes), (0, 0, 0));
+    assert!(result.conflicts.is_empty());
+    for id in ["same", "deleted"] {
+        assert_eq!(crate::projects::get(&db, id).unwrap().path.as_deref(), Some(format!(r"C:\work\{id}").as_str()));
+    }
+    assert!(crate::projects::get(&db, "foreign").is_err());
+    configure(&fresh, &store, setup(&server)).unwrap();
+    let received = run(&fresh, &store, &registry, false).unwrap();
+    assert_eq!((received.uploaded, received.downloaded), (0, 0));
+    assert!(crate::projects::get(&fresh, "same").is_err());
+    assert!(received.blockers.is_empty());
+    assert!(resolve(&db, &store, &registry, "project:same", None).is_err());
+    assert!(resolve(&db, &store, &registry, &deployment_key, None).is_err());
+    // Removing local projects never publishes tombstones for old remote heads.
+    db.with_connection(|conn| { conn.execute("DELETE FROM projects", []).unwrap(); Ok(()) }).unwrap();
+    let again = run(&db, &store, &registry, false).unwrap();
+    assert_eq!((again.uploaded, again.downloaded, again.pending_changes), (0, 0, 0));
+    assert_eq!(server.state.lock().unwrap().files["/dav/manifest.cliora"].0, remote_before);
+}
+
+#[test]
+fn project_deployment_outbox_is_local_even_after_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let entity = super::super::resources::PortableDeployment {
+        resource_kind: "mcp".into(), resource_id: "mcp-local".into(), tool: "codex".into(), scope_key: "project:/work/local".into(), enabled: true,
+    };
+    let key = format!("deployment:{}", entity.id());
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES ('mcp-local','Local','stdio','{}',1)", []).unwrap();
+        conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES ('mcp-local','codex','project:/work/local',1,'')", []).unwrap();
+        super::super::remember_outbox(conn, &key)
+    }).unwrap();
+    assert_eq!(status(&db).unwrap().pending_changes, 1); // The MCP definition still syncs globally.
+    assert!(!outbox_tokens(&db).unwrap().contains_key(&key));
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM mcp_targets", []).unwrap();
+        super::super::remember_outbox(conn, &key)
+    }).unwrap();
+    assert_eq!(status(&db).unwrap().pending_changes, 1); // The MCP definition still syncs globally.
+    assert!(!outbox_tokens(&db).unwrap().contains_key(&key));
+}
 fn setup(server: &Server) -> SyncSetup {
     SyncSetup {
         endpoint: server.endpoint.clone(),
@@ -432,11 +538,7 @@ fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver(
     assert!(received.conflicts.is_empty());
     let local = crate::native::profile::get_registered_profile(&target, "synced-profile").unwrap();
     assert_eq!(new_store.get(local.connection.unwrap().secret_ref.as_deref().unwrap()).unwrap(), "synthetic-api-key");
-    let project = crate::projects::get(&target, "demo").unwrap();
-    assert_eq!(
-        project.path.as_deref().map(std::path::Path::new),
-        Some(target_home.join("projects/demo").as_path())
-    );
+    assert!(crate::projects::get(&target, "demo").is_err());
     let native = std::fs::read_to_string(target_home.join(".codex/config.toml")).unwrap();
     assert!(native.contains("mcp_servers.runner"), "{native}");
     assert!(native.contains("npx"));
@@ -563,12 +665,12 @@ fn deleted_item_that_was_never_synced_is_not_left_pending() {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('project:removed','abc','[]',1)",
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('library:removed','abc','[]',1)",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sync_outbox (id,entity_key,object_json,created_at) VALUES ('project:removed','project:removed','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1)",
+            "INSERT INTO sync_outbox (id,entity_key,object_json,created_at) VALUES ('library:removed','library:removed','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1)",
             [],
         )
         .unwrap();
@@ -584,7 +686,7 @@ fn deleted_item_that_was_never_synced_is_not_left_pending() {
             Ok(rows.collect::<Result<Vec<_>, _>>().unwrap())
         })
         .unwrap();
-    assert_eq!(ids, vec!["library:library-1".to_owned(), "project:removed".to_owned()]);
+    assert_eq!(ids, vec!["library:library-1".to_owned(), "library:removed".to_owned()]);
 }
 
 #[test]
@@ -832,7 +934,7 @@ fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
             .map_err(|error| error.to_string())
         })
         .unwrap();
-    assert_eq!(projects, 1);
+    assert_eq!(projects, 0);
 
     put_library(&a, "from-a");
     put_library(&b, "from-b");
@@ -908,7 +1010,7 @@ fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
         &crypto::open_sync(&key, &config.space_id, &manifest_bytes).unwrap(),
     )
     .unwrap();
-    let project_head = &manifest.heads["project:project-2"][0];
+    let library_head = &manifest.heads["library:library-1"][0];
     let d = database(&temp.path().join("d"));
     let mut setup_d = setup(&server);
     setup_d.encryption_password = "secret-passphrase".into();
@@ -918,7 +1020,7 @@ fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
         .lock()
         .unwrap()
         .files
-        .remove(&format!("/dav/versions/{}.cliora", project_head.id));
+        .remove(&format!("/dav/versions/{}.cliora", library_head.id));
     assert!(run(&d, &store, &registry, false)
         .unwrap_err()
         .contains("远端版本文件缺失"));
@@ -1408,9 +1510,7 @@ fn unchanged_digest_still_finishes_a_pending_native_write() {
     let fresh = database(&temp.path().join("fresh"));
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(&project)).unwrap();
+    let scope = "global".to_owned();
     let key = format!("binding:{}", super::super::binding_id("codex", &scope));
     let profile = crate::native::profile::RegisteredProfile {
         editing: None,
@@ -1445,9 +1545,8 @@ fn unchanged_digest_still_finishes_a_pending_native_write() {
     run(&source, &credentials, &registry, false).unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    super::super::set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
-    let canonical = scope.strip_prefix("project:").unwrap();
-    let config = std::path::Path::new(canonical).join(".codex").join("config.toml");
+    super::super::set_restore_roots_for_test(Some((home.clone(), temp.path().to_path_buf())));
+    let config = home.join(".codex/config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "model = \"old\"\n").unwrap();
     let mut blocked = std::fs::metadata(&config).unwrap().permissions();
@@ -1501,9 +1600,7 @@ fn unchanged_digest_applies_a_restored_binding_ahead_of_a_pending_release() {
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
     put_library(&source, "kept-body");
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(&project)).unwrap();
+    let scope = "global".to_owned();
     let key = format!("binding:{}", super::super::binding_id("codex", &scope));
     let profile = crate::native::profile::RegisteredProfile {
         editing: None,
@@ -1538,12 +1635,11 @@ fn unchanged_digest_applies_a_restored_binding_ahead_of_a_pending_release() {
     run(&source, &credentials, &registry, false).unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    super::super::set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    super::super::set_restore_roots_for_test(Some((home.clone(), temp.path().to_path_buf())));
     configure(&fresh, &credentials, setup(&server)).unwrap();
     let received = run(&fresh, &credentials, &registry, false).unwrap();
     assert!(received.blockers.iter().all(|item| item.key != key), "{:?}", received.blockers);
-    let canonical = scope.strip_prefix("project:").unwrap();
-    let config = std::path::Path::new(canonical).join(".codex").join("config.toml");
+    let config = home.join(".codex/config.toml");
     std::fs::write(&config, ":::not toml").unwrap();
     fresh
         .with_connection(|conn| {
@@ -1658,9 +1754,7 @@ fn unchanged_digest_delete_does_not_keep_a_finished_write_blocker() {
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
     put_library(&source, "kept-body");
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    let scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(&project)).unwrap();
+    let scope = "global".to_owned();
     let key = format!("binding:{}", super::super::binding_id("codex", &scope));
     let profile = crate::native::profile::RegisteredProfile {
         editing: None,
@@ -1695,9 +1789,8 @@ fn unchanged_digest_delete_does_not_keep_a_finished_write_blocker() {
     run(&source, &credentials, &registry, false).unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    super::super::set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
-    let canonical = scope.strip_prefix("project:").unwrap();
-    let config = std::path::Path::new(canonical).join(".codex").join("config.toml");
+    super::super::set_restore_roots_for_test(Some((home.clone(), temp.path().to_path_buf())));
+    let config = home.join(".codex/config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "model = \"old\"\nkeep = \"yes\"\n").unwrap();
     let mut blocked = std::fs::metadata(&config).unwrap().permissions();

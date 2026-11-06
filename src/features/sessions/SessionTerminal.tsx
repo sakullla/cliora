@@ -1265,7 +1265,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   return <div className={styles.terminalInstance} hidden={!active} style={placement} data-pane-session={sessionId} data-focused={(active && focused) || undefined} data-running={running || undefined}>
     {header}
     <div className={styles.terminalBody}>
-      <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={cursorBlink || undefined} />
+      <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={(cursorBlink && active && focused && running) || undefined} />
       <TerminalScrollbar terminal={termRef.current} viewport={viewportRef.current} onUserScroll={() => { userScrollRef.current = true; }} />
       {overlay}
     </div>

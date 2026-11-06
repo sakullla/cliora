@@ -457,6 +457,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         <Switch className={styles.autoSync} checked={status.enabled} disabled={busy} onChange={() => void toggleEnabled()} title={t('settings.webdav.autoSyncHint')}
           label={<span className={styles.switchText}><strong>{t('settings.webdav.autoSync')}</strong><small>{t('settings.webdav.autoSyncHint')}</small></span>} />
       </div>
+      <p className={styles.heroNote}><Icon name="info" size={14} />{t('settings.webdav.localProjectsNote')}</p>
       {!status.enabled && !status.lastError && <p className={styles.heroNote}><Icon name="ban" size={14} />{t('settings.webdav.pausedNote')}</p>}
       {status.lastError && <div className={styles.heroError}>
         <Icon name="alert" size={16} />

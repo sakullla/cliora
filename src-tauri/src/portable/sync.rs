@@ -528,7 +528,45 @@ fn read_config(db: &Database) -> Result<Option<SyncConfig>, String> {
         })).optional().map_err(|error| error.to_string()))
 }
 
+// Project paths and project-scoped native bindings belong to this device.
+// A long binding id is hashed; only the explicit global scope is portable.
+// Keep legacy remote heads intact, including tombstones, without applying them
+// or publishing local deletions. Configuration bundles retain their own scope.
+fn webdav_key(key: &str) -> bool {
+    !key.starts_with("project:")
+        && (!key.starts_with("binding:") || key.ends_with("\u{1f}global"))
+}
+
+fn webdav_entity(entity: &PortableEntity) -> bool {
+    webdav_key(&entity.key()) && match &entity.payload {
+        PortablePayload::Deployment(value) => crate::accounts::selection::split_key(&value.scope_key).1 == "global",
+        _ => true,
+    }
+}
+
+// Deployment ids are hashes, so retain the local-only scope after deletion too.
+// This is device metadata, never a remote tombstone or a project mutation.
+fn local_only_keys(db: &Database, additional: &BTreeSet<String>) -> Result<BTreeSet<String>, String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let previous: Option<String> = tx.query_row("SELECT value FROM app_settings WHERE key='webdav_local_only_keys'", [], |row| row.get(0))
+            .optional().map_err(|error| error.to_string())?;
+        let mut keys: BTreeSet<String> = previous.as_deref().map(serde_json::from_str).transpose()
+            .map_err(|_| "本机同步范围记录损坏")?.unwrap_or_default();
+        keys.extend(additional.iter().cloned());
+        keys.extend(super::resources::collect(&tx)?.into_iter().filter(|entity| !webdav_entity(entity)).map(|entity| entity.key()));
+        let text = serde_json::to_string(&keys).map_err(|error| error.to_string())?;
+        if previous.as_deref() != Some(text.as_str()) {
+            tx.execute("INSERT INTO app_settings(key,value) VALUES ('webdav_local_only_keys',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [text])
+                .map_err(|error| error.to_string())?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(keys)
+    })
+}
+
 pub(crate) fn read_conflicts(db: &Database) -> Result<Vec<SyncConflict>, String> {
+    let excluded = local_only_keys(db, &BTreeSet::new())?;
     db.with_connection(|conn| {
         let value: Option<String> = conn
             .query_row(
@@ -539,9 +577,9 @@ pub(crate) fn read_conflicts(db: &Database) -> Result<Vec<SyncConflict>, String>
             .optional()
             .map_err(|error| error.to_string())?;
         value
-            .map(|text| serde_json::from_str(&text).map_err(|_| "同步冲突记录损坏".to_string()))
+            .map(|text| serde_json::from_str::<Vec<SyncConflict>>(&text).map_err(|_| "同步冲突记录损坏".to_string()))
             .transpose()
-            .map(|value| value.unwrap_or_default())
+            .map(|value| value.unwrap_or_default().into_iter().filter(|item| webdav_key(&item.key) && !excluded.contains(&item.key)).collect())
     })
 }
 
@@ -620,6 +658,7 @@ fn remember_present(conn: &Connection, tracked: &mut BTreeSet<String>, prefix: &
 /// Drop outbox rows whose item is gone locally and was never synced.
 /// A deleted item that still has sync state stays, so its deletion can upload.
 fn forget_untracked_outbox(db: &Database) -> Result<(), String> {
+    let excluded = local_only_keys(db, &BTreeSet::new())?;
     db.with_connection(|conn| {
         let mut tracked = BTreeSet::new();
         remember_present(conn, &mut tracked, "profile", "SELECT id FROM native_profiles")?;
@@ -649,7 +688,7 @@ fn forget_untracked_outbox(db: &Database) -> Result<(), String> {
         let ids = super::read_rows(conn, "SELECT id FROM sync_outbox", |row| row.get::<_, String>(0))?;
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         for id in ids {
-            if !tracked.contains(&id) {
+            if !webdav_key(&id) || excluded.contains(&id) || !tracked.contains(&id) {
                 tx.execute("DELETE FROM sync_outbox WHERE id=?1", [id])
                     .map_err(|error| error.to_string())?;
             }
@@ -1319,6 +1358,10 @@ fn apply_entity(
     expected_digest: &str,
     defer_native: bool,
 ) -> Result<(), String> {
+    if !webdav_key(entity_key) || entity.as_ref().is_some_and(|item| !webdav_entity(item))
+        || local_only_keys(db, &BTreeSet::new())?.contains(entity_key) {
+        return Err("项目与项目级配置仅保留在本机，不参与 WebDAV 同步".into());
+    }
     match entity {
         Some(entity) => {
             let mut draft = preview_import(
@@ -1547,24 +1590,35 @@ fn run_once(
     let (snapshot, blocked_entities) = super::collect_reported(db, store, registry)?;
     let skipped_accounts: BTreeSet<String> = blocked_entities.into_iter().map(|item| item.key).collect();
     let seen = seen_versions(db)?;
+    let mut excluded = local_only_keys(db, &BTreeSet::new())?;
     let mut verified = BTreeMap::new();
     for (entity_key, heads) in &manifest.heads {
+        if !webdav_key(entity_key) || excluded.contains(entity_key) {
+            continue;
+        }
         for head in heads {
-            if !seen.contains(&head.id) {
+            // Legacy deployment heads need their scope inspected even when seen.
+            if !seen.contains(&head.id) || entity_key.starts_with("deployment:") {
                 let entity = read_version(&dav, &key, &manifest.space_id, entity_key, head)?;
+                if entity.as_ref().is_some_and(|item| !webdav_entity(item)) {
+                    excluded.insert(entity_key.clone());
+                }
                 verified.insert((entity_key.clone(), head.id.clone()), entity);
             }
         }
     }
+    let excluded = local_only_keys(db, &excluded)?;
     let local: BTreeMap<String, PortableEntity> = snapshot
         .entities
         .into_iter()
+        .filter(|item| webdav_entity(item) && !excluded.contains(&item.key()))
         .map(|item| (item.key(), item))
         .collect();
     let states = local_states(db)?;
     let mut all_keys: BTreeSet<String> = local.keys().cloned().collect();
     all_keys.extend(states.keys().cloned());
     all_keys.extend(manifest.heads.keys().cloned());
+    all_keys.retain(|key| webdav_key(key) && !excluded.contains(key));
     let mut status = status(db)?;
     status.conflicts.clear();
     let mut pending_states = Vec::new();
@@ -1941,6 +1995,9 @@ pub fn resolve(
     if chosen_bundle || keep_held_local || (read_config(db)?.is_none() && !holds.is_empty()) {
         return resolve_held_bundle(db, store, registry, entity_key, chosen_version_id, &holds);
     }
+    if !webdav_key(entity_key) || local_only_keys(db, &BTreeSet::new())?.contains(entity_key) {
+        return Err("项目与项目级配置仅保留在本机，不参与 WebDAV 同步".into());
+    }
     let config = read_config(db)?.ok_or("请先配置 WebDAV".to_string())?;
     let dav = Dav::new(
         endpoint(&config.endpoint)?,
@@ -1997,6 +2054,10 @@ pub fn resolve(
         let template = read_version(&dav, &key, &config.space_id, entity_key, heads.first().ok_or("冲突版本缺失")?)?
             .ok_or("同名资源版本已删除，请重新同步")?;
         chosen = chosen.map(|value| super::resource_names::with_identity(value, &template));
+    }
+    if chosen.as_ref().is_some_and(|entity| !webdav_entity(entity)) {
+        local_only_keys(db, &BTreeSet::from([entity_key.to_owned()]))?;
+        return Err("项目与项目级配置仅保留在本机，不参与 WebDAV 同步".into());
     }
     let resolved_digest = chosen
         .as_ref()

@@ -2110,8 +2110,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 }}>
                 {mountedSessions.map((session) => {
                   const pane = visibleIds.indexOf(session.id);
-                  const visible = pane >= 0;
-                  const focused = session.id === selectedId;
+                  const visible = active && pane >= 0;
+                  const focused = active && session.id === selectedId;
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;

@@ -2112,6 +2112,10 @@ fn parent_detail_keeps_attribution_and_child_bodies_out_of_list_search_report_an
     assert!(!children_json.contains("UNREADABLE_BODY_SENTINEL"));
     let listed = list(&db, &HistoryFilter::default()).unwrap();
     assert_eq!(listed.len(), 1);
+    // Home sends only a limit; every other filter is optional at the IPC boundary.
+    let home_filter: HistoryFilter = serde_json::from_str(r#"{"limit":24}"#).unwrap();
+    assert!(!home_filter.favorite_only);
+    assert_eq!(list(&db, &home_filter).unwrap().len(), 1);
     let limited = list(&db, &HistoryFilter { limit: Some(1), ..Default::default() }).unwrap();
     assert_eq!(limited.len(), 1);
     assert_eq!(listed[0].id, id);
@@ -2123,7 +2127,8 @@ fn parent_detail_keeps_attribution_and_child_bodies_out_of_list_search_report_an
     }
     assert_eq!(list(&db, &HistoryFilter { search: Some("父会话正文可见".into()), ..Default::default() }).unwrap().len(), 1);
     set_favorite(&db, &id, true).unwrap();
-    let favorites = list(&db, &HistoryFilter { favorite_only: true, ..Default::default() }).unwrap();
+    let favorites_filter: HistoryFilter = serde_json::from_str(r#"{"favoriteOnly":true}"#).unwrap();
+    let favorites = list(&db, &favorites_filter).unwrap();
     assert_eq!(favorites.len(), 1);
     assert_eq!(favorites[0].id, id);
     assert!(list(&db, &HistoryFilter { favorite_only: true, search: Some("CHILD_ONLY_SENTINEL".into()), ..Default::default() }).unwrap().is_empty());

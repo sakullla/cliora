@@ -104,8 +104,10 @@ fn prepare_with(
         return Err(format!("Git 无法创建工作树：分支名“{branch}”不可用。"));
     }
     let path = unique_sibling(parent, repo_name, &branch)?;
-    let path_text = path.to_str().ok_or("工作树路径文字编码无法识别")?;
-    let created = git_output(git, directory, &["worktree", "add", "--quiet", "-b", &branch, path_text, &commit])?;
+    // Git for Windows cannot use canonical \\?\ paths as worktree arguments.
+    // Keep canonical paths for identity/IO and normalize only at the CLI boundary.
+    let path_text = crate::launch::terminal_path(&path)?;
+    let created = git_output(git, directory, &["worktree", "add", "--quiet", "-b", &branch, &path_text, &commit])?;
     if !created.status.success() {
         discard_incomplete(git, directory, &path, &main);
         return Err(command_failure("Git 无法创建工作树", &created.stderr, &created.stdout));
@@ -378,7 +380,7 @@ fn listed(title: &str, lines: &[String], unit: &str) -> String {
 }
 
 fn delete_worktree(git: &Path, main: &Path, worktree: &Path, branch: &str, force_tree: bool, drop_unmerged: bool) -> Result<(), String> {
-    let path = path_key(worktree)?;
+    let path = crate::launch::terminal_path(worktree)?;
     let mut args = vec!["worktree", "remove"];
     if force_tree {
         args.push("--force");
@@ -546,12 +548,12 @@ fn sanitize_ref(raw: &str) -> String {
     }
     let mut name = out.trim_matches(|ch| ch == '-' || ch == '.').to_owned();
     while let Some(stripped) = name.strip_suffix(".lock") {
-        name = stripped.trim_end_matches(|ch| ch == '-' || ch == '.').to_owned();
+        name = stripped.trim_end_matches(['-', '.']).to_owned();
     }
     name = name.chars().take(72).collect();
-    name = name.trim_end_matches(|ch| ch == '-' || ch == '.').to_owned();
+    name = name.trim_end_matches(['-', '.']).to_owned();
     while let Some(stripped) = name.strip_suffix(".lock") {
-        name = stripped.trim_end_matches(|ch| ch == '-' || ch == '.').to_owned();
+        name = stripped.trim_end_matches(['-', '.']).to_owned();
     }
     if name == "@" || name.eq_ignore_ascii_case("con") || name.eq_ignore_ascii_case("prn") || name.eq_ignore_ascii_case("aux") || name.eq_ignore_ascii_case("nul") {
         return String::new();
@@ -621,8 +623,8 @@ fn discard_incomplete(git: &Path, source: &Path, path: &Path, main: &Path) {
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return;
     }
-    if let Some(text) = path.to_str() {
-        let _ = git_output(git, source, &["worktree", "remove", "--force", text]);
+    if let Ok(text) = crate::launch::terminal_path(path) {
+        let _ = git_output(git, source, &["worktree", "remove", "--force", &text]);
     }
     if path.exists() && path != main {
         if let Ok(meta) = std::fs::symlink_metadata(path) {
@@ -959,7 +961,7 @@ mod tests {
         assert!(run_git(&main, &["commit", "-q", "-m", "root"]));
         let created = prepare_worktree(&db, &main, Some("task")).unwrap().expect("worktree");
         assert!(run_git(&main, &["merge", "--ff-only", "task"]));
-        assert!(run_git(&main, &["worktree", "lock", created.directory.to_str().unwrap()]));
+        assert!(run_git(&main, &["worktree", "lock", &crate::launch::terminal_path(&created.directory).unwrap()]));
         let error = cleanup_worktree(&db, &created.directory, false).unwrap_err();
         assert!(error.contains("Git 无法删除工作树"), "{error}");
         assert!(created.directory.is_dir());
