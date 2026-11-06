@@ -1622,13 +1622,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setSelectedId(session.id);
     setAppearanceOpen(false);
     setShortcutsOpen(false);
-    openLocalPrepare(session.projectId?.startsWith('remote:') ? null : session.directory || null);
+    // Launch preference and prepare commands live in Settings; the menu only offers worktree cleanup.
+    openLocalPrepare(null);
     setMenu({ kind: 'session', sessionId: session.id, x, y, besideId: previous && previous !== session.id ? previous : null });
   }
 
   function openTerminalMenu(session: WorkbenchSession, x: number, y: number) {
     setAppearanceOpen(false);
-    openLocalPrepare(session.projectId?.startsWith('remote:') ? null : session.directory || null);
+    openLocalPrepare(null);
     setMenu({ kind: 'terminal', sessionId: session.id, x, y, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
   }
 
@@ -2192,9 +2193,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.sendInterrupt')}</span></button>}
           <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
           <button role="menuitem" onClick={() => setAppearanceOpen(true)}><Icon name="sliders" size={14} /><span>{t('sessions.displaySettings')}</span></button>
-          <span className={styles.menuDivider} role="separator" />
-          <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
-          {worktreeFinishItems(session.projectId?.startsWith('remote:') ? null : session.directory || null)}
+          {worktreeFinishItems(null)}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
@@ -2206,9 +2205,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" onClick={() => void copyTerminalOutput(session)}>{t('sessions.copyOutput')}</button>
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}>{t('sessions.copyPath')}</button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}>{t('sessions.openFolder')}</button>}
+          {worktreeFinishItems(null)}
           <span className={styles.menuDivider} role="separator" />
-          <div className={styles.menuGroup} role="group" aria-label={t('sessions.worktreeLaunch')} onClick={(event) => event.stopPropagation()}>{worktreePreferenceItems()}</div>
-          {worktreeFinishItems(session.projectId?.startsWith('remote:') ? null : session.directory || null)}
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}>{session.running ? t('sessions.end') : t('sessions.removeSession')}</button>
         </>}
       </div>, document.body);

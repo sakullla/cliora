@@ -149,6 +149,7 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             sessions.unshift({ id, toolId: args.request.toolId, projectId: args.request.projectId, directory: args.request.directory || 'C:/work', mode: args.request.mode || 'normal', running: true, exitCode: null, startedAt: Date.now() });
             return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode || 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
           }
+          if (command === 'list_projects') return (window as unknown as { __projects?: unknown[] }).__projects ?? [];
           if (command === 'git_worktrees') return (window as unknown as { __worktrees?: unknown[] }).__worktrees ?? [];
           if (command === 'list_worktree_ledger') return ((window as unknown as { __ledger?: unknown[] }).__ledger ?? []).map((item) => ({ ...(item as object) }));
           if (command === 'worktree_prepare') {
@@ -1929,13 +1930,16 @@ test('running duplicate follows the preference, while restart and an existing ch
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\x1b]0;feat: hello?\x07'));
   await expect(page.getByRole('region', { name: '当前会话' }).locator('h2')).toContainText('feat: hello?');
   await page.getByRole('button', { name: '更多终端操作' }).click();
+  // The launch preference and prepare command live in Settings, not in the context menus.
   const terminal = page.getByRole('menu', { name: '终端操作' });
-  await expect(terminal.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
-  await expect(terminal.getByRole('menuitemradio', { name: '新建工作树' })).toBeVisible();
+  await expect(terminal.getByRole('menuitem', { name: '再开一个' })).toBeVisible();
+  await expect(terminal.getByRole('menuitemradio')).toHaveCount(0);
+  await expect(terminal.getByRole('textbox', { name: '环境准备' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Codex 会话操作' }).click();
   const sessionMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
-  await expect(sessionMenu.getByRole('menuitemradio', { name: '新建工作树' })).toBeVisible();
+  await expect(sessionMenu.getByRole('menuitemradio', { name: '新建工作树' })).toHaveCount(0);
+  await expect(sessionMenu.getByRole('textbox', { name: '环境准备' })).toHaveCount(0);
   await sessionMenu.getByRole('menuitem', { name: '再开一个' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
     worktreeIntent: 'preference', directory: 'C:/work', taskText: 'feat: hello?',
@@ -2004,7 +2008,7 @@ test('a new worktree without a prepare command is marked, and only ledger worktr
   await expect(menu.getByRole('menuitem', { name: /清理 main/ })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: /清理 external/ })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: /清理 repo/ })).toHaveCount(0);
-  await expect(menu.getByRole('textbox', { name: '环境准备' })).toBeVisible();
+  await expect(menu.getByRole('textbox', { name: '环境准备' })).toHaveCount(0);
 });
 
 test('removing a dirty worktree waits for confirmation and can be cancelled', async ({ page }) => {
@@ -2052,15 +2056,28 @@ test('a git failure while removing a worktree keeps the reason on screen', async
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
 });
 
-test('the more menu can save one prepare command for the session directory', async ({ page }) => {
+test('settings can save one prepare command for a project repository', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __projects: [
+      { id: 'p1', name: 'Shop', path: 'C:/work', available: true, preferredTool: null, lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
+      { id: 'p2', name: 'Docs', path: 'C:/docs', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
+    ] });
+  });
   await installWorkbenchMock(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
-  await page.getByRole('button', { name: '更多终端操作' }).click();
-  const menu = page.getByRole('menu', { name: '终端操作' });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const project = page.getByRole('combobox', { name: '环境准备项目' });
+  await expect(project).toHaveValue('p1');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toContain('C:/work');
-  await menu.getByRole('textbox', { name: '环境准备' }).fill('npm ci');
-  await menu.getByRole('menuitem', { name: '保存', exact: true }).click();
+  const input = page.getByRole('textbox', { name: '环境准备' });
+  await input.fill('npm ci');
+  await page.locator('.setting-row').filter({ has: input }).getByRole('button', { name: '保存', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareSaves?: Array<{ directory: string; command: string }> }).__prepareSaves ?? [])).toEqual([{ directory: 'C:/work', command: 'npm ci' }]);
-  await expect(menu.getByRole('textbox', { name: '环境准备' })).toHaveValue('npm ci');
+  await expect(input).toHaveValue('npm ci');
+  await page.evaluate(() => { (window as unknown as { __prepareSaveFails?: boolean }).__prepareSaveFails = true; });
+  await project.selectOption('p2');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toContain('C:/docs');
+  await input.fill('pnpm i');
+  await input.press('Enter');
+  await expect(page.locator('.setting-row').filter({ has: input }).getByRole('alert')).toContainText('保存失败');
 });
