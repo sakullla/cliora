@@ -363,9 +363,9 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  min-height: 18px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -409,8 +409,8 @@
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  height: 22px;
-  min-height: 22px;
+  height: 24px;
+  min-height: 24px;
   margin-left: calc(var(--space-1) * -1);
   padding: 0 var(--space-1);
   border: 0;
@@ -521,8 +521,12 @@
 .row:hover .rowActions,
 .row:focus-within .rowActions,
 .row[data-selected] .rowActions { opacity: 1; pointer-events: auto; }
+.rowActions .rowMoveBtn[data-size],
 .rowActions .rowMenuBtn[data-size],
 .rowActions .rowRemove[data-size] { width: var(--row-h-compact); min-height: 0; height: var(--row-h-compact); color: var(--text-3); }
+.rowActions .rowMoveBtn[data-size] { display: none; width: 24px; height: 24px; }
+.row:hover .rowActions .rowMoveBtn[data-size],
+.row:focus-within .rowActions .rowMoveBtn[data-size] { display: inline-grid; }
 .rowActions .rowRemove[data-variant]:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .railNoMatch { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-3); color: var(--text-3); font-size: var(--fs-caption); text-align: center; }
 .railNoMatch p { margin: 0; }
@@ -751,8 +755,8 @@
   gap: var(--space-1);
   min-width: 0;
   max-width: 300px;
-  height: 22px;
-  min-height: 22px;
+  height: 24px;
+  min-height: 24px;
   margin: 0 calc(var(--space-1_5) * -1);
   padding: 0 var(--space-1_5);
   border: 0;
@@ -1222,7 +1226,7 @@
 /* Git: one chip. Branch name in mono, a worktree glyph for linked checkouts, and a caret only
    when another checkout exists; the worktree list lives in its menu, not in the status line. */
 .worktreeSwitch { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; }
-.gitChip { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-1); min-width: 0; max-width: 260px; height: 20px; min-height: 20px; padding: 0 var(--space-1_5); border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--term-text-2); font-size: var(--fs-micro); white-space: nowrap; }
+.gitChip { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-1); min-width: 0; max-width: 260px; height: 24px; min-height: 24px; padding: 0 var(--space-1_5); border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--term-text-2); font-size: var(--fs-micro); white-space: nowrap; }
 .gitChip > :global(svg) { flex: none; color: var(--term-accent); }
 .gitChip > :global(svg:last-child:not(:first-child)) { color: var(--term-text-3); }
 .gitChipLabel { min-width: 0; overflow: hidden; font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; }

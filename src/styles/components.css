@@ -180,7 +180,7 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
 .toast:hover .toast-text, .toast:focus-within .toast-text { -webkit-line-clamp: unset; }
 .toast-count { flex: none; margin-top: 1px; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--surface-3); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); line-height: 18px; font-variant-numeric: tabular-nums; }
 .toast-count::before { content: "×" attr(data-count); }
-.toast > .toast-close { flex: none; width: 20px; min-height: 20px; margin-left: var(--space-0_5); padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text-3); box-shadow: none; opacity: .75; }
+.toast > .toast-close { flex: none; width: 24px; min-height: 24px; margin-left: var(--space-0_5); padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text-3); box-shadow: none; opacity: .75; }
 .toast:hover > .toast-close, .toast > .toast-close:focus-visible { opacity: 1; }
 .toast > .toast-close:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .toast-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--toast-tone); opacity: .45; transform-origin: left center; animation: toast-progress linear forwards; }

@@ -429,4 +429,67 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   expect(previewNotice.edge).toBe(failure.edge);
   expect(previewNotice.image).toBe('none');
   expect(previewNotice.edgeColor).not.toBe(failure.edgeColor);
+
+  // R6: interactive icon controls and menu items meet the 24x24 CSS px minimum target size.
+  const targetBoxes = await page.evaluate(() => {
+    const selectors = ['.sidebar-toggle', '.sidebar-command', '.theme-switch button', '.nav button', '.error-banner button'];
+    return selectors.flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .filter((el) => el.getClientRects().length > 0)
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        return { selector, width: Math.round(rect.width), height: Math.round(rect.height) };
+      }));
+  });
+  expect(targetBoxes.length).toBeGreaterThan(5);
+  for (const box of targetBoxes) {
+    expect(box.width, `${box.selector} width`).toBeGreaterThanOrEqual(24);
+    expect(box.height, `${box.selector} height`).toBeGreaterThanOrEqual(24);
+  }
+});
+
+test('workbench session rail exposes single-pointer reorder controls alongside drag and keyboard', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions = [
+      { id: 's1', toolId: 'codex', projectId: null, directory: 'C:/alpha', mode: 'normal', running: true, exitCode: null },
+      { id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/beta', mode: 'normal', running: true, exitCode: null },
+    ];
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command.startsWith('plugin:event|')) return 1;
+          return [];
+        },
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const railList = page.getByRole('tablist', { name: '会话列表' });
+  const codex = railList.getByRole('tab', { name: /Codex/ });
+  const codexRow = codex.locator('..');
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
+  await codex.hover();
+  const moveDown = codexRow.getByRole('button', { name: '下移会话：Codex' });
+  await expect(moveDown).toBeVisible();
+  const moveDownBox = await moveDown.boundingBox();
+  expect(moveDownBox!.width).toBeGreaterThanOrEqual(24);
+  expect(moveDownBox!.height).toBeGreaterThanOrEqual(24);
+  await moveDown.click();
+  await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  await codex.hover();
+  const moveUp = codexRow.getByRole('button', { name: '上移会话：Codex' });
+  await expect(moveUp).toBeVisible();
+  await moveUp.click();
+  await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
 });

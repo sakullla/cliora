@@ -61,6 +61,8 @@ export default {
   sessionMenu: '{{name}} session actions',
   pinSession: 'Pin to top',
   unpinSession: 'Unpin',
+  moveSessionUp: 'Move session up',
+  moveSessionDown: 'Move session down',
   kbReorder: 'Move up/down in the session list (or drag it)',
   removeSession: 'Remove session',
   summary: '{{running}} running · {{ended}} ended',
