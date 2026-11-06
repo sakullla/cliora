@@ -153,8 +153,8 @@
 .activity[data-tone='idle'] { color: var(--success); }
 .activity[data-tone='bell'] { color: var(--warning); }
 .activity[data-tone='error'] { color: var(--danger); }
-/* Output already animates the terminal. Keep status indicators steady so a
-   long-running CLI does not also repaint the rail and stage continuously. */
+.activity[data-tone='live'] > svg { animation: wbActivity 1.8s var(--ease) infinite; }
+.activity[data-tone='bell'] > svg { animation: wbBell 2.4s var(--ease) infinite; }
 
 /* Only the stage lives here on wide windows; narrow windows add the session strip on top. */
 .layout {
@@ -247,7 +247,7 @@
   white-space: nowrap;
 }
 .liveDot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--line-strong); }
-.liveDot[data-live] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
+.liveDot[data-live] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); animation: wbLiveDot 1.8s var(--ease) infinite; }
 .railCompactLabel { display: none; }
 .rail .railIconBtn[data-variant] { color: var(--text-3); }
 .rail .railIconBtn[data-variant]:hover:not(:disabled) { background: var(--wb-row-hover); color: var(--text); }
@@ -497,7 +497,7 @@
 .sessionState { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--fw-medium); }
 .sessionTime { font-variant-numeric: tabular-nums; opacity: .85; }
 .sessionMeta[data-tone='live'] .sessionState { color: var(--success); }
-.sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: wbLiveDot 1.8s var(--ease) infinite; }
 .sessionMeta[data-tone='bell'] .sessionState { padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); font-weight: var(--fw-semibold); }
 .sessionMeta[data-tone='error'] .sessionState { color: var(--danger); }
 .sessionMeta[data-tone='pending'] .sessionState { color: var(--warning); }
@@ -575,6 +575,7 @@
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-sm); }
 .rail[data-slim] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 55%, transparent); }
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 70%, transparent), var(--shadow-sm); }
+.rail[data-slim] .sessionIconWrap[data-tone='live']::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--success); border-radius: inherit; opacity: .2; pointer-events: none; animation: wbTileRing 2.4s var(--ease) infinite; }
 .rail[data-slim] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1.5px var(--warning); }
 .rail[data-slim] .row[data-attention] .session:not([aria-selected='true']) { background: transparent; box-shadow: none; }
 .rail[data-slim] .row[data-attention] .sessionIconWrap { background: color-mix(in srgb, var(--warning-soft) 80%, transparent); }
@@ -681,19 +682,18 @@
 .stageBar::after {
   content: '';
   position: absolute;
-  right: 0;
   bottom: -1px;
   left: 0;
+  width: 40%;
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--term-accent), var(--term-accent-2), transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
   opacity: 0;
   pointer-events: none;
+  transform: translateX(-100%);
   transition: opacity var(--medium) var(--ease);
 }
-.window[data-tone='live'] .stageBar::after { opacity: .9; }
-.window[data-tone='bell'] .stageBar::after { opacity: .9; background: var(--term-warning); background-size: 100% 100%; }
+.window[data-tone='live'] .stageBar::after { opacity: .9; animation: wbSweep 2.8s linear infinite; }
+.window[data-tone='bell'] .stageBar::after { width: 100%; opacity: .9; background: var(--term-warning); transform: none; }
 .stageLead { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-3); min-width: 0; }
 .stageTail { display: flex; flex: none; align-items: center; gap: var(--space-2); min-width: 0; }
 .stageIcon {
@@ -1032,7 +1032,7 @@
 .terminalHost { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: clip; }
 .terminalHost :global(.xterm) { height: 100%; padding: 0; }
 .terminalHost :global(.xterm:focus),
-.terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; }
+.terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; box-shadow: none; }
 /* WebView2 anchors the IME at the window origin while this field stays opacity:0. */
 .terminalHost :global(.xterm .xterm-helper-textarea) {
   opacity: 1;
@@ -1557,6 +1557,14 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .dialogSummaryIcon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: none; }
 .dialogActions { position: sticky; bottom: -24px; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin: 0 calc(var(--space-6) * -1) calc(var(--space-6) * -1); padding: var(--space-3) var(--space-6) var(--space-4); border-top: 1px solid var(--line); background: var(--surface); }
 .dialogActions .dialogPrimary { min-width: 112px; }
+.restoreCandidates { display: grid; gap: var(--space-2); min-width: min(560px, 78vw); }
+.restoreCandidate { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 64px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: none; text-align: left; }
+.restoreCandidate:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.restoreCandidateCopy { display: grid; flex: 1 1 auto; gap: var(--space-1); min-width: 0; }
+.restoreCandidateCopy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.restoreCandidateCopy time { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
+.restoreCandidate > code { max-width: 150px; overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.restoreCandidate > :global(svg) { flex: none; color: var(--accent); }
 .banner { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2_5) var(--space-3); margin: var(--space-2_5) var(--space-3) 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-lg); background: var(--danger-soft); color: var(--text); }
 .stage > .banner { margin: var(--space-2) var(--space-2_5) 0; }
 .bannerCopy { display: grid; flex: 1 1 220px; gap: var(--space-0_5); min-width: 0; }
@@ -1568,6 +1576,11 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .loading p { margin: 0; }
 .loadingMark { width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: wbSpin .8s linear infinite; }
 
+@keyframes wbActivity { 0%, 100% { opacity: .72; transform: scaleY(.78); } 50% { opacity: 1; transform: scaleY(1); } }
+@keyframes wbBell { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+@keyframes wbLiveDot { 0%, 100% { opacity: .55; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes wbTileRing { 0%, 100% { opacity: .15; transform: scale(.96); } 50% { opacity: .55; transform: scale(1.02); } }
+@keyframes wbSweep { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
 @keyframes wbBlink { 0%, 55% { opacity: .85; } 56%, 100% { opacity: 0; } }
 @keyframes wbDrop { from { opacity: 0; transform: translateY(-4px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes wbFindIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -1590,6 +1603,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .railAttention,
   .liveDot[data-live],
   .sessionIconWrap,
+  .rail[data-slim] .sessionIconWrap[data-tone='live']::after,
   .sessionMeta .sessionState::before,
   .slimNotice,
   .emptyGlyph,

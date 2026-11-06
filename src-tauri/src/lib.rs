@@ -324,6 +324,7 @@ pub fn run() {
             commands::launch_cli,
             commands::list_workbench_sessions,
             commands::restore_workbench_sessions,
+            commands::restore_workbench_session,
             commands::checkpoint_workbench_sessions,
             commands::forget_workbench_restore,
             commands::list_remote_sessions,

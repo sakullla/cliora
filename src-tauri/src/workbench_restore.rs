@@ -22,9 +22,17 @@ pub struct SavedSession {
     pub context_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreCandidate {
+    pub native_id: String,
+    pub title: String,
+    pub started_at: Option<i64>,
+    pub updated_at: Option<i64>,
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RestoreFailure { pub session: SavedSession, pub detail: String }
+pub struct RestoreFailure { pub session: SavedSession, pub detail: String, pub candidates: Vec<RestoreCandidate> }
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreReport {
@@ -127,25 +135,58 @@ fn history_identities(adapter: &dyn crate::adapters::CliAdapter, sources: &[crat
             Err(error) if error == crate::history::EMPTY_SESSION => return None,
             Err(error) => return Some(Err(error)),
         };
-        // Matching needs identity only. Release transcripts after each parse.
+        // Keep only matching and picker metadata. Release transcripts after each parse.
         Some(Ok(crate::history::ParsedSession {
-            native_id: parsed.native_id, cwd: parsed.cwd, started_at: parsed.started_at,
+            native_id: parsed.native_id, title: parsed.title, cwd: parsed.cwd,
+            started_at: parsed.started_at, updated_at: parsed.updated_at,
             ..Default::default()
         }))
     }).collect()
 }
 
+fn choose_candidate<'a>(session_id: &str, candidates: &'a [&crate::history::ParsedSession], selection: Option<(&str, &str)>) -> Result<&'a crate::history::ParsedSession, String> {
+    if let Some((_, native_id)) = selection.filter(|(id, _)| *id == session_id) {
+        return candidates.iter().copied().find(|parsed| parsed.native_id.as_deref() == Some(native_id))
+            .ok_or_else(|| "所选会话已不在此终端的可恢复范围内，请重新选择".into());
+    }
+    match candidates {
+        [] => Err("尚未找到原生会话记录；可重试恢复，或从新会话启动".into()),
+        [parsed] => Ok(*parsed),
+        _ => Err("发现多条可能的会话，请选择要恢复的原会话".into()),
+    }
+}
+
+fn restore_candidate(parsed: &crate::history::ParsedSession) -> RestoreCandidate {
+    RestoreCandidate {
+        native_id: parsed.native_id.clone().unwrap_or_default(), title: parsed.title.clone(),
+        started_at: parsed.started_at, updated_at: parsed.updated_at,
+    }
+}
+
 pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<RestoreReport, String> {
+    restore_inner(db, registry, home, None)
+}
+
+pub fn restore_selected(db: &Database, registry: &Registry, home: &Path, session_id: &str, native_id: &str) -> Result<RestoreReport, String> {
+    restore_inner(db, registry, home, Some((session_id, native_id)))
+}
+
+fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Option<(&str, &str)>) -> Result<RestoreReport, String> {
     let _guard = RESTORING.lock().map_err(|_| "工作台恢复正在结束，请重试")?;
     let live: HashSet<_> = crate::session_host::list().into_iter().map(|session| session.id).collect();
     let all = list(db)?;
     let saved: Vec<_> = all.iter().filter(|session| !live.contains(&session.id)).cloned().collect();
+    if selection.is_some_and(|(id, _)| !saved.iter().any(|session| session.id == id)) {
+        return Err("恢复记录不存在或已处理".into());
+    }
     let mut report = RestoreReport::default();
     // Discovery is shared by tabs with the same adapter and account context.
     let mut histories: HashMap<(String, Option<String>), Result<Vec<crate::history::ParsedSession>, String>> = HashMap::new();
     let until = now();
     let mut claimed = HashSet::new();
     for session in &saved {
+        if selection.is_some_and(|(id, _)| id != session.id) { continue; }
+        let mut choices = Vec::new();
         let attempt = (|| -> Result<String, String> {
             let adapter = registry.get(&session.tool_id).ok_or("此 CLI 已不可用，恢复记录已保留")?;
             if !adapter.history_supported() { return Err("此 CLI 尚不支持精确恢复；请从新会话重新启动".into()); }
@@ -161,13 +202,19 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
                 history_identities(adapter, &sources)
             }).as_ref().map_err(Clone::clone)?;
             let candidates: Vec<_> = history.iter().filter(|parsed| matches(session, parsed, &saved, &all, until)).collect();
-            if candidates.len() != 1 { return Err(if candidates.is_empty() { "尚未找到原生会话记录；可重试恢复，或从新会话启动" } else { "发现多条可能的会话，未自动选择；请到记录页选择原会话" }.into()); }
-            let parsed = candidates[0];
+            let parsed = match choose_candidate(&session.id, &candidates, selection) {
+                Ok(parsed) => parsed,
+                Err(detail) => {
+                    if !candidates.is_empty() { choices = candidates.iter().map(|parsed| restore_candidate(parsed)).collect(); }
+                    return Err(detail);
+                },
+            };
             let native = parsed.native_id.clone().ok_or("原会话缺少恢复 ID")?;
-            // Two tabs launched together must never both attach to the same
-            // ambiguous history record, even if only one has written a file.
-            if saved.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && matches(other, parsed, &saved, &all, until)).count() != 1 {
-                return Err("多个终端对应同一条可能的会话；请到记录页明确选择".into());
+            // Automatic restoration never guesses which simultaneously opened tab owns a
+            // conversation. An explicit user choice resolves only the selected saved tab.
+            if selection.is_none() && saved.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && matches(other, parsed, &saved, &all, until)).count() != 1 {
+                choices = vec![restore_candidate(parsed)];
+                return Err("多个终端对应同一条可能的会话；请明确选择后恢复".into());
             }
             if !claimed.insert((key, native.clone())) { return Err("此会话已经恢复".into()); }
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
@@ -186,7 +233,7 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
         })();
         match attempt {
             Ok(id) => { report.restored.insert(session.id.clone(), id); }
-            Err(detail) => report.failures.push(RestoreFailure { session: session.clone(), detail }),
+            Err(detail) => report.failures.push(RestoreFailure { session: session.clone(), detail, candidates: choices }),
         }
     }
     Ok(report)
@@ -247,6 +294,16 @@ mod tests {
         let exact = SavedSession { native_id: Some("one".into()), ..saved };
         assert!(candidate(&exact, &parsed, 20_000));
         parsed.cwd = Some("/other".into()); assert!(!candidate(&exact, &parsed, 20_000));
+    }
+    #[test]
+    fn explicit_candidate_choice_disambiguates_without_guessing() {
+        let session = |id: &str| { let mut parsed = crate::history::ParsedSession::new(); parsed.native_id = Some(id.into()); parsed };
+        let (one, two) = (session("one"), session("two"));
+        let candidates = [&one, &two];
+        assert!(choose_candidate("tab", &candidates, None).is_err());
+        assert_eq!(choose_candidate("tab", &candidates, Some(("tab", "two"))).unwrap().native_id.as_deref(), Some("two"));
+        assert!(choose_candidate("tab", &candidates, Some(("tab", "missing"))).is_err());
+        assert_eq!(choose_candidate("tab", &[&one], None).unwrap().native_id.as_deref(), Some("one"));
     }
     #[test]
     fn conversation_named_by_another_tab_is_not_ambiguous() {

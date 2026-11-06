@@ -22,6 +22,10 @@ test.describe('product WebGL input integration', () => {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     const input = page.locator('.xterm-helper-textarea:visible');
     await input.focus();
+    expect(await input.evaluate(node => {
+      const style = getComputedStyle(node);
+      return { border: style.borderWidth, boxShadow: style.boxShadow };
+    })).toEqual({ border: '0px', boxShadow: 'none' });
     await resetWrites(page);
     const commit = async () => {
       await input.evaluate(node => {
@@ -242,6 +246,10 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             harness.__restoreCalls = (harness.__restoreCalls ?? 0) + 1;
             return harness.__restoreReport ?? { restored: {}, failures: [] };
           }
+          if (command === 'restore_workbench_session') {
+            Object.assign(window, { __restoreChoice: args });
+            return { restored: { [args.sessionId]: 's1' }, failures: [] };
+          }
           if (command === 'forget_workbench_restore') { Object.assign(window, { __forgottenRestore: args.sessionId }); return null; }
           if (command === 'open_external_url') {
             if ((window as unknown as { __failOpen?: boolean }).__failOpen) throw new Error('浏览器不可用');
@@ -421,11 +429,16 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await expect(stage.getByRole('img', { name: '等待输入', exact: true })).toBeVisible();
 
   const rail = page.getByRole('complementary', { name: '会话列表' });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   await expect(rail).toHaveAttribute('data-slim', 'true');
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('compact output\r\n'));
   await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="live"]')).toBeVisible();
   await expect(workbench.locator('[data-activity-slot="rail"][data-activity-icon="idle"]')).toBeVisible();
+  const compactLive = rail.locator('[data-rail-icon][data-tone="live"]');
+  expect(await compactLive.evaluate(node => getComputedStyle(node, '::after').animationName)).toContain('wbTileRing');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  expect(await compactLive.evaluate(node => getComputedStyle(node, '::after').animationName)).toBe('none');
   await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
   await page.setViewportSize({ width: 640, height: 760 });
   await expect(root).toHaveAttribute('data-narrow', 'true');
@@ -443,7 +456,7 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('animated output\r\n'));
   await expect(statusIcon).toHaveAttribute('data-activity-icon', 'live');
-  await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
+  await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', /wbActivity/);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(statusIcon.locator('svg')).toHaveCSS('animation-name', 'none');
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题' }).click();
@@ -1544,7 +1557,7 @@ test('switching back to a session does not resend its unchanged grid', async ({ 
 });
 
 test.describe('session switching with the production renderer', () => {
-  test('synchronized TUI redraws keep status decorations still and avoid redundant frame scheduling', async ({ page }) => {
+  test('synchronized TUI redraws keep status motion lightweight and avoid redundant frame scheduling', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -1574,9 +1587,18 @@ test.describe('session switching with the production renderer', () => {
     });
     expect(frames).toBeLessThan(90 * 4);
     for (const icon of await page.locator('[data-activity-icon="live"] svg').all()) {
-      await expect(icon).toHaveCSS('animation-name', 'none');
+      await expect(icon).toHaveCSS('animation-name', /wbActivity/);
     }
-    expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.effect?.getTiming().iterations === Infinity).length)).toBe(0);
+    const motion = await page.evaluate(() => {
+      const animations = document.getAnimations().filter(animation => animation.effect?.getTiming().iterations === Infinity);
+      const paintProperties = new Set(['boxShadow', 'backgroundPosition', 'backgroundColor', 'borderColor', 'width', 'height', 'top', 'left']);
+      return {
+        count: animations.length,
+        heavy: [...new Set(animations.flatMap(animation => (animation.effect?.getKeyframes() ?? []).flatMap(frame => Object.keys(frame).filter(key => paintProperties.has(key)))))],
+      };
+    });
+    expect(motion.count).toBeGreaterThan(0);
+    expect(motion.heavy).toEqual([]);
     await page.evaluate(() => (window as any).__output('\x1b[6n'));
     await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
     await page.getByRole('button', { name: '查找输出', exact: true }).click();
@@ -1798,6 +1820,27 @@ test('unresolved restoration stays visible and can be dismissed explicitly', asy
   await page.getByRole('button', { name: '不再恢复', exact: true }).click();
   await expect(page.getByRole('button', { name: '不再恢复', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __forgottenRestore: string }).__forgottenRestore)).toBe('missing');
+});
+
+test('ambiguous restoration lets the user choose a candidate without clearing other pending tabs', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, { __restoreReport: { restored: {}, failures: [
+    { session: { id: 'ambiguous', toolId: 'codex', directory: 'C:/work', mode: 'normal' }, detail: '发现多条可能的会话', candidates: [
+      { nativeId: 'native-one', title: '第一个会话', startedAt: 1767225600000, updatedAt: 1767225600000 },
+      { nativeId: 'native-two', title: '第二个会话', startedAt: 1767312000000, updatedAt: 1767312000000 },
+    ] },
+    { session: { id: 'other', toolId: 'codex', directory: 'C:/other', mode: 'normal' }, detail: '另一个待恢复', candidates: [] },
+  ] } }));
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '选择会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '选择要恢复的原会话' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /第一个会话/ })).toBeVisible();
+  await dialog.getByRole('button', { name: /第二个会话/ }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText('发现多条可能的会话', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('另一个待恢复', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __restoreChoice: unknown }).__restoreChoice)).toEqual({ sessionId: 'ambiguous', nativeId: 'native-two' });
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
 });
 
 test('replay uses the native grid before interpreting cursor-addressed output', async ({ page }) => {

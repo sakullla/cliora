@@ -204,7 +204,7 @@ test('configuration dialog names the profile, marks the preview tab and reports 
   await page.getByRole('button', { name: '修改', exact: true }).last().click();
   const dialog = page.getByRole('dialog', { name: /^修改配置 · / });
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('[data-config-context]')).toContainText('全局');
+  await expect(dialog.locator('[data-config-context]')).not.toContainText('全局');
   await expect(dialog.locator('[data-config-context]')).toContainText('没有未保存的修改');
   await expect(dialog.getByText('没有未保存的修改', { exact: true }).last()).toBeVisible();
   await dialog.getByLabel('配置名称').fill('改名后的配置');

@@ -442,26 +442,49 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState('');
   const [restoreFailures, setRestoreFailures] = useState<import('../../types/launch').WorkbenchRestoreReport['failures']>([]);
+  const [restoreChoice, setRestoreChoice] = useState<import('../../types/launch').WorkbenchRestoreReport['failures'][number] | null>(null);
+  const [restoreChoiceError, setRestoreChoiceError] = useState('');
+  async function applyRestoreReport(report: import('../../types/launch').WorkbenchRestoreReport, selectedRestoreId?: string) {
+    // Older preview bridges may not implement restoration.
+    if (!report || !report.restored || !Array.isArray(report.failures)) return;
+    setRestoreFailures(current => selectedRestoreId
+      ? [...current.filter(item => item.session.id !== selectedRestoreId), ...report.failures]
+      : report.failures);
+    if (!Object.keys(report.restored).length) return;
+    setArrangement(current => remapArrangement(current, report.restored));
+    const listed = await native.listWorkbenchSessions();
+    applyListedSessions(listed);
+    setSelectedId(current => {
+      let previous: string | null = null;
+      try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
+      return (previous && report.restored[previous]) || current || listed[0]?.id || null;
+    });
+  }
   async function restoreLocalSessions() {
     if (restoring) return;
     setRestoring(true);
     setRestoreError('');
+    try { await applyRestoreReport(await native.restoreWorkbenchSessions()); }
+    catch (value) { setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext'))); }
+    finally { setRestoring(false); }
+  }
+  async function restoreChosenCandidate(nativeId: string) {
+    const choice = restoreChoice;
+    if (!choice || restoring) return;
+    setRestoring(true);
+    setRestoreChoiceError('');
     try {
-      const report = await native.restoreWorkbenchSessions();
-      // Older preview bridges may not implement restoration.
-      if (!report || !report.restored || !Array.isArray(report.failures)) return;
-      setRestoreFailures(report.failures);
-      if (!Object.keys(report.restored).length) return;
-      setArrangement(current => remapArrangement(current, report.restored));
-      const listed = await native.listWorkbenchSessions();
-      applyListedSessions(listed);
-      setSelectedId(current => {
-        let previous: string | null = null;
-        try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
-        return (previous && report.restored[previous]) || current || listed[0]?.id || null;
-      });
+      const report = await native.restoreWorkbenchSession(choice.session.id, nativeId);
+      await applyRestoreReport(report, choice.session.id);
+      if (report.restored[choice.session.id]) {
+        setRestoreChoice(null);
+        return;
+      }
+      const failure = report.failures.find(item => item.session.id === choice.session.id);
+      if (failure) setRestoreChoice(failure);
+      setRestoreChoiceError(failure?.detail ?? t('sessions.restoreFailed'));
     } catch (value) {
-      setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext')));
+      setRestoreChoiceError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')));
     } finally { setRestoring(false); }
   }
   useEffect(() => {
@@ -1995,9 +2018,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setActionError('')} aria-label={t('common.dismissError')} /></div>}
         {restoring && <div className={styles.banner} role="status"><p>{t('sessions.restoringPrevious')}</p></div>}
         {restoreError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{restoreError}</p></div><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button></div>}
-        {restoreFailures.map(({ session, detail }) => <div className={styles.banner} role="status" key={session.id}>
+        {restoreFailures.map(({ session, detail, candidates = [] }) => <div className={styles.banner} role="status" key={session.id}>
           <div className={styles.bannerCopy}><strong>{t('sessions.restorePending', { tool: tools.find(tool => tool.id === session.toolId)?.name ?? session.toolId })}</strong><p>{displayPath(session.directory)} · {detail}</p></div>
-          <div className={styles.bannerActions}><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button><Button size="sm" disabled={restoring} onClick={() => void native.forgetWorkbenchRestore(session.id).then(() => setRestoreFailures(current => current.filter(item => item.session.id !== session.id))).catch(value => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button></div>
+          <div className={styles.bannerActions}>{candidates.length > 0 && <Button variant="primary" size="sm" disabled={restoring} onClick={() => { setRestoreChoice({ session, detail, candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}<Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button><Button size="sm" disabled={restoring} onClick={() => void native.forgetWorkbenchRestore(session.id).then(() => setRestoreFailures(current => current.filter(item => item.session.id !== session.id))).catch(value => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button></div>
         </div>)}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setNotice('')} aria-label={t('common.dismissError')} /></div>}
 
@@ -2212,6 +2235,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       </div>, document.body);
     })()}
 
+    <GuideDialog open={!!restoreChoice} title={t('sessions.restoreChoiceTitle')} hint={t('sessions.restoreChoiceHint')} closeDisabled={restoring} onClose={() => { setRestoreChoice(null); setRestoreChoiceError(''); }}>
+      <div className={styles.restoreCandidates}>
+        {restoreChoiceError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{restoreChoiceError}</p></div></div>}
+        {restoreChoice?.candidates.map(candidate => {
+          const timestamp = candidate.updatedAt ?? candidate.startedAt;
+          return <button type="button" className={styles.restoreCandidate} key={candidate.nativeId} disabled={restoring} onClick={() => void restoreChosenCandidate(candidate.nativeId)}>
+            <span className={styles.restoreCandidateCopy}><strong>{candidate.title || t('records.page.untitled')}</strong><time dateTime={timestamp === null ? undefined : new Date(timestamp).toISOString()}>{timestamp === null ? t('records.format.timeUnknown') : new Date(timestamp).toLocaleString()}</time></span>
+            <code title={candidate.nativeId}>{candidate.nativeId}</code><Icon name="arrowRight" size={16} />
+          </button>;
+        })}
+      </div>
+    </GuideDialog>
     <GuideDialog open={newDialogOpen} title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
       <div className={styles.dialogForm}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}

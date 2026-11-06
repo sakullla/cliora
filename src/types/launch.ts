@@ -50,7 +50,8 @@ export type WorktreeCleanupReport = { removed: boolean; needsConfirmation: boole
 export type RemoteSessionEndResult = { outcome: 'confirmed_absent' | 'failed' | 'unknown'; stage: string; exitCode: number | null };
 export type WorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; running: boolean; exitCode: number | null; startedAt?: number; connectionState?: 'connecting' | 'connected' | 'disconnected' | 'remote_ended' | 'unknown' | 'closed'; exitReason?: 'running' | 'process_exit' | 'connection_lost' | 'remote_ended' | 'unknown'; reattachable?: boolean; remoteSessionId?: string | null; remoteEndResult?: RemoteSessionEndResult | null; stateRevision?: number };
 export type SavedWorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; startedAt: number; stoppedAt: number | null; nativeId: string | null; accountId: string | null; contextId: string | null };
-export type WorkbenchRestoreReport = { restored: Record<string, string>; failures: Array<{ session: SavedWorkbenchSession; detail: string }> };
+export type WorkbenchRestoreCandidate = { nativeId: string; title: string; startedAt: number | null; updatedAt: number | null };
+export type WorkbenchRestoreReport = { restored: Record<string, string>; failures: Array<{ session: SavedWorkbenchSession; detail: string; candidates: WorkbenchRestoreCandidate[] }> };
 export type TrayStatus = { available: boolean; error: string | null };
 
 export type TrayRepairTarget = {
