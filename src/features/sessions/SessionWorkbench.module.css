@@ -153,8 +153,8 @@
 .activity[data-tone='idle'] { color: var(--success); }
 .activity[data-tone='bell'] { color: var(--warning); }
 .activity[data-tone='error'] { color: var(--danger); }
-.activity[data-tone='live'] > svg { animation: wbActivity 1.8s var(--ease) infinite; }
-.activity[data-tone='bell'] > svg { animation: wbPulse 1.8s var(--ease) infinite; }
+/* Output already animates the terminal. Keep status indicators steady so a
+   long-running CLI does not also repaint the rail and stage continuously. */
 
 /* Only the stage lives here on wide windows; narrow windows add the session strip on top. */
 .layout {
@@ -247,7 +247,7 @@
   white-space: nowrap;
 }
 .liveDot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--line-strong); }
-.liveDot[data-live] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); animation: wbBreathe 2.4s var(--ease) infinite; }
+.liveDot[data-live] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
 .railCompactLabel { display: none; }
 .rail .railIconBtn[data-variant] { color: var(--text-3); }
 .rail .railIconBtn[data-variant]:hover:not(:disabled) { background: var(--wb-row-hover); color: var(--text); }
@@ -497,7 +497,7 @@
 .sessionState { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--fw-medium); }
 .sessionTime { font-variant-numeric: tabular-nums; opacity: .85; }
 .sessionMeta[data-tone='live'] .sessionState { color: var(--success); }
-.sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: wbBlink 1.2s ease-in-out infinite; }
+.sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .sessionMeta[data-tone='bell'] .sessionState { padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); font-weight: var(--fw-semibold); }
 .sessionMeta[data-tone='error'] .sessionState { color: var(--danger); }
 .sessionMeta[data-tone='pending'] .sessionState { color: var(--warning); }
@@ -505,7 +505,7 @@
 .row:focus-within .sessionMeta,
 .row[data-selected] .sessionMeta { visibility: hidden; }
 .slimNotice { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--accent); box-sizing: content-box; }
-.slimNotice[data-attention] { background: var(--warning); animation: wbPulse 1.8s var(--ease) infinite; }
+.slimNotice[data-attention] { background: var(--warning); }
 .unreadDot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .sessionPlace { display: flex; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; white-space: nowrap; }
 /* Middle truncation: the shared head folds to an ellipsis long before the distinguishing tail. */
@@ -573,7 +573,7 @@
 .rail[data-slim] .sessionIconWrap { width: 38px; height: 38px; border-radius: var(--radius-lg); background: transparent; box-shadow: none; }
 .rail[data-slim] .session:hover:not(:disabled) .sessionIconWrap { background: var(--wb-row-hover); transform: none; }
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-sm); }
-.rail[data-slim] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 55%, transparent); animation: wbTileBreathe 2.4s var(--ease) infinite; }
+.rail[data-slim] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 55%, transparent); }
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 70%, transparent), var(--shadow-sm); }
 .rail[data-slim] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1.5px var(--warning); }
 .rail[data-slim] .row[data-attention] .session:not([aria-selected='true']) { background: transparent; box-shadow: none; }
@@ -597,8 +597,6 @@
 .row[data-drop='before']::before { top: -2px; }
 .row[data-drop='after']::before { bottom: -2px; }
 
-@keyframes wbBreathe { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 6%, transparent); } }
-@keyframes wbTileBreathe { 50% { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 25%, transparent), 0 0 0 4px color-mix(in srgb, var(--success) 9%, transparent); } }
 @keyframes wbBlink { 50% { opacity: .35; } }
 
 /* Stage chrome ------------------------------------------------------- */
@@ -694,7 +692,7 @@
   pointer-events: none;
   transition: opacity var(--medium) var(--ease);
 }
-.window[data-tone='live'] .stageBar::after { opacity: .9; animation: wbSweep 1.6s linear infinite; }
+.window[data-tone='live'] .stageBar::after { opacity: .9; }
 .window[data-tone='bell'] .stageBar::after { opacity: .9; background: var(--term-warning); background-size: 100% 100%; }
 .stageLead { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-3); min-width: 0; }
 .stageTail { display: flex; flex: none; align-items: center; gap: var(--space-2); min-width: 0; }
@@ -1370,7 +1368,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .emptyGlyphBar i:nth-child(3) { background: var(--wb-glyph-green); opacity: .75; }
 .emptyGlyphLine { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-3); color: var(--wb-glyph-ink); font-family: var(--font-mono); font-size: 22px; }
 .emptyGlyphLine b { font-weight: var(--fw-semibold); }
-.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; animation: wbBlink 1.2s steps(1) infinite; }
+.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; }
 .emptyEyebrow { display: inline-flex; align-items: center; gap: var(--space-1_5); margin-top: var(--space-5); padding: 0 var(--space-2_5); border: 1px solid var(--accent-line); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-soft) 80%, var(--surface)); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-bold); letter-spacing: .14em; line-height: 22px; text-transform: uppercase; }
 .emptyHero h2 { margin: var(--space-3) 0 0; color: var(--text); font-family: var(--font-display); font-size: clamp(26px, 2.6vw, 34px); font-weight: var(--fw-bold); letter-spacing: -.8px; line-height: 1.2; text-wrap: balance; }
 .emptyHero > p { max-width: min(640px, 100%); margin: var(--space-2_5) 0 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.7; text-wrap: pretty; }
@@ -1570,13 +1568,10 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .loading p { margin: 0; }
 .loadingMark { width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: wbSpin .8s linear infinite; }
 
-@keyframes wbActivity { 0%, 100% { opacity: .72; transform: scaleY(.72); } 50% { opacity: 1; transform: scaleY(1); } }
-@keyframes wbPulse { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
 @keyframes wbBlink { 0%, 55% { opacity: .85; } 56%, 100% { opacity: 0; } }
 @keyframes wbDrop { from { opacity: 0; transform: translateY(-4px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes wbFindIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @keyframes wbFadeRise { from { opacity: 0; transform: translate(-50%, 4px); } to { opacity: 1; transform: translate(-50%, 0); } }
-@keyframes wbSweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
 @keyframes wbFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes wbCursorBar { 0%, 50%, 100% { box-shadow: 2px 0 0 0 var(--term-cursor) inset; } 65%, 88% { box-shadow: 2px 0 0 0 transparent inset; } }
 @keyframes wbCursorBlock { 0%, 50%, 100% { background-color: var(--term-cursor); color: var(--term-bg); } 65%, 88% { background-color: transparent; color: var(--term-fg); } }
