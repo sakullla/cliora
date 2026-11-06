@@ -1,0 +1,103 @@
+{
+  "runtime": "WebView2 156.0.4314.58",
+  "durationSeconds": 30,
+  "input": "synthetic synchronized TUI updates, 33ms interval",
+  "isolatedOffscreenHost": true,
+  "results": [
+    {
+      "mode": "baseline",
+      "redraws": 909,
+      "animationFrameRequests": 5408,
+      "cssAnimations": 6,
+      "metrics": {
+        "LayoutCount": 5,
+        "RecalcStyleCount": 2286,
+        "LayoutDuration": 0.003348,
+        "RecalcStyleDuration": 0.659037,
+        "DevToolsCommandDuration": 0.000548,
+        "ScriptDuration": 1.272881,
+        "V8CompileDuration": 0,
+        "TaskDuration": 3.872154,
+        "TaskOtherDuration": 1.93634,
+        "JSHeapUsedSize": 1086124,
+        "JSHeapTotalSize": 4718592
+      }
+    },
+    {
+      "mode": "dom",
+      "redraws": 909,
+      "animationFrameRequests": 5365,
+      "cssAnimations": 7,
+      "metrics": {
+        "LayoutCount": 1747,
+        "RecalcStyleCount": 2668,
+        "LayoutDuration": 0.574687,
+        "RecalcStyleDuration": 0.853442,
+        "DevToolsCommandDuration": 0.000425,
+        "ScriptDuration": 1.046932,
+        "V8CompileDuration": 0,
+        "TaskDuration": 4.921145,
+        "TaskOtherDuration": 2.445659,
+        "JSHeapUsedSize": -862824,
+        "JSHeapTotalSize": -786432
+      }
+    },
+    {
+      "mode": "no-animation",
+      "redraws": 910,
+      "animationFrameRequests": 5333,
+      "cssAnimations": 0,
+      "metrics": {
+        "LayoutCount": 4,
+        "RecalcStyleCount": 2,
+        "LayoutDuration": 0.00187,
+        "RecalcStyleDuration": 0.001274,
+        "DevToolsCommandDuration": 0.000453,
+        "ScriptDuration": 1.405992,
+        "V8CompileDuration": 0,
+        "TaskDuration": 2.335523,
+        "TaskOtherDuration": 0.9259339999999999,
+        "JSHeapUsedSize": 3120276,
+        "JSHeapTotalSize": 3145728
+      }
+    },
+    {
+      "mode": "optimized",
+      "redraws": 911,
+      "animationFrameRequests": 1893,
+      "cssAnimations": 0,
+      "metrics": {
+        "LayoutCount": 5,
+        "RecalcStyleCount": 16,
+        "LayoutDuration": 0.002231,
+        "RecalcStyleDuration": 0.004357,
+        "DevToolsCommandDuration": 0.0005329999999999999,
+        "ScriptDuration": 0.63788,
+        "V8CompileDuration": 0,
+        "TaskDuration": 1.218332,
+        "TaskOtherDuration": 0.573331,
+        "JSHeapUsedSize": -474524,
+        "JSHeapTotalSize": 2621440
+      }
+    },
+    {
+      "mode": "final-0.4.102",
+      "redraws": 909,
+      "animationFrameRequests": 1888,
+      "cssAnimations": 0,
+      "metrics": {
+        "LayoutCount": 5,
+        "RecalcStyleCount": 21,
+        "LayoutDuration": 0.001904,
+        "RecalcStyleDuration": 0.004598,
+        "DevToolsCommandDuration": 0.0005420000000000001,
+        "ScriptDuration": 0.621207,
+        "V8CompileDuration": 0,
+        "TaskDuration": 1.15407,
+        "TaskOtherDuration": 0.525819,
+        "JSHeapUsedSize": 3471264,
+        "JSHeapTotalSize": 2097152
+      }
+    }
+  ]
+}
