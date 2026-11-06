@@ -1317,6 +1317,41 @@ test('wrapped paths, quoted spaces and OSC file links open intact and surface mi
   await expect(page.getByRole('alert')).toContainText('文件或文件夹不存在');
 });
 
+test('a wide character wrapped at the last column keeps the file path whole', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 720 });
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(`\r\n${'x'.repeat(240)}\r\n`));
+  const columnCount = () => page.evaluate(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>('.xterm-rows > div')].filter((row) => row.getClientRects().length);
+    return Math.max(0, ...rows.map((row) => (row.textContent ?? '').match(/x+/)?.[0].length ?? 0));
+  });
+  await expect.poll(columnCount).toBeGreaterThan(24);
+  const cols = await columnCount();
+  const prefix = '/C:/work/docs/';
+  const beforeWidth = 2 + prefix.length;
+  expect(cols).toBeGreaterThan(beforeWidth + 1);
+  const path = `${prefix}${'a'.repeat(cols - 1 - beforeWidth)}通用工作流运行时约束与性能优化.md`;
+  await page.evaluate((path) => (window as unknown as { __output: (text: string) => void }).__output(`\r\n（${path}）。\r\n`), path);
+  await expect.poll(() => page.evaluate((prefix) => {
+    const rows = [...document.querySelectorAll<HTMLElement>('.xterm-rows > div')].filter((row) => row.getClientRects().length);
+    const index = rows.findIndex((row) => (row.textContent ?? '').includes(prefix));
+    const first = rows[index]?.textContent ?? '';
+    const next = (rows[index + 1]?.textContent ?? '').replace(/\s/g, '');
+    return index >= 0 && !first.includes('通') && next.startsWith('通');
+  }, prefix)).toBe(true);
+  const requests = () => page.evaluate(() => (window as unknown as { __pathOpens: Array<{ path: string }> }).__pathOpens.map(item => item.path));
+  for (const label of [prefix, '优化.md']) {
+    const point = await pointForTerminalText(page, label);
+    await page.mouse.move(point.x, point.y);
+    await expect(page.getByRole('tooltip').locator('code')).toHaveText(path);
+    await page.keyboard.down('Control');
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up('Control');
+    await page.mouse.move(8, 8);
+  }
+  await expect.poll(requests).toEqual([path, path]);
+});
+
 test('long output does not probe files and overlong logical lines keep the terminal responsive', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\n' + 'src/file.ts\r\n'.repeat(1000) + './' + 'a'.repeat(20_000) + '/last.txt\r\n'));

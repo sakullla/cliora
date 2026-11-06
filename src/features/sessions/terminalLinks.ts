@@ -38,25 +38,30 @@ function logicalRows(term: Terminal, bufferLineNumber: number): { first: number;
   return mayContainTerminalLink(text) ? { first, last } : null;
 }
 
-function readPhysicalLine(term: Terminal, line: IBufferLine, row: number): PhysicalLine {
+function readPhysicalLine(term: Terminal, line: IBufferLine, row: number, trimWrapPadding: boolean): PhysicalLine {
   let text = '';
   const columns: number[] = [];
   const ends: number[] = [];
   const cell = term.buffer.active.getNullCell();
+  // A wide character that does not fit the last column is moved to the next row, and xterm
+  // clears the leftover cell to codepoint 0. That cell has no characters; only a real space does.
+  let contentLength = 0;
   for (let column = 0; column < term.cols;) {
     const value = line.getCell(column, cell);
-    const chars = value?.getChars() || ' ';
+    const chars = value?.getChars() ?? '';
     const width = value?.getWidth() || 1;
-    for (const char of chars) {
+    for (const char of chars || ' ') {
       text += char;
       for (let index = 0; index < char.length; index += 1) {
         columns.push(column);
         ends.push(column + width);
       }
     }
+    if (chars) contentLength = text.length;
     column += width;
   }
-  return { row, text, columns, ends };
+  if (!trimWrapPadding || contentLength === text.length) return { row, text, columns, ends };
+  return { row, text: text.slice(0, contentLength), columns: columns.slice(0, contentLength), ends: ends.slice(0, contentLength) };
 }
 
 function readLogicalLines(term: Terminal, bufferLineNumber: number): PhysicalLine[] {
@@ -69,7 +74,7 @@ function readLogicalLines(term: Terminal, bufferLineNumber: number): PhysicalLin
     const line = buffer.getLine(row);
     if (!line) break;
     if (lines.length >= LOGICAL_LINE_LIMIT || length + term.cols > TERMINAL_LINK_TEXT_LIMIT) return [];
-    const physical = readPhysicalLine(term, line, row);
+    const physical = readPhysicalLine(term, line, row, row < rows.last);
     length += physical.text.length;
     if (length > TERMINAL_LINK_TEXT_LIMIT) return [];
     lines.push(physical);
