@@ -515,8 +515,13 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
 
   await page.keyboard.press('Control+K');
   await expect(dialog).toBeVisible();
-  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('没有这个页面');
+  const combobox = dialog.getByRole('combobox', { name: '搜索页面、工具或项目' });
+  await combobox.fill('没有这个页面');
   await expect(dialog.getByRole('status')).toContainText('没有匹配');
+  await expect(dialog.locator('#command-list').getByRole('button', { name: '清空搜索' })).toBeVisible();
+  await dialog.locator('#command-list').getByRole('button', { name: '清空搜索' }).click();
+  await expect(combobox).toHaveValue('');
+  await expect(dialog.getByRole('option', { name: /设置/ })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('dialog')).toHaveCount(0);
 
@@ -703,6 +708,13 @@ test('command palette library entry jumps to the library page and opens the item
   await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
+  // Empty query prioritizes recent sessions ahead of pages.
+  await expect(dialog.locator('.command-group').first()).toHaveText('最近会话');
+  // Secondary action on a recent session jumps to Records instead of resuming.
+  await dialog.getByRole('button', { name: '面板会话1 · 在记录中查看' }).click();
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+
+  await page.keyboard.press('Control+K');
   await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('面板规则2');
   await page.keyboard.press('Enter');
   await expect(page.locator('dialog')).toHaveCount(0);
@@ -713,6 +725,47 @@ test('command palette library entry jumps to the library page and opens the item
   await expect(editor).toBeVisible();
   await expect(editor.getByLabel('标题')).toHaveValue('面板规则2');
   await expect(editor.getByRole('button', { name: '复制全文' })).toBeVisible();
+});
+
+test('command palette preserves local navigation when async sources fail and can retry', async ({ page }) => {
+  await page.addInitScript(() => {
+    let failSources = true;
+    Object.assign(window, {
+      isTauri: true,
+      __healPaletteSources: () => { failSources = false; },
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects') {
+            if (failSources) throw new Error('projects read failed');
+            return [{ id: 'p-recovered', name: '恢复后的项目', path: 'C:/recovered', available: true, preferredTool: 'codex', lastOpened: 10, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+          }
+          if (command === 'list_history_sessions' || command === 'list_library_items') {
+            if (failSources) throw new Error('history read failed');
+            return [];
+          }
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command.startsWith('plugin:event|')) return 1;
+          return [];
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.command-source-notice')).toContainText('部分最近内容暂未读入');
+  // Local page and tool navigation remain available despite async failures.
+  await expect(dialog.getByRole('option', { name: /设置/ })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: /Codex/ })).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __healPaletteSources: () => void }).__healPaletteSources());
+  await dialog.getByRole('button', { name: '重试读取' }).click();
+  await expect(dialog.locator('.command-source-notice')).toHaveCount(0);
+  await expect(dialog.getByRole('option', { name: /恢复后的项目/ })).toBeVisible();
 });
 
 test('workbench separates two sessions, marks a self-exit, and returns to management pages', async ({ page }) => {

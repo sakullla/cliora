@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
 import { ToolIcon } from './ToolIcon';
+import { Button } from './ui';
 import { withMod } from '../lib/shortcut';
 
 export type CommandItem = {
@@ -12,10 +13,38 @@ export type CommandItem = {
   keywords?: string;
   icon?: IconName;
   toolId?: string;
+  /** Optional context boost when ranking search matches (e.g. current tool or active page). */
+  contextBoost?: number;
   run: () => void;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
 };
 
-export function CommandPalette({ open, commands, onClose }: { open: boolean; commands: CommandItem[]; onClose: () => void }) {
+function matchScore(item: CommandItem, needle: string): number {
+  const label = item.label.trim().toLowerCase();
+  const group = item.group.trim().toLowerCase();
+  const hint = (item.hint ?? '').trim().toLowerCase();
+  const keywords = (item.keywords ?? '').trim().toLowerCase();
+  const boost = item.contextBoost ?? 0;
+
+  if (label === needle) return 100 + boost;
+  if (label.startsWith(needle)) return 85 + boost;
+  if (keywords === needle || (item.toolId && item.toolId.toLowerCase() === needle)) return 75 + boost;
+  if (label.includes(needle)) return 65 + boost;
+  if (keywords.startsWith(needle)) return 55 + boost;
+  if (keywords.includes(needle)) return 45 + boost;
+  if (group.includes(needle) || hint.includes(needle)) return 30 + boost;
+  if (`${label} ${group} ${hint} ${keywords}`.includes(needle)) return 15 + boost;
+  return 0;
+}
+
+export function CommandPalette({ open, commands, sourceFailed = false, onRetrySources, onClose }: {
+  open: boolean;
+  commands: CommandItem[];
+  sourceFailed?: boolean;
+  onRetrySources?: () => void;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -27,9 +56,14 @@ export function CommandPalette({ open, commands, onClose }: { open: boolean; com
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return commands;
-    return commands.filter((item) => `${item.label} ${item.group} ${item.hint ?? ''} ${item.keywords ?? ''}`.toLowerCase().includes(needle));
+    return commands
+      .map((item, order) => ({ item, order, score: matchScore(item, needle) }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score || a.order - b.order)
+      .map((entry) => entry.item);
   }, [commands, query]);
   const index = shown.length ? Math.min(active, shown.length - 1) : 0;
+  const activeItem = shown[index];
 
   useLayoutEffect(() => {
     const element = dialog.current;
@@ -60,32 +94,71 @@ export function CommandPalette({ open, commands, onClose }: { open: boolean; com
     item.run();
   }
 
+  function chooseSecondary(item: CommandItem | undefined) {
+    if (!item?.onSecondary) return;
+    chosen.current = true;
+    onClose();
+    item.onSecondary();
+  }
+
+  function clearQuery() {
+    setQuery('');
+    setActive(0);
+    input.current?.focus();
+  }
+
   return <dialog ref={dialog} className="command-dialog" aria-labelledby="command-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
     if (withMod(event) && event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); onClose(); return; }
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive(shown.length ? (index + 1) % shown.length : 0); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); setActive(shown.length ? (index - 1 + shown.length) % shown.length : 0); return; }
     if (event.key === 'Home') { event.preventDefault(); setActive(0); return; }
     if (event.key === 'End') { event.preventDefault(); setActive(Math.max(0, shown.length - 1)); return; }
-    if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); choose(shown[index]); }
+    if (event.key === 'Enter' && event.altKey && !event.nativeEvent.isComposing && activeItem?.onSecondary) {
+      event.preventDefault();
+      chooseSecondary(activeItem);
+      return;
+    }
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing && document.activeElement === input.current) {
+      event.preventDefault();
+      if (shown.length) choose(shown[index]);
+      else if (query.trim()) clearQuery();
+    }
   }}>
     <h2 id="command-dialog-title" className="sr-only">{t('common.palette.title')}</h2>
     <div className="command-input-row">
       <Icon name="search" size={16} />
       <input ref={input} role="combobox" aria-expanded="true" aria-controls="command-list" aria-autocomplete="list" aria-activedescendant={shown.length ? `command-option-${index}` : undefined} aria-label={t('common.palette.search')} placeholder={t('common.palette.search')} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
+      {query && <button type="button" className="command-clear" aria-label={t('common.palette.clearQuery')} title={t('common.palette.clearQuery')} onClick={clearQuery}><Icon name="close" size={15} /></button>}
     </div>
+    {sourceFailed && <div className="command-source-notice" role="status">
+      <Icon name="alert" size={14} />
+      <span>{t('common.palette.partialFailed')}</span>
+      {onRetrySources && <Button size="sm" variant="ghost" onClick={onRetrySources}>{t('common.palette.retrySources')}</Button>}
+    </div>}
     <div id="command-list" className="command-list" role="listbox" aria-label={t('common.palette.listLabel')}>
       {shown.length ? shown.map((item, itemIndex) => {
         const previous = shown[itemIndex - 1];
-        return <div key={item.id} role="presentation">
+        return <div key={item.id} role="presentation" className="command-row">
           {previous?.group !== item.group && <div className="command-group">{item.group}</div>}
-          <button type="button" id={`command-option-${itemIndex}`} role="option" aria-selected={itemIndex === index} className="command-option" onMouseMove={() => setActive(itemIndex)} onClick={() => choose(item)}>
-            <span className="command-glyph" aria-hidden="true">{item.toolId ? <ToolIcon toolId={item.toolId} size={18} /> : item.icon ? <Icon name={item.icon} size={16} /> : null}</span>
-            <span className="command-label">{item.label}</span>
-            {item.hint && <small>{item.hint}</small>}
-          </button>
+          <div className="command-item-wrap" data-selected={itemIndex === index || undefined}>
+            <button type="button" id={`command-option-${itemIndex}`} role="option" aria-selected={itemIndex === index} className="command-option" onMouseMove={() => setActive(itemIndex)} onClick={() => choose(item)}>
+              <span className="command-glyph" aria-hidden="true">{item.toolId ? <ToolIcon toolId={item.toolId} size={18} /> : item.icon ? <Icon name={item.icon} size={16} /> : null}</span>
+              <span className="command-label">{item.label}</span>
+              {item.hint && <small>{item.hint}</small>}
+            </button>
+            {item.onSecondary && item.secondaryLabel && <button type="button" className="command-secondary" aria-label={`${item.label} · ${item.secondaryLabel}`} title={`${item.secondaryLabel} (Alt+Enter)`} onMouseEnter={() => setActive(itemIndex)} onClick={() => chooseSecondary(item)}>{item.secondaryLabel}</button>}
+          </div>
         </div>;
-      }) : <p className="command-empty" role="status">{t('common.palette.empty', { query: query.trim() })}</p>}
+      }) : <div className="command-empty-state">
+        <p className="command-empty" role="status">{t('common.palette.empty', { query: query.trim() })}</p>
+        {query.trim() && <Button size="sm" variant="ghost" onClick={clearQuery}>{t('common.palette.clearQuery')}</Button>}
+      </div>}
     </div>
-    <div className="command-foot"><span><kbd>↑</kbd><kbd>↓</kbd> {t('common.palette.footChoose')}</span><span><kbd>Enter</kbd> {t('common.palette.footOpen')}</span><span><kbd>Esc</kbd> {t('common.palette.footClose')}</span></div>
+    <div className="command-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> {t('common.palette.footChoose')}</span>
+      <span><kbd>Enter</kbd> {t('common.palette.footOpen')}</span>
+      {activeItem?.onSecondary && <span><kbd>Alt</kbd><kbd>Enter</kbd> {activeItem.secondaryLabel ?? t('common.palette.footSecondary')}</span>}
+      <span><kbd>Esc</kbd> {t('common.palette.footClose')}</span>
+    </div>
   </dialog>;
 }

@@ -178,6 +178,8 @@ export default function App() {
   const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
   const [paletteSessions, setPaletteSessions] = useState<HistorySession[]>([]);
   const [paletteLibrary, setPaletteLibrary] = useState<LibraryItem[]>([]);
+  const [paletteSourceFailed, setPaletteSourceFailed] = useState(false);
+  const [paletteReload, setPaletteReload] = useState(0);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const [remoteWorkbenchIntent, setRemoteWorkbenchIntent] = useState<RemoteWorkbenchIntent | null>(null);
@@ -273,18 +275,24 @@ export default function App() {
   useEffect(() => {
     if (!paletteOpen || !nativeAvailable) return;
     let live = true;
-    void native.listProjects().then((result) => { if (live && Array.isArray(result)) setPaletteProjects(result); }).catch(() => {});
+    setPaletteSourceFailed(false);
+    const markFailed = () => { if (live) setPaletteSourceFailed(true); };
+    void native.listProjects().then((result) => {
+      if (live && Array.isArray(result)) {
+        setPaletteProjects([...result].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)));
+      }
+    }).catch(markFailed);
     // Palette data is read-only: sessions come straight from the indexed DB snapshot
     // (list_history_sessions never scans) and library items from the library tables.
     void native.listHistorySessions({ limit: 5 }).then((result) => {
       if (!live || !Array.isArray(result)) return;
       setPaletteSessions([...result].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 5));
-    }).catch(() => {});
+    }).catch(markFailed);
     void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, '')])
       .then((groups) => { if (live) setPaletteLibrary(groups.flatMap((entries) => entries.slice(0, 5))); })
-      .catch(() => {});
+      .catch(markFailed);
     return () => { live = false; };
-  }, [paletteOpen]);
+  }, [paletteOpen, paletteReload]);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -623,19 +631,91 @@ export default function App() {
   }
 
   const libraryKindLabel = (kind: LibraryKind) => t(kind === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
-  const commands: CommandItem[] = [
-    ...pages.map((item) => {
-      const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
-      return { id: `page-${item.id}`, group: t('common.palette.groupPages'), label: t(`common.nav.${item.id}`), hint: shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : undefined, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } };
-    }),
-    ...paletteSessions.map((session) => ({ id: `session-${session.id}`, group: t('common.palette.groupSessions'), label: session.title.trim() || t('common.palette.untitledSession'), hint: t('common.palette.hintResumeSession'), keywords: session.toolId, toolId: session.toolId, run: () => { void resumePaletteSession(session.id); } })),
-    ...paletteLibrary.map((item) => ({ id: `library-${item.id}`, group: t('common.palette.groupLibrary'), label: item.title, hint: t('common.palette.hintOpenItem'), keywords: libraryKindLabel(item.kind), icon: 'library' as const, run: () => { void revealLibraryItem(item.kind, item.id); } })),
-    ...visible.map((item) => ({ id: `tool-${item.id}`, group: t('common.palette.groupTools'), label: item.name, hint: t('common.palette.hintOpenConfig'), keywords: item.id, toolId: item.id, run: () => openTool(item.id) })),
-    ...paletteProjects.map((project) => ({ id: `project-${project.id}`, group: t('common.palette.groupProjects'), label: project.name, hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'), keywords: project.path ?? '', icon: 'folder' as const, run: () => { void revealProject(project.id); } })),
+  const recentProjects = useMemo(() => [...paletteProjects].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)), [paletteProjects]);
+  const projectCommands: CommandItem[] = recentProjects.map((project, index) => ({
+    id: `project-${project.id}`,
+    group: t('common.palette.groupProjects'),
+    label: project.name,
+    hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'),
+    keywords: project.path ?? '',
+    icon: 'folder' as const,
+    contextBoost: (page === 'home' ? 6 : 4) + (index < 5 ? 2 : 0),
+    run: () => { void revealProject(project.id); },
+  }));
+  const sessionCommands: CommandItem[] = paletteSessions.map((session) => ({
+    id: `session-${session.id}`,
+    group: t('common.palette.groupSessions'),
+    label: session.title.trim() || t('common.palette.untitledSession'),
+    hint: t('common.palette.hintResumeSession'),
+    keywords: session.toolId,
+    toolId: session.toolId,
+    contextBoost: session.toolId === selectedTool ? 6 : 4,
+    run: () => { void resumePaletteSession(session.id); },
+    secondaryLabel: t('common.palette.hintOpenRecords'),
+    onSecondary: () => { void go('records'); },
+  }));
+  const pageCommands: CommandItem[] = pages.map((item) => {
+    const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
+    return {
+      id: `page-${item.id}`,
+      group: t('common.palette.groupPages'),
+      label: t(`common.nav.${item.id}`),
+      hint: shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : undefined,
+      keywords: item.id,
+      icon: item.glyph,
+      contextBoost: page === item.id ? 2 : 5,
+      run: () => { void go(item.id); },
+    };
+  });
+  const libraryCommands: CommandItem[] = paletteLibrary.map((item) => ({
+    id: `library-${item.id}`,
+    group: t('common.palette.groupLibrary'),
+    label: item.title,
+    hint: t('common.palette.hintOpenItem'),
+    keywords: libraryKindLabel(item.kind),
+    icon: 'library' as const,
+    contextBoost: page === 'library' ? 5 : 2,
+    run: () => { void revealLibraryItem(item.kind, item.id); },
+  }));
+  const toolCommands: CommandItem[] = visible.map((item) => {
+    const canWorkbench = nativeAvailable && (!('launchForm' in item) || item.launchForm !== 'desktop');
+    return {
+      id: `tool-${item.id}`,
+      group: t('common.palette.groupTools'),
+      label: item.name,
+      hint: t('common.palette.hintOpenConfig'),
+      keywords: item.id,
+      toolId: item.id,
+      contextBoost: item.id === selectedTool ? 8 : 3,
+      run: () => openTool(item.id),
+      secondaryLabel: canWorkbench ? t('common.palette.hintOpenWorkbench') : undefined,
+      onSecondary: canWorkbench ? () => {
+        window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { targetId: remoteTargetId, toolId: item.id } }));
+      } : undefined,
+    };
+  });
+  const actionCommands: CommandItem[] = [
     { id: 'sidebar', group: t('common.palette.groupActions'), label: sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse'), hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
     ...themes.map((item) => ({ id: `theme-${item.id}`, group: t('common.palette.groupActions'), label: t(`common.theme.${item.id}`), hint: bootstrap.preferences.theme === item.id ? t('common.theme.current') : t('common.theme.switch'), icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
     { id: 'help', group: t('common.palette.groupActions'), label: t('common.shortcuts.title'), hint: '?', icon: 'info', run: () => setHelpOpen(true) },
   ];
+  const hasRecentWork = projectCommands.length > 0 || sessionCommands.length > 0;
+  const commands: CommandItem[] = hasRecentWork
+    ? [
+      ...projectCommands.slice(0, 5),
+      ...sessionCommands,
+      ...pageCommands,
+      ...toolCommands,
+      ...libraryCommands,
+      ...actionCommands,
+      ...projectCommands.slice(5),
+    ]
+    : [
+      ...pageCommands,
+      ...toolCommands,
+      ...libraryCommands,
+      ...actionCommands,
+    ];
 
   async function updateManaged(id: string, checked: boolean) {
     if (!nativeAvailable || busy) return;
@@ -761,5 +841,5 @@ export default function App() {
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>
-  </div>{nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
+  </div>{nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
 }
