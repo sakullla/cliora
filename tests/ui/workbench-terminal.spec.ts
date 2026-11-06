@@ -1489,6 +1489,35 @@ test.describe('session switching with the production renderer', () => {
     await expect.poll(async () => (await grids()).at(-1)?.cols).toBeLessThan(settled.at(-1)!.cols);
   });
 
+  test('hiding the document releases WebGL and resumes the same terminal without losing replies', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const terminal = page.locator('[data-pane-session="s1"]');
+    const canvas = terminal.locator('.xterm-screen canvas:not(.xterm-link-layer)');
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await expect(canvas).toBeVisible();
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await expect(canvas).toHaveCount(0);
+      await expect(terminal.locator('[data-blink]')).toHaveCount(0);
+      await resetWrites(page);
+      await page.evaluate(() => (window as any).__output('\r\nhidden-window-output\r\n\x1b[6n'));
+      await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    }
+    await expect(canvas).toBeVisible();
+    await page.getByRole('button', { name: '查找输出', exact: true }).click();
+    await page.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('hidden-window-output');
+    await expect(page.getByRole('region', { name: '当前会话' })).toContainText('1 / 3');
+  });
+
   test('leaving the workbench releases WebGL while retaining output and protocol replies', async ({ page }) => {
     await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
     await installWorkbenchMock(page);
@@ -1531,6 +1560,36 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog.filter(item => item.sessionId === 's1').map(item => item.text))).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
   await expect(page.locator('[data-pane-session="s1"] textarea')).toBeDisabled();
   await expect(page.locator('[data-pane-session="s2"] textarea')).toBeEnabled();
+});
+
+test('late output from many unmounted sessions has a bounded retained heap', async ({ page }) => {
+  await openWorkbench(page);
+  const cdp = await page.context().newCDPSession(page);
+  const heap = async () => {
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const usage = await cdp.send('Runtime.getHeapUsage');
+    return usage.usedSize + usage.backingStorageSize;
+  };
+  const before = await heap();
+  const growth: number[] = [];
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await page.evaluate(cycle => {
+      for (let index = 0; index < 256; index++) {
+        const bytes = crypto.getRandomValues(new Uint8Array(48 * 1024));
+        for (let offset = 0; offset < bytes.length; offset++) bytes[offset] = 32 + (bytes[offset] & 63);
+        (window as any).__output(String.fromCharCode(...bytes), `late-session-${cycle}-${index}`);
+      }
+    }, cycle);
+    growth.push((await heap()) - before);
+    expect(growth.at(-1)).toBeLessThan(8 * 1024 * 1024);
+  }
+  console.log('retained output bytes', { before, growth });
+  await test.info().attach('retained-output-heap', { body: JSON.stringify({ before, growth }), contentType: 'application/json' });
+  await cdp.detach();
+  await resetWrites(page);
+  await page.evaluate(() => (window as any).__output('\x1b[6n'));
+  await expect.poll(() => writes(page)).toContainEqual(expect.stringMatching(/^\x1b\[\d+;\d+R$/));
 });
 
 test('switching sessions preserves a reading position while background output keeps arriving', async ({ page }) => {

@@ -11,12 +11,13 @@ import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalThem
 import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalWebglLifecycle } from './terminalWebgl';
+import type { OutputChunk, PendingTerminalOutput } from './pendingOutput';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalMatch = { row: number; col: number; length: number };
 
 /** One output event. `offset` is the stream position of its first byte when the host reports it. */
-export type OutputChunk = { data: string; offset?: number };
+export type { OutputChunk } from './pendingOutput';
 
 /** Replay from the host: the current contract carries the stream end, older mocks send bare base64. */
 export type ReplayPayload = string | { dataBase64: string; endOffset: number; cols?: number; rows?: number };
@@ -476,7 +477,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
   overlay?: ReactNode;
   footer?: ReactNode;
   writers: MutableRefObject<Map<string, (chunk: OutputChunk) => void>>;
-  pending: MutableRefObject<Map<string, OutputChunk[]>>;
+  pending: MutableRefObject<PendingTerminalOutput>;
   handles: MutableRefObject<Map<string, TerminalHandle>>;
   bridge: MutableRefObject<TerminalBridge>;
 }) {
@@ -1084,8 +1085,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       let snapshot = new Uint8Array(0);
       try { snapshot = Uint8Array.from(decodeBase64(encoded)); }
       catch { snapshot = new Uint8Array(0); }
-      const earlier = (pending.current.get(sessionId) ?? []).splice(0);
-      pending.current.delete(sessionId);
+      const earlier = pending.current.drain(sessionId);
       const arrived = queued.splice(0);
       const chunks = [...earlier, ...arrived];
       let suffix: Uint8Array;
@@ -1135,9 +1135,8 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       acceptLive = true;
       replayReady = true;
       fitNow();
-      (pending.current.get(sessionId) ?? []).splice(0).forEach((item) => writeChunk(item));
+      pending.current.drain(sessionId).forEach((item) => writeChunk(item));
       queued.splice(0).forEach((item) => writeChunk(item));
-      pending.current.delete(sessionId);
     });
     return () => {
       flushInput();

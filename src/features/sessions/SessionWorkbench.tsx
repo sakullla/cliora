@@ -1,5 +1,5 @@
 import { useRemoteIdentity } from '../../lib/remoteReads';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
@@ -26,6 +26,7 @@ import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
 import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
 import { SessionRail, type RailSession, type SessionTone } from './SessionRail';
@@ -45,6 +46,12 @@ import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
 import { workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
+
+function subscribeVisibility(notify: () => void): () => void {
+  document.addEventListener('visibilitychange', notify);
+  return () => document.removeEventListener('visibilitychange', notify);
+}
+const documentVisible = () => document.visibilityState !== 'hidden';
 
 function sameDirectory(left: string, right: string): boolean {
   const norm = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -258,6 +265,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 }) {
   const { t } = useTranslation();
   const writeRecoveryNeeded = useWriteRecoveryNeeded(remoteTargetId);
+  const windowVisible = useSyncExternalStore(subscribeVisibility, documentVisible);
+  const renderActive = active && windowVisible;
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
   function applyListedSessions(listed: WorkbenchSession[]) {
@@ -466,10 +475,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }, [selectedId, restoring]);
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
-  const pending = useRef(new Map<string, OutputChunk[]>());
-  const pendingBytes = useRef(new Map<string, number>());
+  const pending = useRef(new PendingTerminalOutput());
   const handles = useRef(new Map<string, TerminalHandle>());
-  const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
   const pasteAttachmentPaths = useCallback(async (sessionId: string, paths: string[]) => {
     const session = sessionsRef.current.find((item) => item.id === sessionId);
@@ -810,20 +817,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const push = (sessionId: string, chunk: OutputChunk) => {
       const write = writers.current.get(sessionId);
       if (write) write(chunk);
-      else {
-        const queued = pending.current.get(sessionId) ?? [];
-        let bytes = pendingBytes.current.get(sessionId) ?? 0;
-        queued.push(chunk);
-        bytes += chunk.data.length;
-        // A terminal that is not mounted can still receive output while the
-        // session list is loading. Keep only a bounded tail; replay() supplies
-        // the complete recent output when the terminal mounts.
-        while (bytes > MAX_PENDING_OUTPUT_BYTES && queued.length > 1) {
-          bytes -= queued.shift()?.data.length ?? 0;
-        }
-        pending.current.set(sessionId, queued);
-        pendingBytes.current.set(sessionId, bytes);
-      }
+      else pending.current.push(sessionId, chunk);
     };
     void listen<WorkbenchOutput>('cliora:session-output', (event) => {
       if (alive) push(event.payload.sessionId, { data: event.payload.dataBase64, offset: typeof event.payload.offset === 'number' ? event.payload.offset : undefined });
@@ -857,7 +851,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         && (event.payload.stateRevision === undefined || (item.stateRevision ?? 0) <= event.payload.stateRevision)
         ? { ...item, running: false, exitCode: event.payload.exitCode ?? null, ...(event.payload.stateRevision === undefined ? {} : { stateRevision: event.payload.stateRevision }) } : item));
     }).then((stop) => { if (alive) stops.push(stop); else stop(); }).catch(() => {});
-    return () => { alive = false; stops.forEach((stop) => { void Promise.resolve(stop()).catch(() => {}); }); };
+    return () => { alive = false; pending.current.clear(); stops.forEach((stop) => { void Promise.resolve(stop()).catch(() => {}); }); };
   }, []);
 
   useEffect(() => {
@@ -883,13 +877,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         return next.find((item) => item.running)?.id ?? next[0]?.id ?? null;
       });
       for (const session of next) {
-        const queued = pending.current.get(session.id);
         const write = writers.current.get(session.id);
-        if (queued?.length && write) {
-          queued.splice(0).forEach(write);
-          pending.current.delete(session.id);
-        }
-        if (!pending.current.has(session.id)) pendingBytes.current.delete(session.id);
+        if (write) pending.current.drain(session.id).forEach(write);
       }
     }).catch((value) => {
       if (alive) setListError(formatFailure(value, t('sessions.listFailed'), t('sessions.listNext')));
@@ -1123,7 +1112,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return next;
     });
     pending.current.delete(id);
-    pendingBytes.current.delete(id);
     writers.current.delete(id);
     handles.current.delete(id);
   }
@@ -2110,8 +2098,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 }}>
                 {mountedSessions.map((session) => {
                   const pane = visibleIds.indexOf(session.id);
-                  const visible = active && pane >= 0;
-                  const focused = active && session.id === selectedId;
+                  const visible = renderActive && pane >= 0;
+                  const focused = renderActive && session.id === selectedId;
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
