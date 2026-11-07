@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/history';
 import { Icon } from '../../components/Icon';
@@ -7,6 +7,7 @@ import { writeClipboard } from '../../lib/clipboard';
 import { ChildCluster } from './SessionAssociation';
 import { timelineRows } from './sessionTimeline';
 import { useDisclosure } from './useDisclosure';
+import type { ReadingSettings } from './readingContext';
 import i18n from '../../i18n';
 import styles from './SessionReader.module.css';
 
@@ -73,20 +74,36 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
   </article>;
 });
 
-export const SessionReader = memo(function SessionReader({ detail, toolName, children = noChildren, onOpenChild }: {
+export const SessionReader = memo(function SessionReader({ detail, toolName, children = noChildren, onOpenChild, context, onContextChange, notice }: {
   detail: HistoryDetail;
   toolName: string;
   children?: readonly ChildSession[];
   onOpenChild?: (key: string) => void;
+  /** Reading settings saved when this conversation was last read; restored on mount only. */
+  context?: ReadingSettings;
+  onContextChange?: (settings: ReadingSettings) => void;
+  /** Feedback about the shown conversation, kept in the sticky toolbar. */
+  notice?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState('');
-  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState(context?.query ?? '');
+  const [findOpen, setFindOpen] = useState(context?.findOpen ?? false);
   const findButton = useRef<HTMLButtonElement>(null);
+  const findInput = useRef<HTMLInputElement>(null);
+  // Only a find the reader opens takes focus; a restored find stays where it was.
+  const focusFind = useRef(false);
   const optionsRef = useDisclosure();
-  const [onlyQuestions, setOnlyQuestions] = useState(false);
-  const [raw, setRaw] = useState(false);
-  const [current, setCurrent] = useState(0);
+  const [onlyQuestions, setOnlyQuestions] = useState(context?.onlyQuestions ?? false);
+  const [raw, setRaw] = useState(context?.raw ?? false);
+  const [current, setCurrent] = useState(context?.current ?? 0);
+  const findKey = useRef(`${(context?.query ?? '').trim()}\u0000${context?.onlyQuestions ?? false}`);
+  const contextChange = useRef(onContextChange); contextChange.current = onContextChange;
+  useEffect(() => { contextChange.current?.({ query, findOpen, onlyQuestions, raw, current }); }, [query, findOpen, onlyQuestions, raw, current]);
+  useEffect(() => {
+    if (!findOpen || !focusFind.current) return;
+    focusFind.current = false;
+    findInput.current?.focus();
+  }, [findOpen]);
   const root = useRef<HTMLDivElement>(null);
   const [rendered, setRendered] = useState(() => new Set(detail.messages.slice(0, 8).map((item) => item.id)));
   const search = query.trim();
@@ -121,7 +138,8 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
     return blocks;
   }, [rows, t]);
   const matches = useMemo(() => search ? visible.filter((item) => item.text.toLowerCase().includes(search.toLowerCase())).map((item) => ({ item })) : [], [visible, search]);
-  const selected = matches.length ? current % matches.length : 0;
+  // A restored match index is clamped when the conversation now has fewer matches.
+  const selected = matches.length ? Math.min(current, matches.length - 1) : 0;
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       const ids = entries.filter((entry) => entry.isIntersecting).map((entry) => {
@@ -153,16 +171,21 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
     });
   }
   useEffect(() => {
+    // The restored match and scroll place belong to the page; only a changed find or filter
+    // starts again from the first match.
+    const key = `${search}\u0000${onlyQuestions}`;
+    if (findKey.current === key) return;
+    findKey.current = key;
     setCurrent(0);
     if (search && matches.length) revealMatch(matches[0].item.id);
   }, [search, onlyQuestions]);
-  return <div className={styles.reader} aria-label={t('records.reader.label')} ref={root}>
+  return <div className={styles.reader} data-reader-root="" aria-label={t('records.reader.label')} ref={root}>
     <div className={styles.readerToolbar}>
       <div className={styles.readerTitle}><strong>{onlyQuestions ? t('records.reader.onlyQuestions') : t('records.reader.allMessages')}</strong><span>{t('records.reader.messageCount', { count: visible.length.toLocaleString() })}{raw ? t('records.reader.rawSuffix') : ''}</span>
         {detail.session.messageCount > detail.messages.length && <span title={t('records.reader.indexedTitle')}>{t('records.reader.indexed', { count: detail.session.messageCount.toLocaleString() })}</span>}
       </div>
       <div className={styles.readerOptions}>
-        <button type="button" ref={findButton} aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
+        <button type="button" ref={findButton} data-reader-find="" aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { focusFind.current = !findOpen; setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
         <details className={styles.readingOptions} ref={optionsRef}><summary>{t('records.reader.options')}</summary><div>
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
@@ -170,13 +193,14 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
         <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={14} />{t('records.reader.latest')}</button>
       </div>
       {findOpen && <div className={styles.find} data-field-frame="">
-        <Icon name="search" size={14} /><input autoFocus aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+        <Icon name="search" size={14} /><input ref={findInput} aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
           if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }
         }} />
         {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" className={styles.findClear} aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={16} /></button></>}
       </div>}
       {search && <small className={styles.findHint}>{t('records.reader.findHint')}</small>}
+      {notice}
     </div>
     <div className={styles.messages}>
       {displayBlocks.map((block, index) => {

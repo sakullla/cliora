@@ -1123,6 +1123,184 @@ test('hidden records release message DOM, ignore late detail reads and restore t
   await expect(page.getByRole('combobox', { name: '恢复模式' })).toHaveValue('yolo');
 });
 
+type ReadingMock = { failDetail: boolean; reads: number; sessions: Array<Record<string, unknown>>; messages: Record<string, Array<Record<string, unknown>>> };
+/** Two local sessions; `long` is a conversation tall enough to scroll and find in. */
+async function installReading(page: import('@playwright/test').Page) {
+  await page.addInitScript((report) => {
+    const filler = '这一段用于撑开阅读区域，确保可以滚动到会话中部。'.repeat(14);
+    const long = Array.from({ length: 40 }, (_, index) => ({
+      id: `m${index}`, role: index % 2 ? 'assistant' : 'user', timestamp: 1790668800000 + index * 1000,
+      text: `第 ${index} 条消息${index % 10 === 5 ? ' MARK' : ''}\n\n${filler}`,
+    }));
+    const base = { toolId: 'codex', nativeId: null, cwd: 'C:\\demo', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, favorite: false, partial: false, stale: false, usageCount: 0 };
+    const control = {
+      failDetail: false, reads: 0,
+      sessions: [
+        { ...base, id: 'long', title: 'Long conversation', updatedAt: 1790668900000, messageCount: long.length },
+        { ...base, id: 'other', title: 'Other conversation', updatedAt: 1790668800000, messageCount: 1 },
+      ],
+      messages: { long, other: [{ id: 'o1', role: 'user', text: 'OTHER_BODY', timestamp: 1790668800000 }] } as Record<string, unknown[]>,
+    };
+    Object.assign(window, { isTauri: true, __reading: control, __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+      if (command === 'list_history_sessions') return structuredClone(control.sessions);
+      if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt: Date.now(), sourceCount: 1, failedCount: 0, incomplete: false, detail: '' }];
+      if (command === 'refresh_history') return [{ toolId: 'codex', scannedAt: Date.now(), sourceCount: 1, failedCount: 0, incomplete: false, detail: '' }];
+      if (command === 'get_history_session') {
+        control.reads++;
+        if (control.failDetail) throw new Error('读取暂时失败');
+        const session = control.sessions.find((item) => item.id === args.id);
+        if (!session) throw new Error('会话不存在');
+        return structuredClone({ session, messages: control.messages[args.id] ?? [], usage: [], resumeReason: null });
+      }
+      if (command === 'copy_history_resume_command') return `codex resume ${args.id}`;
+      if (command === 'get_usage_report') return report;
+      if (command === 'list_projects' || command === 'list_history_prices') return [];
+      if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+      return null;
+    } } });
+  }, emptyReport());
+}
+const readingMock = (page: import('@playwright/test').Page, change: (mock: ReadingMock) => void) =>
+  page.evaluate(`(${change.toString()})(window.__reading)`);
+/** Top of a message relative to the reader's scroll box, or null when it is not laid out. */
+const messageTop = (page: import('@playwright/test').Page, id: string) => page.evaluate((messageId) => {
+  const box = document.querySelector('[aria-label="会话正文"]')?.parentElement;
+  const message = document.querySelector(`[data-message-id="${messageId}"]`);
+  if (!box || !message) return null;
+  return Math.round(message.getBoundingClientRect().top - box.getBoundingClientRect().top);
+}, id);
+const readerScroll = (page: import('@playwright/test').Page) => page.evaluate(() => {
+  const box = document.querySelector('[aria-label="会话正文"]')?.parentElement;
+  return box ? { top: Math.round(box.scrollTop), max: Math.round(box.scrollHeight - box.clientHeight) } : null;
+});
+
+test('an open session whose refresh fails keeps its transcript, says it is stale and retries in place', async ({ page }) => {
+  await installReading(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const reader = page.getByLabel('会话正文');
+  await expect(reader).toContainText('第 0 条消息');
+  await readingMock(page, (mock) => { mock.failDetail = true; });
+  await page.getByRole('button', { name: '刷新本机记录' }).click();
+  const stale = reader.getByRole('alert').filter({ hasText: '会话刷新失败，下面仍是上次读取的内容。' });
+  await expect(stale).toBeVisible();
+  // The last read stays readable instead of being replaced by an error page.
+  await expect(reader).toContainText('第 0 条消息');
+  await expect(page.getByRole('heading', { name: '暂时无法打开会话' })).toHaveCount(0);
+  // The banner sits in the sticky reader toolbar, so it stays in view deep in the conversation.
+  await page.evaluate(() => { const box = document.querySelector('[aria-label="会话正文"]')!.parentElement!; box.scrollTop = box.scrollHeight; });
+  await expect(stale).toBeInViewport();
+  await readingMock(page, (mock) => { mock.failDetail = false; });
+  const reads = await page.evaluate(() => (window as any).__reading.reads);
+  await reader.getByRole('button', { name: '重新加载会话' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__reading.reads)).toBe(reads + 1);
+  await expect(stale).toHaveCount(0);
+  await expect(reader).toContainText('第 39 条消息');
+  await expect(reader.getByRole('button', { name: '查找本会话' })).toBeFocused();
+});
+
+test('returning to a conversation restores find, reading options, match and place, per session', async ({ page }) => {
+  await installReading(page);
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '记录' }).click();
+  const reader = page.getByLabel('会话正文');
+  await expect(reader).toContainText('第 0 条消息');
+  await reader.getByRole('button', { name: '查找本会话' }).click();
+  await reader.getByRole('textbox', { name: '查找本会话' }).fill('MARK');
+  await expect(reader.getByRole('status')).toHaveText('1 / 4 条');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(reader.getByRole('status')).toHaveText('3 / 4 条');
+  await reader.getByText('阅读', { exact: true }).click();
+  await reader.getByRole('checkbox', { name: '显示原文', exact: true }).check();
+  await page.keyboard.press('Escape');
+  // Read from the middle of the conversation, a little into message m20.
+  await page.evaluate(() => {
+    const box = document.querySelector('[aria-label="会话正文"]')!.parentElement!;
+    const message = document.querySelector('[data-message-id="m20"]')!;
+    box.scrollTop += message.getBoundingClientRect().top - box.getBoundingClientRect().top + 37;
+  });
+  await page.waitForTimeout(50);
+  const place = await messageTop(page, 'm20');
+  expect(place).toBeLessThan(0);
+  const expectRestored = async () => {
+    await expect(reader.getByRole('textbox', { name: '查找本会话' })).toHaveValue('MARK');
+    await expect(reader.getByRole('status')).toHaveText('3 / 4 条');
+    await expect(reader.getByRole('checkbox', { name: '显示原文', exact: true, includeHidden: true })).toBeChecked();
+    await expect.poll(async () => Math.abs((await messageTop(page, 'm20'))! - place!)).toBeLessThanOrEqual(4);
+  };
+
+  // Leaving the page releases the transcript but not where the reader was.
+  await nav.getByRole('button', { name: '首页' }).click();
+  await expect(page.locator('[data-message-id="m20"]')).toHaveCount(0);
+  await nav.getByRole('button', { name: '记录' }).click();
+  await expectRestored();
+  // The find box came back without taking focus from the page.
+  await expect(reader.getByRole('textbox', { name: '查找本会话' })).not.toBeFocused();
+
+  // So does a trip to the usage tab.
+  await page.getByRole('tab', { name: /用量/ }).click();
+  await expect(page.locator('[data-message-id="m20"]')).toHaveCount(0);
+  await page.getByRole('tab', { name: /会话/ }).click();
+  await expectRestored();
+
+  // Another conversation has its own context and starts at the top.
+  await page.getByRole('button', { name: /Other conversation/ }).click();
+  await expect(reader).toContainText('OTHER_BODY');
+  await expect(reader.getByRole('textbox', { name: '查找本会话' })).toBeHidden();
+  await expect(reader.getByRole('checkbox', { name: '显示原文', exact: true, includeHidden: true })).not.toBeChecked();
+  expect((await readerScroll(page))!.top).toBe(0);
+  await page.getByRole('button', { name: /Long conversation/ }).click();
+  await expectRestored();
+
+  // Content that changed while away: the saved message is gone, so the place and match are clamped.
+  await nav.getByRole('button', { name: '首页' }).click();
+  await readingMock(page, (mock) => { mock.messages.long = mock.messages.long.slice(0, 10); });
+  await nav.getByRole('button', { name: '记录' }).click();
+  await expect(reader).toContainText('第 9 条消息');
+  await expect(reader.getByRole('status')).toHaveText('1 / 1 条');
+  await expect.poll(async () => { const scroll = (await readerScroll(page))!; return scroll.top <= scroll.max; }).toBe(true);
+
+  // A session that disappears from a complete list read forgets its context.
+  await readingMock(page, (mock) => { mock.sessions = mock.sessions.filter((item) => item.id !== 'long'); });
+  await page.getByRole('button', { name: '刷新本机记录' }).click();
+  await expect(page.getByRole('button', { name: /Long conversation/ })).toHaveCount(0);
+  await readingMock(page, (mock) => { mock.sessions.unshift({ ...mock.sessions[0], id: 'long', title: 'Long conversation', messageCount: 10 }); });
+  await page.getByRole('button', { name: '刷新本机记录' }).click();
+  await page.getByRole('button', { name: /Long conversation/ }).click();
+  await expect(reader).toContainText('第 9 条消息');
+  await expect(reader.getByRole('textbox', { name: '查找本会话' })).toBeHidden();
+  await expect(reader.getByRole('checkbox', { name: '显示原文', exact: true, includeHidden: true })).not.toBeChecked();
+});
+
+test('narrow records return to the list row and keep the reading place of the opened session', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 820 });
+  await installReading(page);
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '记录' }).click();
+  await page.getByRole('button', { name: /Long conversation/ }).click();
+  const reader = page.getByLabel('会话正文');
+  await expect(reader).toContainText('第 0 条消息');
+  await page.evaluate(() => {
+    const box = document.querySelector('[aria-label="会话正文"]')!.parentElement!;
+    const message = document.querySelector('[data-message-id="m12"]')!;
+    box.scrollTop += message.getBoundingClientRect().top - box.getBoundingClientRect().top + 20;
+  });
+  await page.waitForTimeout(50);
+  const place = await messageTop(page, 'm12');
+  await nav.getByRole('button', { name: '首页' }).click();
+  await nav.getByRole('button', { name: '记录' }).click();
+  await expect.poll(async () => Math.abs((await messageTop(page, 'm12'))! - place!)).toBeLessThanOrEqual(4);
+  await page.getByRole('button', { name: '← 返回会话列表' }).click();
+  await expect(page.locator('[data-session-id="long"]')).toBeFocused();
+});
+
 test('a failed session refresh keeps the list readable, marks the scope and retries in place', async ({ page }) => {
   await page.addInitScript((report) => {
     const control = { fail: false };

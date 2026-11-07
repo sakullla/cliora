@@ -1,7 +1,7 @@
 import { StatusBanner } from '../../components/StatusBanner';
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { NativeUsageSummary } from './NativeUsageSummary';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -25,6 +25,7 @@ import { SessionReader } from './SessionReader';
 import { childTitle, childTrail } from './SessionAssociation';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import { useDisclosure } from './useDisclosure';
+import { ReadingContexts, capturePosition, readingKey, restorePosition, type ReadingSettings } from './readingContext';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { Badge, Button } from '../../components/ui';
 import i18n from '../../i18n';
@@ -103,6 +104,11 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const remoteReads = useRemoteReads(remoteTargetId, '', active);
   const native = remoteReads.native;
   const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
+  // Find, reading options and place per conversation. The page owns them so a hidden page
+  // can release the transcript and still return the reader to where it was.
+  const readingContexts = useRef(new ReadingContexts());
+  const activeRef = useRef(active); activeRef.current = active;
+  const tabRef = useRef(tab); tabRef.current = tab;
   const [search, setSearch] = useState('');
   const [toolId, setToolId] = useState('');
   const [model, setModel] = useState('');
@@ -246,6 +252,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
           return true;
         });
         if (sequence !== request.current || remoteTargetId === 'local') return false;
+        if (!snapshot.sourceFailures.length) readingContexts.current.retainSessions(remoteTargetId, new Set(rows.keys()));
         if (unfilteredQuery(current)) setUnfilteredTotal(rows.size);
         loadedFilter.current = JSON.stringify(current);
         setSessions(items); setSourceFailures(snapshot.sourceFailures); remotePartial.current = snapshot.sourceFailures.length > 0;
@@ -263,7 +270,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
       const items = await native.listHistorySessions(current);
-      if (unfilteredQuery(current)) setUnfilteredTotal(items.length);
+      if (unfilteredQuery(current)) {
+        setUnfilteredTotal(items.length);
+        // A complete read is the record of which sessions still exist; forget the reading
+        // place of the rest so the cache follows the index instead of growing.
+        readingContexts.current.retainSessions(remoteTargetId, new Set(items.map((item) => item.id)));
+      }
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       loadedFilter.current = key;
       setSessions(items); toasts.setError(null);
@@ -341,6 +353,11 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const openedChild = openedTrail && childPath.length > 0 && openedTrail.length === childPath.length ? openedTrail[openedTrail.length - 1] : null;
   const readerDetail = useMemo(() => selected && openedChild ? { ...selected, messages: openedChild.messages, session: { ...selected.session, messageCount: openedChild.messages.length } } : selected, [selected, openedChild]);
   const openChild = useCallback((key: string) => setChildPath((path) => [...path, key]), []);
+  const readerKey = readerDetail && !(openedChild && !openedChild.readable) ? readingKey(remoteTargetId, readerDetail.session.id, childPath) : '';
+  // Read once per opened conversation: the reader only consumes it on mount, and a fresh
+  // object on every save would re-render the whole transcript.
+  const readerContext = useMemo(() => readerKey ? readingContexts.current.get(readerKey) : undefined, [readerKey]);
+  const saveReading = useCallback((settings: ReadingSettings) => { if (readerKey) readingContexts.current.update(readerKey, settings); }, [readerKey]);
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
   const resumeKey = selected ? JSON.stringify([selected.session.id, selected.session.updatedAt, selected.session.projectId,
     selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
@@ -523,7 +540,58 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       if (window.matchMedia('(max-width: 760px)').matches) detailRef.current?.querySelector('button')?.focus({ preventScroll: true });
     });
   }
-  useEffect(() => { detailRef.current?.scrollTo({ top: 0 }); }, [selectedId, childPath]);
+  useLayoutEffect(() => { detailRef.current?.scrollTo({ top: 0 }); }, [selectedId, childPath]);
+  // Declared after the reset above so a conversation read before returns to its own place.
+  const readerKeyRef = useRef('');
+  // While a restored place settles (deferred Markdown, fonts), keep re-applying it instead of
+  // recording the shifting layout; the reader's own scrolling ends that at once.
+  const settling = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    readerKeyRef.current = readerKey;
+    settling.current?.();
+    const container = detailRef.current;
+    const position = readerKey ? readingContexts.current.get(readerKey)?.position : null;
+    if (!readerKey || !container || !position) return;
+    restorePosition(container, position);
+    const reader = container.querySelector<HTMLElement>('[data-reader-root]');
+    const observer = new ResizeObserver(() => { if (readerKeyRef.current === readerKey) restorePosition(container, position); });
+    if (reader) observer.observe(reader);
+    const stop = () => {
+      observer.disconnect(); window.clearTimeout(timer);
+      for (const name of ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const) container.removeEventListener(name, stop);
+      if (settling.current === stop) settling.current = null;
+    };
+    const timer = window.setTimeout(stop, 1200);
+    for (const name of ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const) container.addEventListener(name, stop, { passive: true });
+    settling.current = stop;
+  }, [readerKey]);
+  const scrollFrame = useRef(0);
+  useEffect(() => () => { cancelAnimationFrame(scrollFrame.current); settling.current?.(); }, []);
+  function rememberPosition() {
+    if (scrollFrame.current) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = 0;
+      const key = readerKeyRef.current;
+      const container = detailRef.current;
+      // A hidden page or tab collapses the scroll box; that is not where the reader stopped.
+      if (!key || !container || settling.current || !activeRef.current || tabRef.current !== 'sessions') return;
+      const position = capturePosition(container);
+      if (position) readingContexts.current.update(key, { position });
+    });
+  }
+  const retryFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (detailError || !retryFocus.current) return;
+    retryFocus.current = false;
+    detailRef.current?.querySelector<HTMLElement>('[data-reader-find]')?.focus({ preventScroll: true });
+  }, [detailError]);
+  function retryDetail() {
+    if (detailRef.current?.contains(document.activeElement)) retryFocus.current = true;
+    setDetailRetry((value) => value + 1);
+  }
+  // A failed refresh of the open conversation keeps its last read on screen and says so
+  // next to the reader instead of disappearing behind the kept transcript.
+  const detailNotice = useMemo(() => detailError ? <div className={styles.detailStale}><StatusBanner tone="error" action={<Button size="sm" onClick={retryDetail}>{t('records.page.reloadSession')}</Button>}>{`${t('records.page.detailStale')} ${detailError}`}</StatusBanner></div> : null, [detailError, t]);
   const groupedSessions = useMemo(() => {
     const groups = new Map<SessionGroup, HistorySession[]>();
     const sorted = [...sessions].sort((a, b) => sort === 'messages' ? b.messageCount - a.messageCount : sort === 'oldest' ? (a.updatedAt ?? Infinity) - (b.updatedAt ?? Infinity) : (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -619,7 +687,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading ? t('records.page.loading') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading ? t('records.page.loadingHint') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{tool.name}：{tool.history.reason}</p>)}{listError ? <Button size="sm" onClick={() => void load(filter)}>{t('records.page.retryList')}</Button> : activeFilters.length > 0 && <Button variant="ghost" size="sm" onClick={clearAllFilters}>{t('records.page.clearAll')}</Button>}</div>}</div>
         <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning || backgroundScanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
       </aside>
-      <div className={styles.detail} ref={detailRef}>
+      <div className={styles.detail} ref={detailRef} onScroll={rememberPosition}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
         {selected ? <>
         <div className={styles.detailBar}>
@@ -652,8 +720,8 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
         </div>}
         </div>
         {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
-        {openedChild && !openedChild.readable ? <div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div> : readerDetail && <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={readerDetail} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) : undefined} onOpenChild={openChild} />}
-      </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
+        {openedChild && !openedChild.readable ? <>{detailNotice}<div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div></> : readerDetail && <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={readerDetail} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) : undefined} onOpenChild={openChild} context={readerContext} onContextChange={saveReading} notice={detailNotice} />}
+      </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={retryDetail}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><h3>{t('records.page.pickSessionTitle')}</h3><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
     <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} onSearchChange={setSearch} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}

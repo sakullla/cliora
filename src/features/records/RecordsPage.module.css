@@ -97,6 +97,10 @@
 
 .staleBanner { flex: none; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); background: var(--surface); }
 .staleBanner :global(.status-banner) { padding: var(--space-2) var(--space-2_5); }
+/* Shown in the reader's sticky toolbar, so the failed refresh stays in view while reading. */
+.detailStale { flex: 1 1 100%; min-width: 0; }
+.detail > .detailStale { flex: none; padding: var(--space-2) var(--space-6); }
+.detailStale :global(.status-banner) { padding: var(--space-2) var(--space-2_5); }
 
 .list, .detail { min-width: 0; min-height: 0; }
 .list { display: grid; flex: 1; align-content: start; grid-auto-rows: max-content; gap: var(--space-0_5); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: var(--space-1) var(--space-2) var(--space-3); }

@@ -245,6 +245,7 @@ export default {
     emptyTitle: 'Start with your first session',
     listFailedHint: 'Local records are kept. You can read again.',
     listStale: 'Refresh failed; the sessions below are from the last read.',
+    detailStale: 'Refreshing this session failed; the conversation below is from the last read.',
     loadingHint: 'Reading local records.',
     noMatchHint: 'Try another keyword, or clear the filters.',
     emptyHint: 'After using a managed CLI, come back here to find and continue conversations.',

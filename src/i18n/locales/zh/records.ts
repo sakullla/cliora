@@ -245,6 +245,7 @@ export default {
     emptyTitle: '从第一段会话开始',
     listFailedHint: '本机记录仍然保留，可以重新读取。',
     listStale: '刷新失败，下面仍是上次读取的会话。',
+    detailStale: '会话刷新失败，下面仍是上次读取的内容。',
     loadingHint: '正在读取本机记录。',
     noMatchHint: '试试其他关键词，或清除筛选。',
     emptyHint: '使用受管理的 CLI 后，回到这里查找与继续对话。',
