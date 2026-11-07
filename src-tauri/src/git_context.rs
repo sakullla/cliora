@@ -65,13 +65,37 @@ pub(crate) fn main_checkout(directory: &Path) -> Option<PathBuf> {
 /// an empty list is never produced when inside one (the current checkout is
 /// always present). The checkout holding `directory` is flagged `current`.
 pub fn worktrees(directory: &Path) -> Option<Vec<Worktree>> {
-    let (root, git_dir, linked) = locate(directory)?;
+    collect(directory).ok().flatten()
+}
+
+/// The same list for callers that must tell "not a repository" from "could not be
+/// read": outside a repository is an empty list, an unreadable repository is an
+/// error the menu can show and retry.
+pub fn worktrees_checked(directory: &Path) -> Result<Vec<Worktree>, String> {
+    Ok(collect(directory)?.unwrap_or_default())
+}
+
+/// `None` means `directory` is outside a repository; `Err` means it is inside one whose
+/// worktree metadata could not be read.
+fn collect(directory: &Path) -> Result<Option<Vec<Worktree>>, String> {
+    let Some((root, git_dir, linked)) = locate(directory) else {
+        return Ok(None);
+    };
     // The common dir is the main checkout's `.git`; for the main checkout it is
     // the git dir itself, for a linked worktree it is resolved via `commondir`.
-    let common = if linked { common_dir(&git_dir)? } else { git_dir.clone() };
+    let common = if linked {
+        common_dir(&git_dir).ok_or_else(|| "Git 工作树的公共目录无法读取。".to_string())?
+    } else {
+        git_dir.clone()
+    };
     let main_root = common.parent().map(Path::to_path_buf).unwrap_or(root);
     // The working tree the session currently sits in, used to flag `current`.
     let active = if linked { worktree_tree(&git_dir) } else { Some(main_root.clone()) };
+    let head = read_pointer(&common.join("HEAD"))
+        .ok_or_else(|| "Git 仓库的 HEAD 无法读取，无法列出工作树。".to_string())?;
+    if parse_head(&head).is_none() {
+        return Err("Git 仓库的 HEAD 无法解析，无法列出工作树。".into());
+    }
 
     let mut out = Vec::new();
     out.push(worktree_entry(
@@ -82,17 +106,19 @@ pub fn worktrees(directory: &Path) -> Option<Vec<Worktree>> {
     ));
 
     let linked_dir = common.join("worktrees");
-    if let Ok(entries) = std::fs::read_dir(&linked_dir) {
-        let mut linked: Vec<_> = entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
-        linked.sort();
-        for admin in linked {
+    if linked_dir.exists() {
+        let entries = std::fs::read_dir(&linked_dir)
+            .map_err(|error| format!("Git 的工作树列表无法读取：{error}"))?;
+        let mut admin_dirs: Vec<_> = entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+        admin_dirs.sort();
+        for admin in admin_dirs {
             let Some(tree) = worktree_tree(&admin) else { continue };
             let name = admin.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
             if name.is_empty() { continue; }
             out.push(worktree_entry(name, &admin.join("HEAD"), tree, active.as_deref()));
         }
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 fn worktree_entry(name: String, head_path: &Path, tree: PathBuf, active: Option<&Path>) -> Worktree {

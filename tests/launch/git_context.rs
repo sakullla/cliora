@@ -132,6 +132,50 @@ fn git(cwd: &Path, args: &[&str]) -> Option<()> {
 }
 
 #[test]
+fn a_directory_outside_a_repository_is_an_empty_list_not_an_error() {
+    let plain = scratch("checked-plain");
+    // A machine whose temp directory sits inside a checkout cannot show "outside".
+    if plain.ancestors().any(|path| path.join(".git").exists()) {
+        return;
+    }
+    assert_eq!(worktrees_checked(&plain.join("missing")), Ok(Vec::new()));
+    assert_eq!(worktrees(&plain.join("missing")), None);
+}
+
+#[test]
+fn a_repository_whose_head_cannot_be_read_is_an_error_not_an_empty_list() {
+    let broken = scratch("checked-broken");
+    write(&broken.join(".git/HEAD"), "not a ref");
+    assert_eq!(read(&broken), None);
+    let error = worktrees_checked(&broken).expect_err("真实读取失败必须传给调用方");
+    assert!(error.contains("HEAD"), "{error}");
+    assert_eq!(worktrees(&broken), None, "旧调用方仍然拿到 Option");
+}
+
+#[test]
+fn an_unreadable_worktree_list_is_an_error_not_a_shorter_list() {
+    let base = scratch("checked-worktrees");
+    let repo = base.join("shop");
+    write(&repo.join(".git/HEAD"), "ref: refs/heads/main\n");
+    // A file where Git keeps the per-worktree admin directories makes the list
+    // unreadable while the repository itself is still recognizable.
+    write(&repo.join(".git/worktrees"), "not a directory\n");
+    let error = worktrees_checked(&repo).expect_err("工作树列表读取失败必须报错");
+    assert!(error.contains("工作树列表"), "{error}");
+}
+
+#[test]
+fn checked_worktrees_still_flag_the_current_checkout() {
+    let repo = scratch("checked-single").join("shop");
+    write(&repo.join(".git/HEAD"), "ref: refs/heads/main\n");
+    let list = worktrees_checked(&repo).expect("worktrees");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "shop");
+    assert!(list[0].current);
+    assert_eq!(worktrees(&repo), Some(list));
+}
+
+#[test]
 fn a_repository_without_linked_worktrees_lists_only_the_main_checkout() {
     let repo = scratch("single").join("shop");
     write(&repo.join(".git/HEAD"), "ref: refs/heads/main\n");

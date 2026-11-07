@@ -85,6 +85,7 @@ pub mod history;
 pub mod launch;
 pub mod library;
 pub mod git_context;
+pub mod git_status;
 pub mod git_worktree;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../../tests/platform/macos.rs"]
@@ -340,6 +341,9 @@ pub fn run() {
             commands::replay_workbench_session,
             commands::workbench_git_context,
             commands::git_worktrees,
+            commands::worktree_base_preview,
+            commands::worktree_base_update,
+            commands::worktree_status,
             commands::worktree_prepare,
             commands::save_worktree_prepare,
             commands::workbench_code_status,

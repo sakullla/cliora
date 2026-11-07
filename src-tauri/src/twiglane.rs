@@ -6,15 +6,14 @@
 //! 它不写 Git、不改会话、不联网：所有失败都在任何仓库写入之前结束。
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
 use crate::commands::ApiError;
+use crate::git_status::{is_oid, run_git};
 
 /// 出站 scheme：cliora 发起审查。
 const SCHEME_OUT: &str = "twiglane";
@@ -24,9 +23,6 @@ const HOST: &str = "review";
 pub(crate) const MAX_URL_BYTES: usize = 2048;
 /// 协议规定的路径长度上限（字符）。
 const MAX_PATH_CHARS: usize = 1000;
-/// Git 输出上限。超过即未知，不伪造 0。
-const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-
 /// 入站事件允许的查询参数名。任何其它名字都是无效输入。
 const PARAMS: [&str; 7] = ["v", "event", "reviewId", "sessionId", "reason", "outcome", "headOid"];
 
@@ -170,11 +166,6 @@ fn is_uuid(value: &str) -> bool {
         8 | 13 | 18 | 23 => *byte == b'-',
         _ => byte.is_ascii_hexdigit(),
     })
-}
-
-/// 完整对象 ID：恰好 40 位小写十六进制。短 OID、大写、HEAD~ 一律无效。
-fn is_oid(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// 路径必须绝对、长度受限，且不含控制字符。
@@ -475,84 +466,6 @@ pub(crate) fn review_target(directory: Option<PathBuf>) -> Result<PathBuf, &'sta
     directory.ok_or("remote_session")
 }
 
-fn find_git() -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(windows) { &["git.exe", "git.cmd", "git"] } else { &["git"] };
-    crate::process_environment::directories()
-        .into_iter()
-        .find_map(|directory| names.iter().map(|name| directory.join(name)).find(|path| path.is_file()))
-}
-
-/// Windows 上 CREATE_NO_WINDOW 的取值；后台读取 Git 时不能创建可见控制台。
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// 读取状态用的 Git 命令：沿用既有 PATH，Windows 上不申请控制台窗口。
-fn git_command(git: PathBuf) -> Command {
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new(git);
-    crate::process_environment::apply(&mut command);
-    // 后台读取不能在桌面上闪现控制台窗口。
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW); // CREATE_NO_WINDOW
-    command
-}
-
-/// 用参数数组运行 Git，不经 shell，不访问网络；输出超限即失败，不截断计数。
-fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
-    let mut out = Vec::new();
-    let ok = stream_git(cwd, args, |chunk| { out.extend_from_slice(chunk); Ok(()) })?;
-    Ok((ok, String::from_utf8_lossy(&out).into_owned()))
-}
-
-/// Drain stdout without retaining file paths; all consumers share the same output bound.
-fn stream_git(cwd: &Path, args: &[&str], mut consume: impl FnMut(&[u8]) -> Result<(), &'static str>) -> Result<bool, &'static str> {
-    let git = find_git().ok_or("git_missing")?;
-    let mut child = git_command(git)
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // 这是一次只读读取，不拿任何锁，也不让全局配置改变结果。
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
-        .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "git_missing")?;
-    let mut bytes = 0;
-    if let Some(mut stdout) = child.stdout.take() {
-        let mut chunk = [0u8; 8192];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(read) => {
-                    bytes += read;
-                    if bytes > MAX_GIT_OUTPUT_BYTES {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err("output_too_large");
-                    }
-                    if let Err(reason) = consume(&chunk[..read]) {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(reason);
-                    }
-                }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("read_failed");
-                }
-            }
-        }
-    }
-    let status = child.wait().map_err(|_| "read_failed")?;
-    Ok(status.success())
-}
-
 /// 工作树根目录（rev-parse --show-toplevel 的规范结果）。
 pub(crate) fn worktree_root(directory: &Path) -> Result<PathBuf, &'static str> {
     let (ok, stdout) = run_git(directory, &["rev-parse", "--show-toplevel"])?;
@@ -584,68 +497,6 @@ fn head_oid(root: &Path) -> Option<String> {
     (ok && is_oid(text)).then(|| text.to_owned())
 }
 
-/// Porcelain v2 includes HEAD and branch in the same snapshot as the count.
-/// Only headers are retained (at most 4 KiB); file records are counted and discarded.
-/// Without -z, Git quotes embedded newlines in paths, including rename paths.
-#[derive(Default)]
-struct StatusSummary {
-    branch: Option<String>,
-    head_oid: Option<String>,
-    files: u64,
-    first: Option<u8>,
-    header: Vec<u8>,
-    saw_branch: bool,
-    saw_head: bool,
-}
-
-impl StatusSummary {
-    fn push(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
-        for &byte in chunk {
-            if byte == b'\n' {
-                self.finish_line()?;
-                continue;
-            }
-            let first = *self.first.get_or_insert(byte);
-            if first == b'#' {
-                if self.header.len() == 4096 { return Err("output_too_large"); }
-                self.header.push(byte);
-            }
-        }
-        Ok(())
-    }
-
-    fn finish_line(&mut self) -> Result<(), &'static str> {
-        match self.first.take() {
-            Some(b'#') => {
-                let header = std::str::from_utf8(&self.header).map_err(|_| "read_failed")?.trim_end();
-                if let Some(oid) = header.strip_prefix("# branch.oid ") {
-                    let sha256 = oid.len() == 64 && oid.bytes().all(|byte| byte.is_ascii_hexdigit());
-                    if oid != "(initial)" && !is_oid(oid) && !sha256 { return Err("read_failed"); }
-                    // The review protocol accepts SHA-1 only; preserve the previous
-                    // unknown HEAD for SHA-256 without losing branch/file status.
-                    self.head_oid = is_oid(oid).then(|| oid.to_owned());
-                    self.saw_head = true;
-                } else if let Some(branch) = header.strip_prefix("# branch.head ") {
-                    if branch.is_empty() { return Err("read_failed"); }
-                    self.branch = (branch != "(detached)").then(|| branch.to_owned());
-                    self.saw_branch = true;
-                }
-                self.header.clear();
-            }
-            Some(b'1' | b'2' | b'u' | b'?') => self.files += 1,
-            None => {},
-            _ => return Err("read_failed"),
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<(), &'static str> {
-        self.finish_line()?;
-        if !self.saw_head || !self.saw_branch { return Err("read_failed"); }
-        Ok(())
-    }
-}
-
 /// 读取目标 worktree 的真实分支、HEAD 与完整未提交文件数。
 pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
     let root = match checked_worktree(directory) {
@@ -656,25 +507,17 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
         }
     };
     let path = crate::launch::terminal_path(&root).ok();
-    let mut summary = StatusSummary::default();
-    let ok = match stream_git(&root, &["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=all"], |chunk| summary.push(chunk)) {
-        Ok(result) => result,
-        Err(reason) => return CodeStatus::unknown(session_id, path, reason),
-    };
-    if !ok {
-        return CodeStatus::unknown(session_id, path, "read_failed");
-    }
-    if let Err(reason) = summary.finish() {
-        return CodeStatus::unknown(session_id, path, reason);
-    }
-    CodeStatus {
-        session_id: session_id.into(),
-        worktree_path: path,
-        branch: summary.branch,
-        head_oid: summary.head_oid,
-        uncommitted_files: Some(summary.files),
-        state: "ready",
-        reason: None,
+    match crate::git_status::read(&root) {
+        Ok(snapshot) => CodeStatus {
+            session_id: session_id.into(),
+            worktree_path: path,
+            branch: snapshot.branch,
+            head_oid: snapshot.head_oid,
+            uncommitted_files: Some(snapshot.files),
+            state: "ready",
+            reason: None,
+        },
+        Err(reason) => CodeStatus::unknown(session_id, path, reason),
     }
 }
 
@@ -952,82 +795,10 @@ mod tests {
     }
 
     #[test]
-    fn status_stream_counts_all_record_types_across_chunk_boundaries() {
-        let mut output = format!("# branch.oid {OID}\n# branch.head feature/中文\n# future.header ignored\n");
-        for index in 0..57 {
-            output.push_str(&format!("? file-{index}.txt\n"));
-        }
-        output.push_str("2 R. N... 100644 100644 100644 oid oid R100 new.txt\told.txt\n");
-        output.push_str("1 .M N... 100644 100644 100644 oid oid tracked.txt\n");
-        output.push_str("u UU N... modes oids conflict.txt\n? \"line\\nbreak.txt\"");
-        for size in [1, 7, 8192] {
-            let mut summary = StatusSummary::default();
-            for chunk in output.as_bytes().chunks(size) { summary.push(chunk).unwrap(); }
-            summary.finish().unwrap();
-            assert_eq!(summary.files, 61);
-            assert_eq!(summary.branch.as_deref(), Some("feature/中文"));
-            assert_eq!(summary.head_oid.as_deref(), Some(OID));
-        }
-    }
-
-    #[test]
-    fn status_stream_does_not_retain_paths_and_rejects_incomplete_headers() {
-        let mut summary = StatusSummary::default();
-        summary.push(b"# branch.oid (initial)\n# branch.head main\n? ").unwrap();
-        let retained = summary.header.capacity();
-        for _ in 0..1024 { summary.push(&[b'x'; 4096]).unwrap(); }
-        summary.push(b"\n").unwrap();
-        summary.finish().unwrap();
-        assert_eq!(summary.files, 1);
-        assert_eq!(summary.header.capacity(), retained);
-        assert_eq!(StatusSummary::default().finish(), Err("read_failed"));
-        let mut oversized = StatusSummary::default();
-        oversized.push(b"# ").unwrap();
-        assert_eq!(oversized.push(&[b'x'; 4096]), Err("output_too_large"));
-    }
-
-    #[test]
     fn a_remote_session_has_no_local_directory_to_review() {
         assert_eq!(review_target(None), Err("remote_session"));
         let path = PathBuf::from("C:/w");
         assert_eq!(review_target(Some(path.clone())), Ok(path));
-    }
-
-    /// std 无法回读 `Command` 已设置的 creation flags，因此守卫真正的构造点：
-    /// 少了这行，Windows 上每 15 秒的轮询都会弹一次 cmd 窗口。
-    #[test]
-    fn git_reads_never_ask_windows_for_a_console_window() {
-        let source = include_str!("twiglane.rs");
-        let lines: Vec<&str> = source.lines().collect();
-        let guarded = lines.windows(2).any(|pair| {
-            pair[0].trim() == "#[cfg(windows)]" && pair[1].contains("creation_flags(CREATE_NO_WINDOW)")
-        });
-        assert!(guarded, "读取状态的 Git 命令必须在 cfg(windows) 下设置 CREATE_NO_WINDOW");
-        // run_git 必须走同一个构造点，否则标志会被绕过。
-        assert!(source.contains("let mut child = git_command(git)"), "run_git 必须使用 git_command");
-        // 只读环境、参数数组与输出上限保持不变。
-        assert!(source.contains(".env(\"GIT_OPTIONAL_LOCKS\", \"0\")"));
-        assert!(source.contains("MAX_GIT_OUTPUT_BYTES"));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn a_windows_git_read_starts_without_a_console_window() {
-        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000, "CREATE_NO_WINDOW 常量被改动");
-        let Some(git) = find_git() else {
-            eprintln!("git unavailable; skipping console window test");
-            return;
-        };
-        // 按 run_git 的构造方式真实启动一次：标志没有破坏命令行。
-        let output = git_command(git)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .expect("git --version 应该能启动");
-        assert!(output.status.success(), "{output:?}");
-        assert!(String::from_utf8_lossy(&output.stdout).contains("git version"));
     }
 
     fn git(cwd: &Path, args: &[&str]) -> bool {
@@ -1043,7 +814,7 @@ mod tests {
     }
 
     fn init_repo(root: &Path) -> Option<PathBuf> {
-        if find_git().is_none() {
+        if crate::git_status::find_git().is_none() {
             eprintln!("git unavailable; skipping Twiglane status test");
             return None;
         }

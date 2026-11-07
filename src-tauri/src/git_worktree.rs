@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, OptionalExtension};
 
 use crate::database::Database;
+use crate::git_status::find_git;
 
 const LEDGER_TABLE: &str = "worktree_ledger";
 const PREPARE_TABLE: &str = "worktree_prepare";
@@ -21,11 +22,110 @@ const ENVIRONMENT_PREPARED: &str = "prepared";
 /// Serializes name allocation so two new sessions cannot take the same branch.
 static CREATE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Stage names for one explicit worktree launch. The command layer turns them
+/// into progress events; the launch result stays authoritative.
+pub(crate) const STAGE_CREATING: &str = "creating";
+pub(crate) const STAGE_PREPARING: &str = "preparing";
+pub(crate) const STAGE_STARTING: &str = "starting";
+pub(crate) const STAGE_SUCCEEDED: &str = "succeeded";
+pub(crate) const STAGE_FAILED: &str = "failed";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedWorktree {
     pub directory: PathBuf,
     pub branch: String,
     pub main_checkout: PathBuf,
+}
+
+/// Which commit a new worktree starts from. `Default` follows the repository's own
+/// trunk; `Head` is used only when the user asks for the current commit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WorktreeBase {
+    #[default]
+    Default,
+    Head,
+    Reference { reference: String },
+}
+
+/// What a creation will really start from, resolved before anything is written.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeBasePreview {
+    /// `default`, `head` or `reference`.
+    pub kind: String,
+    /// The ref that will be used, e.g. `origin/main`.
+    pub reference: Option<String>,
+    pub commit: Option<String>,
+    pub short_commit: Option<String>,
+    /// Remote name when the base is a remote-tracking branch.
+    pub remote: Option<String>,
+    /// Branch name without the remote prefix.
+    pub branch: Option<String>,
+    /// Visible reason when the default could not be used unchanged.
+    pub degraded: Option<String>,
+    /// Candidates the user has to choose from when no default is identifiable.
+    pub candidates: Vec<String>,
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+/// A base that resolved to a real commit, or the reason it did not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BaseResolution {
+    Resolved { reference: String, commit: String, remote: Option<String>, branch: Option<String>, degraded: Option<String> },
+    Unavailable { reason: String, candidates: Vec<String> },
+}
+
+/// One progress event of an explicit worktree launch. Every field is known at
+/// the moment the stage is reached; a later stage never rewrites an earlier one.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeLaunchEvent {
+    pub operation_id: String,
+    /// `creating`, `preparing`, `starting`, `succeeded` or `failed`.
+    pub stage: &'static str,
+    /// The worktree directory, once it exists.
+    pub worktree_path: Option<String>,
+    pub branch: Option<String>,
+    /// The workbench session, once it started.
+    pub session_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Progress for one explicit creation. Never used for a plain or remote launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorktreeProgress {
+    /// The directory exists and its ledger row is written; the environment
+    /// command is about to run.
+    Preparing { directory: PathBuf, branch: String },
+    /// The environment command failed. The worktree and its ledger row stay.
+    PrepareFailed { directory: PathBuf, branch: String, error: String },
+}
+
+/// Options only an explicit creation carries.
+#[derive(Clone, Debug)]
+pub(crate) struct PrepareOptions<'a> {
+    /// `Head` keeps the historical preference behaviour; an explicit creation
+    /// passes what the caller confirmed.
+    pub base: WorktreeBase,
+    /// An explicit branch name is used exactly as given: a conflict is an error.
+    pub branch: Option<&'a str>,
+    /// An explicit creation must fail outside a repository, never start there.
+    pub require_repository: bool,
+}
+
+impl<'a> Default for PrepareOptions<'a> {
+    fn default() -> Self {
+        Self { base: WorktreeBase::Head, branch: None, require_repository: false }
+    }
+}
+
+/// One local session that keeps a worktree in use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RunningSession {
+    pub session_id: String,
+    pub directory: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -55,16 +155,34 @@ pub struct CleanupReport {
 
 /// `Ok(None)` means `directory` is not inside a Git repository: start there.
 /// A repository whose `git` is missing or refuses the add is `Err`.
+///
+/// This is the entry point for the stored launch preference: it keeps the
+/// historical "current commit" base and tolerates a plain directory.
 pub(crate) fn prepare_worktree(
     db: &Database,
     directory: &Path,
     task_text: Option<&str>,
 ) -> Result<Option<PreparedWorktree>, String> {
+    prepare_worktree_with(db, directory, task_text, &PrepareOptions::default(), &mut |_| {})
+}
+
+/// Create a worktree from a resolved base. `require_repository` marks an explicit
+/// creation, which must never fall back to starting in the given directory.
+pub(crate) fn prepare_worktree_with(
+    db: &Database,
+    directory: &Path,
+    task_text: Option<&str>,
+    options: &PrepareOptions<'_>,
+    progress: &mut dyn FnMut(WorktreeProgress),
+) -> Result<Option<PreparedWorktree>, String> {
     if crate::git_context::main_checkout(directory).is_none() {
+        if options.require_repository {
+            return Err("这个目录不是 Git 仓库，不能新建工作树。".into());
+        }
         return Ok(None);
     }
     let git = find_git().ok_or_else(|| "找不到 Git，无法新建工作树。".to_string())?;
-    prepare_with(&git, db, directory, task_text)
+    prepare_with(&git, db, directory, task_text, options, progress)
 }
 
 fn prepare_with(
@@ -72,9 +190,14 @@ fn prepare_with(
     db: &Database,
     directory: &Path,
     task_text: Option<&str>,
+    options: &PrepareOptions<'_>,
+    progress: &mut dyn FnMut(WorktreeProgress),
 ) -> Result<Option<PreparedWorktree>, String> {
     let _guard = CREATE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(main) = crate::git_context::main_checkout(directory) else {
+        if options.require_repository {
+            return Err("这个目录不是 Git 仓库，不能新建工作树。".into());
+        }
         return Ok(None);
     };
     if !git.is_file() {
@@ -89,16 +212,36 @@ fn prepare_with(
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty() && *name != "." && *name != "..")
         .ok_or_else(|| "无法确定仓库目录名。".to_string())?;
-    let commit = git_ok(git, directory, &["rev-parse", "--verify", "HEAD"])?;
-    if commit.is_empty() || commit.chars().any(|ch| ch.is_whitespace()) {
-        return Err("Git 无法创建工作树：无法读取当前提交。".into());
-    }
+    // The base is resolved once here and pinned to its commit, so a ref that
+    // moves after the preview cannot change where the worktree starts.
+    let commit = match &options.base {
+        WorktreeBase::Head => {
+            let commit = git_ok(git, directory, &["rev-parse", "--verify", "HEAD"])?;
+            if !is_commit_oid(&commit) {
+                return Err("Git 无法创建工作树：无法读取当前提交。".into());
+            }
+            commit
+        }
+        base => match resolve_base(git, directory, base)? {
+            BaseResolution::Resolved { commit, .. } => commit,
+            BaseResolution::Unavailable { reason, candidates } => {
+                return Err(base_unavailable_message(&reason, &candidates));
+            }
+        },
+    };
     let existing = branch_names(git, directory)?;
-    let base = branch_base(task_text, repo_name);
-    let branch = unique_branch(&base, &existing);
-    if !ref_ok(git, directory, &branch) {
-        return Err(format!("Git 无法创建工作树：分支名“{branch}”不可用。"));
-    }
+    let branch = match options.branch.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => {
+            if !ref_ok(git, directory, name) {
+                return Err(format!("Git 无法创建工作树：分支名“{name}”不可用。"));
+            }
+            if existing.contains(name) {
+                return Err(format!("分支“{name}”已存在，请换一个名称。"));
+            }
+            name.to_owned()
+        }
+        None => unique_branch(&branch_base(task_text, repo_name), &existing),
+    };
     let path = unique_sibling(parent, repo_name, &branch)?;
     // Git for Windows cannot use canonical \\?\ paths as worktree arguments.
     // Keep canonical paths for identity/IO and normalize only at the CLI boundary.
@@ -116,7 +259,23 @@ fn prepare_with(
         discard_incomplete(git, &main, &directory, &main);
         return Err(error);
     }
+    progress(WorktreeProgress::Preparing { directory: directory.clone(), branch: branch.clone() });
     Ok(Some(PreparedWorktree { directory, branch, main_checkout: main }))
+}
+
+/// Resume a creation that is already recorded. The ledger row and the directory
+/// are authoritative, so a retry reuses the same branch and allocates nothing.
+pub(crate) fn retry_prepare(db: &Database, directory: &Path) -> Result<PreparedWorktree, String> {
+    let record = find_ledger(db, directory)?;
+    let path = PathBuf::from(&record.worktree_path);
+    if !path.is_dir() {
+        return Err("已创建的工作树目录不存在，请重新创建工作树。".into());
+    }
+    Ok(PreparedWorktree {
+        directory: path,
+        branch: record.branch,
+        main_checkout: PathBuf::from(&record.main_checkout),
+    })
 }
 
 pub(crate) fn recorded_worktrees(db: &Database) -> Result<Vec<WorktreeRecord>, String> {
@@ -206,7 +365,29 @@ pub fn write_prepare_command(db: &Database, directory: &Path, command: &str) -> 
 
 /// Remove one ledger worktree. Paths that are not in the ledger, including the
 /// main checkout and worktrees Cliora did not create, are refused before git runs.
+/// A worktree a running local session still sits in is refused before any Git
+/// write: ending that session is the only safe next step.
 pub fn cleanup_worktree(db: &Database, path: &Path, confirm: bool) -> Result<CleanupReport, String> {
+    cleanup_worktree_with_sessions(db, path, confirm, &running_local_sessions())
+}
+
+/// Running local sessions and their directories, read from the session host.
+fn running_local_sessions() -> Vec<RunningSession> {
+    crate::session_host::list()
+        .into_iter()
+        .filter(|session| session.running && session.remote_session_id.is_none())
+        .map(|session| RunningSession { session_id: session.id, directory: PathBuf::from(session.directory) })
+        .filter(|session| !session.directory.as_os_str().is_empty())
+        .collect()
+}
+
+/// `sessions` is injected so the running-session guard is testable without a live PTY.
+pub(crate) fn cleanup_worktree_with_sessions(
+    db: &Database,
+    path: &Path,
+    confirm: bool,
+    sessions: &[RunningSession],
+) -> Result<CleanupReport, String> {
     let record = find_ledger(db, path)?;
     let worktree = PathBuf::from(&record.worktree_path);
     let main = PathBuf::from(&record.main_checkout);
@@ -214,12 +395,21 @@ pub fn cleanup_worktree(db: &Database, path: &Path, confirm: bool) -> Result<Cle
         return Err("主检出不能清理。".into());
     }
     let git = find_git().ok_or_else(|| "找不到 Git，无法清理工作树。".to_string())?;
-    if let (Ok(tree), Ok(root)) = (worktree.canonicalize(), main.canonicalize()) {
-        if tree == root {
-            return Err("主检出不能清理。".into());
-        }
+    // A path that cannot be resolved cannot be proven unrelated to a session, so
+    // it is reported instead of deleted: a wrong delete loses work silently.
+    let Some(root) = worktree.canonicalize().ok() else {
+        return Err("无法确认工作树目录（可能已移动或删除），不能清理。".into());
+    };
+    if main.canonicalize().ok().as_deref() == Some(root.as_path()) {
+        return Err("主检出不能清理。".into());
     }
-    let dirty = if worktree.is_dir() { dirty_lines(&git, &worktree)? } else { Vec::new() };
+    if let Some(session) = sessions.iter().find(|session| same_or_inside(&session.directory, &root)) {
+        return Err(format!(
+            "工作树仍被运行中的会话 {} 使用，请先结束该会话再清理。",
+            session.session_id
+        ));
+    }
+    let dirty = dirty_lines(&git, &worktree)?;
     let commits = unmerged_lines(&git, &main, &record.branch)?;
     if (!dirty.is_empty() || !commits.is_empty()) && !confirm {
         return Ok(CleanupReport {
@@ -231,6 +421,29 @@ pub fn cleanup_worktree(db: &Database, path: &Path, confirm: bool) -> Result<Cle
     delete_worktree(&git, &main, &worktree, &record.branch, !dirty.is_empty(), !commits.is_empty())?;
     forget_ledger(db, &record.worktree_path)?;
     Ok(CleanupReport { removed: true, needs_confirmation: false, detail: String::new() })
+}
+
+/// Whether `child` is `root` itself or lies inside it. Comparison uses canonical
+/// paths when available and compares component by component either way, so a
+/// sibling such as `repo-other` never matches `repo`.
+fn same_or_inside(child: &Path, root: &Path) -> bool {
+    let child = child.canonicalize().unwrap_or_else(|_| child.to_path_buf());
+    let mut actual = child.components();
+    for expected in root.components() {
+        match actual.next() {
+            Some(component) if same_component(component, expected) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn same_component(left: std::path::Component<'_>, right: std::path::Component<'_>) -> bool {
+    if cfg!(windows) {
+        left.as_os_str().to_string_lossy().eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn canonical_main(directory: &Path) -> Result<PathBuf, String> {
@@ -301,17 +514,21 @@ fn prepare_shell(command: &str) -> Command {
     child
 }
 
-fn find_ledger(db: &Database, path: &Path) -> Result<WorktreeRecord, String> {
+/// The ledger row for `path`, including a path that moved: the stored path
+/// and its canonical form are both compared. `None` means Cliora did not
+/// create it, which is not an error.
+pub(crate) fn ledger_entry(db: &Database, path: &Path) -> Result<Option<WorktreeRecord>, String> {
     let records = recorded_worktrees(db)?;
     let canon = path.canonicalize().ok();
-    records
-        .into_iter()
-        .find(|row| {
-            let stored = PathBuf::from(&row.worktree_path);
-            stored == path
-                || canon.as_ref().is_some_and(|canon| stored == *canon || stored.canonicalize().ok().as_ref() == Some(canon))
-        })
-        .ok_or_else(|| "这个目录不是 Cliora 创建的工作树，不能清理。".to_string())
+    Ok(records.into_iter().find(|row| {
+        let stored = PathBuf::from(&row.worktree_path);
+        stored == path
+            || canon.as_ref().is_some_and(|canon| stored == *canon || stored.canonicalize().ok().as_ref() == Some(canon))
+    }))
+}
+
+fn find_ledger(db: &Database, path: &Path) -> Result<WorktreeRecord, String> {
+    ledger_entry(db, path)?.ok_or_else(|| "这个目录不是 Cliora 创建的工作树，不能清理。".to_string())
 }
 
 fn forget_ledger(db: &Database, worktree: &str) -> Result<(), String> {
@@ -454,13 +671,6 @@ fn ensure_prepare(conn: &rusqlite::Connection) -> Result<(), String> {
          );"
     ))
     .map_err(|error| error.to_string())
-}
-
-fn find_git() -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(windows) { &["git.exe", "git.cmd", "git"] } else { &["git"] };
-    crate::process_environment::directories().into_iter().find_map(|directory| {
-        names.iter().map(|name| directory.join(name)).find(|path| path.is_file())
-    })
 }
 
 fn branch_names(git: &Path, directory: &Path) -> Result<HashSet<String>, String> {
@@ -607,6 +817,236 @@ fn command_failure(prefix: &str, stderr: &str, stdout: &str) -> String {
     }
 }
 
+/// What a creation would start from, resolved without writing anything.
+pub fn base_preview(directory: &Path, base: Option<&WorktreeBase>) -> Result<WorktreeBasePreview, String> {
+    let git = find_git().ok_or_else(|| "找不到 Git，无法读取工作树基点。".to_string())?;
+    if crate::git_context::main_checkout(directory).is_none() {
+        return Err("这个目录不是 Git 仓库，不能新建工作树。".into());
+    }
+    let base = base.cloned().unwrap_or_default();
+    Ok(preview_of(&base, resolve_base(&git, directory, &base)?))
+}
+
+/// Refresh only the selected remote branch. Nothing else is fetched and no
+/// reference other than that remote-tracking one is written, so the main
+/// checkout, HEAD and every other base stay exactly as they were.
+pub fn base_update(directory: &Path, base: Option<&WorktreeBase>) -> Result<WorktreeBasePreview, String> {
+    let git = find_git().ok_or_else(|| "找不到 Git，无法更新工作树基点。".to_string())?;
+    if crate::git_context::main_checkout(directory).is_none() {
+        return Err("这个目录不是 Git 仓库，不能更新基点。".into());
+    }
+    let base = base.cloned().unwrap_or_default();
+    let preview = preview_of(&base, resolve_base(&git, directory, &base)?);
+    let (Some(remote), Some(branch)) = (preview.remote.clone(), preview.branch.clone()) else {
+        return Err("只能更新远程分支基点。".into());
+    };
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let output = git_output(
+        &git,
+        directory,
+        &["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", &remote, &refspec],
+    )?;
+    if !output.status.success() {
+        return Err(command_failure(&format!("更新远程基点 {remote}/{branch} 失败"), &output.stderr, &output.stdout));
+    }
+    Ok(preview_of(&base, resolve_base(&git, directory, &base)?))
+}
+
+fn preview_of(base: &WorktreeBase, resolution: BaseResolution) -> WorktreeBasePreview {
+    let kind = match base {
+        WorktreeBase::Default => "default",
+        WorktreeBase::Head => "head",
+        WorktreeBase::Reference { .. } => "reference",
+    };
+    match resolution {
+        BaseResolution::Resolved { reference, commit, remote, branch, degraded } => WorktreeBasePreview {
+            kind: kind.to_owned(),
+            short_commit: Some(commit.chars().take(7).collect()),
+            reference: Some(reference),
+            commit: Some(commit),
+            remote,
+            branch,
+            degraded,
+            candidates: Vec::new(),
+            available: true,
+            reason: None,
+        },
+        BaseResolution::Unavailable { reason, candidates } => WorktreeBasePreview {
+            kind: kind.to_owned(),
+            candidates,
+            available: false,
+            reason: Some(reason),
+            ..WorktreeBasePreview::default()
+        },
+    }
+}
+
+/// Resolve the base a new worktree starts from. Read-only: no ref, HEAD or
+/// working tree is written. An unidentifiable base is reported together with
+/// the candidates to choose from instead of being guessed.
+fn resolve_base(git: &Path, directory: &Path, base: &WorktreeBase) -> Result<BaseResolution, String> {
+    match base {
+        WorktreeBase::Default => default_base(git, directory),
+        WorktreeBase::Head => Ok(match rev_parse_commit(git, directory, "HEAD")? {
+            Some(commit) => BaseResolution::Resolved {
+                reference: "HEAD".into(),
+                commit,
+                remote: None,
+                branch: None,
+                degraded: None,
+            },
+            None => BaseResolution::Unavailable {
+                reason: "当前仓库还没有提交，无法确定基点。".into(),
+                candidates: Vec::new(),
+            },
+        }),
+        WorktreeBase::Reference { reference } => {
+            let reference = reference.trim();
+            if reference.is_empty() || reference.starts_with('-') {
+                return Ok(BaseResolution::Unavailable { reason: "基点无效。".into(), candidates: Vec::new() });
+            }
+            match rev_parse_commit(git, directory, reference)? {
+                Some(commit) => {
+                    let (remote, branch) = split_remote(git, directory, reference)?;
+                    Ok(BaseResolution::Resolved { reference: reference.to_owned(), commit, remote, branch, degraded: None })
+                }
+                None => Ok(BaseResolution::Unavailable {
+                    reason: format!("基点 {reference} 不存在或无法解析为提交。"),
+                    candidates: Vec::new(),
+                }),
+            }
+        }
+    }
+}
+
+/// The repository's own default: the remote trunk its remote HEAD points at.
+/// Without that, a single unambiguous remote-tracking branch, a single detected
+/// remote HEAD, or (with no remote at all) the only local branch. Names such as
+/// main or master are never guessed and HEAD is never used as a fallback.
+fn default_base(git: &Path, directory: &Path) -> Result<BaseResolution, String> {
+    if let Some(reference) = remote_head(git, directory, "origin")? {
+        return resolve_tracking(git, directory, &reference, None);
+    }
+    let remotes = git_lines(git, directory, &["remote"])?;
+    let tracking = tracking_branches(git, directory)?;
+    if tracking.len() == 1 {
+        let reference = tracking[0].clone();
+        let note = format!("远程主干未配置，已使用唯一的远程跟踪分支 {reference}。");
+        return resolve_tracking(git, directory, &reference, Some(note));
+    }
+    if !tracking.is_empty() {
+        for remote in &remotes {
+            if let Some(reference) = remote_head(git, directory, remote)? {
+                let note = format!("远程主干未配置，已使用检测到的远程 HEAD {reference}。");
+                return resolve_tracking(git, directory, &reference, Some(note));
+            }
+        }
+        return Ok(BaseResolution::Unavailable {
+            reason: "无法确定仓库默认的远程主干，请选择基点。".into(),
+            candidates: tracking,
+        });
+    }
+    let locals = git_lines(git, directory, &["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+    if remotes.is_empty() && locals.len() == 1 {
+        let reference = locals[0].clone();
+        let note = format!("仓库没有远程，已使用唯一的本地分支 {reference}。");
+        return resolve_tracking(git, directory, &reference, Some(note));
+    }
+    if locals.is_empty() {
+        return Ok(BaseResolution::Unavailable {
+            reason: "仓库还没有提交，无法确定基点。".into(),
+            candidates: Vec::new(),
+        });
+    }
+    Ok(BaseResolution::Unavailable { reason: "无法确定仓库默认分支，请选择基点。".into(), candidates: locals })
+}
+
+fn resolve_tracking(
+    git: &Path,
+    directory: &Path,
+    reference: &str,
+    degraded: Option<String>,
+) -> Result<BaseResolution, String> {
+    let Some(commit) = rev_parse_commit(git, directory, reference)? else {
+        return Ok(BaseResolution::Unavailable {
+            reason: format!("基点 {reference} 不存在或无法解析为提交。"),
+            candidates: Vec::new(),
+        });
+    };
+    let (remote, branch) = match reference.split_once('/') {
+        Some((remote, branch)) if !remote.is_empty() && !branch.is_empty() => {
+            (Some(remote.to_owned()), Some(branch.to_owned()))
+        }
+        _ => (None, None),
+    };
+    Ok(BaseResolution::Resolved { reference: reference.to_owned(), commit, remote, branch, degraded })
+}
+
+fn remote_head(git: &Path, directory: &Path, remote: &str) -> Result<Option<String>, String> {
+    let probe = format!("refs/remotes/{remote}/HEAD");
+    let output = git_output(git, directory, &["symbolic-ref", "--quiet", "--short", &probe])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let reference = output.stdout.trim();
+    Ok((!reference.is_empty()).then(|| reference.to_owned()))
+}
+
+fn tracking_branches(git: &Path, directory: &Path) -> Result<Vec<String>, String> {
+    Ok(git_lines(git, directory, &["for-each-ref", "--format=%(refname:short)", "refs/remotes"])?
+        .into_iter()
+        .filter(|name| !name.ends_with("/HEAD"))
+        .collect())
+}
+
+/// The remote and branch of an explicit ref, but only when it really is a
+/// remote-tracking branch; a local branch with a slash keeps no remote.
+fn split_remote(git: &Path, directory: &Path, reference: &str) -> Result<(Option<String>, Option<String>), String> {
+    let Some((remote, branch)) = reference.split_once('/') else {
+        return Ok((None, None));
+    };
+    if remote.is_empty() || branch.is_empty() {
+        return Ok((None, None));
+    }
+    let probe = format!("refs/remotes/{reference}");
+    let output = git_output(git, directory, &["show-ref", "--verify", "--quiet", &probe])?;
+    Ok(if output.status.success() {
+        (Some(remote.to_owned()), Some(branch.to_owned()))
+    } else {
+        (None, None)
+    })
+}
+
+fn git_lines(git: &Path, directory: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+    let output = git_output(git, directory, args)?;
+    if !output.status.success() {
+        return Err(command_failure("Git 无法读取仓库信息", &output.stderr, &output.stdout));
+    }
+    Ok(output.stdout.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect())
+}
+
+fn rev_parse_commit(git: &Path, directory: &Path, reference: &str) -> Result<Option<String>, String> {
+    let probe = format!("{reference}^{{commit}}");
+    let output = git_output(git, directory, &["rev-parse", "--verify", "--quiet", &probe])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let commit = output.stdout.trim();
+    Ok(is_commit_oid(commit).then(|| commit.to_owned()))
+}
+
+fn is_commit_oid(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn base_unavailable_message(reason: &str, candidates: &[String]) -> String {
+    if candidates.is_empty() {
+        return reason.to_owned();
+    }
+    format!("{reason}
+可选基点：{}", candidates.join("、"))
+}
+
 /// Remove a directory this call created. Never touches the main checkout.
 fn discard_incomplete(git: &Path, source: &Path, path: &Path, main: &Path) {
     if path == main || path.parent() != main.parent() {
@@ -674,6 +1114,17 @@ mod tests {
     }
 
     #[test]
+    fn the_base_contract_deserializes_for_every_kind() {
+        let default: WorktreeBase = serde_json::from_str(r#"{"kind":"default"}"#).unwrap();
+        assert_eq!(default, WorktreeBase::Default);
+        let head: WorktreeBase = serde_json::from_str(r#"{"kind":"head"}"#).unwrap();
+        assert_eq!(head, WorktreeBase::Head);
+        let reference: WorktreeBase =
+            serde_json::from_str(r#"{"kind":"reference","reference":"origin/main"}"#).unwrap();
+        assert_eq!(reference, WorktreeBase::Reference { reference: "origin/main".into() });
+    }
+
+    #[test]
     fn branch_names_drop_ref_characters_and_fall_back_to_the_repository() {
         assert_eq!(branch_base(Some("feat: hello?\nsecond"), "shop"), "feat-hello");
         assert_eq!(branch_base(Some("  \n"), "shop"), "shop");
@@ -712,7 +1163,7 @@ mod tests {
         std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         std::fs::write(main.join("keep.txt"), "before").unwrap();
         let missing = temp.path().join("missing-git");
-        let error = prepare_with(&missing, &db, &main, Some("task")).unwrap_err();
+        let error = prepare_with(&missing, &db, &main, Some("task"), &PrepareOptions::default(), &mut |_| {}).unwrap_err();
         assert!(error.contains("找不到 Git"), "{error}");
         assert_eq!(std::fs::read(main.join("keep.txt")).unwrap(), b"before");
         assert!(recorded_worktrees(&db).unwrap().is_empty());
@@ -733,7 +1184,7 @@ mod tests {
         std::fs::write(main.join("tracked.txt"), "dirty\n").unwrap();
         std::fs::write(main.join("untracked.txt"), "keep\n").unwrap();
         let fake = fake_git(temp.path());
-        let error = prepare_with(&fake, &db, &main, Some("task")).unwrap_err();
+        let error = prepare_with(&fake, &db, &main, Some("task"), &PrepareOptions::default(), &mut |_| {}).unwrap_err();
         assert!(error.contains("refusing on purpose"), "{error}");
         assert_eq!(std::fs::read(main.join("tracked.txt")).unwrap(), b"dirty\n");
         assert_eq!(std::fs::read(main.join("untracked.txt")).unwrap(), b"keep\n");
@@ -961,6 +1412,256 @@ mod tests {
         assert!(error.contains("Git 无法删除工作树"), "{error}");
         assert!(created.directory.is_dir());
         assert_eq!(recorded_worktrees(&db).unwrap().len(), 1);
+    }
+
+    /// A repository whose origin is a local bare trunk, with a feature branch
+    /// checked out in the main checkout so trunk and HEAD deliberately differ.
+    fn repo_with_origin(parent: &Path) -> Option<PathBuf> {
+        let bare = parent.join("origin.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        if !run_git(&bare, &["init", "-q", "--bare", "-b", "main"]) {
+            return None;
+        }
+        let main = init_repo(parent, "shop")?;
+        std::fs::write(main.join("tracked.txt"), "root\n").unwrap();
+        assert!(run_git(&main, &["add", "tracked.txt"]));
+        assert!(run_git(&main, &["commit", "-q", "-m", "root"]));
+        let bare_text = crate::launch::terminal_path(&bare).unwrap();
+        assert!(run_git(&main, &["remote", "add", "origin", &bare_text]));
+        assert!(run_git(&main, &["push", "-q", "origin", "main"]));
+        assert!(run_git(&main, &["fetch", "-q", "origin"]));
+        assert!(run_git(&main, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]));
+        assert!(run_git(&main, &["checkout", "-q", "-b", "feature/orders"]));
+        std::fs::write(main.join("feature.txt"), "feature\n").unwrap();
+        assert!(run_git(&main, &["add", "feature.txt"]));
+        assert!(run_git(&main, &["commit", "-q", "-m", "feature"]));
+        Some(main)
+    }
+
+    fn explicit(base: WorktreeBase, branch: Option<&str>) -> PrepareOptions<'_> {
+        PrepareOptions { base, branch, require_repository: true }
+    }
+
+    #[test]
+    fn the_default_base_is_the_remote_trunk_not_the_current_feature_branch() {
+        let (temp, db) = database();
+        let Some(main) = repo_with_origin(temp.path()) else {
+            eprintln!("git unavailable; skipping default base test");
+            return;
+        };
+        let preview = base_preview(&main, None).expect("preview");
+        assert!(preview.available, "{preview:?}");
+        assert_eq!(preview.kind, "default");
+        assert_eq!(preview.reference.as_deref(), Some("origin/main"));
+        assert_eq!(preview.remote.as_deref(), Some("origin"));
+        assert_eq!(preview.branch.as_deref(), Some("main"));
+        assert!(preview.degraded.is_none(), "{preview:?}");
+        let head = git_text(&main, &["rev-parse", "HEAD"]);
+        let trunk = git_text(&main, &["rev-parse", "origin/main"]);
+        assert_ne!(head, trunk, "功能分支必须领先于主干");
+        assert_eq!(preview.commit.as_deref(), Some(trunk.as_str()));
+        assert_eq!(preview.short_commit.as_deref(), Some(&trunk[..7]));
+
+        let mut seen = Vec::new();
+        let created = prepare_worktree_with(&db, &main, Some("task"), &explicit(WorktreeBase::Default, None), &mut |event| seen.push(event))
+            .unwrap()
+            .expect("worktree");
+        assert_eq!(git_text(&created.directory, &["rev-parse", "HEAD"]), trunk);
+        assert!(!created.directory.join("feature.txt").exists(), "未提交之外的功能分支提交也不能带进来");
+        assert_eq!(seen, vec![WorktreeProgress::Preparing { directory: created.directory.clone(), branch: created.branch.clone() }]);
+        // The main checkout keeps its branch, its files and its commit.
+        assert_eq!(git_text(&main, &["rev-parse", "HEAD"]), head);
+        assert!(main.join("feature.txt").is_file());
+    }
+
+    #[test]
+    fn the_head_and_an_explicit_reference_create_at_the_selected_commit() {
+        let (temp, db) = database();
+        let Some(main) = repo_with_origin(temp.path()) else {
+            eprintln!("git unavailable; skipping selected base test");
+            return;
+        };
+        let head = git_text(&main, &["rev-parse", "HEAD"]);
+        let head_preview = base_preview(&main, Some(&WorktreeBase::Head)).expect("preview");
+        assert_eq!(head_preview.kind, "head");
+        assert_eq!(head_preview.commit.as_deref(), Some(head.as_str()));
+        let from_head = prepare_worktree_with(&db, &main, Some("task"), &explicit(WorktreeBase::Head, None), &mut |_| {})
+            .unwrap()
+            .expect("worktree");
+        assert_eq!(git_text(&from_head.directory, &["rev-parse", "HEAD"]), head);
+        assert!(from_head.directory.join("feature.txt").is_file());
+
+        let trunk = git_text(&main, &["rev-parse", "origin/main"]);
+        let preview = base_preview(&main, Some(&WorktreeBase::Reference { reference: trunk.clone() })).expect("preview");
+        assert!(preview.available, "{preview:?}");
+        assert_eq!(preview.commit.as_deref(), Some(trunk.as_str()));
+        assert_eq!(preview.short_commit.as_deref(), Some(&trunk[..7]));
+        let picked = prepare_worktree_with(
+            &db,
+            &main,
+            Some("task"),
+            &explicit(WorktreeBase::Reference { reference: trunk.clone() }, Some("picked")),
+            &mut |_| {},
+        )
+        .unwrap()
+        .expect("worktree");
+        assert_eq!(picked.branch, "picked");
+        assert_eq!(git_text(&picked.directory, &["rev-parse", "HEAD"]), trunk);
+
+        // A base that no longer resolves is a readable refusal and creates nothing.
+        let gone = base_preview(&main, Some(&WorktreeBase::Reference { reference: "gone-ref".into() })).expect("preview");
+        assert!(!gone.available, "{gone:?}");
+        assert!(gone.reason.as_deref().unwrap_or_default().contains("gone-ref"));
+        let before = std::fs::read_dir(temp.path()).unwrap().count();
+        let error = prepare_worktree_with(&db, &main, Some("task"), &explicit(WorktreeBase::Reference { reference: "gone-ref".into() }, None), &mut |_| {})
+            .unwrap_err();
+        assert!(error.contains("gone-ref"), "{error}");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), before);
+    }
+
+    #[test]
+    fn without_a_remote_only_a_single_local_branch_counts_as_the_default() {
+        let (temp, db) = database();
+        let Some(single) = init_repo(temp.path(), "solo") else {
+            eprintln!("git unavailable; skipping local default test");
+            return;
+        };
+        assert!(run_git(&single, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        let preview = base_preview(&single, None).expect("preview");
+        assert!(preview.available, "{preview:?}");
+        assert_eq!(preview.reference.as_deref(), Some("main"));
+        assert_eq!(preview.remote, None);
+        assert!(preview.degraded.as_deref().unwrap_or_default().contains("没有远程"), "{preview:?}");
+
+        // Two local branches leave no identifiable default: the user has to choose.
+        assert!(run_git(&single, &["branch", "release"]));
+        let ambiguous = base_preview(&single, None).expect("preview");
+        assert!(!ambiguous.available, "{ambiguous:?}");
+        assert_eq!(ambiguous.candidates, vec!["main".to_string(), "release".to_string()]);
+        assert!(ambiguous.commit.is_none());
+        let error = prepare_worktree_with(&db, &single, Some("task"), &explicit(WorktreeBase::Default, None), &mut |_| {})
+            .unwrap_err();
+        assert!(error.contains("请选择基点"), "{error}");
+        assert!(error.contains("release"), "{error}");
+        assert!(!temp.path().join("solo-task").exists());
+    }
+
+    #[test]
+    fn updating_a_remote_base_moves_only_that_branch_and_a_failure_keeps_the_cache() {
+        let (temp, _db) = database();
+        let Some(main) = repo_with_origin(temp.path()) else {
+            eprintln!("git unavailable; skipping base update test");
+            return;
+        };
+        let feature_head = git_text(&main, &["rev-parse", "HEAD"]);
+        let cached = base_preview(&main, None).expect("preview");
+        // Another clone lands a commit on the remote trunk.
+        let other = temp.path().join("other");
+        let bare_text = crate::launch::terminal_path(&temp.path().join("origin.git")).unwrap();
+        assert!(run_git(temp.path(), &["clone", "-q", &bare_text, other.to_str().unwrap()]));
+        std::fs::write(other.join("trunk.txt"), "trunk\n").unwrap();
+        assert!(run_git(&other, &["add", "trunk.txt"]));
+        assert!(run_git(&other, &["-c", "user.name=cliora", "-c", "user.email=cliora@example.com", "commit", "-q", "-m", "trunk"]));
+        assert!(run_git(&other, &["push", "-q", "origin", "main"]));
+        let pushed = git_text(&other, &["rev-parse", "HEAD"]);
+        assert_eq!(base_preview(&main, None).expect("preview").commit, cached.commit, "更新前缓存不变");
+
+        let updated = base_update(&main, None).expect("update");
+        assert_eq!(updated.reference.as_deref(), Some("origin/main"));
+        assert_eq!(updated.commit.as_deref(), Some(pushed.as_str()));
+        assert_eq!(git_text(&main, &["rev-parse", "HEAD"]), feature_head, "更新不改写当前 HEAD");
+        assert_eq!(git_text(&main, &["rev-parse", "refs/remotes/origin/main"]), pushed);
+
+        // A failing update reports Git and leaves the cached base untouched.
+        let missing = crate::launch::terminal_path(&temp.path().join("gone.git")).unwrap();
+        assert!(run_git(&main, &["remote", "set-url", "origin", &missing]));
+        let error = base_update(&main, None).unwrap_err();
+        assert!(error.contains("更新远程基点 origin/main 失败"), "{error}");
+        assert_eq!(base_preview(&main, None).expect("preview").commit.as_deref(), Some(pushed.as_str()));
+        assert_eq!(git_text(&main, &["rev-parse", "HEAD"]), feature_head);
+    }
+
+    #[test]
+    fn explicit_creation_refuses_a_plain_directory_an_empty_repository_and_a_taken_branch() {
+        let (temp, db) = database();
+        let plain = temp.path().join("notes");
+        std::fs::create_dir(&plain).unwrap();
+        let error = prepare_worktree_with(&db, &plain, Some("task"), &explicit(WorktreeBase::Default, None), &mut |_| {})
+            .unwrap_err();
+        assert!(error.contains("不是 Git 仓库"), "{error}");
+        assert!(recorded_worktrees(&db).unwrap().is_empty());
+
+        let Some(empty) = init_repo(temp.path(), "empty") else {
+            eprintln!("git unavailable; skipping empty repository test");
+            return;
+        };
+        let error = prepare_worktree_with(&db, &empty, Some("task"), &explicit(WorktreeBase::Default, None), &mut |_| {})
+            .unwrap_err();
+        assert!(error.contains("还没有提交"), "{error}");
+        assert!(!temp.path().join("empty-task").exists());
+
+        let Some(main) = repo_with_origin(temp.path()) else { return };
+        let error = prepare_worktree_with(&db, &main, Some("task"), &explicit(WorktreeBase::Head, Some("feature/orders")), &mut |_| {})
+            .unwrap_err();
+        assert!(error.contains("已存在"), "{error}");
+        let first = prepare_worktree_with(&db, &main, Some("shop task"), &explicit(WorktreeBase::Head, None), &mut |_| {})
+            .unwrap()
+            .expect("first");
+        let second = prepare_worktree_with(&db, &main, Some("shop task"), &explicit(WorktreeBase::Head, None), &mut |_| {})
+            .unwrap()
+            .expect("second");
+        assert_ne!(first.branch, second.branch, "自动分支名仍避让冲突");
+        assert_ne!(first.directory, second.directory);
+    }
+
+    #[test]
+    fn a_prepare_retry_reuses_the_recorded_directory_and_branch() {
+        let (temp, db) = database();
+        let Some(main) = init_repo(temp.path(), "shop") else {
+            eprintln!("git unavailable; skipping prepare retry test");
+            return;
+        };
+        std::fs::write(main.join("tracked.txt"), "committed\n").unwrap();
+        assert!(run_git(&main, &["add", "tracked.txt"]));
+        assert!(run_git(&main, &["commit", "-q", "-m", "root"]));
+        write_prepare_command(&db, &main, fail_command()).unwrap();
+        let created = prepare_worktree_with(&db, &main, Some("task"), &PrepareOptions::default(), &mut |_| {})
+            .unwrap()
+            .expect("worktree");
+        assert!(finish_prepare(&db, &created).is_err());
+        let siblings = std::fs::read_dir(temp.path()).unwrap().count();
+        write_prepare_command(&db, &main, &marker_command("ready.txt")).unwrap();
+        let retried = retry_prepare(&db, &created.directory).expect("retry");
+        assert_eq!(retried.directory, created.directory);
+        assert_eq!(retried.branch, created.branch);
+        finish_prepare(&db, &retried).unwrap();
+        assert!(retried.directory.join("ready.txt").is_file());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), siblings, "重试不重新分配目录");
+        assert_eq!(recorded_worktrees(&db).unwrap().len(), 1, "重试不重复分配分支");
+    }
+
+    #[test]
+    fn cleanup_refuses_a_worktree_a_running_session_still_uses() {
+        let (temp, db) = database();
+        let Some(main) = init_repo(temp.path(), "shop") else {
+            eprintln!("git unavailable; skipping running session cleanup test");
+            return;
+        };
+        assert!(run_git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        let created = prepare_worktree(&db, &main, Some("task")).unwrap().expect("worktree");
+        let inside = [RunningSession { session_id: "session-1".into(), directory: created.directory.join("src") }];
+        let error = cleanup_worktree_with_sessions(&db, &created.directory, true, &inside).unwrap_err();
+        assert!(error.contains("运行中的会话 session-1"), "{error}");
+        assert!(created.directory.is_dir());
+        assert_eq!(recorded_worktrees(&db).unwrap().len(), 1, "被拒绝时台账保留");
+
+        // A sibling directory with a similar name is not inside the worktree.
+        let sibling = temp.path().join("shop-task-other");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let outside = [RunningSession { session_id: "session-2".into(), directory: sibling }];
+        let removed = cleanup_worktree_with_sessions(&db, &created.directory, false, &outside).unwrap();
+        assert!(removed.removed, "{removed:?}");
+        assert!(!created.directory.exists());
     }
 
     #[cfg(unix)]

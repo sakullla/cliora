@@ -3788,7 +3788,9 @@ pub async fn workbench_git_context(session_id: String) -> Result<Option<crate::g
 pub async fn git_worktrees(directory: String) -> Result<Vec<crate::git_context::Worktree>, ApiError> {
     blocking(move || {
         let path = std::path::PathBuf::from(directory);
-        Ok(crate::git_context::worktrees(&path).unwrap_or_default())
+        // Outside a repository is an empty list; a repository that cannot be
+        // read is an error the menu shows and retries, never a silent empty list.
+        crate::git_context::worktrees_checked(&path).map_err(native_error)
     }).await
 }
 
@@ -3874,6 +3876,42 @@ pub async fn save_worktree_prepare(app: AppHandle, directory: String, command: S
         app.state::<AppState>().with_database(&app, |db| {
             crate::git_worktree::write_prepare_command(db, Path::new(&directory), &command).map_err(native_error)
         })
+    })
+    .await
+}
+
+/// What a new worktree would start from, resolved read-only and shown before
+/// anything is created.
+#[tauri::command]
+pub async fn worktree_base_preview(
+    directory: String,
+    base: Option<crate::git_worktree::WorktreeBase>,
+) -> Result<crate::git_worktree::WorktreeBasePreview, ApiError> {
+    blocking(move || {
+        crate::git_worktree::base_preview(Path::new(&directory), base.as_ref()).map_err(native_error)
+    })
+    .await
+}
+
+/// Refresh only the selected remote base. A failure leaves the cached base and
+/// the main checkout exactly as they were, so the user can retry or use the cache.
+#[tauri::command]
+pub async fn worktree_base_update(
+    directory: String,
+    base: Option<crate::git_worktree::WorktreeBase>,
+) -> Result<crate::git_worktree::WorktreeBasePreview, ApiError> {
+    blocking(move || {
+        crate::git_worktree::base_update(Path::new(&directory), base.as_ref()).map_err(native_error)
+    })
+    .await
+}
+
+/// Ledger environment plus real Git status for one worktree the menu shows.
+#[tauri::command]
+pub async fn worktree_status(app: AppHandle, directory: String) -> Result<crate::git_status::WorktreeMenuStatus, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| crate::git_status::menu_status(db, Path::new(&directory)).map_err(native_error))
     })
     .await
 }
@@ -4417,12 +4455,42 @@ pub(crate) fn launch_now_with_stage(
     app: &AppHandle,
     envelope: impl Into<launch::LaunchEnvelope>,
 ) -> Result<launch::LaunchResult, Box<LaunchFailure>> {
+    let envelope = envelope.into();
+    let reporter = WorktreeLaunchReporter::new(app, &envelope);
+    reporter.stage(crate::git_worktree::STAGE_CREATING, None, None, None, None);
+    match launch_now_reported(app, envelope, &reporter) {
+        Ok((result, directory)) => {
+            reporter.stage(
+                crate::git_worktree::STAGE_SUCCEEDED,
+                Some(directory),
+                None,
+                result.session_id.clone(),
+                None,
+            );
+            Ok(result)
+        }
+        Err(failure) => {
+            // The failure event carries the same operation id; the command
+            // result stays the single source of truth for the final state.
+            reporter.failed(failure.error.message.clone());
+            Err(failure)
+        }
+    }
+}
+
+/// One explicit worktree launch. Reports its real stages while it runs and
+/// returns the directory the session ended up in.
+fn launch_now_reported(
+    app: &AppHandle,
+    envelope: launch::LaunchEnvelope,
+    reporter: &WorktreeLaunchReporter,
+) -> Result<(launch::LaunchResult, String), Box<LaunchFailure>> {
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
-    let envelope = envelope.into();
     let request = envelope.request;
     let worktree_intent = envelope.worktree_intent;
     let task_text = envelope.task_text;
+    let worktree_options = envelope.worktree;
     let project_id = request.project_id.clone();
     let launch_tool_id = request.tool_id.clone();
     let launch_mode = request.mode;
@@ -4467,10 +4535,11 @@ pub(crate) fn launch_now_with_stage(
         }
     }
     let project_path = project.as_ref().and_then(|item| item.path.clone());
+    let mut progress = |update: crate::git_worktree::WorktreeProgress| reporter.progress(update);
     let plan = app
         .state::<AppState>()
         .with_database(app, |db| {
-            Ok(launch::plan_envelope(
+            Ok(launch::plan_envelope_with_progress(
                 db,
                 &adapters::Registry::builtins(),
                 &home,
@@ -4478,7 +4547,9 @@ pub(crate) fn launch_now_with_stage(
                     request,
                     worktree_intent,
                     task_text,
+                    worktree: worktree_options,
                 },
+                &mut progress,
             ))
         })
         .map_err(|error| LaunchFailure::new(LaunchStage::Tool, error))?
@@ -4500,6 +4571,8 @@ pub(crate) fn launch_now_with_stage(
         launch::remember_remote_session(&db, project_id, &launch_tool_id, launch_mode, remote_session_id)
             .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
     }
+    let planned_directory = plan.directory.display().to_string();
+    reporter.stage(crate::git_worktree::STAGE_STARTING, Some(planned_directory.clone()), None, None, None);
     let mut result = launch::spawn(&db, plan)
         .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
     if let (Some(project_id), Some(remote_session_id)) =
@@ -4523,7 +4596,84 @@ pub(crate) fn launch_now_with_stage(
     if result.remote_session_id.is_some() {
         if let Some(context) = crate::remote::operations::current() { context.accept_persistent_launch(); }
     }
-    Ok(result)
+    Ok((result, planned_directory))
+}
+
+/// Emits the progress events of one explicit worktree launch. Armed only when the
+/// envelope carries an operation id and an explicit intent, so every other caller
+/// keeps the plain synchronous result with no extra events.
+struct WorktreeLaunchReporter {
+    app: Option<AppHandle>,
+    operation_id: Option<String>,
+    /// A prepare failure is already reported with its directory; the final
+    /// failure must not overwrite that stage with a pathless duplicate.
+    reported_failure: std::cell::Cell<bool>,
+}
+
+impl WorktreeLaunchReporter {
+    fn new(app: &AppHandle, envelope: &launch::LaunchEnvelope) -> Self {
+        let explicit = matches!(
+            envelope.worktree_intent,
+            launch::WorktreeIntent::Explicit | launch::WorktreeIntent::PrepareRetry
+        );
+        let operation_id = envelope.worktree.operation_id.clone().filter(|_| explicit);
+        Self { app: operation_id.as_ref().map(|_| app.clone()), operation_id, reported_failure: std::cell::Cell::new(false) }
+    }
+
+    fn stage(
+        &self,
+        stage: &'static str,
+        worktree_path: Option<String>,
+        branch: Option<String>,
+        session_id: Option<String>,
+        error: Option<String>,
+    ) {
+        let (Some(app), Some(operation_id)) = (self.app.as_ref(), self.operation_id.as_ref()) else {
+            return;
+        };
+        let _ = app.emit(
+            "cliora:worktree-launch",
+            crate::git_worktree::WorktreeLaunchEvent {
+                operation_id: operation_id.clone(),
+                stage,
+                worktree_path,
+                branch,
+                session_id,
+                error,
+            },
+        );
+    }
+
+    /// Report the final failure once, keeping an earlier failure that already
+    /// carried the created directory and its Git output.
+    fn failed(&self, error: String) {
+        if self.reported_failure.replace(true) {
+            return;
+        }
+        self.stage(crate::git_worktree::STAGE_FAILED, None, None, None, Some(error));
+    }
+
+    fn progress(&self, update: crate::git_worktree::WorktreeProgress) {
+        match update {
+            crate::git_worktree::WorktreeProgress::Preparing { directory, branch } => self.stage(
+                crate::git_worktree::STAGE_PREPARING,
+                Some(directory.display().to_string()),
+                Some(branch),
+                None,
+                None,
+            ),
+            crate::git_worktree::WorktreeProgress::PrepareFailed { directory, branch, error } => {
+                self.reported_failure.set(true);
+                self.stage(
+                    crate::git_worktree::STAGE_FAILED,
+                    Some(directory.display().to_string()),
+                    Some(branch),
+                    None,
+                    Some(error),
+                );
+            }
+        }
+    }
 }
 
 #[tauri::command]

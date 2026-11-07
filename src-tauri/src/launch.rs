@@ -172,7 +172,28 @@ pub struct LaunchRequest {
 pub enum WorktreeIntent {
     #[default]
     Given,
+    /// The stored launch preference decides, keeping its historical behaviour.
     Preference,
+    /// The user explicitly asked for a new worktree: a plain directory or an
+    /// unusable repository is an error, never a silent direct launch.
+    Explicit,
+    /// Retry the environment step of an already created worktree.
+    PrepareRetry,
+}
+
+/// Options only an explicit creation or a prepare retry carries. Every field is
+/// optional, so existing callers keep their exact request shape.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorktreeLaunchOptions {
+    /// What the parsed preview confirmed. Absent keeps the repository default.
+    pub base: Option<crate::git_worktree::WorktreeBase>,
+    /// An explicit branch name; a taken name is an error, never renamed.
+    pub branch: Option<String>,
+    /// Correlates the progress events of one explicit creation.
+    pub operation_id: Option<String>,
+    /// The directory an earlier attempt created, for a prepare retry.
+    pub retry_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -184,6 +205,8 @@ pub struct LaunchEnvelope {
     pub worktree_intent: WorktreeIntent,
     #[serde(default)]
     pub task_text: Option<String>,
+    #[serde(default)]
+    pub worktree: WorktreeLaunchOptions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -196,17 +219,35 @@ pub enum WorktreeLaunchMode {
 struct WorktreeLaunch {
     intent: WorktreeIntent,
     task_text: Option<String>,
+    options: WorktreeLaunchOptions,
 }
 
 impl WorktreeLaunch {
     fn given() -> Self {
-        Self { intent: WorktreeIntent::Given, task_text: None }
+        Self { intent: WorktreeIntent::Given, task_text: None, options: WorktreeLaunchOptions::default() }
     }
+
+    /// An explicit creation is the only intent that reports progress stages.
+    fn explicit(&self) -> bool {
+        matches!(self.intent, WorktreeIntent::Explicit | WorktreeIntent::PrepareRetry)
+    }
+}
+
+/// The worktree part of one plan: what the launch asked for and where its
+/// progress goes. Bundled so the planner keeps a readable argument list.
+struct WorktreePlan<'a> {
+    launch: WorktreeLaunch,
+    progress: &'a mut dyn FnMut(crate::git_worktree::WorktreeProgress),
 }
 
 impl From<LaunchRequest> for LaunchEnvelope {
     fn from(request: LaunchRequest) -> Self {
-        Self { request, worktree_intent: WorktreeIntent::Given, task_text: None }
+        Self {
+            request,
+            worktree_intent: WorktreeIntent::Given,
+            task_text: None,
+            worktree: WorktreeLaunchOptions::default(),
+        }
     }
 }
 
@@ -932,26 +973,82 @@ pub fn set_worktree_launch(db: &Database, mode: &str) -> Result<LaunchSettings, 
     settings(db)
 }
 
-/// Directory the session process should use. A missing, unreadable, or
-/// unrecognized preference stays on `directory` and does not rewrite the row.
+/// Directory the session process should use.
+///
+/// A missing, unreadable or unrecognized preference stays on `directory` and
+/// does not rewrite the row. An explicit creation never falls back to the given
+/// directory: outside a repository or without a usable base it is an error.
 fn session_directory_for_launch(
     db: &Database,
     directory: &Path,
-    intent: WorktreeIntent,
+    worktree: &WorktreeLaunch,
     task_text: Option<&str>,
+    progress: &mut dyn FnMut(crate::git_worktree::WorktreeProgress),
 ) -> Result<PathBuf, String> {
-    if intent != WorktreeIntent::Preference {
-        return Ok(directory.to_path_buf());
-    }
-    match stored_worktree_launch(db) {
-        Err(_) | Ok(StoredWorktreeLaunch::Direct | StoredWorktreeLaunch::Unrecognized) => Ok(directory.to_path_buf()),
-        Ok(StoredWorktreeLaunch::Worktree) => match crate::git_worktree::prepare_worktree(db, directory, task_text)? {
-            Some(created) => {
-                crate::git_worktree::finish_prepare(db, &created)?;
-                Ok(created.directory)
+    match worktree.intent {
+        WorktreeIntent::Given => Ok(directory.to_path_buf()),
+        WorktreeIntent::Preference => match stored_worktree_launch(db) {
+            Err(_) | Ok(StoredWorktreeLaunch::Direct | StoredWorktreeLaunch::Unrecognized) => {
+                Ok(directory.to_path_buf())
             }
-            None => Ok(directory.to_path_buf()),
+            Ok(StoredWorktreeLaunch::Worktree) => {
+                // The stored preference keeps its historical base and its
+                // tolerance for a directory that is not a repository.
+                match crate::git_worktree::prepare_worktree(db, directory, task_text)? {
+                    Some(created) => {
+                        finish_prepare_reported(db, &created, progress)?;
+                        Ok(created.directory)
+                    }
+                    None => Ok(directory.to_path_buf()),
+                }
+            }
         },
+        WorktreeIntent::Explicit => {
+            let options = crate::git_worktree::PrepareOptions {
+                base: worktree.options.base.clone().unwrap_or_default(),
+                branch: worktree.options.branch.as_deref(),
+                require_repository: true,
+            };
+            let created = crate::git_worktree::prepare_worktree_with(db, directory, task_text, &options, progress)?
+                .ok_or_else(|| "这个目录不是 Git 仓库，不能新建工作树。".to_string())?;
+            finish_prepare_reported(db, &created, progress)?;
+            Ok(created.directory)
+        }
+        WorktreeIntent::PrepareRetry => {
+            let retry = worktree
+                .options
+                .retry_directory
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
+                .ok_or_else(|| "准备重试缺少已创建的工作树目录。".to_string())?;
+            let created = crate::git_worktree::retry_prepare(db, Path::new(retry))?;
+            progress(crate::git_worktree::WorktreeProgress::Preparing {
+                directory: created.directory.clone(),
+                branch: created.branch.clone(),
+            });
+            finish_prepare_reported(db, &created, progress)?;
+            Ok(created.directory)
+        }
+    }
+}
+
+/// Run the saved environment command, reporting the failure before returning it
+/// so the frontend can offer a retry in the very same directory.
+fn finish_prepare_reported(
+    db: &Database,
+    created: &crate::git_worktree::PreparedWorktree,
+    progress: &mut dyn FnMut(crate::git_worktree::WorktreeProgress),
+) -> Result<(), String> {
+    match crate::git_worktree::finish_prepare(db, created) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            progress(crate::git_worktree::WorktreeProgress::PrepareFailed {
+                directory: created.directory.clone(),
+                branch: created.branch.clone(),
+                error: error.clone(),
+            });
+            Err(error)
+        }
     }
 }
 
@@ -1146,7 +1243,7 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_for(db, registry, home, request, WorktreeLaunch::given())
+    plan_with_stage_for(db, registry, home, request, WorktreeLaunch::given(), &mut |_| {})
 }
 
 pub fn plan_envelope(
@@ -1155,8 +1252,24 @@ pub fn plan_envelope(
     home: &Path,
     envelope: LaunchEnvelope,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    let worktree = WorktreeLaunch { intent: envelope.worktree_intent, task_text: envelope.task_text };
-    plan_with_stage_for(db, registry, home, envelope.request, worktree)
+    plan_envelope_with_progress(db, registry, home, envelope, &mut |_| {})
+}
+
+/// Same plan as `plan_envelope`, but an explicit worktree creation reports its
+/// real stages while it runs. A plain or remote launch never calls `progress`.
+pub fn plan_envelope_with_progress(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    envelope: LaunchEnvelope,
+    progress: &mut dyn FnMut(crate::git_worktree::WorktreeProgress),
+) -> Result<LaunchPlan, LaunchPlanError> {
+    let worktree = WorktreeLaunch {
+        intent: envelope.worktree_intent,
+        task_text: envelope.task_text,
+        options: envelope.worktree,
+    };
+    plan_with_stage_for(db, registry, home, envelope.request, worktree, progress)
 }
 
 fn plan_with_stage_for(
@@ -1165,6 +1278,7 @@ fn plan_with_stage_for(
     home: &Path,
     request: LaunchRequest,
     worktree: WorktreeLaunch,
+    progress: &mut dyn FnMut(crate::git_worktree::WorktreeProgress),
 ) -> Result<LaunchPlan, LaunchPlanError> {
     if request.resume_latest && request.session_id.is_some() {
         return Err(LaunchPlanError::new(
@@ -1197,7 +1311,15 @@ fn plan_with_stage_for(
         ));
     }
     let directory = original.or_else(|| request.directory.as_ref().map(PathBuf::from));
-    plan_with_stage_at(db, registry, home, request, directory.as_deref(), None, worktree)
+    plan_with_stage_at(
+        db,
+        registry,
+        home,
+        request,
+        directory.as_deref(),
+        None,
+        WorktreePlan { launch: worktree, progress },
+    )
 }
 
 pub fn plan_history(
@@ -1207,11 +1329,27 @@ pub fn plan_history(
     request: LaunchRequest,
     cwd: &Path,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, Some(cwd), None, WorktreeLaunch::given())
+    plan_with_stage_at(
+        db,
+        registry,
+        home,
+        request,
+        Some(cwd),
+        None,
+        WorktreePlan { launch: WorktreeLaunch::given(), progress: &mut |_| {} },
+    )
 }
 
 pub fn plan_history_context(db: &Database, registry: &Registry, home: &Path, request: LaunchRequest, cwd: &Path, context: Option<(String, crate::accounts::NativeContext)>) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, Some(cwd), Some(context), WorktreeLaunch::given())
+    plan_with_stage_at(
+        db,
+        registry,
+        home,
+        request,
+        Some(cwd),
+        Some(context),
+        WorktreePlan { launch: WorktreeLaunch::given(), progress: &mut |_| {} },
+    )
 }
 
 /// Directory of the desktop executable. A direct launch, or a selected
@@ -1232,8 +1370,9 @@ fn plan_with_stage_at(
     request: LaunchRequest,
     directory_override: Option<&Path>,
     resume_context: Option<Option<(String, crate::accounts::NativeContext)>>,
-    worktree: WorktreeLaunch,
+    worktree: WorktreePlan<'_>,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    let WorktreePlan { launch: worktree, progress } = worktree;
     if let Some(plan) = remote_launch_plan(db, registry, &request)? {
         return Ok(plan);
     }
@@ -1396,11 +1535,19 @@ fn plan_with_stage_at(
         LaunchForm::Desktop => TerminalId::Desktop,
     };
     let task_text = worktree.task_text.as_deref().filter(|text| !text.trim().is_empty()).or(request.initial_prompt.as_deref());
-    let launch_directory = if terminal == TerminalId::Workbench
+    // Only a new local workbench session creates a worktree. An explicit request
+    // that cannot satisfy this is an error, never a direct launch elsewhere.
+    let may_create_worktree = terminal == TerminalId::Workbench
         && request.session_id.is_none()
-        && !request.resume_latest
-    {
-        session_directory_for_launch(db, &directory, worktree.intent, task_text)
+        && !request.resume_latest;
+    if worktree.explicit() && !may_create_worktree {
+        return Err(LaunchPlanError::new(
+            LaunchStage::ProjectDirectory,
+            "新建工作树只能在本地工作台的新会话中使用。".into(),
+        ));
+    }
+    let launch_directory = if may_create_worktree {
+        session_directory_for_launch(db, &directory, &worktree, task_text, progress)
             .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
     } else {
         directory.clone()
@@ -2708,6 +2855,7 @@ mod installed_desktop_launch {
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
+            worktree: WorktreeLaunchOptions::default(),
         };
         let isolated = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
         assert_ne!(isolated.directory, canonical);
@@ -2729,6 +2877,7 @@ mod installed_desktop_launch {
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
+            worktree: WorktreeLaunchOptions::default(),
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
         assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
@@ -2796,6 +2945,7 @@ mod installed_desktop_launch {
             },
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
+            worktree: WorktreeLaunchOptions::default(),
         };
         let bare = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
         assert_ne!(bare.directory, canonical);
@@ -2844,6 +2994,7 @@ mod installed_desktop_launch {
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
+            worktree: WorktreeLaunchOptions::default(),
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
         assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
@@ -2889,6 +3040,7 @@ mod installed_desktop_launch {
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
+            worktree: WorktreeLaunchOptions::default(),
         };
         let stayed = plan_envelope(&db, &registry, temp.path(), envelope.clone()).unwrap();
         assert_eq!(stayed.directory, canonical);
@@ -2929,6 +3081,243 @@ mod installed_desktop_launch {
         set_worktree_launch(&db, "direct").unwrap();
         assert_eq!(read_key("worktree_launch").as_deref(), Some("\"direct\""));
         assert!(read_key("preferences").unwrap().contains("dark"));
+    }
+
+    #[test]
+    fn the_launch_envelope_accepts_the_explicit_worktree_contract() {
+        let explicit: LaunchEnvelope = serde_json::from_value(serde_json::json!({
+            "toolId": "codex",
+            "mode": "normal",
+            "directory": "C:/w/shop",
+            "worktreeIntent": "explicit",
+            "taskText": "feat: hello",
+            "worktree": {
+                "base": {"kind": "reference", "reference": "origin/main"},
+                "branch": "feat-hello",
+                "operationId": "op-1"
+            }
+        }))
+        .expect("explicit envelope");
+        assert_eq!(explicit.worktree_intent, WorktreeIntent::Explicit);
+        assert_eq!(explicit.task_text.as_deref(), Some("feat: hello"));
+        assert_eq!(explicit.worktree.branch.as_deref(), Some("feat-hello"));
+        assert_eq!(explicit.worktree.operation_id.as_deref(), Some("op-1"));
+        assert_eq!(
+            explicit.worktree.base,
+            Some(crate::git_worktree::WorktreeBase::Reference { reference: "origin/main".into() })
+        );
+
+        // Existing callers keep their exact shape: nothing new is required.
+        let legacy: LaunchEnvelope = serde_json::from_value(serde_json::json!({
+            "toolId": "codex",
+            "mode": "normal",
+            "directory": "C:/w/shop"
+        }))
+        .expect("legacy envelope");
+        assert_eq!(legacy.worktree_intent, WorktreeIntent::Given);
+        assert!(legacy.worktree.base.is_none());
+        assert!(legacy.worktree.operation_id.is_none());
+
+        let retry: LaunchEnvelope = serde_json::from_value(serde_json::json!({
+            "toolId": "codex",
+            "mode": "normal",
+            "worktreeIntent": "prepareRetry",
+            "worktree": {"retryDirectory": "C:/w/shop-task"}
+        }))
+        .expect("retry envelope");
+        assert_eq!(retry.worktree_intent, WorktreeIntent::PrepareRetry);
+        assert_eq!(retry.worktree.retry_directory.as_deref(), Some("C:/w/shop-task"));
+    }
+
+    fn git_binary() -> Option<PathBuf> {
+        crate::process_environment::directories().into_iter().find_map(|directory| {
+            let path = directory.join(if cfg!(windows) { "git.exe" } else { "git" });
+            path.is_file().then_some(path)
+        })
+    }
+
+    fn git_run(cwd: &std::path::Path, args: &[&str]) -> bool {
+        let Some(git_bin) = git_binary() else { return false };
+        std::process::Command::new(git_bin)
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn git_text(cwd: &std::path::Path, args: &[&str]) -> String {
+        let Some(git_bin) = git_binary() else { return String::new() };
+        std::process::Command::new(git_bin)
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .unwrap_or_default()
+    }
+
+    fn shop_repository(temp: &std::path::Path) -> Option<PathBuf> {
+        let main = temp.join("shop");
+        std::fs::create_dir_all(&main).unwrap();
+        if !git_run(&main, &["init", "-q", "-b", "main"]) {
+            return None;
+        }
+        assert!(git_run(&main, &["config", "user.email", "t@example.com"]));
+        assert!(git_run(&main, &["config", "user.name", "Test"]));
+        std::fs::write(main.join("tracked.txt"), "root\n").unwrap();
+        assert!(git_run(&main, &["add", "tracked.txt"]));
+        assert!(git_run(&main, &["commit", "-q", "-m", "root"]));
+        Some(main)
+    }
+
+    fn explicit_envelope(directory: &std::path::Path, options: WorktreeLaunchOptions) -> LaunchEnvelope {
+        LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "codex".into(),
+                project_id: None,
+                session_id: None,
+                directory: Some(directory.display().to_string()),
+                initial_prompt: Some("feat: hello?".into()),
+                mode: LaunchMode::Normal,
+                resume_latest: false,
+                remote_intent: None,
+            },
+            worktree_intent: WorktreeIntent::Explicit,
+            task_text: Some("feat: hello?".into()),
+            worktree: options,
+        }
+    }
+
+    #[test]
+    fn an_explicit_worktree_launch_uses_the_resolved_base_and_reports_the_preparing_stage() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        // The stored preference is direct: an explicit request must ignore it.
+        set_worktree_launch(&db, "direct").unwrap();
+        let registry = Registry::builtins().with_fixture_installation("codex", "0.165.0");
+        let Some(main) = shop_repository(temp.path()) else {
+            eprintln!("git unavailable; skipping explicit worktree plan test");
+            return;
+        };
+        let bare = temp.path().join("origin.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(git_run(&bare, &["init", "-q", "--bare", "-b", "main"]));
+        assert!(git_run(&main, &["remote", "add", "origin", bare.to_str().unwrap()]));
+        assert!(git_run(&main, &["push", "-q", "origin", "main"]));
+        assert!(git_run(&main, &["fetch", "-q", "origin"]));
+        assert!(git_run(&main, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]));
+        assert!(git_run(&main, &["checkout", "-q", "-b", "feature/orders"]));
+        std::fs::write(main.join("feature.txt"), "feature\n").unwrap();
+        assert!(git_run(&main, &["add", "feature.txt"]));
+        assert!(git_run(&main, &["commit", "-q", "-m", "feature"]));
+        let canonical = main.canonicalize().unwrap();
+        let trunk = git_text(&canonical, &["rev-parse", "origin/main"]);
+        let head = git_text(&canonical, &["rev-parse", "HEAD"]);
+        assert_ne!(trunk, head, "功能分支必须领先于主干");
+
+        let preview = crate::git_worktree::base_preview(&canonical, None).unwrap();
+        assert_eq!(preview.reference.as_deref(), Some("origin/main"));
+        assert_eq!(preview.short_commit.as_deref(), Some(&trunk[..7]));
+
+        let options = WorktreeLaunchOptions { operation_id: Some("op-1".into()), ..Default::default() };
+        let mut stages = Vec::new();
+        let plan = plan_envelope_with_progress(
+            &db,
+            &registry,
+            temp.path(),
+            explicit_envelope(&canonical, options),
+            &mut |event| stages.push(event),
+        )
+        .unwrap();
+        assert_ne!(plan.directory, canonical);
+        assert_eq!(git_text(&plan.directory, &["rev-parse", "HEAD"]), trunk, "创建使用预览确认的主干提交");
+        assert!(!plan.directory.join("feature.txt").exists());
+        assert_eq!(git_text(&canonical, &["rev-parse", "HEAD"]), head, "主检出保持原分支与原提交");
+        assert_eq!(stages.len(), 1, "{stages:?}");
+        match &stages[0] {
+            crate::git_worktree::WorktreeProgress::Preparing { directory, branch } => {
+                assert_eq!(directory, &plan.directory);
+                assert_eq!(branch, "feat-hello");
+            }
+            other => panic!("unexpected stage {other:?}"),
+        }
+        assert_eq!(crate::git_worktree::recorded_worktrees(&db).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_prepare_failure_keeps_the_created_directory_and_the_retry_reuses_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = Registry::builtins().with_fixture_installation("codex", "0.165.0");
+        let Some(main) = shop_repository(temp.path()) else {
+            eprintln!("git unavailable; skipping prepare retry plan test");
+            return;
+        };
+        let canonical = main.canonicalize().unwrap();
+        let fail = if cfg!(windows) { "echo nope>&2& exit /b 9" } else { "echo nope >&2; exit 9" };
+        crate::git_worktree::write_prepare_command(&db, &canonical, fail).unwrap();
+        let options = WorktreeLaunchOptions { operation_id: Some("op-2".into()), ..Default::default() };
+        let mut stages = Vec::new();
+        let failure = plan_envelope_with_progress(
+            &db,
+            &registry,
+            temp.path(),
+            explicit_envelope(&canonical, options),
+            &mut |event| stages.push(event),
+        )
+        .unwrap_err();
+        assert_eq!(failure.stage, LaunchStage::ProjectDirectory);
+        assert!(failure.message.contains("环境准备失败"), "{}", failure.message);
+        let created = stages
+            .iter()
+            .find_map(|stage| match stage {
+                crate::git_worktree::WorktreeProgress::Preparing { directory, .. } => Some(directory.clone()),
+                _ => None,
+            })
+            .expect("准备开始前必须报告真实目录");
+        let (failed_directory, failed_error) = stages
+            .iter()
+            .find_map(|stage| match stage {
+                crate::git_worktree::WorktreeProgress::PrepareFailed { directory, error, .. } => {
+                    Some((directory.clone(), error.clone()))
+                }
+                _ => None,
+            })
+            .expect("准备失败必须报告事件");
+        assert_eq!(failed_directory, created);
+        assert!(failed_error.contains("nope"), "{failed_error}");
+        assert!(created.is_dir(), "准备失败保留已创建的工作树");
+        assert_eq!(crate::git_worktree::recorded_worktrees(&db).unwrap().len(), 1);
+
+        let siblings = std::fs::read_dir(temp.path()).unwrap().count();
+        let marker = if cfg!(windows) { "echo ready> ready.txt" } else { "printf ready > ready.txt" };
+        crate::git_worktree::write_prepare_command(&db, &canonical, marker).unwrap();
+        let retry = LaunchEnvelope {
+            worktree_intent: WorktreeIntent::PrepareRetry,
+            worktree: WorktreeLaunchOptions {
+                operation_id: Some("op-2".into()),
+                retry_directory: Some(created.display().to_string()),
+                ..Default::default()
+            },
+            ..explicit_envelope(&canonical, WorktreeLaunchOptions::default())
+        };
+        let plan = plan_envelope_with_progress(&db, &registry, temp.path(), retry, &mut |_| {}).unwrap();
+        assert_eq!(plan.directory, created, "重试沿用原目录");
+        assert!(created.join("ready.txt").is_file());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), siblings, "重试不新建目录");
+        let rows = crate::git_worktree::recorded_worktrees(&db).unwrap();
+        assert_eq!(rows.len(), 1, "重试不重复分配分支");
+        assert_eq!(rows[0].environment, "prepared");
     }
 }
 
