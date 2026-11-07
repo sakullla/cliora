@@ -186,6 +186,14 @@ fn is_valid_path(value: &str) -> bool {
         && !value.chars().any(|character| character.is_control())
 }
 
+/// 固定 host：`review`，或系统对无路径 URL 规范化出的 `review/`（恰好一个尾斜杠）。
+///
+/// Windows 把 `twiglane://review?...` 交给应用时会写成 `twiglane://review/?...`，
+/// 两端都必须接受；再多的斜杠或任何路径段都不是本协议。
+fn is_host(authority: &str) -> bool {
+    authority.strip_suffix('/').unwrap_or(authority) == HOST
+}
+
 /// 一条 URL 出现控制字符或裸空白即无效（协议第 2 节）。
 fn has_raw_whitespace_or_control(url: &str) -> bool {
     url.chars().any(|character| character.is_control() || character.is_whitespace())
@@ -234,8 +242,9 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
     }
     let rest = url.strip_prefix("cliora://").ok_or("malformed_request")?;
     // host 之后只能紧跟查询串：不接受 userinfo、端口、路径或 fragment。
+    // 系统会把无路径 URL 规范化成 host 后跟一个斜杠，因此 `review` 与 `review/` 等价。
     let (authority, query) = rest.split_once('?').ok_or("malformed_request")?;
-    if authority != HOST || query.contains('#') || query.contains('?') {
+    if !is_host(authority) || query.contains('#') || query.contains('?') {
         return Err("malformed_request");
     }
     let mut params: HashMap<&str, &str> = HashMap::new();
@@ -679,6 +688,40 @@ mod tests {
         let reordered =
             format!("cliora://review?sessionId={SESSION_ID}&reviewId={REVIEW_ID}&event=accepted&v=1");
         assert!(parse_event_url(&reordered).is_ok());
+    }
+
+    #[test]
+    fn inbound_links_accept_a_single_trailing_slash_and_nothing_more() {
+        // 生成端继续输出零斜杠形式，接收端把系统的单斜杠规范化当作同一个 host。
+        let plain = accepted_url();
+        assert!(plain.starts_with("cliora://review?"));
+        let slashed = plain.replacen("cliora://review?", "cliora://review/?", 1);
+        for url in [&plain, &slashed] {
+            assert_eq!(
+                parse_event_url(url),
+                Ok(LinkEvent::Accepted { review_id: REVIEW_ID.into(), session_id: SESSION_ID.into() }),
+                "{url}"
+            );
+        }
+
+        for hostile in [
+            plain.replacen("cliora://review?", "cliora://review//?", 1),
+            plain.replacen("cliora://review?", "cliora://review/x?", 1),
+            plain.replacen("cliora://review?", "cliora://review/a/b?", 1),
+            plain.replacen("cliora://review?", "cliora://review/%2F?", 1),
+            plain.replacen("cliora://review?", "cliora://review:1?", 1),
+            plain.replacen("cliora://review?", "cliora://me@review?", 1),
+        ] {
+            assert!(parse_event_url(&hostile).is_err(), "should reject: {hostile}");
+        }
+
+        // 带尾斜杠的 returned 与 rejected 也照常解析。
+        for event in [
+            format!("cliora://review/?v=1&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed"),
+            format!("cliora://review/?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=merged&headOid={OID}"),
+        ] {
+            assert!(parse_event_url(&event).is_ok(), "{event}");
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@
 - 查询串使用 `application/x-www-form-urlencoded` 的百分号编码：未保留字符 `A-Z a-z 0-9 - _ . ~` 原样出现，其余字节按 UTF-8 编码为 `%XX`（大写十六进制）。空格编码为 `%20`，不使用 `+`；解析端遇到 `+` 按字面加号处理，不当作空格。
 - 每个参数名最多出现一次。重复参数、未知参数、空参数名都是无效输入。
 - 参数顺序不参与语义，解析端不得依赖顺序。
-- URL 是普通字符串，不做 URL 规范化后再比较：scheme、host 必须精确等于上表的小写形式；不接受 userinfo、端口、fragment，host 之后只能紧跟 `?` 查询串。
+- URL 是普通字符串，不做通用 URL 规范化后再比较：scheme、host 必须精确等于上表的小写形式；不接受 userinfo、端口、fragment。host 之后只允许两种等价写法：紧跟 `?` 查询串，或恰好一个 `/` 再紧跟 `?`。第二种是操作系统对无路径 URL 的等价规范化（Windows 会把 `twiglane://review?v=1...` 交给应用时变成 `twiglane://review/?v=1...`），因此两端都必须接受；而 `//`（双斜杠）、`review/anything?` 这类多余路径段仍然无效，不能把 `review/anything` 当成 `review`。生成端继续使用不带尾斜杠的写法，示例也只有这种形式。
 - 整个 URL 长度上限 2048 个 UTF-8 字节。URL 中出现 `\u0000`–`\u001F`、`\u007F` 等控制字符或裸空白（未编码空格）即无效。
 - URL 不含任何凭据、令牌、完整路径之外的 Git 输出；两端日志不得记录完整 query，只记录长度、reviewId 和错误码。
 - `reviewId`、`sessionId`：小写或大写十六进制的 RFC 4122 连字符形式 `8-4-4-4-12`，共 36 字符；不做版本位语义校验。
@@ -40,6 +40,8 @@
 ```
 twiglane://review?v=1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=C%3A%2FUsers%2Fme%2Fwork%2F%E4%BB%A3%E7%A0%81%20demo&baseline=4f3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0
 ```
+
+示例与 cliora 生成端都使用**不带**尾斜杠的写法；系统或其它发起方把它写成 `twiglane://review/?...`（host 后恰好一个斜杠）时，接收端必须接受同一语义，见第 2 节。
 
 ### 接收行为
 
@@ -123,6 +125,9 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 | `twiglane://review?v=1&reviewId=<uuid>&sessionId=<uuid>&worktreePath=C%3A%2Fw%2Fa%20b&baseline=<oid>` | 接受，路径解码为 `C:/w/a b` |
 | `worktreePath` 含 Unicode 目录（`%E4%BB%A3%E7%A0%81`） | 接受，解码后为原字符 |
 | `v=2` 或缺少 `v` | 拒绝，`unsupported_version` |
+| `twiglane://review/?v=1&...`、`cliora://review/?v=1&...`（host 后恰好一个尾斜杠） | 接受，与无斜杠形式同一语义 |
+| `twiglane://review//?...`、`twiglane://review/a/b?...`（双斜杠或多路径段） | 拒绝，`malformed_request` |
+| 带端口或 userinfo（`twiglane://review:80?...`、`twiglane://me@review?...`） | 拒绝，`malformed_request` |
 | `http://review?...`、`twiglane://other?...`、带 fragment | 拒绝，`malformed_request` |
 | 同一参数出现两次 | 拒绝，`malformed_request` |
 | 未知参数 `foo=1` | 拒绝，`malformed_request` |
