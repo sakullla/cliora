@@ -126,6 +126,168 @@ test.describe('product WebGL input integration', () => {
     expect(anchor.top).toBeLessThan(anchor.screenHeight);
     expect(anchor.left).toBeGreaterThan(30);
   });
+
+  // The two orders below sent 升级升级 before the transaction rewrite (evidence/ime-before.json).
+  // 30 ms only moves an event to a later task; it is a test interval, not a product threshold.
+  test('candidate commits that span event turns send each confirmed word exactly once', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await expect(page.locator('[data-ime-bridge]').first()).toHaveAttribute('data-ime-bridge', 'ready');
+    await input.focus();
+    const commit = (word: string, order: string, key = ' ', keyCode = 32) => input.evaluate(async (node, payload) => {
+      const wait = () => new Promise(resolve => setTimeout(resolve, 30));
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      textarea.value += payload.word;
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: payload.word, bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: payload.key, keyCode: payload.keyCode, bubbles: true }));
+      if (payload.order === 'delayed-end') await wait();
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { data: payload.word, bubbles: true }));
+      if (payload.order === 'delayed-trailing-input') {
+        await wait();
+        textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'Process', keyCode: 229, bubbles: true }));
+      }
+      textarea.dispatchEvent(new InputEvent('input', { data: payload.word, inputType: 'insertText', composed: true, bubbles: true }));
+      await wait();
+    }, { word, order, key, keyCode });
+    for (const order of ['same-turn', 'delayed-end', 'delayed-trailing-input']) {
+      await resetWrites(page);
+      await commit('升级', order);
+      expect(await writes(page), order).toEqual(['升级']);
+      // A second confirmation of the same word is the user's input, never a duplicate.
+      await commit('升级', order, '1', 49);
+      expect(await writes(page), order).toEqual(['升级', '升级']);
+    }
+    // English and emoji still take their own paths after a commit.
+    await resetWrites(page);
+    await input.press('a');
+    await input.evaluate(node => node.dispatchEvent(new InputEvent('input', { data: '🙂', inputType: 'insertText', bubbles: true })));
+    await expect.poll(async () => (await writes(page)).join('')).toBe('a🙂');
+  });
+
+  test('a composition interrupted by blur or a session switch is never sent later or to the next session', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.assign(window, { __twoSessions: true });
+    });
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const first = page.locator('[data-pane-session="s1"] .xterm-helper-textarea');
+    await expect(first).toBeVisible();
+    await first.focus();
+    await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+    const begin = (locator: typeof first, word: string) => locator.evaluate((node, word) => {
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      textarea.value += word;
+      textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: word, bubbles: true }));
+    }, word);
+    const finish = (locator: typeof first, word: string) => locator.evaluate((node, word) => {
+      node.dispatchEvent(new CompositionEvent('compositionend', { data: word, bubbles: true }));
+      node.dispatchEvent(new InputEvent('input', { data: word, inputType: 'insertText', composed: true, bubbles: true }));
+    }, word);
+
+    // Focus moves to the search field mid-composition; a late end must not type into the CLI.
+    await begin(first, 'shengji');
+    await page.getByRole('tab', { name: /Codex/ }).focus();
+    await finish(first, 'shengji');
+    await page.waitForTimeout(50);
+    expect(await writeLog(page)).toEqual([]);
+
+    // Switching sessions mid-composition: nothing reaches either session.
+    await first.focus();
+    await begin(first, '升级');
+    await page.getByRole('tab', { name: /Claude Code/ }).click();
+    const second = page.locator('[data-pane-session="s2"] .xterm-helper-textarea');
+    await expect(second).toBeVisible();
+    await finish(first, '升级');
+    await page.waitForTimeout(50);
+    expect(await writeLog(page)).toEqual([]);
+
+    // The new session's own composition goes only to it, once.
+    await second.focus();
+    await begin(second, '审计');
+    await finish(second, '审计');
+    await expect.poll(() => writeLog(page)).toEqual([{ sessionId: 's2', text: '审计' }]);
+  });
+
+  test('the anchor stays inside a shrunken screen, skips a collapsed layout and returns with it', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    // Put the input cell on the last row, then hold it in a composition.
+    await page.evaluate(async () => {
+      (window as unknown as { __output: (text: string) => void }).__output('\x1b[999;60H');
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined))));
+    });
+    const box = () => input.evaluate(node => {
+      const screen = node.closest('.xterm')!.querySelector('.xterm-screen')!.getBoundingClientRect();
+      const field = node.getBoundingClientRect();
+      return { top: field.top - screen.top, bottom: screen.bottom - field.bottom, left: field.left - screen.left, right: screen.right - field.right, styleTop: (node as HTMLElement).style.top, height: screen.height, fieldHeight: field.height, cellHeight: Number.parseFloat((node as HTMLElement).style.height) };
+    });
+    await input.evaluate(node => {
+      node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      (node as HTMLTextAreaElement).value += '升级';
+      node.dispatchEvent(new CompositionEvent('compositionupdate', { data: '升级', bubbles: true }));
+    });
+    const tall = await box();
+    // The field is exactly one cell tall, not the shared 36px control height.
+    expect(Math.abs(tall.fieldHeight - tall.cellHeight)).toBeLessThan(1);
+    expect(tall.bottom).toBeGreaterThanOrEqual(-1);
+    await page.setViewportSize({ width: 900, height: 520 });
+    await expect.poll(async () => (await box()).height).toBeLessThan(tall.height);
+    await expect.poll(async () => { const now = await box(); return now.bottom >= -1 && now.top >= -1 && now.right >= -1 && now.left >= -1; }).toBe(true);
+    await input.evaluate(node => node.dispatchEvent(new CompositionEvent('compositionend', { data: '升级', bubbles: true })));
+    await expect.poll(async () => (await writes(page)).join('')).toContain('升级');
+
+    // A collapsed workbench keeps the last valid anchor instead of writing a zero-size one.
+    const valid = (await box()).styleTop;
+    await page.evaluate(() => { Object.assign(document.querySelector<HTMLElement>('[data-pane-session="s1"] .xterm')!.parentElement!.style, { flex: '0 0 0px', height: '0px' }); });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)))));
+    expect(await input.evaluate(node => (node as HTMLElement).style.top)).toBe(valid);
+    await page.evaluate(() => { Object.assign(document.querySelector<HTMLElement>('[data-pane-session="s1"] .xterm')!.parentElement!.style, { flex: '', height: '' }); });
+    await expect.poll(async () => { const now = await box(); return now.top >= -1 && now.bottom >= -1; }).toBe(true);
+  });
+
+  test('the pre-edit text sits in the terminal cell without a floating panel', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    await input.evaluate(node => {
+      node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      (node as HTMLTextAreaElement).value += 'sheng';
+      node.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'sheng', bubbles: true }));
+    });
+    const view = page.locator('[data-pane-session="s1"] .composition-view');
+    await expect(view).toHaveClass(/active/);
+    const style = await view.evaluate(node => {
+      const css = getComputedStyle(node);
+      return { shadow: css.boxShadow, radius: css.borderRadius, padding: css.paddingLeft, background: css.backgroundColor };
+    });
+    expect(style.shadow).toBe('none');
+    expect(style.radius).toBe('0px');
+    expect(style.padding).toBe('0px');
+    expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
+    await input.evaluate(node => {
+      (node as HTMLTextAreaElement).value = (node as HTMLTextAreaElement).value.replace(/sheng$/, '');
+      node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+      node.dispatchEvent(new CompositionEvent('compositionend', { data: '', bubbles: true }));
+    });
+    await expect(view).not.toHaveClass(/active/);
+    await page.waitForTimeout(50);
+    expect(await writes(page)).not.toContainEqual(expect.stringContaining('sheng'));
+    expect(await writes(page)).not.toContain('\x1b');
+  });
 });
 
 test('terminal code loads on demand and an opening request survives the first module load', async ({ page }) => {

@@ -95,6 +95,8 @@ export default {
   workspaceHome: '默认主目录',
   workspaceCustom: '自定义目录 · {{path}}',
   pickFolder: '选择其他文件夹…',
+  pickFolderFailed: '无法打开文件夹选择窗口',
+  pickFolderNext: '已保留当前选择。可重试，或从列表中选择项目或最近目录。',
   launchModeLabel: '启动模式',
   modeNormalDesc: '每次操作前逐项确认权限',
   modeYoloDesc: '跳过常规审批，适合可信任务',

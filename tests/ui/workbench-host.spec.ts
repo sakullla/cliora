@@ -43,6 +43,11 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
             return [host];
           }
           if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
+          if (command === 'plugin:dialog|open') {
+            const result = (window as unknown as { __dialogResult?: string | null }).__dialogResult;
+            if (result === 'fail') throw new Error('系统文件夹对话框不可用');
+            return result ?? null;
+          }
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions' || command === 'list_projects' || command === 'list_remote_projects' || command === 'list_remote_sessions' || command === 'list_library_items') return [];
@@ -54,6 +59,43 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
     });
   }, { host, savedHost: options.savedHost ?? false, holdTargets: options.holdTargets ?? false });
 }
+
+test('a failed local folder dialog is reported in the new-session dialog and keeps the choices; cancelling stays silent', async ({ page }) => {
+  await installHostDesktop(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('radio', { name: 'Claude Code' }).click();
+  const workspace = dialog.getByRole('button', { name: '工作目录 / 项目' });
+  const before = await workspace.getAttribute('title');
+
+  // Cancel resolves null: no message.
+  await page.evaluate(() => { (window as unknown as { __dialogResult?: string | null }).__dialogResult = null; });
+  await workspace.click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+
+  // A real dialog failure is visible next to the form; nothing the user chose is lost.
+  await page.evaluate(() => { (window as unknown as { __dialogResult?: string | null }).__dialogResult = 'fail'; });
+  if (!(await page.getByRole('button', { name: '选择其他文件夹…' }).isVisible())) await workspace.click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('系统文件夹对话框不可用');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('radio', { name: 'Claude Code' })).toHaveAttribute('aria-checked', 'true');
+  await expect(workspace).toHaveAttribute('title', before ?? '');
+
+  // Retrying with a working dialog applies the folder and clears the failure.
+  await page.evaluate(() => { (window as unknown as { __dialogResult?: string | null }).__dialogResult = 'C:/picked folder'; });
+  if (!(await page.getByRole('button', { name: '选择其他文件夹…' }).isVisible())) await workspace.click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  await expect(workspace).toHaveAttribute('title', /C:\/picked folder/);
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: 'Claude Code' })).toHaveAttribute('aria-checked', 'true');
+});
 
 test('a saved remote host stays the workbench target while its list is still loading', async ({ page }) => {
   await installHostDesktop(page, { savedHost: true, holdTargets: true });

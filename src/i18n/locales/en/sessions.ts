@@ -95,6 +95,8 @@ export default {
   workspaceHome: 'Default home directory',
   workspaceCustom: 'Custom folder · {{path}}',
   pickFolder: 'Choose another folder…',
+  pickFolderFailed: 'Could not open the folder dialog',
+  pickFolderNext: 'Your selections are kept. Try again, or pick a project or recent folder from the list.',
   launchModeLabel: 'Launch mode',
   modeNormalDesc: 'Confirm permissions step by step',
   modeYoloDesc: 'Skip standard approvals for trusted work',

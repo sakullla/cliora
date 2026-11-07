@@ -566,6 +566,17 @@ for (const width of widths) {
     await page.keyboard.press('Control+Shift+F');
     await stage.getByRole('searchbox', { name: copy('在终端输出中查找…', 'Find in terminal output…') }).fill('SessionWorkbench');
   });
+  // Pre-edit text only: the system candidate list is drawn by the OS IME and never appears in a browser capture.
+  await shot('workbench-preedit-' + theme + '-' + width, theme, width, async (page) => {
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.waitFor({ state: 'attached', timeout: 20000 });
+    await input.focus();
+    await input.evaluate((node) => {
+      node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      node.value += 'sheng ji';
+      node.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'sheng ji', bubbles: true }));
+    });
+  });
   await shot('workbench-dialog-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('complementary', { name: copy('会话列表', 'Sessions') }).getByRole('button', { name: copy('新建会话', 'New session') }).click();
   });

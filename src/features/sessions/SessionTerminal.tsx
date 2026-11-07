@@ -12,6 +12,7 @@ import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalWebglLifecycle } from './terminalWebgl';
 import type { OutputChunk, PendingTerminalOutput } from './pendingOutput';
+import { createTerminalIme, type TerminalIme } from './terminalIme';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalMatch = { row: number; col: number; length: number };
@@ -283,202 +284,6 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
   return state;
 }
 
-type XtermCore = {
-  _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } };
-  _syncTextArea?: () => void;
-  _compositionHelper?: {
-    isComposing?: boolean;
-    keydown?: (event: KeyboardEvent) => boolean;
-    updateCompositionElements?: (dontRecurse?: boolean) => void;
-  };
-  coreService?: { isCursorHidden?: boolean };
-};
-
-export type ImeAnchor = {
-  /** Re-place now, re-reading where input lands (also scans for a TUI-drawn cursor). */
-  refresh: () => void;
-  /** Re-place on the next frame; cheap enough for every render or scroll. */
-  schedule: () => void;
-  /** Re-place for the current composition text without moving its anchor. */
-  place: () => void;
-  compositionStart: () => void;
-  compositionEnd: () => void;
-  dispose: () => void;
-};
-
-const clampInt = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
-
-/**
- * Owns xterm's helper textarea and composition view placement. Both sit inside `.xterm-screen`,
- * so cell coordinates map directly to CSS pixels.
- */
-export function createImeAnchor(term: Terminal, available: () => boolean): ImeAnchor {
-  const core = (term as unknown as { _core?: XtermCore })._core;
-  let composing = false;
-  let anchor: { col: number; row: number } | null = null;
-  let applied = '';
-  let frame = 0;
-  let disposed = false;
-
-  const cellSize = () => {
-    const cell = core?._renderService?.dimensions?.css?.cell;
-    if (cell?.width && cell.height && cell.width > 0 && cell.height > 0) return { width: cell.width, height: cell.height };
-    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
-    if (!screen || !term.cols || !term.rows || screen.clientWidth < 8) return null;
-    return { width: screen.clientWidth / term.cols, height: screen.clientHeight / term.rows };
-  };
-
-  // Full-screen CLIs hide the hardware cursor and draw their own. A highlight bar is a run of
-  // inverse cells; the cursor is the one isolated inverse or blinking cell. Any second run used
-  // to abandon the scan, leaving the parked hardware cursor at the top-left.
-  const drawnCursor = (): { col: number; row: number } | null => {
-    const buffer = term.buffer.active;
-    const cell = buffer.getNullCell();
-    const side = buffer.getNullCell();
-    let inverse: { col: number; row: number } | null = null;
-    let blink: { col: number; row: number } | null = null;
-    let inverseCount = 0;
-    let blinkCount = 0;
-    for (let row = term.rows - 1; row >= 0 && (inverseCount < 2 || blinkCount < 2); row -= 1) {
-      const line = buffer.getLine(buffer.viewportY + row);
-      if (!line) continue;
-      for (let col = 0; col < term.cols; col += 1) {
-        const current = line.getCell(col, cell);
-        if (!current) continue;
-        const blinking = current.isBlink() !== 0;
-        const marked = current.isInverse() !== 0;
-        if (!blinking && !marked) continue;
-        const left = col > 0 ? line.getCell(col - 1, side) : null;
-        const leftBlink = !!left?.isBlink();
-        const leftInverse = !!left?.isInverse();
-        const right = col + 1 < term.cols ? line.getCell(col + 1, side) : null;
-        if (blinking && !leftBlink && !right?.isBlink()) {
-          blinkCount += 1;
-          if (blinkCount === 1) blink = { col, row };
-        }
-        if (marked && !leftInverse && !right?.isInverse()) {
-          inverseCount += 1;
-          if (inverseCount === 1) inverse = { col, row };
-        }
-      }
-    }
-    if (blinkCount === 1) return blink;
-    if (inverseCount === 1) return inverse;
-    return null;
-  };
-
-  const inputCell = (scan: boolean) => {
-    const buffer = term.buffer.active;
-    if (scan && core?.coreService?.isCursorHidden) {
-      const drawn = drawnCursor();
-      if (drawn) return drawn;
-    }
-    return {
-      col: clampInt(buffer.cursorX, 0, Math.max(0, term.cols - 1)),
-      row: clampInt(buffer.baseY + buffer.cursorY - buffer.viewportY, 0, Math.max(0, term.rows - 1)),
-    };
-  };
-
-  const apply = (scan: boolean) => {
-    if (disposed || !available()) return;
-    const textarea = term.textarea;
-    const cell = cellSize();
-    if (!textarea || !cell) return;
-    if (composing && !anchor) anchor = inputCell(true);
-    const at = composing && anchor ? anchor : inputCell(scan);
-    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
-    const screenWidth = screen?.clientWidth || term.cols * cell.width;
-    let left = at.col * cell.width;
-    const top = at.row * cell.height;
-    let width = cell.width;
-    if (composing) {
-      const view = term.element?.querySelector<HTMLElement>('.composition-view');
-      if (view) {
-        view.style.height = `${cell.height}px`;
-        view.style.lineHeight = `${cell.height}px`;
-        view.style.fontFamily = String(term.options.fontFamily ?? '');
-        view.style.fontSize = `${term.options.fontSize ?? 14}px`;
-        // Long composition text near the right edge would run past the clip and vanish.
-        const viewWidth = view.offsetWidth;
-        left = Math.max(0, Math.min(left, screenWidth - viewWidth));
-        view.style.left = `${left}px`;
-        view.style.top = `${top}px`;
-        width = Math.max(1, viewWidth);
-      }
-    }
-    const key = `${Math.round(left)}:${Math.round(top)}:${Math.round(width)}:${Math.round(cell.height)}`;
-    // Rewriting the textarea on every frame restarts the Windows IME and drops the key
-    // that would commit or insert punctuation, so only real moves are written.
-    if (key === applied) return;
-    applied = key;
-    textarea.style.left = `${left}px`;
-    textarea.style.top = `${top}px`;
-    textarea.style.width = `${width}px`;
-    textarea.style.height = `${cell.height}px`;
-    textarea.style.lineHeight = `${cell.height}px`;
-    textarea.style.fontSize = `${term.options.fontSize ?? 14}px`;
-    // WebView2 puts the candidate window at the window origin when this field is
-    // opacity:0 or z-index:-5. Keep it on the input cell, with the text itself invisible.
-    textarea.style.opacity = '1';
-    textarea.style.color = 'transparent';
-    textarea.style.caretColor = 'transparent';
-    textarea.style.backgroundColor = 'transparent';
-    textarea.style.zIndex = '1';
-  };
-
-  const schedule = () => {
-    if (disposed || frame || !available()) return;
-    frame = requestAnimationFrame(() => { frame = 0; apply(true); });
-  };
-
-  // xterm calls these on cursor moves and on every render; route both through one placement.
-  if (core && typeof core._syncTextArea === 'function') core._syncTextArea = () => { if (!composing) schedule(); };
-  const helper = core?._compositionHelper;
-  let commitTimer = 0;
-  if (helper?.keydown) {
-    const originalKeydown = helper.keydown.bind(helper);
-    helper.keydown = (event: KeyboardEvent) => {
-      const code = event.keyCode;
-      const commit = !!helper.isComposing && code !== 229 && code !== 20 && code !== 16 && code !== 17 && code !== 18;
-      if (!commit) return originalKeydown(event);
-      // Space, Enter, or a candidate number makes xterm send the word from keydown and
-      // again from compositionend (升级升级). Leave the commit to compositionend.
-      // If that event never arrives, send on the next turn while composition is still open.
-      window.clearTimeout(commitTimer);
-      commitTimer = window.setTimeout(() => {
-        if (!disposed && helper.isComposing) originalKeydown(event);
-      }, 0);
-      return false;
-    };
-  }
-  if (helper && typeof helper.updateCompositionElements === 'function') helper.updateCompositionElements = () => { if (composing) apply(false); };
-
-  return {
-    refresh: () => { if (!composing) applied = ''; apply(true); },
-    schedule,
-    place: () => apply(false),
-    compositionStart: () => {
-      // Typing reads the prompt, not the history: bring the input row back into view first.
-      const buffer = term.buffer.active;
-      if (buffer.viewportY < buffer.baseY) term.scrollToBottom();
-      composing = true;
-      anchor = null;
-      applied = '';
-      apply(true);
-    },
-    compositionEnd: () => {
-      composing = false;
-      anchor = null;
-      schedule();
-    },
-    dispose: () => {
-      disposed = true;
-      window.clearTimeout(commitTimer);
-      cancelAnimationFrame(frame);
-    },
-  };
-}
-
 // Keep the browser-side terminal buffer bounded. The native replay remains the
 // source of truth when an ended session is mounted again.
 const TERMINAL_SCROLLBACK = 6000;
@@ -551,7 +356,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
-  const imeRef = useRef<ImeAnchor | null>(null);
+  const imeRef = useRef<TerminalIme | null>(null);
   const startedAtRef = useRef(startedAt);
   startedAtRef.current = startedAt;
   const activeRef = useRef(active);
@@ -613,42 +418,18 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     // cursor elsewhere drags the candidate window along mid-composition. One owner
     // places the textarea: it follows the input cell, stays inside the screen, and
     // holds still for the whole composition.
-    const ime = createImeAnchor(term, () => !disposed && activeRef.current);
-    const textarea = term.textarea;
-    let composingInput = false;
-    let finishingComposition = false;
-    let compositionTurn = 0;
-    const onCompositionStart = () => {
-      window.clearTimeout(compositionTurn);
-      composingInput = true;
-      finishingComposition = false;
-      ime.compositionStart();
-    };
-    const onCompositionUpdate = () => ime.place();
-    const onCompositionEnd = () => {
-      composingInput = false;
-      finishingComposition = true;
-      ime.compositionEnd();
-      // Registered after xterm's compositionend listener: its deferred commit
-      // runs before this reset. WebView2's trailing insertText belongs to that
-      // same composition, not xterm's separate emoji-input fallback.
-      compositionTurn = window.setTimeout(() => { finishingComposition = false; }, 0);
-    };
-    const onCompositionInput = (event: Event) => {
-      const input = event as InputEvent;
-      if (input.target === textarea && input.inputType === 'insertText'
-        && (composingInput || finishingComposition || input.isComposing)) {
-        // Keep the native textarea update. Only stop xterm's second sender;
-        // CompositionHelper remains the sole owner of committed IME bytes.
-        event.stopImmediatePropagation();
-      }
-    };
-    const onTextareaFocus = () => ime.refresh();
-    textarea?.addEventListener('compositionstart', onCompositionStart);
-    textarea?.addEventListener('compositionupdate', onCompositionUpdate);
-    textarea?.addEventListener('compositionend', onCompositionEnd);
-    textarea?.addEventListener('focus', onTextareaFocus);
-    node.addEventListener('input', onCompositionInput, true);
+    // Composition commits are one transaction each (see terminalIme.ts).
+    const ime = createTerminalIme(term, {
+      available: () => !disposed && activeRef.current,
+      ownsInput: () => !disposed && activeRef.current && runningRef.current && !!term.textarea && document.activeElement === term.textarea,
+      host: node,
+    });
+    // Returning to the window or tab can leave the candidate window where the OS last
+    // put it; re-place the anchor once the page is visible and focused again.
+    const onWindowFocus = () => { if (activeRef.current) ime.refresh(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible' && activeRef.current) ime.refresh(); };
+    window.addEventListener('focus', onWindowFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     imeRef.current = ime;
     const cursorSub = term.onCursorMove(() => ime.schedule());
     let acceptLive = false;
@@ -754,7 +535,8 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
 
     term.attachCustomKeyEventHandler((event) => {
       if (!activeRef.current) return false;
-      if (terminalYieldsToIme(event)) return true;
+      // Every key inside an open composition belongs to the IME, whatever keyCode WebView2 reports.
+      if (terminalYieldsToIme(event) || ime.composing()) return true;
       const action = terminalKeyAction(event, { hasSelection: term.hasSelection(), canSwitch: bridge.current.canSwitch(), mac: MAC });
       if (!action) return true;
       if (event.type !== 'keydown') return false;
@@ -1109,7 +891,8 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     let resizeFrame = 0;
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(resizeFrame);
-      resizeFrame = requestAnimationFrame(fitNow);
+      // A same-grid size change (or a return from zero height) still moves or clamps the anchor.
+      resizeFrame = requestAnimationFrame(() => { fitNow(); ime.schedule(); });
     });
     observer.observe(node);
     void native.replayWorkbenchSession(sessionId).then(async (payload: ReplayPayload) => {
@@ -1221,12 +1004,8 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       osc52.dispose();
       osc7.dispose();
       osc1337.dispose();
-      textarea?.removeEventListener('compositionstart', onCompositionStart);
-      textarea?.removeEventListener('compositionupdate', onCompositionUpdate);
-      textarea?.removeEventListener('compositionend', onCompositionEnd);
-      node.removeEventListener('input', onCompositionInput, true);
-      window.clearTimeout(compositionTurn);
-      textarea?.removeEventListener('focus', onTextareaFocus);
+      window.removeEventListener('focus', onWindowFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
@@ -1256,6 +1035,8 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     // disableStdin suppresses protocol replies as well as keyboard events.
     // A hidden live CLI must still receive DSR/DA responses from its own buffer.
     term.options.disableStdin = !running;
+    // A composition must not survive into a hidden pane or an ended session.
+    if (!active || !running) imeRef.current?.deactivate();
     if (term.textarea) term.textarea.disabled = !active || !running;
     if (active) webglRef.current?.prepareActivation();
   }, [active, running]);

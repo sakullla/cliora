@@ -1035,6 +1035,9 @@
 .terminalHost :global(.xterm .xterm-helper-textarea:focus) { outline: none; box-shadow: none; }
 /* WebView2 anchors the IME at the window origin while this field stays opacity:0. */
 .terminalHost :global(.xterm .xterm-helper-textarea) {
+  /* The shared field style gives every textarea a control height; this one must be exactly one cell. */
+  min-height: 0;
+  min-width: 0;
   opacity: 1;
   color: transparent;
   caret-color: transparent;
@@ -1043,14 +1046,15 @@
 .terminalHost :global(.xterm .xterm-viewport),
 .terminalHost :global(.xterm-scrollable-element) { background: var(--term-bg); }
 .terminalHost :global(.xterm-scrollable-element > .scrollbar) { display: none; }
-/* The IME composition sits on the input cell as a floating chip, always readable over output. */
+/* Pre-edit text drawn in the terminal's own cell, font and colours. The candidate list
+   comes from the system IME; nothing here imitates it. */
 .terminalHost :global(.xterm .composition-view) {
   z-index: 6;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-xs);
-  background: var(--term-float);
+  padding: 0;
+  border-radius: 0;
+  background: var(--term-bg);
   color: var(--term-fg);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--term-accent) 55%, var(--term-float-line)), 0 6px 18px -8px var(--term-shadow);
+  box-shadow: none;
   text-decoration: underline;
   text-decoration-color: var(--term-accent);
   text-underline-offset: 3px;

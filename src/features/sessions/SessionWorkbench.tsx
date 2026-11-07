@@ -1473,12 +1473,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
     try {
       const picked = await open({ directory: true, multiple: false, title: t('sessions.pickFolder') });
+      // Cancelling the dialog resolves null and needs no feedback.
       if (typeof picked === 'string' && picked.trim()) {
         const clean = picked.trim();
         setCustomFolderPath(clean);
         setWorkspaceValue(`custom:${clean}`);
+        setDialogError('');
       }
-    } catch { /* Folder dialog cancellation needs no feedback. */ }
+    } catch (value) {
+      // The system dialog itself failed. Stay in the dialog with every choice intact.
+      setDialogError(formatFailure(value, t('sessions.pickFolderFailed'), t('sessions.pickFolderNext')));
+    }
   }
 
   async function launchFromDialog() {
