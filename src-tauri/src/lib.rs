@@ -329,6 +329,7 @@ pub fn run() {
             commands::set_worktree_launch,
             commands::launch_cli,
             commands::list_workbench_sessions,
+            commands::list_workbench_restore_sessions,
             commands::restore_workbench_sessions,
             commands::restore_workbench_session,
             commands::checkpoint_workbench_sessions,

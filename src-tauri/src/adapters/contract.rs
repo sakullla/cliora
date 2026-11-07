@@ -1114,6 +1114,17 @@ pub trait CliAdapter: Sync {
     fn parse_history(&self, _source: &HistorySource) -> Result<ParsedSession, String> {
         Err("此 CLI 尚无已验证的历史格式".into())
     }
+    /// Recovery identity only: the fields a restore match needs. An adapter may
+    /// read just these and skip messages, usage and child logs; the default
+    /// keeps full-parse correctness by trimming a normal parse.
+    fn restore_identity(
+        &self,
+        source: &HistorySource,
+    ) -> Result<crate::history::SessionIdentity, String> {
+        Ok(crate::history::SessionIdentity::from_parsed(
+            self.parse_history(source)?,
+        ))
+    }
     fn history_sources_controlled(
         &self,
         home: &Path,

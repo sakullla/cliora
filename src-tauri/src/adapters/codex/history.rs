@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
     discover_jsonl_with_control, raw_string_after, read_jsonl_filtered, text_content, timestamp,
-    valid_native_id, HistoryMessageKind, HistorySource, ParsedSession, UsageEvent,
+    valid_native_id, HistoryMessageKind, HistorySource, ParsedSession, SessionIdentity, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -351,10 +351,96 @@ pub fn parse_controlled(
     session.finish(source)
 }
 
+pub fn identity(source: &HistorySource) -> Result<SessionIdentity, String> {
+    identity_controlled(source, &|| false)
+}
+
+/// Recovery reads the same rows, skips the same rows and applies the same
+/// timestamp rules as a full parse, but keeps only the matching fields: no
+/// message bodies, no usage accounting. The default adapter port would parse
+/// everything and throw it away.
+pub fn identity_controlled(
+    source: &HistorySource,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SessionIdentity, String> {
+    let mut session = ParsedSession::new();
+    let mut earliest: Option<i64> = None;
+    let mut latest: Option<i64> = None;
+    let partial = read_jsonl_filtered(source, cancelled, skip_row, |_line, row| {
+        let time = row.get("timestamp").and_then(timestamp);
+        let payload = row.get("payload").unwrap_or(&Value::Null);
+        match row.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                let id = payload
+                    .get("id")
+                    .or_else(|| payload.get("session_id"))
+                    .and_then(Value::as_str);
+                session.native_id = id.filter(|id| valid_native_id(id)).map(str::to_owned);
+                session.cwd = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                session.started_at = payload.get("timestamp").and_then(timestamp).or(time);
+            }
+            Some("response_item")
+                if payload.get("type").and_then(Value::as_str) == Some("message") =>
+            {
+                let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
+                if role == "user" || role == "assistant" {
+                    if let Some(time) = time {
+                        earliest = Some(earliest.map_or(time, |value| value.min(time)));
+                        latest = Some(latest.map_or(time, |value| value.max(time)));
+                    }
+                    // The picker title comes from the first user conversation
+                    // row, so only those rows are decoded.
+                    if role == "user" && session.title.is_empty() {
+                        let body = payload.get("content").map(text_content).unwrap_or_default();
+                        session.title_from_message(role, &body, message_kind(role, &body));
+                    }
+                }
+            }
+            _ => {}
+        }
+    })?;
+    session.partial |= partial;
+    let updated = latest.or(session.started_at);
+    session.started_at = session.started_at.or(earliest).or(updated);
+    session.updated_at = updated;
+    session.finish(source).map(SessionIdentity::from_parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Recovery reads a light path; the fields it returns must equal what a
+    /// full parse keeps, including the timestamp fallbacks and the title.
+    #[test]
+    fn recovery_identity_equals_full_parse_identity() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".codex").join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-identity.jsonl");
+        let lines = [
+            json!({"timestamp":"2026-09-29T08:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/fixture/project","cli_version":"0.165.0"}}),
+            json!({"timestamp":"2026-09-29T08:00:01Z","type":"turn_context","payload":{"model":"gpt-6-astra"}}),
+            json!({"timestamp":"2026-09-29T08:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请检查恢复链路"}]}}),
+            json!({"timestamp":"2026-09-29T08:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已核对"}]}}),
+            json!({"timestamp":"2026-09-29T08:00:09Z","type":"response_item","payload":{"type":"reasoning","content":[]}}),
+            json!({"timestamp":"2026-09-29T08:00:10Z","type":"token_usage_record","payload":{"response_id":"resp-1","usage":{"input_tokens":10,"cached_input_tokens":4,"cache_write_input_tokens":0,"output_tokens":2}}}),
+            json!({"type":"unknown-shape","payload":{}}),
+        ];
+        let text = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(&path, text).unwrap();
+        let found = sources(home.path()).unwrap();
+        let full = parse(&found[0]).unwrap();
+        assert!(!full.messages.is_empty(), "the full parse still carries messages");
+        let light = identity(&found[0]).unwrap();
+        assert_eq!(SessionIdentity::from_parsed(full), light);
+        assert_eq!(light.native_id.as_deref(), Some("11111111-1111-4111-8111-111111111111"));
+        assert_eq!(light.cwd.as_deref(), Some("/fixture/project"));
+    }
 
     #[test]
     fn memory_exclusions_match_rollouts_without_loading_metadata_or_titles() {

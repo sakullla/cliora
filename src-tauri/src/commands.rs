@@ -3656,10 +3656,33 @@ pub async fn checkpoint_workbench_sessions(app: AppHandle) -> Result<(), ApiErro
 }
 
 #[tauri::command]
+pub async fn list_workbench_restore_sessions(
+    app: AppHandle,
+) -> Result<Vec<crate::workbench_restore::SavedSession>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::list(&db).map_err(native_error)
+    })
+    .await
+}
+
+/// Per-item recovery progress. Saved records are read separately through
+/// list_workbench_restore_sessions, so a view can show the pending tabs before
+/// the whole batch finishes.
+const WORKBENCH_RESTORE_EVENT: &str = "cliora:workbench-restore";
+
+fn workbench_restore_reporter(app: AppHandle) -> impl Fn(crate::workbench_restore::RestoreEvent) + Send + Sync {
+    move |event| {
+        let _ = app.emit(WORKBENCH_RESTORE_EVENT, event);
+    }
+}
+
+#[tauri::command]
 pub async fn restore_workbench_sessions(app: AppHandle) -> Result<crate::workbench_restore::RestoreReport, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        crate::workbench_restore::restore(&db, &adapters::Registry::builtins(), &home()?).map_err(native_error)
+        let reporter = workbench_restore_reporter(app.clone());
+        crate::workbench_restore::restore_with(&db, &adapters::Registry::builtins(), &home()?, &reporter).map_err(native_error)
     }).await
 }
 
@@ -3667,7 +3690,8 @@ pub async fn restore_workbench_sessions(app: AppHandle) -> Result<crate::workben
 pub async fn restore_workbench_session(app: AppHandle, session_id: String, native_id: Option<String>) -> Result<crate::workbench_restore::RestoreReport, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        crate::workbench_restore::restore_selected(&db, &adapters::Registry::builtins(), &home()?, &session_id, native_id.as_deref()).map_err(native_error)
+        let reporter = workbench_restore_reporter(app.clone());
+        crate::workbench_restore::restore_selected_with(&db, &adapters::Registry::builtins(), &home()?, &session_id, native_id.as_deref(), &reporter).map_err(native_error)
     }).await
 }
 

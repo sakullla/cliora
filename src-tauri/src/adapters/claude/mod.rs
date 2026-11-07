@@ -592,6 +592,12 @@ impl CliAdapter for Claude {
     ) -> Result<crate::history::ParsedSession, String> {
         history::parse(source)
     }
+    fn restore_identity(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::SessionIdentity, String> {
+        history::identity(source)
+    }
     fn history_sources_controlled(
         &self,
         home: &std::path::Path,

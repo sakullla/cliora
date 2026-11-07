@@ -10,7 +10,7 @@ use crate::history::{
     check_cancelled, contains_bytes, discover_jsonl_controlled_in, discover_jsonl_with_control,
     read_jsonl_filtered, source_fingerprint_controlled, text_content, timestamp, valid_native_id,
     AgentKind, ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
-    ParsedSession, UsageAttribution, UsageEvent,
+    ParsedSession, SessionIdentity, UsageAttribution, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -379,6 +379,72 @@ pub fn parse_controlled(
     session.finish(source)
 }
 
+pub fn identity(source: &HistorySource) -> Result<SessionIdentity, String> {
+    identity_controlled(source, &|| false)
+}
+
+/// Recovery reads the parent transcript only. It applies the same row filter,
+/// the same duplicate-id rule and the same timestamp rules as a full parse, but
+/// never assembles message text, folds usage or walks the subagent logs, all of
+/// which a restore match discards anyway.
+pub fn identity_controlled(
+    source: &HistorySource,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SessionIdentity, String> {
+    let mut session = ParsedSession::new();
+    let mut seen = HashSet::new();
+    let mut earliest: Option<i64> = None;
+    let mut latest: Option<i64> = None;
+    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
+        let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "ai-title" | "custom-title") {
+            if let Some(title) = row
+                .get("customTitle")
+                .or_else(|| row.get("aiTitle"))
+                .and_then(Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+            {
+                session.title = title.trim().to_owned();
+            }
+            return;
+        }
+        if kind != "user" && kind != "assistant" {
+            return;
+        }
+        let time = row.get("timestamp").and_then(timestamp);
+        let id = row
+            .get("uuid")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("line-{line}"));
+        if seen.insert(id) {
+            if let Some(time) = time {
+                earliest = Some(earliest.map_or(time, |value| value.min(time)));
+                latest = Some(latest.map_or(time, |value| value.max(time)));
+            }
+            if kind == "user" && session.title.is_empty() {
+                let body = row.get("message").and_then(|message| message.get("content")).map(text_content).unwrap_or_default();
+                session.title_from_message(kind, &body, HistoryMessageKind::Conversation);
+            }
+        }
+        if session.native_id.is_none() {
+            session.native_id = row
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .filter(|id| valid_native_id(id))
+                .map(str::to_owned);
+        }
+        if session.cwd.is_none() {
+            session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
+        }
+    })?;
+    session.partial |= partial;
+    let updated = latest.or(session.started_at);
+    session.started_at = session.started_at.or(earliest).or(updated);
+    session.updated_at = updated;
+    session.finish(source).map(SessionIdentity::from_parsed)
+}
+
 fn valid_child_key(key: &str) -> bool {
     !key.is_empty() && key.len() <= 512 && key.chars().all(|ch| !ch.is_control())
 }
@@ -591,6 +657,39 @@ fn fold_assistant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The light recovery read skips subagents and usage but must return the
+    /// same identity fields, including duplicate uuids and the title row.
+    #[test]
+    fn recovery_identity_equals_full_parse_identity() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".claude").join("projects").join("fixture");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("session-identity.jsonl");
+        let native = "22222222-2222-4222-8222-222222222222";
+        let lines = [
+            serde_json::json!({"type":"ai-title","aiTitle":"恢复标题"}),
+            serde_json::json!({"type":"user","uuid":"user-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:00Z","message":{"role":"user","content":"解释恢复"}}),
+            serde_json::json!({"type":"assistant","uuid":"assistant-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:05Z","message":{"id":"msg-1","role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"说明"}],"usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}),
+            serde_json::json!({"type":"assistant","uuid":"assistant-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:30Z","message":{"id":"msg-1","role":"assistant","model":"claude-opus-4-1","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}),
+            serde_json::json!({"type":"user","uuid":"tool-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:31Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"output"}]}}),
+        ];
+        let text = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(&path, text).unwrap();
+        // A child log exists so the full parse does work the light path skips.
+        let child = root.join("session-identity").join("subagents");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("agent-1.jsonl"), format!("{}\n", serde_json::json!({"type":"assistant","uuid":"sub-1","timestamp":"2026-09-29T08:00:06Z","message":{"id":"msg-sub","role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"子代理"}],"usage":{"input_tokens":2,"output_tokens":1}}}))).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        let full = parse(&found[0]).unwrap();
+        assert!(!full.children.is_empty(), "the full parse still reads child logs");
+        let light = identity(&found[0]).unwrap();
+        assert_eq!(SessionIdentity::from_parsed(full), light);
+        assert_eq!(light.title, "恢复标题");
+        assert_eq!(light.native_id.as_deref(), Some(native));
+        assert_eq!(light.cwd.as_deref(), Some("/fixture/project"));
+    }
 
     fn source(path: PathBuf) -> HistorySource {
         HistorySource {

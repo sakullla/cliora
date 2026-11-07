@@ -264,6 +264,19 @@ impl ParsedSession {
             kind,
         });
     }
+    /// The title a full parse would keep for this row. A light recovery read
+    /// uses it so the picker shows the same title without keeping messages.
+    pub fn title_from_message(&mut self, role: &str, text: &str, kind: HistoryMessageKind) {
+        if self.title.is_empty() && role == "user" && kind == HistoryMessageKind::Conversation {
+            self.title = text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("")
+                .chars()
+                .take(96)
+                .collect();
+        }
+    }
     pub fn finish(mut self, source: &HistorySource) -> Result<Self, String> {
         if self.native_id.is_none() {
             self.native_id = source.native_id.clone();
@@ -295,6 +308,97 @@ impl ParsedSession {
         }
         Ok(self)
     }
+}
+
+/// The only fields a restore match needs from a native source. A dedicated
+/// type keeps a recovery identity from being mistaken for a parsed transcript
+/// whose messages are merely missing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub native_id: Option<String>,
+    pub title: String,
+    pub cwd: Option<String>,
+    pub started_at: Option<i64>,
+    pub updated_at: Option<i64>,
+}
+
+impl SessionIdentity {
+    pub fn from_parsed(parsed: ParsedSession) -> Self {
+        Self {
+            native_id: parsed.native_id,
+            title: parsed.title,
+            cwd: parsed.cwd,
+            started_at: parsed.started_at,
+            updated_at: parsed.updated_at,
+        }
+    }
+}
+
+/// Indexed identities for one tool. Stale rows are dropped here rather than
+/// being filtered by every caller.
+fn cached_identities(
+    conn: &Connection,
+    tool: &str,
+) -> Result<HashMap<String, (String, SessionIdentity)>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT source_key, source_fingerprint, native_id, title, cwd, started_at, updated_at
+             FROM history_sessions WHERE tool = ?1 AND stale = 0",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([tool], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (
+                    row.get::<_, String>(1)?,
+                    SessionIdentity {
+                        native_id: row.get(2)?,
+                        title: row.get(3)?,
+                        cwd: row.get(4)?,
+                        started_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                    },
+                ),
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+/// Recovery identities for an already discovered source set. The scan index is
+/// a cache, never an authority: an entry answers only while its fingerprint
+/// still matches the live source, and every other source goes through the
+/// adapter recovery identity port, which defaults to a full parse. A changed
+/// or unreadable source, and a source no index row names, are never trusted
+/// from the cache alone.
+pub fn restore_identities(
+    db: &Database,
+    adapter: &dyn CliAdapter,
+    sources: &[HistorySource],
+) -> Result<Vec<SessionIdentity>, String> {
+    let cached = db.with_connection(|conn| cached_identities(conn, adapter.id()))?;
+    let mut identities = Vec::with_capacity(sources.len());
+    for source in sources {
+        let reusable = cached
+            .get(&source.key())
+            .filter(|(fingerprint, _)| {
+                !source.fingerprint.is_empty()
+                    && source.fingerprint_error.is_none()
+                    && fingerprint == &source.fingerprint
+            });
+        if let Some((_, identity)) = reusable {
+            identities.push(identity.clone());
+            continue;
+        }
+        match adapter.restore_identity(source) {
+            Ok(identity) => identities.push(identity),
+            Err(error) if error == EMPTY_SESSION => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(identities)
 }
 
 pub fn timestamp(value: &Value) -> Option<i64> {
@@ -1739,3 +1843,76 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
 #[cfg(test)]
 #[path = "../../../tests/history/history.rs"]
 mod tests;
+/// The recovery index is a cache. These cases pin that it answers only while
+/// the row is not stale and its fingerprint still matches the live source.
+#[cfg(test)]
+mod restore_identity_tests {
+    use super::*;
+    use crate::adapters::Registry;
+
+    const STAMP: &str = "2026-09-29T08:00:00Z";
+    const NATIVE: &str = "11111111-1111-4111-8111-111111111111";
+
+    fn fixture(home: &Path) -> PathBuf {
+        let root = home.join(".codex").join("sessions");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-one.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::json!({"timestamp": STAMP, "type": "session_meta", "payload": {"id": NATIVE, "cwd": "/fixture/project", "cli_version": "0.165.0"}})
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn a_live_index_row_answers_and_a_stale_or_changed_source_does_not() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let db = Database::open(&home.join("index.db")).unwrap();
+        let path = fixture(home);
+        let adapter = &crate::adapters::CODEX;
+        refresh(&db, &Registry::builtins(), home).unwrap();
+        let sources = adapter.history_sources(home).unwrap();
+        assert_eq!(sources.len(), 1);
+        let identity = |sources: &[HistorySource]| restore_identities(&db, adapter, sources).unwrap();
+
+        // A matching, non-stale row is the answer.
+        db.with_connection(|conn| conn.execute("UPDATE history_sessions SET native_id='cached'", []).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+        assert_eq!(identity(&sources)[0].native_id.as_deref(), Some("cached"));
+
+        // A stale row is not.
+        db.with_connection(|conn| conn.execute("UPDATE history_sessions SET stale=1", []).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+        assert_eq!(identity(&sources)[0].native_id.as_deref(), Some(NATIVE));
+
+        // A changed source invalidates the row even while it is not stale.
+        db.with_connection(|conn| conn.execute("UPDATE history_sessions SET stale=0", []).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push('\n');
+        std::fs::write(&path, text).unwrap();
+        let changed = adapter.history_sources(home).unwrap();
+        assert_ne!(changed[0].fingerprint, sources[0].fingerprint);
+        assert_eq!(identity(&changed)[0].native_id.as_deref(), Some(NATIVE));
+
+        // A source no row names is read from the adapter.
+        std::fs::remove_file(&path).unwrap();
+        let empty = adapter.history_sources(home).unwrap();
+        assert!(identity(&empty).is_empty());
+    }
+
+    #[test]
+    fn a_source_without_an_index_row_is_read_by_the_adapter_port() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let db = Database::open(&home.join("index.db")).unwrap();
+        fixture(home);
+        let adapter = &crate::adapters::CODEX;
+        let sources = adapter.history_sources(home).unwrap();
+        let identity = restore_identities(&db, adapter, &sources).unwrap();
+        assert_eq!(identity[0].native_id.as_deref(), Some(NATIVE));
+        assert_eq!(identity[0].cwd.as_deref(), Some("/fixture/project"));
+    }
+}
