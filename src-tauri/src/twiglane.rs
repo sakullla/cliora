@@ -211,6 +211,22 @@ pub(crate) fn review_url(
     url
 }
 
+/// 生成链接并校验整条 URL 的 2048 字节上限（协议第 2 节）。
+/// 超限时必须在这里失败：接收端只会静默丢弃超长链接，cliora 会误等 10 秒再报"环境未知"。
+pub(crate) fn checked_review_url(
+    review_id: &str,
+    session_id: &str,
+    worktree_path: &str,
+    baseline: Option<&str>,
+) -> Result<String, &'static str> {
+    let url = review_url(review_id, session_id, worktree_path, baseline);
+    // percent_encode 之后整条链接只有 ASCII，len() 就是 UTF-8 字节数。
+    if url.len() > MAX_URL_BYTES {
+        return Err("path_too_long");
+    }
+    Ok(url)
+}
+
 /// 校验并解析回送的 cliora://review 事件。失败返回协议里的稳定错误码。
 pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
     if url.len() > MAX_URL_BYTES || has_raw_whitespace_or_control(url) {
@@ -294,6 +310,16 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
     }
 }
 
+/// 一条入站事件对注册表的结果。
+enum UpdateOutcome {
+    /// 该 reviewId 就是此 session 的最新审查，状态已更新。
+    Applied,
+    /// 注册表里从来没有这个 reviewId（应用重启后旧链接到达也走这里）。
+    Unknown,
+    /// 记录还在，但同一 session 已经发起了更新的审查。
+    Superseded,
+}
+
 #[derive(Default)]
 struct RegistryData {
     entries: HashMap<String, ReviewState>,
@@ -319,17 +345,26 @@ impl ReviewRegistry {
     }
 
     /// 只有当作最新 reviewId 且记录仍在时更新状态，旧请求不会被晚到的结果改写。
-    fn update<F: FnOnce(&mut ReviewState)>(&self, review_id: &str, session_id: &str, update: F) -> bool {
+    /// 只有当作最新 reviewId 且记录仍在时更新状态，旧请求不会被晚到的结果改写。
+    /// 完全没见过的 reviewId 与"存在但已被更新 review 取代"分开报告：前者是失效来源，
+    /// 后者是迟到事件，界面上的下一步不同。
+    fn update<F: FnOnce(&mut ReviewState)>(&self, review_id: &str, session_id: &str, update: F) -> UpdateOutcome {
         let mut data = self.lock();
+        let Some(known_session) = data.entries.get(review_id).map(|entry| entry.session_id.clone()) else {
+            return UpdateOutcome::Unknown;
+        };
+        if known_session != session_id {
+            return UpdateOutcome::Unknown;
+        }
         if data.latest.get(session_id).map(String::as_str) != Some(review_id) {
-            return false;
+            return UpdateOutcome::Superseded;
         }
         match data.entries.get_mut(review_id) {
             Some(entry) => {
                 update(entry);
-                true
+                UpdateOutcome::Applied
             }
-            None => false,
+            None => UpdateOutcome::Unknown,
         }
     }
 
@@ -340,64 +375,69 @@ impl ReviewRegistry {
     }
 
     /// 应用一条入站事件：未知或被取代的 reviewId 一律丢弃，不覆盖新结果。
+    /// 未知来源回 `unknown_review`，迟到事件回 `superseded_review`，两者由调用方分别提示。
     pub(crate) fn apply(&self, event: LinkEvent) -> LinkOutcome {
         match event {
             LinkEvent::Accepted { review_id, session_id } => {
-                let applied = self.update(&review_id, &session_id, |entry| {
+                match self.update(&review_id, &session_id, |entry| {
                     entry.status = STATUS_ACCEPTED.into();
                     entry.reason = None;
-                });
-                if applied {
-                    LinkOutcome {
+                }) {
+                    UpdateOutcome::Applied => LinkOutcome {
                         kind: "accepted".into(),
                         session_id: Some(session_id),
                         review_id: Some(review_id),
                         outcome: None,
                         head_oid: None,
                         reason: None,
-                    }
-                } else {
-                    LinkOutcome::ignored("superseded_review")
+                    },
+                    other => LinkOutcome::ignored(other.code()),
                 }
             }
             LinkEvent::Rejected { review_id, session_id, reason } => {
-                let applied = self.update(&review_id, &session_id, |entry| {
+                match self.update(&review_id, &session_id, |entry| {
                     entry.status = STATUS_REJECTED.into();
                     entry.reason = Some(reason.clone());
-                });
-                if applied {
-                    LinkOutcome {
+                }) {
+                    UpdateOutcome::Applied => LinkOutcome {
                         kind: "rejected".into(),
                         session_id: Some(session_id),
                         review_id: Some(review_id),
                         outcome: None,
                         head_oid: None,
                         reason: Some(reason),
-                    }
-                } else {
-                    LinkOutcome::ignored("superseded_review")
+                    },
+                    other => LinkOutcome::ignored(other.code()),
                 }
             }
             LinkEvent::Returned { review_id, session_id, outcome, head_oid } => {
-                let applied = self.update(&review_id, &session_id, |entry| {
+                match self.update(&review_id, &session_id, |entry| {
                     entry.status = STATUS_RETURNED.into();
                     entry.outcome = Some(outcome.clone());
                     entry.head_oid = head_oid.clone();
                     entry.reason = None;
-                });
-                if applied {
-                    LinkOutcome {
+                }) {
+                    UpdateOutcome::Applied => LinkOutcome {
                         kind: "returned".into(),
                         session_id: Some(session_id),
                         review_id: Some(review_id),
                         outcome: Some(outcome),
                         head_oid,
                         reason: None,
-                    }
-                } else {
-                    LinkOutcome::ignored("superseded_review")
+                    },
+                    other => LinkOutcome::ignored(other.code()),
                 }
             }
+        }
+    }
+}
+
+impl UpdateOutcome {
+    fn code(&self) -> &'static str {
+        match self {
+            UpdateOutcome::Applied => "applied",
+            UpdateOutcome::Unknown => "unknown_review",
+            UpdateOutcome::Superseded => "superseded_review",
         }
     }
 }
@@ -566,6 +606,7 @@ pub(crate) fn api_error(code: &'static str) -> ApiError {
         "invalid_path" => ("会话目录已经失效或无法读取。", "确认目录仍然存在后重试。"),
         "not_a_worktree" => ("这个目录不是 Git 工作树根目录。", "在会话所在的工作树根目录中重新发起。"),
         "git_missing" => ("找不到 Git，无法读取工作树状态。", "安装 Git 后重试。"),
+        "path_too_long" => ("工作树路径太长，无法生成审查链接。", "把工作树放到更短的路径下再发起审查。"),
         "output_too_large" => ("工作树的改动太多，这次没有读完。", "在终端里整理改动后重试。"),
         "read_failed" => ("这次没有读到工作树的 Git 状态。", "稍后重试；期间显示为未知。"),
         "open_failed" => ("系统没有接受打开 Twiglane 的请求。", "确认已安装 Twiglane 后重试，或手动打开它。"),
@@ -720,7 +761,60 @@ mod tests {
             head_oid: Some(OID.into()),
         });
         assert_eq!(outcome.kind, "ignored");
+        // 完全没有过的 reviewId 是"来源失效"，不能报成迟到事件。
+        assert_eq!(outcome.reason.as_deref(), Some("unknown_review"));
         assert!(registry.latest_for_session(SESSION_ID).is_none());
+    }
+
+    #[test]
+    fn an_unknown_review_and_a_superseded_review_are_reported_differently() {
+        let registry = ReviewRegistry::default();
+        let missing = registry.apply(LinkEvent::Accepted {
+            review_id: "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb".into(),
+            session_id: SESSION_ID.into(),
+        });
+        assert_eq!(missing.kind, "ignored");
+        assert_eq!(missing.reason.as_deref(), Some("unknown_review"));
+
+        registry.begin(review(REVIEW_ID, SESSION_ID));
+        let newer = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        registry.begin(review(newer, SESSION_ID));
+        let late = registry.apply(LinkEvent::Returned {
+            review_id: REVIEW_ID.into(),
+            session_id: SESSION_ID.into(),
+            outcome: "reviewed".into(),
+            head_oid: None,
+        });
+        assert_eq!(late.kind, "ignored");
+        assert_eq!(late.reason.as_deref(), Some("superseded_review"));
+        // 迟到事件不改写最新状态。
+        let state = registry.latest_for_session(SESSION_ID).unwrap();
+        assert_eq!(state.review_id, newer);
+        assert_eq!(state.status, STATUS_OPENING);
+
+        // 同一个 reviewId 换了 sessionId 也不算已知来源。
+        let mismatched = registry.apply(LinkEvent::Accepted {
+            review_id: newer.into(),
+            session_id: "11111111-2222-4333-8444-555555555555".into(),
+        });
+        assert_eq!(mismatched.reason.as_deref(), Some("unknown_review"));
+    }
+
+    #[test]
+    fn an_outbound_url_over_the_byte_limit_fails_before_it_is_opened() {
+        // 中文路径在百分号编码后每字符 9 字节，仍在 1000 字符的路径上限内。
+        let short = format!("C:/w/{}", "代码".repeat(10));
+        let url = checked_review_url(REVIEW_ID, SESSION_ID, &short, Some(OID)).expect("short path fits");
+        assert!(url.len() <= MAX_URL_BYTES);
+        assert!(url.contains("%E4%BB%A3%E7%A0%81"));
+
+        let long = format!("C:/w/{}", "代".repeat(300));
+        assert!(long.chars().count() <= MAX_PATH_CHARS);
+        // 只有整条链接的字节上限能拦住它。
+        assert!(review_url(REVIEW_ID, SESSION_ID, &long, Some(OID)).len() > MAX_URL_BYTES);
+        assert_eq!(checked_review_url(REVIEW_ID, SESSION_ID, &long, Some(OID)), Err("path_too_long"));
+        // 不带 baseline 也不能绕过。
+        assert_eq!(checked_review_url(REVIEW_ID, SESSION_ID, &long, None), Err("path_too_long"));
     }
 
     #[test]

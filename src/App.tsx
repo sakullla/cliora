@@ -328,14 +328,38 @@ export default function App() {
     let active = true;
     let stop: (() => void) | null = null;
     const seen = new Set<string>();
+    // 原审查关联失效时明确说明无法返回：不创建替代会话，不改动任何会话或仓库。
+    const showReviewExpired = () => {
+      setError({
+        code: 'review_link_expired',
+        message: t('sessions.reviewReturnExpired'),
+        action: t('sessions.reviewReturnExpiredAction'),
+      });
+    };
+    // 只有该 session 仍在工作台里且是本地会话时才跳转；否则停在当前页并说明原因。
+    const sessionAvailable = async (sessionId: string) => native.listWorkbenchSessions()
+      .then((list) => !Array.isArray(list)
+        || list.some((item) => item.id === sessionId && !item.projectId?.startsWith('remote:')))
+      // 读不到列表不是"会话已失效"的证据，保持原行为。
+      .catch(() => true);
     const handle = (url: unknown) => {
       if (!active || typeof url !== 'string' || seen.has(url)) return;
       seen.add(url);
-      void native.twiglaneReviewLink(url).then((outcome) => {
-        if (!active || !outcome.sessionId || outcome.kind === 'ignored') return;
+      void native.twiglaneReviewLink(url).then(async (outcome) => {
+        if (!active) return;
+        if (outcome.kind === 'ignored') {
+          // unknown_review：注册表里从未有过这个 reviewId（重启或来源失效）；
+          // superseded_review：同一会话已经发起了更新的审查，迟到事件不覆盖新结果。
+          if (outcome.reason === 'unknown_review' || outcome.reason === 'superseded_review') showReviewExpired();
+          return;
+        }
         const sessionId = outcome.sessionId;
+        if (!sessionId) return;
         if (outcome.kind === 'returned') {
-          // 只有注册表里仍是该 session 最新的 review 才会走到这里；失效关联不创建替代会话。
+          if (!await sessionAvailable(sessionId) || !active) {
+            if (active) showReviewExpired();
+            return;
+          }
           openWorkbenchSession(sessionId);
           return;
         }

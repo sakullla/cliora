@@ -218,6 +218,7 @@ const REVIEW_REASON_KEYS: Record<string, string> = {
   git_missing: 'sessions.reviewCodeGitMissing',
   open_failed: 'sessions.reviewCodeOpenFailed',
   output_too_large: 'sessions.reviewCodeOutputTooLarge',
+  path_too_long: 'sessions.reviewCodePathTooLong',
   read_failed: 'sessions.reviewCodeReadFailed',
   malformed_request: 'sessions.reviewCodeMalformedRequest',
   unsupported_version: 'sessions.reviewCodeUnsupportedVersion',

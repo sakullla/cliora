@@ -3824,7 +3824,8 @@ pub async fn twiglane_start_review(
         let path = crate::twiglane::url_path(&root).map_err(crate::twiglane::api_error)?;
         let baseline = crate::twiglane::baseline(&root);
         let state = crate::twiglane::new_review(&session_id, &path, baseline.clone());
-        let url = crate::twiglane::review_url(&state.review_id, &session_id, &path, baseline.as_deref());
+        let url = crate::twiglane::checked_review_url(&state.review_id, &session_id, &path, baseline.as_deref())
+            .map_err(crate::twiglane::api_error)?;
         tauri_plugin_opener::open_url(&url, None::<&str>)
             .map_err(|_| crate::twiglane::api_error("open_failed"))?;
         app.state::<AppState>().reviews.begin(state.clone());
