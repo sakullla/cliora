@@ -590,11 +590,12 @@ for (const width of widths) {
   // real target size, and no copy is clipped by the row.
   const measureRestoreRows = (page) => page.evaluate(() => {
     const rows = [...document.querySelectorAll('[data-restore-row]')];
+    const queue = document.querySelector('[data-restore-queue]');
     const box = (element) => {
       const rect = element.getBoundingClientRect();
       return { w: Math.round(rect.width), h: Math.round(rect.height) };
     };
-    const clipped = rows.flatMap((row) => {
+    const clippedCopy = rows.flatMap((row) => {
       const stage = row.querySelectorAll('p');
       const copy = row.querySelector('[class*="restoreRowCopy"]');
       const rowRect = row.getBoundingClientRect();
@@ -603,10 +604,35 @@ for (const width of widths) {
         ...(copy && copy.getBoundingClientRect().right > rowRect.right + 1 ? ['copy-past-row'] : []),
       ];
     });
+    // Vertical evidence: the queue box stays inside the stage and its own scroll reaches the last
+    // row, so no record is permanently cut off however many are saved.
+    let vertical = null;
+    if (queue && rows.length) {
+      const queueRect = queue.getBoundingClientRect();
+      const stageRect = queue.closest('section').getBoundingClientRect();
+      const hiddenBeforeScroll = rows.filter((row) => row.getBoundingClientRect().bottom > queueRect.bottom + 1).length;
+      const before = queue.scrollTop;
+      queue.scrollTop = queue.scrollHeight;
+      const lastRect = rows[rows.length - 1].getBoundingClientRect();
+      const scrolledRect = queue.getBoundingClientRect();
+      vertical = {
+        records: rows.length,
+        clientHeight: queue.clientHeight,
+        scrollHeight: queue.scrollHeight,
+        scrollRange: queue.scrollHeight - queue.clientHeight,
+        hiddenBeforeScroll,
+        reachedEnd: queue.scrollTop > 0,
+        lastRowVisibleAtEnd: lastRect.bottom <= scrolledRect.bottom + 1 && lastRect.top >= scrolledRect.top - 1,
+        insideStage: queueRect.bottom <= stageRect.bottom + 1 && queueRect.top >= stageRect.top - 1,
+        focusable: queue.tabIndex >= 0,
+      };
+      queue.scrollTop = before;
+    }
     return {
       rows: rows.map((row) => ({ stage: row.getAttribute('data-stage'), size: box(row) })),
       actions: rows.flatMap((row) => [...row.querySelectorAll('button')].map((button) => ({ label: button.textContent?.trim() ?? '', size: box(button) }))),
-      clipped,
+      clippedCopy,
+      vertical,
       page: { scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth },
     };
   });
@@ -616,6 +642,22 @@ for (const width of widths) {
       { event: { savedSessionId: 'saved-grok', stage: 'starting' } },
       { hold: true },
     ]);
+    return measureRestoreRows(page);
+  }, true);
+  // 14 saved records: more than fits, so the queue must scroll instead of cutting the last rows.
+  const manyRestores = Array.from({ length: 14 }, (_, index) => ({
+    id: 'saved-' + (index + 1), toolId: 'codex', projectId: null, directory: 'C:\\Projects\\workspace-' + (index + 1),
+    mode: 'normal', startedAt: Date.now() - (index + 1) * 60000, stoppedAt: Date.now() - index * 60000, nativeId: null, accountId: null, contextId: null,
+  }));
+  await shot('workbench-restore-many-' + theme + '-' + width, theme, width, async (page) => {
+    await page.evaluate(({ saved }) => localStorage.setItem('capture:restore', JSON.stringify({
+      saved,
+      // Every record failed, so even the last row carries its own retry.
+      script: saved.map((item) => ({ event: { savedSessionId: item.id, stage: 'failed', detail: '原会话已被删除，无法继续' } })),
+    })), { saved: manyRestores });
+    await page.reload();
+    await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
+    await page.locator('[data-restore-row="saved-14"]').waitFor({ state: 'attached' });
     return measureRestoreRows(page);
   }, true);
   await shot('workbench-restore-mixed-' + theme + '-' + width, theme, width, async (page) => {

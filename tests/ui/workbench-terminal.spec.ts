@@ -2304,6 +2304,121 @@ test('a slow saved record does not block the ones that are already usable', asyn
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
 });
 
+/** More saved records than fit: the queue must scroll, not clip, at any window size. */
+const manySavedRecords = (count: number) => Array.from({ length: count }, (_, index) => ({
+  id: 'saved-' + (index + 1),
+  toolId: 'codex',
+  projectId: null,
+  directory: 'C:/projects/workspace-' + (index + 1),
+  mode: 'normal',
+  startedAt: 1,
+  stoppedAt: 2,
+  nativeId: null,
+  accountId: null,
+  contextId: null,
+}));
+
+async function openManyRecordQueue(page: Page, count: number) {
+  await page.addInitScript((records) => {
+    Object.assign(window, {
+      __emptySessions: true,
+      __savedRestores: records,
+      // Every record already failed, so even the last row carries its own retry.
+      __restoreScript: records.map((item: { id: string }) => ({ event: { savedSessionId: item.id, stage: 'failed', detail: '原会话已被删除' } })),
+      __restoreOneFailure: { detail: '原会话已被删除', candidates: [] },
+    });
+  }, manySavedRecords(count));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const queue = page.getByRole('group', { name: '待恢复的会话' });
+  await expect(queue).toBeVisible();
+  await expect(page.locator('[data-restore-row]')).toHaveCount(count);
+  return queue;
+}
+
+for (const tier of [{ width: 1360, height: 900, count: 14 }, { width: 900, height: 640, count: 8 }, { width: 640, height: 720, count: 10 }]) {
+  test('every saved record stays reachable when the queue is taller than the stage (' + tier.width + 'x' + tier.height + ')', async ({ page }) => {
+    await page.setViewportSize({ width: tier.width, height: tier.height });
+    await openManyRecordQueue(page, tier.count);
+    const measure = await page.evaluate(() => {
+      const node = document.querySelector('[data-restore-queue]') as HTMLElement;
+      const rows = [...document.querySelectorAll('[data-restore-row]')];
+      const queueRect = node.getBoundingClientRect();
+      const stageRect = node.closest('section')!.getBoundingClientRect();
+      const hiddenBeforeScroll = rows.filter((row) => row.getBoundingClientRect().bottom > queueRect.bottom + 1).length;
+      // The container itself must stay inside the stage; its content scrolls, it is not clipped.
+      const insideStage = queueRect.bottom <= stageRect.bottom + 1 && queueRect.top >= stageRect.top - 1;
+      node.scrollTop = node.scrollHeight;
+      const lastRect = rows.at(-1)!.getBoundingClientRect();
+      const scrolledRect = node.getBoundingClientRect();
+      const lastRowVisibleAtEnd = lastRect.bottom <= scrolledRect.bottom + 1 && lastRect.top >= scrolledRect.top - 1;
+      const reachedEnd = node.scrollTop > 0;
+      node.scrollTop = 0;
+      return {
+        scrolls: node.scrollHeight > node.clientHeight + 1,
+        scrollRange: node.scrollHeight - node.clientHeight,
+        focusable: node.tabIndex >= 0,
+        insideStage,
+        hiddenBeforeScroll,
+        reachedEnd,
+        lastRowVisibleAtEnd,
+        queueHeight: Math.round(queueRect.height),
+        stageHeight: Math.round(stageRect.height),
+      };
+    });
+    // The queue keeps its box inside the stage and scrolls its own content: no row is cut off.
+    expect(measure.insideStage).toBe(true);
+    expect(measure.scrolls).toBe(true);
+    expect(measure.focusable).toBe(true);
+    expect(measure.hiddenBeforeScroll).toBeGreaterThan(0);
+    expect(measure.reachedEnd).toBe(true);
+    expect(measure.lastRowVisibleAtEnd).toBe(true);
+    console.log('restore queue reachability', { viewport: tier.width + 'x' + tier.height, records: tier.count, ...measure });
+    // Every row, including the last one, can be scrolled fully into the queue's view.
+    for (let index = 1; index <= tier.count; index += 1) {
+      const row = page.locator('[data-restore-row="saved-' + index + '"]');
+      await row.scrollIntoViewIfNeeded();
+      expect(await row.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const queueRect = node.closest('[data-restore-queue]')!.getBoundingClientRect();
+        return rect.top >= queueRect.top - 1 && rect.bottom <= queueRect.bottom + 1;
+      })).toBe(true);
+    }
+    // Keyboard: Tab reaches the last row's retry inside the scrolled view, and Enter runs it.
+    await page.getByRole('group', { name: '待恢复的会话' }).focus();
+    let reached = false;
+    for (let step = 0; step < tier.count * 3 + 8; step += 1) {
+      await page.keyboard.press('Tab');
+      const focused = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        const row = active?.closest('[data-restore-row]');
+        const queue = document.querySelector('[data-restore-queue]') as HTMLElement | null;
+        if (!active || !row || !queue || !active.textContent) return null;
+        const rect = active.getBoundingClientRect();
+        const queueRect = queue.getBoundingClientRect();
+        return {
+          row: row.getAttribute('data-restore-row'),
+          label: active.textContent.trim(),
+          inView: rect.top >= queueRect.top - 1 && rect.bottom <= queueRect.bottom + 1,
+        };
+      });
+      if (!focused) continue;
+      if (focused.row === 'saved-' + tier.count && focused.label === '重试恢复') {
+        // Focusing the button scrolled it into view: the keyboard reaches a hidden row.
+        expect(focused.inView).toBe(true);
+        reached = true;
+        break;
+      }
+    }
+    expect(reached).toBe(true);
+    await page.keyboard.press('Enter');
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreOne?: Array<{ sessionId: string }> }).__restoreOne ?? [])).toEqual([{ sessionId: 'saved-' + tier.count, nativeId: null }]);
+    // The retry failed again, so the last row is still there and still readable.
+    await expect(page.locator('[data-restore-row="saved-' + tier.count + '"]')).toContainText('原会话已被删除');
+  });
+}
+
 test('a completed record does not take a selection the user made afterwards', async ({ page }) => {
   await page.addInitScript(() => Object.assign(window, {
     __savedRestores: [
