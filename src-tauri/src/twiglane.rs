@@ -482,12 +482,26 @@ fn find_git() -> Option<PathBuf> {
         .find_map(|directory| names.iter().map(|name| directory.join(name)).find(|path| path.is_file()))
 }
 
+/// Windows 上 CREATE_NO_WINDOW 的取值；后台读取 Git 时不能创建可见控制台。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 读取状态用的 Git 命令：沿用既有 PATH，Windows 上不申请控制台窗口。
+fn git_command(git: PathBuf) -> Command {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(git);
+    crate::process_environment::apply(&mut command);
+    // workbench_code_status 每 15 秒轮询一次，没有这个标志桌面上会不断闪现 cmd 窗口。
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW); // CREATE_NO_WINDOW
+    command
+}
+
 /// 用参数数组运行 Git，不经 shell，不访问网络；输出超限即失败，不截断计数。
 fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
     let git = find_git().ok_or("git_missing")?;
-    let mut command = Command::new(git);
-    crate::process_environment::apply(&mut command);
-    let mut child = command
+    let mut child = git_command(git)
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -887,6 +901,43 @@ mod tests {
         assert_eq!(review_target(None), Err("remote_session"));
         let path = PathBuf::from("C:/w");
         assert_eq!(review_target(Some(path.clone())), Ok(path));
+    }
+
+    /// std 无法回读 `Command` 已设置的 creation flags，因此守卫真正的构造点：
+    /// 少了这行，Windows 上每 15 秒的轮询都会弹一次 cmd 窗口。
+    #[test]
+    fn git_reads_never_ask_windows_for_a_console_window() {
+        let source = include_str!("twiglane.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let guarded = lines.windows(2).any(|pair| {
+            pair[0].trim() == "#[cfg(windows)]" && pair[1].contains("creation_flags(CREATE_NO_WINDOW)")
+        });
+        assert!(guarded, "读取状态的 Git 命令必须在 cfg(windows) 下设置 CREATE_NO_WINDOW");
+        // run_git 必须走同一个构造点，否则标志会被绕过。
+        assert!(source.contains("let mut child = git_command(git)"), "run_git 必须使用 git_command");
+        // 只读环境、参数数组与输出上限保持不变。
+        assert!(source.contains(".env(\"GIT_OPTIONAL_LOCKS\", \"0\")"));
+        assert!(source.contains("MAX_GIT_OUTPUT_BYTES"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_windows_git_read_starts_without_a_console_window() {
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000, "CREATE_NO_WINDOW 常量被改动");
+        let Some(git) = find_git() else {
+            eprintln!("git unavailable; skipping console window test");
+            return;
+        };
+        // 按 run_git 的构造方式真实启动一次：标志没有破坏命令行。
+        let output = git_command(git)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .expect("git --version 应该能启动");
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("git version"));
     }
 
     fn git(cwd: &Path, args: &[&str]) -> bool {
