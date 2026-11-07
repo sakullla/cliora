@@ -1569,6 +1569,26 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .restoreCandidateCopy time { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .restoreCandidate > code { max-width: 150px; overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .restoreCandidate > :global(svg) { flex: none; color: var(--accent); }
+/* Saved records before their sessions come back: one row per record, each with its own
+   state and its own retry, so a slow or failed record never hides the others. */
+.restoreQueue { display: grid; flex: none; gap: 2px; margin: var(--space-2_5) var(--space-3) 0; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.restoreQueueHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 26px; padding: 0 var(--space-1_5); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-bold); letter-spacing: .08em; text-transform: uppercase; }
+.restoreRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; padding: var(--space-2) var(--space-2_5); border-radius: var(--radius); }
+.restoreRow:hover { background: var(--surface-2); }
+.restoreRow[data-stage='failed'] { background: color-mix(in srgb, var(--danger-soft) 55%, var(--surface)); }
+.restoreRowIcon { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); }
+.restoreRowCopy { display: grid; flex: 1 1 200px; gap: 1px; min-width: 0; }
+.restoreRowCopy strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
+.restoreRowPath { margin: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+.restoreRowStage { margin: 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; }
+.restoreRowStage[data-state='failed'] { color: var(--danger); }
+.restoreRowActions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.restoreRowWait { flex: none; width: 13px; height: 13px; margin: 0 var(--space-2); border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: wbSpin .8s linear infinite; }
+@media (max-width: 700px) {
+  .restoreRowActions { flex: 1 1 100%; justify-content: flex-end; }
+  .restoreRowPath { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (prefers-reduced-motion: reduce) { .restoreRowWait { animation: none; } }
 .banner { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2_5) var(--space-3); margin: var(--space-2_5) var(--space-3) 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-lg); background: var(--danger-soft); color: var(--text); }
 .stage > .banner { margin: var(--space-2) var(--space-2_5) 0; }
 .bannerCopy { display: grid; flex: 1 1 220px; gap: var(--space-0_5); min-width: 0; }

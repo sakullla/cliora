@@ -189,3 +189,64 @@ test('a worktree created mid-session appears and opens a new session there', asy
   expect(calls.some(([command]) => command === 'write_workbench_session')).toBe(false);
   await expect(page.getByRole('tablist', { name: '会话列表' }).getByRole('tab')).toHaveCount(2);
 });
+/** A restore that finishes late must not replace the session the user is already on. */
+test('a late restore does not change the session the workbench keeps across page switches', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions: Array<Record<string, unknown>> = [
+      { id: 's1', toolId: 'codex', projectId: null, directory: 'C:/home', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
+    ];
+    const saved = [{ id: 'old', toolId: 'claude_code', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null }];
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    Object.assign(window, {
+      isTauri: true,
+      __releaseRestore: () => (window as unknown as { __releaseRestoreRun?: () => void }).__releaseRestoreRun?.(),
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: ['codex', 'claude_code'].map((id) => ({ id, name: id === 'codex' ? 'Codex' : 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'list_workbench_restore_sessions') return saved.map((item) => ({ ...item }));
+          if (command === 'restore_workbench_sessions') {
+            // The saved record is only restored once the test releases it.
+            await new Promise<void>((resolve) => { (window as unknown as { __releaseRestoreRun?: () => void }).__releaseRestoreRun = resolve; });
+            const restored = { id: 'late', toolId: 'claude_code', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() };
+            sessions.push(restored);
+            bridge.handlers[bridge.listens['cliora:workbench-restore']]?.({ payload: { restoreId: 'restore-1', savedSessionId: 'old', stage: 'restored', detail: null, candidates: [], session: restored } });
+            return { restored: { old: 'late' }, failures: [] };
+          }
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'workbench_git_context') return null;
+          if (command === 'git_worktrees') return [];
+          if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
+          if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('tablist', { name: '会话列表' });
+  const earlier = rail.getByRole('tab', { name: /Codex/ });
+  await expect(earlier).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByLabel('待恢复的会话')).toBeVisible();
+
+  await page.evaluate(() => (window as unknown as { __releaseRestore: () => void }).__releaseRestore());
+  const late = rail.getByRole('tab', { name: /Claude Code/ });
+  await expect(late).toBeVisible();
+  // The session the user already had stays selected; the late completion only joins the list.
+  await expect(earlier).toHaveAttribute('aria-selected', 'true');
+  await expect(late).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByLabel('待恢复的会话')).toHaveCount(0);
+
+  await nav.getByRole('button', { name: '首页' }).click();
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(earlier).toHaveAttribute('aria-selected', 'true');
+  await expect(late).toBeVisible();
+});

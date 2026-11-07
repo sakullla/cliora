@@ -477,13 +477,97 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           }
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'list_workbench_restore_sessions') {
+            const harness = window as unknown as {
+              __savedRestores?: Array<Record<string, any>>;
+              __savedRestoreFails?: boolean;
+              __restoreReport?: { restored?: Record<string, string>; failures?: Array<Record<string, any>> };
+            };
+            if (harness.__savedRestoreFails) throw new Error('无法读取上次会话');
+            if (harness.__savedRestores) return harness.__savedRestores.map((item) => ({ ...item }));
+            // Tests written before the saved-record read only declare a batch report; derive the
+            // pending rows from it so the same fixture still exercises the queue.
+            const report = harness.__restoreReport;
+            if (!report) return [];
+            const base = { projectId: null, mode: 'normal', startedAt: Date.now(), stoppedAt: null, nativeId: null, accountId: null, contextId: null };
+            return [
+              ...Object.keys(report.restored ?? {}).map((id) => ({ ...base, id, toolId: 'codex', directory: 'C:/work' })),
+              ...(report.failures ?? []).map((item) => ({ ...base, ...item.session })),
+            ];
+          }
           if (command === 'restore_workbench_sessions') {
-            const harness = window as unknown as { __restoreReport?: unknown; __restoreCalls?: number };
+            const harness = window as unknown as {
+              __restoreReport?: unknown;
+              __restoreCalls?: number;
+              __savedRestores?: Array<Record<string, any>>;
+              __restoreScript?: Array<{ hold?: boolean; event: Record<string, any> }>;
+              __restoreRelease?: () => void;
+              __restoreDelay?: number;
+            };
             harness.__restoreCalls = (harness.__restoreCalls ?? 0) + 1;
-            return harness.__restoreReport ?? { restored: {}, failures: [] };
+            // A batch that only answers at the end is the pre-event baseline for the timing test.
+            if (harness.__restoreDelay) await new Promise<void>((resolve) => setTimeout(resolve, harness.__restoreDelay));
+            const script = harness.__restoreScript;
+            if (!Array.isArray(script)) {
+              const report = harness.__restoreReport ?? { restored: {}, failures: [] } as { restored?: Record<string, string>; failures?: unknown[] };
+              // A report-only batch still has to hand the view real sessions: the restore report
+              // carries ids, so the list must agree or the view has nothing to show.
+              for (const [savedId, id] of Object.entries(report.restored ?? {})) {
+                if (sessions.some((item) => item.id === id)) continue;
+                const saved = (harness.__savedRestores ?? []).find((item) => item.id === savedId) ?? { toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal' };
+                sessions.push({ id, toolId: saved.toolId, projectId: saved.projectId ?? null, directory: saved.directory, mode: saved.mode ?? 'normal', running: true, exitCode: null, startedAt: Date.now() });
+              }
+              return report;
+            }
+            // A scripted batch publishes each record's own stages; a held step keeps the batch
+            // promise pending while the already published rows are on screen.
+            const restoreId = 'restore-' + harness.__restoreCalls;
+            const emit = (payload: Record<string, unknown>) => {
+              bridge.handlers[bridge.listens['cliora:workbench-restore']]?.({ payload: { restoreId, detail: null, candidates: [], session: null, ...payload } });
+            };
+            const restored: Record<string, string> = {};
+            const failures: unknown[] = [];
+            for (const step of script) {
+              const event = step.event;
+              if (event) {
+                if (event.stage === 'restored') {
+                  const id: string = event.session?.id ?? 'restored-' + event.savedSessionId;
+                  const snapshot = event.session ?? { id, toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() };
+                  if (!sessions.some((item) => item.id === id)) sessions.push(snapshot);
+                  restored[event.savedSessionId] = id;
+                  emit({ ...event, session: snapshot });
+                } else if (event.stage === 'failed') {
+                  const saved = (harness.__savedRestores ?? []).find((item) => item.id === event.savedSessionId)
+                    ?? { id: event.savedSessionId, toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal' };
+                  failures.push({ session: saved, detail: event.detail ?? '', candidates: event.candidates ?? [] });
+                  emit(event);
+                } else {
+                  emit(event);
+                }
+              }
+              if (step.hold) await new Promise<void>((resolve) => { harness.__restoreRelease = resolve; });
+            }
+            return { restored, failures };
           }
           if (command === 'restore_workbench_session') {
             Object.assign(window, { __restoreChoice: args });
+            const oneHarness = window as unknown as {
+              __savedRestores?: Array<Record<string, any>>;
+              __restoreOneFailure?: { detail: string; candidates: unknown[] };
+              __restoreOne?: Array<{ sessionId: string; nativeId: string | null }>;
+            };
+            oneHarness.__restoreOne = [...(oneHarness.__restoreOne ?? []), { sessionId: args.sessionId, nativeId: args.nativeId ?? null }];
+            const saved = (oneHarness.__savedRestores ?? []).find(item => item.id === args.sessionId);
+            if (saved && !args.nativeId) {
+              // A single record retried on its own: it may fail again without touching other rows.
+              const retryFailure = oneHarness.__restoreOneFailure;
+              if (retryFailure) return { restored: {}, failures: [{ session: saved, ...retryFailure }] };
+              const retriedId = 'resumed-' + args.sessionId;
+              if (!sessions.some(item => item.id === retriedId)) {
+                sessions.push({ ...saved, id: retriedId, running: true, exitCode: null, startedAt: Date.now() });
+              }
+              return { restored: { [args.sessionId]: retriedId }, failures: [] };
+            }
             const index = sessions.findIndex(item => item.id === args.sessionId);
             if (index >= 0) {
               const failure = (window as unknown as { __reconnectFailure?: { detail: string; candidates: unknown[] } }).__reconnectFailure;
@@ -559,6 +643,13 @@ async function openWorkbench(page: Page, english = false) {
 const writes = (page: Page) => page.evaluate(() => (window as unknown as { __writes: string[] }).__writes.slice());
 const resetWrites = (page: Page) => page.evaluate(() => { (window as unknown as { __writes: string[] }).__writes.length = 0; });
 const openedUrls = (page: Page) => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened.slice());
+
+/** Wall-clock numbers measured in the browser against synthetic IPC; never native evidence. */
+function reportRestoreTiming(info: { attach: (name: string, body: { body: string; contentType: string }) => Promise<void> }, payload: Record<string, unknown>) {
+  const record = { ...payload, nativePlatform: 'unverified', note: 'Browser timing with synthetic IPC; it does not measure WebView2, macOS or Linux restores.' };
+  console.log('restore timing', record);
+  void info.attach('restore-timing-' + String(payload.mode), { body: JSON.stringify(record), contentType: 'application/json' });
+}
 
 test('terminal and quick input preserve session order while another session stays independent', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
@@ -2095,18 +2186,33 @@ test('restored sessions come back in the rail order they had before the restart'
 });
 
 test('unresolved restoration stays visible and can be dismissed explicitly', async ({ page }) => {
-  await page.addInitScript(() => Object.assign(window, { __restoreReport: { restored: {}, failures: [{ session: { id: 'missing', toolId: 'codex', directory: 'C:/work' }, detail: '原会话不存在' }] } }));
+  await page.addInitScript(() => Object.assign(window, {
+    __savedRestores: [{ id: 'missing', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null }],
+    __restoreReport: { restored: {}, failures: [{ session: { id: 'missing', toolId: 'codex', directory: 'C:/work' }, detail: '原会话不存在' }] },
+    // Retrying the row fails again, and only this record is retried.
+    __restoreOneFailure: { detail: '原会话不存在', candidates: [] },
+  }));
   await openWorkbench(page);
   await expect(page.getByText('原会话不存在', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: '重试恢复', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(2);
+  const retry = page.getByRole('button', { name: '重试恢复', exact: true });
+  await retry.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreOne: Array<{ sessionId: string; nativeId: string | null }> }).__restoreOne ?? [])).toEqual([{ sessionId: 'missing', nativeId: null }]);
+  // The batch is not replayed: a single record retries on its own.
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
+  await expect(page.getByText('原会话不存在', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '不再恢复', exact: true }).click();
   await expect(page.getByRole('button', { name: '不再恢复', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __forgottenRestore: string }).__forgottenRestore)).toBe('missing');
 });
 
 test('ambiguous restoration lets the user choose a candidate without clearing other pending tabs', async ({ page }) => {
-  await page.addInitScript(() => Object.assign(window, { __restoreReport: { restored: {}, failures: [
+  await page.addInitScript(() => Object.assign(window, {
+    __savedRestores: [
+      { id: 'ambiguous', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'other', toolId: 'codex', projectId: null, directory: 'C:/other', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+    ],
+    __restoreReport: { restored: {}, failures: [
     { session: { id: 'ambiguous', toolId: 'codex', directory: 'C:/work', mode: 'normal' }, detail: '发现多条可能的会话', candidates: [
       { nativeId: 'native-one', title: '第一个会话', startedAt: 1767225600000, updatedAt: 1767225600000 },
       { nativeId: 'native-two', title: '第二个会话', startedAt: 1767312000000, updatedAt: 1767312000000 },
@@ -2124,6 +2230,168 @@ test('ambiguous restoration lets the user choose a candidate without clearing ot
   await expect(page.getByText('另一个待恢复', { exact: false })).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { __restoreChoice: unknown }).__restoreChoice)).toEqual({ sessionId: 'ambiguous', nativeId: 'native-two' });
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
+});
+
+/** The stage a workbench with saved records shows first: no live session, pending rows. */
+async function openRestoreQueue(page: Page) {
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByLabel('待恢复的会话')).toBeVisible();
+}
+
+test('saved records show as pending rows before their sessions are restored', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __emptySessions: true,
+    __savedRestores: [
+      { id: 'old-codex', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'old-claude', toolId: 'claude_code', projectId: null, directory: 'D:/a-very-long-project-directory-name/that/keeps/going/past/the/restore/row/width', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+    ],
+    // Nothing is restored yet: one record reports its stage and the batch keeps waiting.
+    __restoreScript: [
+      { event: { savedSessionId: 'old-claude', stage: 'discovering' }, hold: true },
+      { event: { savedSessionId: 'old-codex', stage: 'restored', session: { id: 'codex-back', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+    ],
+  }));
+  await installWorkbenchMock(page);
+  await page.setViewportSize({ width: 640, height: 720 });
+  await openRestoreQueue(page);
+  // A workbench with saved records is not the empty workbench.
+  await expect(page.getByText('还没有进行中的会话')).toHaveCount(0);
+  await expect(page.locator('[data-restore-row]')).toHaveCount(2);
+  await expect(page.locator('[data-restore-row="old-claude"]')).toContainText('正在查找原会话…');
+  await expect(page.locator('[data-restore-row="old-codex"]')).toContainText('等待恢复');
+  await expect(page.getByRole('button', { name: '新建会话', exact: true }).first()).toBeVisible();
+  // A long directory stays inside the row instead of widening the page.
+  const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
+  // The finished record replaces its row; the other record keeps its own row.
+  await page.evaluate(() => (window as unknown as { __restoreRelease: () => void }).__restoreRelease());
+  await expect(page.locator('[data-session-id="codex-back"]')).toBeVisible();
+  await expect(page.locator('[data-restore-row="old-codex"]')).toHaveCount(0);
+  await expect(page.locator('[data-restore-row]')).toHaveCount(1);
+});
+
+test('a slow saved record does not block the ones that are already usable', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __emptySessions: true,
+    __savedRestores: [
+      { id: 'fast', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'slow', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+      { id: 'broken', toolId: 'codex', projectId: null, directory: 'C:/gone', mode: 'normal', startedAt: 5, stoppedAt: 6, nativeId: null, accountId: null, contextId: null },
+    ],
+    __restoreScript: [
+      { event: { savedSessionId: 'broken', stage: 'failed', detail: '原会话已被删除' } },
+      { event: { savedSessionId: 'fast', stage: 'restored', session: { id: 'fast-1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+      { event: { savedSessionId: 'slow', stage: 'starting' }, hold: true },
+      { event: { savedSessionId: 'slow', stage: 'restored', session: { id: 'slow-1', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+    ],
+    __restoreOneFailure: { detail: '原会话已被删除', candidates: [] },
+  }));
+  await installWorkbenchMock(page);
+  await openRestoreQueue(page);
+  // The ready record is a session while the slow one is still starting.
+  await expect(page.locator('[data-session-id="fast-1"]')).toBeVisible();
+  await expect(page.locator('[data-restore-row="fast"]')).toHaveCount(0);
+  await expect(page.locator('[data-restore-row="slow"]')).toContainText('正在启动会话…');
+  await expect(page.locator('[data-restore-row="broken"]')).toContainText('原会话已被删除');
+  // Only the failed record offers a retry, and it retries that record alone.
+  await expect(page.locator('[data-restore-row="fast"]').getByRole('button', { name: '重试恢复', exact: true })).toHaveCount(0);
+  await page.locator('[data-restore-row="broken"]').getByRole('button', { name: '重试恢复', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreOne: Array<{ sessionId: string }> }).__restoreOne.map((item) => item.sessionId))).toEqual(['broken']);
+  await page.evaluate(() => (window as unknown as { __restoreRelease: () => void }).__restoreRelease());
+  await expect(page.locator('[data-session-id="slow-1"]')).toBeVisible();
+  await expect(page.locator('[data-restore-row]')).toHaveCount(1);
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
+});
+
+test('a completed record does not take a selection the user made afterwards', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __savedRestores: [
+      { id: 'r1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'r2', toolId: 'claude_code', projectId: null, directory: 'D:/later', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+    ],
+    __restoreScript: [
+      { event: { savedSessionId: 'r1', stage: 'restored', session: { id: 'fast-1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+      { event: { savedSessionId: 'r2', stage: 'starting' }, hold: true },
+      { event: { savedSessionId: 'r2', stage: 'restored', session: { id: 'fast-2', toolId: 'claude_code', projectId: null, directory: 'D:/later', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+    ],
+  }));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  // A restored session joins the list without taking a selection the workbench already had.
+  await expect(page.locator('[data-session-id="fast-1"]')).toBeVisible();
+  await expect(page.locator('[data-session-id="s1"]')).toHaveAttribute('aria-selected', 'true');
+  // The user picks the restored session; the record that completes later must not steal it.
+  await page.locator('[data-session-id="fast-1"]').click();
+  await expect(page.locator('[data-session-id="fast-1"]')).toHaveAttribute('aria-selected', 'true');
+  await page.evaluate(() => (window as unknown as { __restoreRelease: () => void }).__restoreRelease());
+  await expect(page.locator('[data-session-id="fast-2"]')).toBeVisible();
+  await expect(page.locator('[data-session-id="fast-1"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('[data-session-id="fast-2"]')).toHaveAttribute('aria-selected', 'false');
+});
+
+test('no saved records shows the original empty workbench instead of a restore prompt', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, { __emptySessions: true }));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByText('还没有进行中的会话')).toBeVisible();
+  await expect(page.getByLabel('待恢复的会话')).toHaveCount(0);
+  // No saved record means no restore call at all.
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls?: number }).__restoreCalls ?? 0)).toBe(0);
+});
+
+test('saved records become usable before the whole batch ends (browser baseline)', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __emptySessions: true,
+    __savedRestores: [
+      { id: 'fast', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'slow', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+    ],
+    __restoreScript: [
+      { event: { savedSessionId: 'fast', stage: 'restored', session: { id: 'fast-1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+      { event: { savedSessionId: 'slow', stage: 'starting' }, hold: true },
+      { event: { savedSessionId: 'slow', stage: 'restored', session: { id: 'slow-1', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+    ],
+  }));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  const started = Date.now();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-session-id="fast-1"]')).toBeVisible();
+  const firstUsable = Date.now() - started;
+  // The slow record is still running; only its own row is left.
+  await expect(page.locator('[data-restore-row="slow"]')).toBeVisible();
+  const pendingAtFirst = await page.locator('[data-restore-row]').count();
+  await page.evaluate(() => (window as unknown as { __restoreRelease: () => void }).__restoreRelease());
+  await expect(page.locator('[data-restore-row]')).toHaveCount(0);
+  const allDone = Date.now() - started;
+  reportRestoreTiming(test.info(), { mode: 'per-item-events', firstUsableMs: firstUsable, allDoneMs: allDone, pendingRowsAtFirstUsable: pendingAtFirst });
+  expect(firstUsable).toBeLessThan(allDone);
+});
+
+test('a batch that only answers at the end is the pre-event baseline (browser baseline)', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __emptySessions: true,
+    __savedRestores: [
+      { id: 'fast', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'slow', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+    ],
+    // The same two records, but nothing is usable until the whole report arrives.
+    __restoreDelay: 1200,
+    __restoreReport: { restored: { fast: 'fast-1', slow: 'slow-1' }, failures: [] },
+  }));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  const started = Date.now();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-session-id="fast-1"]')).toBeVisible();
+  const firstUsable = Date.now() - started;
+  await expect(page.locator('[data-session-id="slow-1"]')).toBeVisible();
+  const allDone = Date.now() - started;
+  reportRestoreTiming(test.info(), { mode: 'batch-only', firstUsableMs: firstUsable, allDoneMs: allDone, syntheticBatchDelayMs: 1200 });
+  expect(firstUsable).toBeGreaterThanOrEqual(1200);
 });
 
 test('replay uses the native grid before interpreting cursor-addressed output', async ({ page }) => {

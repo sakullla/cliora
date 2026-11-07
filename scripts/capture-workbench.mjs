@@ -132,8 +132,13 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       localStorage.setItem('cliora:workbench-selected', 'r1');
     }
     const bridge = { handlers: [], listens: {} };
+    // The restore scenes are set from the test body, so they survive the reload that re-runs
+    // this init script: the fixture lives in storage, not in a global.
+    let restoreFixture = null;
+    try { restoreFixture = JSON.parse(localStorage.getItem('capture:restore') ?? 'null'); } catch { /* optional */ }
     Object.assign(window, {
       isTauri: true,
+      __releaseRestore: null,
       __promptFixture: promptFixture,
       __directoryFixture: directoryFixture,
       __failRemotePrompts: () => { promptFixture.fail = true; clockOffset += 31000; },
@@ -177,6 +182,27 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          // Saved records for the per-record restore scenes; absent means "nothing to restore".
+          if (command === 'list_workbench_restore_sessions') return restoreFixture?.saved ?? [];
+          if (command === 'restore_workbench_sessions') {
+            const restored = {};
+            const failures = [];
+            const emit = (payload) => bridge.handlers[bridge.listens['cliora:workbench-restore']]?.({ payload: { restoreId: 'capture-restore', detail: null, candidates: [], session: null, ...payload } });
+            for (const step of restoreFixture?.script ?? []) {
+              if (step.event) {
+                if (step.event.stage === 'restored') {
+                  sessions.push(step.event.session);
+                  restored[step.event.savedSessionId] = step.event.session.id;
+                } else if (step.event.stage === 'failed') {
+                  const saved = (restoreFixture?.saved ?? []).find((item) => item.id === step.event.savedSessionId);
+                  failures.push({ session: saved, detail: step.event.detail ?? '', candidates: step.event.candidates ?? [] });
+                }
+                emit(step.event);
+              }
+              if (step.hold) await new Promise((resolve) => { window.__releaseRestore = resolve; });
+            }
+            return { restored, failures };
+          }
           if (command === 'replay_workbench_session') return transcripts[args.sessionId] ?? transcripts.s1;
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
           if (command === 'git_worktrees') {
@@ -546,6 +572,62 @@ for (const width of widths) {
     await menu.getByRole('menuitem', { name: /清理 feature\/workbench-polish|Remove feature\/workbench-polish/ }).click();
     await menu.getByRole('alert').waitFor();
   });
+  // Saved records come first: their own rows and the new-session entry are on screen before
+  // any session exists, and each finished record replaces only its own row.
+  const savedRestores = [
+    { id: 'saved-codex', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', startedAt: Date.now() - 3 * 60000, stoppedAt: Date.now() - 60000, nativeId: 'native-codex', accountId: null, contextId: null },
+    { id: 'saved-claude', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'normal', startedAt: Date.now() - 9 * 60000, stoppedAt: Date.now() - 4 * 60000, nativeId: 'native-claude', accountId: null, contextId: null },
+    { id: 'saved-grok', toolId: 'grok', projectId: null, directory: 'C:\\Projects\\acme-svc-order-billing', mode: 'normal', startedAt: Date.now() - 26 * 60000, stoppedAt: Date.now() - 12 * 60000, nativeId: null, accountId: null, contextId: null },
+  ];
+  const openRestoreScene = async (page, script) => {
+    await page.evaluate(({ saved, script }) => localStorage.setItem('capture:restore', JSON.stringify({ saved, script })), { saved: savedRestores, script });
+    // The fixture is read by the init script, so the reload is what installs it.
+    await page.reload();
+    await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
+    await page.locator('[data-restore-row]').first().waitFor();
+  };
+  // Objective layout evidence for the rows: each row stays inside the stage, its actions keep a
+  // real target size, and no copy is clipped by the row.
+  const measureRestoreRows = (page) => page.evaluate(() => {
+    const rows = [...document.querySelectorAll('[data-restore-row]')];
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const clipped = rows.flatMap((row) => {
+      const stage = row.querySelectorAll('p');
+      const copy = row.querySelector('[class*="restoreRowCopy"]');
+      const rowRect = row.getBoundingClientRect();
+      return [
+        ...[...stage].filter((node) => node.scrollHeight > node.clientHeight + 1).map(() => 'stage-text'),
+        ...(copy && copy.getBoundingClientRect().right > rowRect.right + 1 ? ['copy-past-row'] : []),
+      ];
+    });
+    return {
+      rows: rows.map((row) => ({ stage: row.getAttribute('data-stage'), size: box(row) })),
+      actions: rows.flatMap((row) => [...row.querySelectorAll('button')].map((button) => ({ label: button.textContent?.trim() ?? '', size: box(button) }))),
+      clipped,
+      page: { scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth },
+    };
+  });
+  await shot('workbench-restore-queue-' + theme + '-' + width, theme, width, async (page) => {
+    await openRestoreScene(page, [
+      { event: { savedSessionId: 'saved-claude', stage: 'discovering' } },
+      { event: { savedSessionId: 'saved-grok', stage: 'starting' } },
+      { hold: true },
+    ]);
+    return measureRestoreRows(page);
+  }, true);
+  await shot('workbench-restore-mixed-' + theme + '-' + width, theme, width, async (page) => {
+    await openRestoreScene(page, [
+      { event: { savedSessionId: 'saved-codex', stage: 'restored', session: { id: 'back-codex', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() } } },
+      { event: { savedSessionId: 'saved-claude', stage: 'failed', detail: copy('原会话已被删除，无法继续', 'The original session was deleted.'), candidates: [] } },
+      { event: { savedSessionId: 'saved-grok', stage: 'starting' } },
+      { hold: true },
+    ]);
+    await page.locator('[data-session-id="back-codex"]').waitFor();
+    return measureRestoreRows(page);
+  }, true);
   await shot('workbench-metrics-' + theme + '-' + width, theme, width, async page => {
     // Objective layout evidence: clipped text, toolbar overflow, muted-copy contrast and the
     // ended state's affordances.

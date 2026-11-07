@@ -9,7 +9,7 @@ import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccou
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
@@ -370,6 +370,8 @@ export const native = {
     return result;
   },
   listWorkbenchSessions: () => command<WorkbenchSession[]>('list_workbench_sessions'),
+  /** Read-only saved records: they become the pending rows before anything is restored. */
+  listWorkbenchRestoreSessions: () => command<SavedWorkbenchSession[]>('list_workbench_restore_sessions'),
   restoreWorkbenchSessions: () => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_sessions'),
   restoreWorkbenchSession: (sessionId: string, nativeId: string | null = null) => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_session', { sessionId, nativeId }),
   checkpointWorkbenchSessions: () => command<void>('checkpoint_workbench_sessions'),

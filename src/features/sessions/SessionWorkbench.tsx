@@ -19,7 +19,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -177,6 +177,22 @@ export function remapArrangement(current: RailArrangement, restored: Record<stri
   return { pinned: remap(current.pinned), order: remap(current.order) };
 }
 
+/** The session the user last had selected; a restore maps it to its new id. */
+function readStoredSelection(): string | null {
+  try { return localStorage.getItem('cliora:workbench-selected'); } catch { return null; }
+}
+
+/** One saved record on screen before it becomes a real session again. */
+type RestoreRow = {
+  saved: SavedWorkbenchSession;
+  stage: 'queued' | 'discovering' | 'starting' | 'failed';
+  detail: string;
+  candidates: WorkbenchRestoreCandidate[];
+};
+
+/** Stage order inside one restore: a repeat or a late event never moves a row backwards. */
+const RESTORE_STAGE_RANK: Record<WorkbenchRestoreStage, number> = { discovering: 1, starting: 2, restored: 3, failed: 3 };
+
 function readRailArrangement(): RailArrangement {
   try {
     const raw = JSON.parse(localStorage.getItem(RAIL_ARRANGE_KEY) ?? '') as Partial<RailArrangement> | null;
@@ -323,8 +339,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const renderActive = active && windowVisible;
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
+  /** A restored snapshot can arrive before any list contains it. It survives the list reads
+   *  that have not seen it yet; once the native list names that id, the list is authoritative. */
+  const pendingRestored = useRef(new Map<string, WorkbenchSession>());
   function applyListedSessions(listed: WorkbenchSession[]) {
-    setSessions((current) => listed.map((item) => {
+    const known = new Set(listed.map((item) => item.id));
+    for (const id of [...pendingRestored.current.keys()]) if (known.has(id)) pendingRestored.current.delete(id);
+    const extra = [...pendingRestored.current.values()].filter((item) => !known.has(item.id));
+    if (pendingRestored.current.size > 16) pendingRestored.current.clear();
+    const rows = extra.length ? [...listed, ...extra] : listed;
+    setSessions((current) => rows.map((item) => {
       const candidates = [item, current.find(session => session.id === item.id), sessionStateUpdates.current.get(item.id)];
       return candidates.reduce<WorkbenchSession>((newest, candidate) => candidate && (candidate.stateRevision ?? 0) > (newest.stateRevision ?? 0) ? { ...item, ...candidate } : newest, item);
     }));
@@ -526,51 +550,136 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const autoLocalRestoreAttempted = useRef(false);
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState('');
-  const [restoreFailures, setRestoreFailures] = useState<import('../../types/launch').WorkbenchRestoreReport['failures']>([]);
+  // Saved records are shown before anything is restored, then replaced one by one as each
+  // session reports its own result. A slow or failing record never hides the other rows.
+  const [restoreRows, setRestoreRows] = useState<RestoreRow[]>([]);
+  // The ref is the source of truth: native events can arrive before React commits a render,
+  // and a stale read there would drop a row or place it twice.
+  const restoreRowsRef = useRef<RestoreRow[]>([]);
+  function writeRestoreRows(next: RestoreRow[]) {
+    restoreRowsRef.current = next;
+    setRestoreRows(next);
+  }
+  // Until the saved-record read answers, an empty session list means "unknown", not "empty".
+  const [restoreListReady, setRestoreListReady] = useState(false);
+  const [restoringIds, setRestoringIds] = useState<Set<string>>(() => new Set());
   const [restoreChoice, setRestoreChoice] = useState<import('../../types/launch').WorkbenchRestoreReport['failures'][number] | null>(null);
   const [restoreChoiceError, setRestoreChoiceError] = useState('');
+  // One restore call shares a restore id; (restoreId, savedSessionId) publishes an ordered
+  // stage stream, so a repeated or late event is dropped instead of reopening a done row.
+  const restoreStages = useRef(new Map<string, number>());
+  /** Only the first completion (or the record selected before the restart) takes the selection. */
+  const restoreSelectionTaken = useRef(false);
+  const restorePreferred = useRef<string | null>(readStoredSelection());
+  function toRestoreRows(saved: SavedWorkbenchSession[]): RestoreRow[] {
+    return saved.map((session) => ({ saved: session, stage: 'queued' as const, detail: '', candidates: [] }));
+  }
+  function markRestoreRowFailed(saved: SavedWorkbenchSession, detail: string, candidates: WorkbenchRestoreCandidate[]) {
+    const row: RestoreRow = { saved, stage: 'failed', detail, candidates };
+    const index = restoreRowsRef.current.findIndex((item) => item.saved.id === saved.id);
+    if (index < 0) { writeRestoreRows([...restoreRowsRef.current, row]); return; }
+    const copy = [...restoreRowsRef.current];
+    copy[index] = row;
+    writeRestoreRows(copy);
+  }
+  function setRestoreRowStage(savedId: string, stage: RestoreRow['stage']) {
+    const index = restoreRowsRef.current.findIndex((item) => item.saved.id === savedId);
+    if (index < 0) return;
+    const copy = [...restoreRowsRef.current];
+    copy[index] = { ...copy[index], stage, detail: '' };
+    writeRestoreRows(copy);
+  }
+  function dropRestoreRow(savedId: string) {
+    if (!restoreRowsRef.current.some((item) => item.saved.id === savedId)) return;
+    writeRestoreRows(restoreRowsRef.current.filter((item) => item.saved.id !== savedId));
+  }
+  /** Replace one pending row with the real session, without waiting for a second list IPC. */
+  function applyRestoredSession(savedId: string, snapshot: WorkbenchSession) {
+    if (!firstSeenAt.current.has(snapshot.id)) firstSeenAt.current.set(snapshot.id, snapshot.startedAt ?? Date.now());
+    pendingRestored.current.set(snapshot.id, snapshot);
+    setSessions((current) => {
+      const index = current.findIndex((item) => item.id === snapshot.id);
+      if (index < 0) return [...current, snapshot];
+      const copy = [...current];
+      copy[index] = { ...copy[index], ...snapshot };
+      return copy;
+    });
+    dropRestoreRow(savedId);
+    setArrangement((current) => remapArrangement(current, { [savedId]: snapshot.id }));
+    // The selection already belongs to a live session the user chose: leave it alone.
+    if (allSessionsRef.current.some((item) => item.id === selectedIdRef.current)) return;
+    if (restoreSelectionTaken.current && restorePreferred.current !== savedId) return;
+    restoreSelectionTaken.current = true;
+    setSelectedId(snapshot.id);
+  }
   async function applyRestoreReport(report: import('../../types/launch').WorkbenchRestoreReport, selectedRestoreId?: string) {
     // Older preview bridges may not implement restoration.
     if (!report || !report.restored || !Array.isArray(report.failures)) return;
-    setRestoreFailures(current => selectedRestoreId
-      ? [...current.filter(item => item.session.id !== selectedRestoreId), ...report.failures]
-      : report.failures);
+    // A failure keeps its saved record and its own retry; the other rows are untouched.
+    for (const failure of report.failures) {
+      if (!failure?.session?.id || report.restored[failure.session.id]) continue;
+      markRestoreRowFailed(failure.session, failure.detail, Array.isArray(failure.candidates) ? failure.candidates : []);
+    }
     if (!Object.keys(report.restored).length) return;
-    setArrangement(current => remapArrangement(current, report.restored));
-    const listed = await native.listWorkbenchSessions();
-    applyListedSessions(listed);
-    setSelectedId(current => {
-      let previous: string | null = null;
-      try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
-      return (selectedRestoreId && report.restored[selectedRestoreId]) || (current && report.restored[current]) || (previous && report.restored[previous]) || current || listed[0]?.id || null;
+    writeRestoreRows(restoreRowsRef.current.filter((row) => !report.restored[row.saved.id]));
+    setArrangement((current) => remapArrangement(current, report.restored));
+    // The per-record events already delivered their snapshots. Only a record whose event never
+    // arrived (an older bridge) needs one list read as a completeness correction.
+    const missing = Object.keys(report.restored).filter((oldId) => !allSessionsRef.current.some((item) => item.id === report.restored[oldId]));
+    if (missing.length) applyListedSessions(await native.listWorkbenchSessions());
+    setSelectedId((current) => {
+      const mapped = (selectedRestoreId && report.restored[selectedRestoreId]) || (current && report.restored[current]);
+      if (mapped) return mapped;
+      const preferred = restorePreferred.current;
+      if (preferred && report.restored[preferred] && !restoreSelectionTaken.current) {
+        restoreSelectionTaken.current = true;
+        return report.restored[preferred];
+      }
+      return current ?? null;
     });
   }
   async function restoreLocalSessions() {
     if (restoring) return;
     setRestoring(true);
     setRestoreError('');
+    writeRestoreRows(restoreRowsRef.current.map((row) => row.stage === 'failed' ? row : { ...row, stage: 'queued', detail: '' }));
+    restoreSelectionTaken.current = false;
+    restoreStages.current.clear();
     try { await applyRestoreReport(await native.restoreWorkbenchSessions()); }
     catch (value) { setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext'))); }
     finally { setRestoring(false); }
   }
+  /** Retry one saved record on its own: a failure never re-runs the other rows. */
+  async function retryRestoreRow(row: RestoreRow, nativeId: string | null = null): Promise<boolean> {
+    const savedId = row.saved.id;
+    setRestoringIds((current) => new Set(current).add(savedId));
+    setRestoreRowStage(savedId, 'starting');
+    setRestoreError('');
+    try {
+      const report = await native.restoreWorkbenchSession(savedId, nativeId);
+      await applyRestoreReport(report, savedId);
+      if (report?.restored?.[savedId]) return true;
+      const failure = report?.failures?.find((item) => item.session?.id === savedId);
+      // An older bridge that answers neither keeps the row, but never leaves it spinning.
+      if (!failure) markRestoreRowFailed(row.saved, t('sessions.restoreFailed'), []);
+      return false;
+    } catch (value) {
+      markRestoreRowFailed(row.saved, formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')), row.candidates);
+      return false;
+    } finally {
+      setRestoringIds((current) => { const next = new Set(current); next.delete(savedId); return next; });
+    }
+  }
   async function restoreChosenCandidate(nativeId: string) {
     const choice = restoreChoice;
     if (!choice || restoring) return;
-    setRestoring(true);
+    const row = restoreRowsRef.current.find((item) => item.saved.id === choice.session.id);
+    if (!row) { setRestoreChoice(null); return; }
     setRestoreChoiceError('');
-    try {
-      const report = await native.restoreWorkbenchSession(choice.session.id, nativeId);
-      await applyRestoreReport(report, choice.session.id);
-      if (report.restored[choice.session.id]) {
-        setRestoreChoice(null);
-        return;
-      }
-      const failure = report.failures.find(item => item.session.id === choice.session.id);
-      if (failure) setRestoreChoice(failure);
-      setRestoreChoiceError(failure?.detail ?? t('sessions.restoreFailed'));
-    } catch (value) {
-      setRestoreChoiceError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')));
-    } finally { setRestoring(false); }
+    const done = await retryRestoreRow(row, nativeId);
+    if (done) { setRestoreChoice(null); return; }
+    const failed = restoreRowsRef.current.find((item) => item.saved.id === choice.session.id);
+    setRestoreChoiceError(failed?.detail ?? t('sessions.restoreFailed'));
   }
   async function reconnectLocalSession(session: WorkbenchSession) {
     if (busy || restoring || session.running) return;
@@ -589,11 +698,58 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setActionError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')));
     } finally { setBusy(''); setRestoring(false); }
   }
+  // The saved records arrive beside the in-memory list: the pending rows are on screen before
+  // any session has been restored. A bridge that does not answer this read keeps the old batch.
   useEffect(() => {
     if (!active || !nativeAvailable || autoLocalRestoreAttempted.current) return;
     autoLocalRestoreAttempted.current = true;
-    void restoreLocalSessions();
+    let alive = true;
+    void native.listWorkbenchRestoreSessions().then((saved) => {
+      if (!alive) return;
+      if (!Array.isArray(saved)) { void restoreLocalSessions(); return; }
+      const rows = toRestoreRows(saved.filter((item) => !!item && typeof item.id === 'string'));
+      if (rows.length) {
+        const known = new Set(restoreRowsRef.current.map((row) => row.saved.id));
+        writeRestoreRows([...restoreRowsRef.current, ...rows.filter((row) => !known.has(row.saved.id))]);
+        void restoreLocalSessions();
+      }
+    }).catch(() => { if (alive) void restoreLocalSessions(); })
+      .finally(() => { if (alive) setRestoreListReady(true); });
+    return () => { alive = false; };
   }, [active]);
+  // Each saved record publishes its own stages. A restored record becomes a real session at
+  // once; a failed one keeps the record and its retry, and never blocks the others.
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    void listen<WorkbenchRestoreEvent>('cliora:workbench-restore', (event) => {
+      if (!alive) return;
+      const payload = event.payload;
+      if (!payload || typeof payload.restoreId !== 'string' || typeof payload.savedSessionId !== 'string') return;
+      const rank = RESTORE_STAGE_RANK[payload.stage];
+      if (!rank) return;
+      const key = payload.restoreId + ':' + payload.savedSessionId;
+      const seen = restoreStages.current.get(key) ?? 0;
+      // A repeated stage, a step backwards, or anything after the final stage is a late
+      // duplicate of a record that already settled.
+      if (rank <= seen || seen >= RESTORE_STAGE_RANK.restored) return;
+      restoreStages.current.set(key, rank);
+      if (restoreStages.current.size > 512) restoreStages.current.clear();
+      if (payload.stage === 'restored') {
+        if (payload.session && typeof payload.session.id === 'string') applyRestoredSession(payload.savedSessionId, payload.session);
+        else dropRestoreRow(payload.savedSessionId);
+        return;
+      }
+      if (payload.stage === 'failed') {
+        const row = restoreRowsRef.current.find((item) => item.saved.id === payload.savedSessionId);
+        if (row) markRestoreRowFailed(row.saved, payload.detail || t('sessions.restoreFailed'), Array.isArray(payload.candidates) ? payload.candidates : []);
+        return;
+      }
+      setRestoreRowStage(payload.savedSessionId, payload.stage === 'starting' ? 'starting' : 'discovering');
+    }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
+    return () => { alive = false; stop?.(); };
+  }, [t]);
   useEffect(() => {
     if (!selectedId || restoring) return;
     try { localStorage.setItem('cliora:workbench-selected', selectedId); } catch { /* optional */ }
@@ -990,7 +1146,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       {t(state.at ? 'sessions.promptsStale' : 'sessions.promptsFailed')}
     </StatusBanner>;
   }
-  const showEmpty = !loading && !scopedSessions.length;
+  // An empty list is the real empty state only once the saved records are known to be empty:
+  // otherwise the pending rows (or one line of them) would flash away and come back.
+  const restorePreviewKnown = !nativeAvailable || restoreListReady;
+  const showEmpty = !loading && !scopedSessions.length && !restoreRows.length && restorePreviewKnown;
   const runningCount = scopedSessions.filter((item) => item.running).length;
   const endedCount = scopedSessions.filter(sessionConfirmedEnded).length;
 
@@ -2587,12 +2746,34 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         {writeRecoveryNeeded && !stageSession && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{t('common.remoteWrite.unknown')}</p></div><div className={styles.bannerActions}><Button size="sm" onClick={() => requestWriteRecovery(remoteTargetId)}>{t('common.remoteWrite.open')}</Button></div></div>}
         {failure && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.launchFailed')}</strong><p>{failure.detail}</p><p>{t('sessions.failureHint')}</p></div><div className={styles.bannerActions}><Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => void retry()} disabled={retrying}>{retrying ? t('sessions.loading') : t('sessions.retry')}</Button><Button size="sm" onClick={() => onFailure(null)}>{t('sessions.dismissBanner')}</Button></div></div>}
         {actionError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{actionError}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setActionError('')} aria-label={t('common.dismissError')} /></div>}
-        {restoring && <div className={styles.banner} role="status"><p>{t('sessions.restoringPrevious')}</p></div>}
         {restoreError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{restoreError}</p></div><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button></div>}
-        {restoreFailures.map(({ session, detail, candidates = [] }) => <div className={styles.banner} role="status" key={session.id}>
-          <div className={styles.bannerCopy}><strong>{t('sessions.restorePending', { tool: tools.find(tool => tool.id === session.toolId)?.name ?? session.toolId })}</strong><p>{displayPath(session.directory)} · {detail}</p></div>
-          <div className={styles.bannerActions}>{candidates.length > 0 && <Button variant="primary" size="sm" disabled={restoring} onClick={() => { setRestoreChoice({ session, detail, candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}<Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button><Button size="sm" disabled={restoring} onClick={() => void native.forgetWorkbenchRestore(session.id).then(() => setRestoreFailures(current => current.filter(item => item.session.id !== session.id))).catch(value => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button></div>
-        </div>)}
+        {restoreRows.length > 0 && <div className={styles.restoreQueue} aria-label={t('sessions.restoreQueueLabel')} data-restore-queue={restoreRows.length}>
+          <div className={styles.restoreQueueHead}>
+            <span>{t('sessions.restoreQueueLabel')}</span>
+            {!scopedSessions.length && terminalTools.length > 0 && <Button size="sm" icon={<Icon name="plus" size={13} />} onClick={() => openNewSessionDialog()}>{t('sessions.newSession')}</Button>}
+          </div>
+          {restoreRows.map((row) => {
+            const failed = row.stage === 'failed';
+            const rowBusy = restoringIds.has(row.saved.id);
+            return <div className={styles.restoreRow} key={row.saved.id} data-restore-row={row.saved.id} data-stage={row.stage}>
+              <span className={styles.restoreRowIcon} aria-hidden="true"><ToolIcon toolId={row.saved.toolId} size={18} /></span>
+              <div className={styles.restoreRowCopy}>
+                <strong>{t('sessions.restorePending', { tool: tools.find(tool => tool.id === row.saved.toolId)?.name ?? row.saved.toolId })}</strong>
+                <p className={styles.restoreRowPath} title={row.saved.directory}>{displayPath(row.saved.directory)}</p>
+                <p className={styles.restoreRowStage} data-state={failed ? 'failed' : 'pending'} role={failed ? 'alert' : 'status'}>
+                  {failed ? row.detail : row.stage === 'starting' ? t('sessions.restoreStarting') : row.stage === 'discovering' ? t('sessions.restoreDiscovering') : t('sessions.restoreQueued')}
+                </p>
+              </div>
+              {failed
+                ? <div className={styles.restoreRowActions}>
+                  {row.candidates.length > 0 && <Button variant="primary" size="sm" disabled={rowBusy} onClick={() => { setRestoreChoice({ session: row.saved, detail: row.detail, candidates: row.candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}
+                  <Button size="sm" disabled={rowBusy} icon={<Icon name="refresh" size={13} />} onClick={() => void retryRestoreRow(row)}>{t('sessions.retryRestore')}</Button>
+                  <Button size="sm" disabled={rowBusy} onClick={() => void native.forgetWorkbenchRestore(row.saved.id).then(() => dropRestoreRow(row.saved.id)).catch((value) => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button>
+                </div>
+                : <span className={styles.restoreRowWait} aria-hidden="true" />}
+            </div>;
+          })}
+        </div>}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setNotice('')} aria-label={t('common.dismissError')} /></div>}
         {worktreeOps.map((operation) => <div key={operation.operationId} className={styles.banner} data-tone={operation.stage === 'failed' ? undefined : 'status'} data-worktree-op={operation.operationId} data-stage={operation.stage} role={operation.stage === 'failed' ? 'alert' : 'status'}>
           <div className={styles.bannerCopy}>

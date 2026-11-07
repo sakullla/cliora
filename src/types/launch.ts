@@ -114,6 +114,18 @@ export type WorkbenchSession = { id: string; toolId: string; projectId: string |
 export type SavedWorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; startedAt: number; stoppedAt: number | null; nativeId: string | null; accountId: string | null; contextId: string | null };
 export type WorkbenchRestoreCandidate = { nativeId: string; title: string; startedAt: number | null; updatedAt: number | null };
 export type WorkbenchRestoreReport = { restored: Record<string, string>; failures: Array<{ session: SavedWorkbenchSession; detail: string; candidates: WorkbenchRestoreCandidate[] }> };
+export type WorkbenchRestoreStage = 'discovering' | 'starting' | 'restored' | 'failed';
+/** `cliora:workbench-restore` payload: one saved record's own progress, sent per record. */
+export type WorkbenchRestoreEvent = {
+  /** One restore call shares one id; a retry or a manual restore gets its own. */
+  restoreId: string;
+  savedSessionId: string;
+  stage: WorkbenchRestoreStage;
+  detail: string | null;
+  candidates: WorkbenchRestoreCandidate[];
+  /** The real session, once this record is restored. */
+  session: WorkbenchSession | null;
+};
 export type TrayStatus = { available: boolean; error: string | null };
 
 export type TrayRepairTarget = {
