@@ -116,7 +116,7 @@ export default {
     projectModeHint: 'Used by project cards and tray recent projects. CLIs without a YOLO flag still use normal mode.',
     projectModeAria: 'Project default launch mode',
     worktreeLaunch: 'Start preference',
-    worktreeLaunchHint: 'Start here stays in the selected directory. A new worktree is only for new sessions and duplicates in a Git repository.',
+    worktreeLaunchHint: 'The initial choice for a new session. Start here stays in the selected directory; a new worktree is only for new sessions and duplicates in a Git repository, and each new session can still choose for itself.',
     worktreeDirect: 'Start here',
     worktreeNew: 'New worktree',
     worktreeUnrecognized: 'Unrecognized format',

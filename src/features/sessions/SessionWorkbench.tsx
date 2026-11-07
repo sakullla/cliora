@@ -19,7 +19,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchSettings, Project, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeLedgerEntry } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -56,6 +56,39 @@ const documentVisible = () => document.visibilityState !== 'hidden';
 function sameDirectory(left: string, right: string): boolean {
   const norm = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
   return norm(left) === norm(right) || norm(left).toLowerCase() === norm(right).toLowerCase();
+}
+
+/** Whether `child` is `root` itself or lies inside it. A sibling such as `repo-other`
+ *  never matches `repo`, so a running session guard cannot pass for the wrong checkout. */
+function withinDirectory(root: string, child: string): boolean {
+  const norm = (value: string) => {
+    const clean = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[a-zA-Z]:/.test(clean) ? clean.toLowerCase() : clean;
+  };
+  const base = norm(root);
+  const target = norm(child);
+  if (!base || !target) return false;
+  return target === base || target.startsWith(base + '/');
+}
+
+/** One explicit worktree creation or prepare retry the user is waiting for.
+ *  It is a progress notice, not a task store: nothing else is persisted. */
+type WorktreeOperation = {
+  operationId: string;
+  stage: WorktreeLaunchStage;
+  worktreePath: string | null;
+  branch: string | null;
+  sessionId: string | null;
+  error: string | null;
+  /** Repeated when a creation failed before any worktree existed. */
+  request: LaunchRequest;
+  /** A prepare retry reuses an existing worktree: it never reports `creating` again. */
+  retry: boolean;
+};
+const WORKTREE_STAGE_RANK: Record<WorktreeLaunchStage, number> = { creating: 0, preparing: 1, starting: 2, succeeded: 3, failed: 4 };
+
+function newWorktreeOperationId(): string {
+  return 'wt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
 /** A remote session's library prompts come from that host. `null` means the host is not known yet. */
@@ -341,6 +374,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
   // Keep only the current menu's list, rather than every repository ever visited.
   const [gitWorktrees, setGitWorktrees] = useState<{ anchor: string; trees: WorkbenchWorktree[] } | null>(null);
+  // An empty list and a failed read are different facts: the menu says which one it saw.
+  const [worktreeListState, setWorktreeListState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [worktreeListError, setWorktreeListError] = useState('');
+  const [worktreeStatuses, setWorktreeStatuses] = useState<Map<string, { status: WorktreeMenuStatus | null; error: string }>>(() => new Map());
+  const [worktreeStatusSeq, setWorktreeStatusSeq] = useState(0);
   const gitReadPending = useRef<Promise<unknown> | null>(null);
   const codeReadPending = useRef<Promise<unknown> | null>(null);
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
@@ -378,6 +416,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [cleanupError, setCleanupError] = useState('');
   const [cleanupBusy, setCleanupBusy] = useState('');
   const prepareRequest = useRef(0);
+  // The per-launch worktree choice; the saved preference only seeds it.
+  const [dialogPlace, setDialogPlace] = useState<'direct' | 'worktree'>('direct');
+  const dialogPlaceTouched = useRef(false);
+  const [dialogDirectory, setDialogDirectory] = useState<string | null>(null);
+  const [baseChoice, setBaseChoice] = useState<WorktreeBase | null>(null);
+  const [baseRef, setBaseRef] = useState('');
+  const [basePreview, setBasePreview] = useState<WorktreeBasePreview | null>(null);
+  const [baseBusy, setBaseBusy] = useState(false);
+  const [baseError, setBaseError] = useState('');
+  const [baseStale, setBaseStale] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [branchDraft, setBranchDraft] = useState('');
+  const baseRequest = useRef(0);
+  const [worktreeOps, setWorktreeOps] = useState<WorktreeOperation[]>([]);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -676,6 +728,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }, [reviewStates]);
   useEffect(() => {
     setGitWorktrees(null);
+    setWorktreeListState('idle');
+    setWorktreeListError('');
+    setWorktreeStatuses(new Map());
   }, [worktreeAnchor]);
   useEffect(() => {
     if (!nativeAvailable || !gitTarget) return;
@@ -710,6 +765,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       });
       const worktrees = context.then(() => {
         if (!alive || !worktreeAnchor || (!worktreeMenuOpen && !needsFallback)) return;
+        setWorktreeListState((current) => current === 'loading' ? current : 'loading');
         return native.gitWorktrees(worktreeAnchor).then((list) => {
           if (!alive) return;
           const next = Array.isArray(list) ? list : [];
@@ -717,6 +773,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             if (current?.anchor === worktreeAnchor && JSON.stringify(current.trees) === JSON.stringify(next)) return current;
             return { anchor: worktreeAnchor, trees: next };
           });
+          setWorktreeListState('ready');
+          setWorktreeListError('');
+        }).catch((error) => {
+          // A read failure is not an empty repository: keep whatever list was read last
+          // and let the menu retry instead of claiming there is nothing to switch to.
+          if (!alive) return;
+          setWorktreeListState('error');
+          setWorktreeListError(formatFailure(error, t('sessions.worktreeListFailed'), t('sessions.failureHint')));
         });
       }).catch(() => {});
       const pending = Promise.all([context, worktrees]);
@@ -766,6 +830,81 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     void read();
     return () => { alive = false; };
   }, [gitTarget, worktreeAnchor, codeStatusNeeded, returnedReviewId, codeReadSeq, nativeAvailable, focusToken, reviewSignal?.token]);
+  // Status is read only for the checkouts the open menu shows, in small batches.
+  // Closing the menu or switching repository drops every late answer.
+  useEffect(() => {
+    if (!nativeAvailable || !worktreeMenuOpen || !worktreeAnchor) return;
+    const trees = worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees.trees : [];
+    let alive = true;
+    // Nothing is known yet: an unread status must never render as "0 changes".
+    setWorktreeStatuses(new Map());
+    if (!trees.length) return;
+    const readOne = async (path: string) => {
+      try {
+        const value = await native.worktreeStatus(path);
+        if (!alive) return;
+        const usable = !!value && typeof value === 'object' && (value.state === 'ready' || value.state === 'unknown');
+        setWorktreeStatuses((current) => {
+          const map = new Map(current);
+          map.set(path, usable ? { status: value, error: '' } : { status: null, error: t('sessions.worktreeStatusFailed') });
+          return map;
+        });
+      } catch (error) {
+        if (!alive) return;
+        setWorktreeStatuses((current) => {
+          const map = new Map(current);
+          map.set(path, { status: null, error: formatFailure(error, t('sessions.worktreeStatusFailed'), '') });
+          return map;
+        });
+      }
+    };
+    void (async () => {
+      for (let index = 0; index < trees.length && alive; index += 3) {
+        await Promise.all(trees.slice(index, index + 3).map((tree) => readOne(tree.path)));
+      }
+    })();
+    return () => { alive = false; };
+  }, [worktreeMenuOpen, worktreeAnchor, gitWorktrees, nativeAvailable, worktreeStatusSeq, t]);
+  // Real stages of an explicit creation. An event only updates an operation this page
+  // started; unknown or late ids are dropped and the command result stays final.
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    void listen<WorktreeLaunchEvent>('cliora:worktree-launch', (event) => {
+      if (!alive) return;
+      const payload = event.payload;
+      if (!payload || typeof payload.operationId !== 'string') return;
+      setWorktreeOps((current) => {
+        const index = current.findIndex((item) => item.operationId === payload.operationId);
+        if (index < 0) return current;
+        const operation = current[index];
+        // A finished operation is final; a late event must not reopen it.
+        if (operation.stage === 'succeeded') return current;
+        // A prepare retry reuses an existing worktree, so the planner's leading
+        // "creating" must not move the row backwards.
+        if (operation.retry && payload.stage === 'creating') return current;
+        if (payload.stage !== 'failed' && WORKTREE_STAGE_RANK[payload.stage] < WORKTREE_STAGE_RANK[operation.stage]) return current;
+        const copy = [...current];
+        copy[index] = {
+          ...operation,
+          stage: payload.stage,
+          worktreePath: payload.worktreePath ?? operation.worktreePath,
+          branch: payload.branch ?? operation.branch,
+          sessionId: payload.sessionId ?? operation.sessionId,
+          error: payload.stage === 'failed' ? payload.error ?? operation.error : operation.error,
+        };
+        return copy;
+      });
+    }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
+    return () => { alive = false; stop?.(); };
+  }, []);
+  // A finished creation is announced once and then leaves the stage on its own.
+  useEffect(() => {
+    if (!worktreeOps.some((item) => item.stage === 'succeeded')) return;
+    const timer = window.setTimeout(() => setWorktreeOps((current) => current.filter((item) => item.stage !== 'succeeded')), 4000);
+    return () => window.clearTimeout(timer);
+  }, [worktreeOps]);
   // 审查状态由 native 注册表判定，这里只读取最新一条。打开菜单、收到回执和切换会话
   // 都会重读，因此被新链接取代的旧请求不会被迟到的回执改写。
   useEffect(() => {
@@ -1383,6 +1522,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string }, targetOverride?: string) {
     setDialogError('');
+    // Each opening starts from the saved preference; the dialog decides this launch.
+    dialogPlaceTouched.current = false;
+    setDialogPlace(launchSettings?.worktreeLaunchError ? 'direct' : launchSettings?.worktreeLaunch === 'worktree' ? 'worktree' : 'direct');
+    setBaseChoice(null);
+    setBaseRef('');
+    setBasePreview(null);
+    setBaseError('');
+    setBaseStale(false);
+    setAdvancedOpen(false);
+    setBranchDraft('');
     if (targetOverride && targetOverride !== activeTargetId) setActiveTargetId(targetOverride);
     let nextToolId = effectiveLaunchToolId;
     if (prefill?.projectId) {
@@ -1519,6 +1668,31 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const resume = !remoteLaunch && resumeLatest && !!selectedLaunchTool?.resumeLatestAvailable;
       const taskLine = firstTaskLine(promptText);
       setLaunchMenuOpen(false);
+      // The dialog's own choice decides this launch. It only falls back to the
+      // saved preference when that preference picked the worktree and no base can
+      // be confirmed, which keeps the historical plain-directory behaviour.
+      const wantsWorktree = !remoteLaunch && !resume && useWorkbench && dialogPlace === 'worktree';
+      const target = wantsWorktree ? dialogPrepareDirectory() : null;
+      const confirmed = wantsWorktree && !!target && !!basePreview?.available;
+      const preferenceFallback = wantsWorktree && !confirmed && !dialogPlaceTouched.current;
+      if (wantsWorktree && !confirmed && !preferenceFallback) {
+        setDialogError(!target
+          ? t('sessions.worktreeNeedsFolder')
+          : baseError || basePreview?.reason || t('sessions.worktreeBaseUnavailable'));
+        return;
+      }
+      const branchName = branchDraft.trim();
+      const baseOf = (preview: WorktreeBasePreview): WorktreeBase => preview.kind === 'reference'
+        ? { kind: 'reference', reference: preview.reference ?? '' }
+        : { kind: preview.kind === 'head' ? 'head' : 'default' };
+      const worktreeIntent: WorktreeLaunchIntent = confirmed ? 'explicit' : preferenceFallback ? 'preference' : 'given';
+      // The preference picked the worktree, but no base could be confirmed here: say so
+      // instead of either failing the launch or silently pretending the base is known.
+      if (preferenceFallback && target) setNotice(t('sessions.worktreePreferenceFallback'));
+      const explicitBranch = confirmed && branchName ? branchName : undefined;
+      const baseOptions: { base?: WorktreeBase; branch?: string } = confirmed
+        ? { ...(basePreview ? { base: baseOf(basePreview) } : {}), ...(explicitBranch ? { branch: explicitBranch } : {}) }
+        : {};
       const request: LaunchRequest = {
         toolId: effectiveLaunchToolId,
         projectId,
@@ -1528,9 +1702,36 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
-        worktreeIntent: remoteLaunch || resume || !useWorkbench ? 'given' : 'preference',
+        worktreeIntent,
         ...(!remoteLaunch && !resume && useWorkbench && taskLine ? { taskText: taskLine } : {}),
       };
+      // An explicit creation runs in the background: the dialog closes at once,
+      // real stages arrive as events and no other session is blocked.
+      if (confirmed) {
+        const operationId = newWorktreeOperationId();
+        const watched = selectedIdRef.current;
+        const tracked: LaunchRequest = { ...request, worktree: { ...baseOptions, operationId } };
+        setWorktreeOps((current) => [...current, {
+          operationId,
+          stage: 'creating',
+          worktreePath: null,
+          branch: explicitBranch ?? null,
+          sessionId: null,
+          error: null,
+          request: tracked,
+          retry: false,
+        }]);
+        onFailure(null);
+        setNewDialogOpen(false);
+        setInitialPrompt('');
+        setDialogError('');
+        void native.launchCli(tracked).then((result) => {
+          settleWorktreeOperation(operationId, result, watched);
+        }).catch((error) => {
+          failWorktreeOperation(operationId, formatFailure(error, t('sessions.worktreeOpCreateFailed'), t('sessions.failureHint')));
+        });
+        return;
+      }
       const result = await native.launchCli(request);
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
       const opened = workbenchSessionId(result);
@@ -1548,6 +1749,73 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     } catch (value) {
       setDialogError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
     } finally { newLaunchPending.current = false; setLaunchingNew(false); refreshLedger(); }
+  }
+
+  /** A creation's command result is final: it converges the row even when no event
+   *  arrived, and never steals the selection the user made afterwards. */
+  function settleWorktreeOperation(operationId: string, result: LaunchResult, watched: string | null) {
+    const opened = workbenchSessionId(result);
+    setWorktreeOps((current) => current.map((item) => item.operationId === operationId
+      ? { ...item, stage: 'succeeded', sessionId: opened ?? item.sessionId }
+      : item));
+    if (result.warnings?.length) setNotice(result.warnings.join('\n'));
+    // Adopt the new session only if the user has not chosen another one since.
+    const adopt = () => { if (opened && selectedIdRef.current === watched) selectPendingSession(opened); };
+    void native.listWorkbenchSessions().then((listed) => {
+      if (Array.isArray(listed)) applyListedSessions(listed);
+      adopt();
+    }).catch(adopt);
+    refreshLedger();
+  }
+
+  function failWorktreeOperation(operationId: string, detail: string) {
+    setWorktreeOps((current) => current.map((item) => item.operationId === operationId
+      ? (item.stage === 'failed' ? (item.error ? item : { ...item, error: detail }) : { ...item, stage: 'failed', error: detail })
+      : item));
+    refreshLedger();
+  }
+
+  /** Retry only the environment step of the worktree that already exists: no new
+   *  branch or directory is allocated. */
+  function retryWorktreePrepare(operation: WorktreeOperation) {
+    const directory = operation.worktreePath;
+    if (!directory) return;
+    const operationId = newWorktreeOperationId();
+    const watched = selectedIdRef.current;
+    const request: LaunchRequest = {
+      ...operation.request,
+      worktreeIntent: 'prepareRetry',
+      worktree: { ...(operation.request.worktree ?? {}), operationId, retryDirectory: directory },
+    };
+    setWorktreeOps((current) => [
+      ...current.filter((item) => item.operationId !== operation.operationId),
+      { ...operation, operationId, stage: 'preparing', error: null, sessionId: null, request, retry: true },
+    ]);
+    void native.launchCli(request)
+      .then((result) => settleWorktreeOperation(operationId, result, watched))
+      .catch((error) => failWorktreeOperation(operationId, formatFailure(error, t('sessions.worktreeOpPrepareFailed'), t('sessions.failureHint'))));
+  }
+
+  /** A creation that never produced a worktree starts over, with a fresh operation id. */
+  function retryWorktreeCreate(operation: WorktreeOperation) {
+    const operationId = newWorktreeOperationId();
+    const watched = selectedIdRef.current;
+    const request: LaunchRequest = { ...operation.request, worktree: { ...(operation.request.worktree ?? {}), operationId } };
+    setWorktreeOps((current) => [
+      ...current.filter((item) => item.operationId !== operation.operationId),
+      { ...operation, operationId, stage: 'creating', error: null, sessionId: null, request },
+    ]);
+    void native.launchCli(request)
+      .then((result) => settleWorktreeOperation(operationId, result, watched))
+      .catch((error) => failWorktreeOperation(operationId, formatFailure(error, t('sessions.worktreeOpCreateFailed'), t('sessions.failureHint'))));
+  }
+
+  function worktreeStageText(operation: WorktreeOperation): string {
+    if (operation.stage === 'creating') return t('sessions.worktreeOpCreating');
+    if (operation.stage === 'preparing') return t('sessions.worktreeOpPreparing');
+    if (operation.stage === 'starting') return t('sessions.worktreeOpStarting');
+    if (operation.stage === 'succeeded') return t('sessions.worktreeOpSucceeded');
+    return operation.worktreePath ? t('sessions.worktreeOpPrepareFailed') : t('sessions.worktreeOpCreateFailed');
   }
 
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean, directoryIntent?: 'given' | 'preference') {
@@ -1957,6 +2225,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   async function cleanWorktree(row: WorktreeLedgerEntry) {
     if (cleanupBusy) return;
+    // A running local session keeps this checkout in use. Native refuses the same
+    // case; saying it here names the one action that unblocks the removal.
+    const inUse = sessions.find((session) => session.running
+      && !session.projectId?.startsWith('remote:')
+      && !!session.directory
+      && withinDirectory(row.worktreePath, session.directory));
+    if (inUse) {
+      setCleanupError(t('sessions.worktreeCleanupRunning', { tool: toolName(inUse) }));
+      return;
+    }
     setCleanupBusy(row.worktreePath);
     setCleanupError('');
     try {
@@ -2027,6 +2305,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     try {
       const next = await native.setWorktreeLaunch(mode);
       setLaunchSettings(next);
+      // The dialog keeps showing the same choice it just saved, so the visible
+      // selection and the saved preference never disagree.
+      dialogPlaceTouched.current = false;
+      setDialogPlace(mode);
       setLaunchMenuOpen(false);
       setMenu(null);
     } catch (value) {
@@ -2050,6 +2332,68 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const availableRemoteProjects = useMemo(() => activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId).sort((a, b) => b.updatedAt - a.updatedAt), [activeTargetId, remoteProjects]);
   const activeRemoteTarget = remoteSshEnabled && activeTargetId !== 'local' ? remoteTargets.find((target) => target.id === activeTargetId) ?? null : null;
   const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
+  // The dialog reads its base from the directory it will really use; the home
+  // entry has none, so a worktree cannot be chosen there.
+  useEffect(() => {
+    if (!newDialogOpen) { setDialogDirectory(null); return; }
+    setDialogDirectory(dialogPrepareDirectory());
+  }, [newDialogOpen, workspaceValue, availableProjects, activeRemoteTarget]);
+  // The confirmed base and its short commit are visible before anything is written.
+  useEffect(() => {
+    if (!nativeAvailable || !newDialogOpen || dialogPlace !== 'worktree' || !dialogDirectory) {
+      setBasePreview(null);
+      setBaseBusy(false);
+      return;
+    }
+    const request = ++baseRequest.current;
+    setBaseBusy(true);
+    setBaseError('');
+    void native.worktreeBasePreview(dialogDirectory, baseChoice).then((value) => {
+      if (baseRequest.current !== request) return;
+      setBasePreview(value && typeof value === 'object' ? value : null);
+      setBaseBusy(false);
+    }).catch((error) => {
+      if (baseRequest.current !== request) return;
+      setBasePreview(null);
+      setBaseBusy(false);
+      setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
+    });
+  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, t]);
+
+  function chooseDialogPlace(place: 'direct' | 'worktree') {
+    dialogPlaceTouched.current = true;
+    setDialogPlace(place);
+    setBaseError('');
+    setBaseStale(false);
+    setDialogError('');
+  }
+
+  /** Refresh only the selected remote base. A failure keeps the cached preview on
+   *  screen so the user can retry or deliberately continue with it. */
+  async function updateBase() {
+    if (!dialogDirectory || baseBusy) return;
+    const request = ++baseRequest.current;
+    setBaseBusy(true);
+    setBaseError('');
+    try {
+      const value = await native.worktreeBaseUpdate(dialogDirectory, baseChoice);
+      if (baseRequest.current !== request) return;
+      setBasePreview(value && typeof value === 'object' ? value : null);
+      setBaseStale(false);
+    } catch (error) {
+      if (baseRequest.current !== request) return;
+      setBaseError(formatFailure(error, t('sessions.worktreeBaseUpdateFailed'), t('sessions.failureHint')));
+    } finally {
+      if (baseRequest.current === request) setBaseBusy(false);
+    }
+  }
+
+  function applyBaseRef() {
+    const reference = baseRef.trim();
+    setBaseError('');
+    setBaseStale(false);
+    setBaseChoice(reference ? { kind: 'reference', reference } : null);
+  }
   // A picked folder belongs to the host it was picked on.
   useEffect(() => { setCustomRemotePath(''); }, [activeTargetId]);
   useEffect(() => {
@@ -2250,6 +2594,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <div className={styles.bannerActions}>{candidates.length > 0 && <Button variant="primary" size="sm" disabled={restoring} onClick={() => { setRestoreChoice({ session, detail, candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}<Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button><Button size="sm" disabled={restoring} onClick={() => void native.forgetWorkbenchRestore(session.id).then(() => setRestoreFailures(current => current.filter(item => item.session.id !== session.id))).catch(value => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button></div>
         </div>)}
         {notice && <div className={styles.banner} data-tone="status" role="status"><div className={styles.bannerCopy}><p>{notice}</p></div><IconButton size="sm" icon={<Icon name="close" size={14} />} onClick={() => setNotice('')} aria-label={t('common.dismissError')} /></div>}
+        {worktreeOps.map((operation) => <div key={operation.operationId} className={styles.banner} data-tone={operation.stage === 'failed' ? undefined : 'status'} data-worktree-op={operation.operationId} data-stage={operation.stage} role={operation.stage === 'failed' ? 'alert' : 'status'}>
+          <div className={styles.bannerCopy}>
+            <strong>{operation.branch ? t('sessions.gitWorktree', { name: operation.branch }) : t('sessions.worktreePlaceNew')}</strong>
+            <p>{operation.stage === 'failed' && operation.error ? operation.error : worktreeStageText(operation)}</p>
+            {operation.worktreePath && operation.stage !== 'succeeded' && <p className={styles.worktreeOpPath}>{shortPath(displayPath(operation.worktreePath))}</p>}
+          </div>
+          <div className={styles.bannerActions}>
+            {operation.stage === 'failed' && operation.worktreePath && <Button variant="primary" size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => retryWorktreePrepare(operation)}>{t('sessions.worktreeRetryPrepare')}</Button>}
+            {operation.stage === 'failed' && !operation.worktreePath && <Button size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => retryWorktreeCreate(operation)}>{t('sessions.worktreeRetryCreate')}</Button>}
+            {(operation.stage === 'failed' || operation.stage === 'succeeded') && <Button size="sm" onClick={() => setWorktreeOps((current) => current.filter((item) => item.operationId !== operation.operationId))}>{t('sessions.dismissBanner')}</Button>}
+          </div>
+        </div>)}
 
         {mountedSessions.length > 0 && (() => {
           // Terminals stay mounted while the selection briefly points at a session the list has not
@@ -2399,13 +2755,32 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 {(gitLabel || canOpenGitMenu) && (canOpenGitMenu && current ? <span className={styles.worktreeSwitch} onKeyDown={(event) => { if (event.key === 'Escape' && worktreeMenuOpen) { event.stopPropagation(); setWorktreeMenuOpen(false); } }}>
                   <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu'), t('sessions.reviewGroup')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu') + '\n' + t('sessions.reviewGroup')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
                   {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.worktreeMenu')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
-                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeMenu')}</span><em>{worktrees.length}</em></div>
-                    {worktrees.map((tree) => <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
-                      <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} />
-                      <span className={styles.worktreeName}>{tree.name}</span>
-                      {tree.branch && <span className={styles.worktreeBranch}>{tree.branch}</span>}
-                      {!tree.current && <Icon name="plus" size={12} className={styles.worktreeOpen} />}
-                    </button>)}
+                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeMenu')}</span>{worktreeListState === 'ready' && <em>{worktrees.length}</em>}</div>
+                    {worktreeListState === 'loading' && !gitWorktrees && <p className={styles.menuHint} role="status">{t('sessions.worktreeListLoading')}</p>}
+                    {worktreeListState === 'error' && <p className={styles.menuError} role="alert">{worktreeListError}</p>}
+                    {worktreeListState === 'ready' && !worktrees.length && <p className={styles.menuHint}>{t('sessions.worktreeListEmpty')}</p>}
+                    {worktrees.map((tree) => {
+                      // An unread status stays unknown: it is never shown as "no changes".
+                      const read = worktreeStatuses.get(tree.path);
+                      const status = read?.status ?? null;
+                      const changes = status?.state === 'ready' && status.uncommittedFiles != null
+                        ? (status.uncommittedFiles > 0 ? t('sessions.worktreeStatusUncommitted', { count: status.uncommittedFiles }) : t('sessions.worktreeStatusClean'))
+                        : '';
+                      return <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} data-status={!read ? 'loading' : status ? status.state : 'unknown'} data-environment={status?.environment ?? undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
+                        <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} />
+                        <span className={styles.worktreeName}>{tree.name}</span>
+                        {tree.branch && <span className={styles.worktreeBranch}>{tree.branch}</span>}
+                        {status?.environment === 'unprepared' && <span className={styles.worktreeEnv}>{t('sessions.worktreeEnvUnprepared')}</span>}
+                        {changes
+                          ? <span className={styles.worktreeChanges}>{changes}</span>
+                          : read ? <span className={styles.worktreeChanges} title={read.error || status?.reason || undefined}>{t('sessions.worktreeStatusUnknown')}</span> : null}
+                        {!tree.current && <Icon name="plus" size={12} className={styles.worktreeOpen} />}
+                      </button>;
+                    })}
+                    {(worktreeListState === 'error' || [...worktreeStatuses.values()].some((entry) => !entry.status)) && <button type="button" role="menuitem" onClick={() => { setGitReadSeq((seq) => seq + 1); setWorktreeStatusSeq((seq) => seq + 1); }}>
+                      <Icon name="refresh" size={13} />
+                      <span>{worktreeListState === 'error' ? t('sessions.worktreeListRetry') : t('sessions.worktreeStatusRetry')}</span>
+                    </button>}
                     <span className={styles.reviewDivider} role="separator" />
                     <div className={styles.reviewGroup} role="group" aria-label={t('sessions.reviewGroup')} onClick={(event) => event.stopPropagation()}>
                       <span className={styles.reviewLabel} role="presentation">{t('sessions.reviewGroup')}</span>
@@ -2524,6 +2899,31 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             }
           }} /></div>
         </div>
+        {!activeRemoteTarget && !resumeLatest && <div className={styles.dialogField}>
+          <span className={styles.fieldLabel}>{t('sessions.worktreePlace')}</span>
+          <div className={styles.placeChoices} role="radiogroup" aria-label={t('sessions.worktreePlace')}>
+            <button type="button" role="radio" aria-checked={dialogPlace === 'direct'} className={styles.placeChoice} onClick={() => chooseDialogPlace('direct')}><Icon name="folder" size={14} /><span>{t('sessions.worktreePlaceDirect')}</span><span className={styles.placeCheck} aria-hidden="true"><Icon name="check" size={12} /></span></button>
+            <button type="button" role="radio" aria-checked={dialogPlace === 'worktree'} className={styles.placeChoice} onClick={() => chooseDialogPlace('worktree')}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreePlaceNew')}</span><span className={styles.placeCheck} aria-hidden="true"><Icon name="check" size={12} /></span></button>
+          </div>
+          {dialogPlace === 'worktree' && <div className={styles.basePanel} data-busy={baseBusy || undefined}>
+            <div className={styles.baseRow}>
+              <span className={styles.baseLabel}>{t('sessions.worktreeBase')}</span>
+              <code className={styles.baseRef} title={basePreview?.reference ?? undefined}>{baseBusy && !basePreview ? t('sessions.worktreeBaseLoading') : basePreview?.available ? basePreview.reference ?? '' : '—'}</code>
+              {basePreview?.available && basePreview.shortCommit && <code className={styles.baseOid} title={basePreview.commit ?? undefined}>{t('sessions.worktreeBaseOid', { short: basePreview.shortCommit })}</code>}
+              {basePreview?.available && basePreview.remote && <Button size="sm" disabled={baseBusy} onClick={() => void updateBase()}>{baseBusy ? t('sessions.worktreeBaseUpdating') : t('sessions.worktreeBaseUpdate')}</Button>}
+              <Button size="sm" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen((value) => !value)}>{advancedOpen ? t('sessions.worktreeAdvancedHide') : t('sessions.worktreeAdvanced')}</Button>
+            </div>
+            {basePreview?.degraded && <p className={styles.baseHint}>{basePreview.degraded}</p>}
+            {baseStale && <p className={styles.baseHint} role="status">{t('sessions.worktreeBaseStale')}</p>}
+            {basePreview && !basePreview.available && <p className={styles.baseError} role="alert">{basePreview.reason || t('sessions.worktreeBaseUnavailable')}</p>}
+            {baseError && <div className={styles.baseError} role="alert"><span>{baseError}</span><span className={styles.baseActions}><Button size="sm" disabled={baseBusy} onClick={() => void updateBase()}>{t('sessions.worktreeBaseRetry')}</Button>{basePreview && <Button size="sm" onClick={() => { setBaseError(''); setBaseStale(true); }}>{t('sessions.worktreeBaseUseCache')}</Button>}</span></div>}
+            {!!basePreview?.candidates.length && <div className={styles.baseCandidates} role="group" aria-label={t('sessions.worktreeBaseCandidates')}>{basePreview.candidates.map((candidate) => <button key={candidate} type="button" className={styles.baseCandidate} onClick={() => { setBaseRef(candidate); setBaseChoice({ kind: 'reference', reference: candidate }); setBaseError(''); }}>{candidate}</button>)}</div>}
+            {advancedOpen && <div className={styles.baseAdvanced}>
+              <div className={styles.baseField}><span>{t('sessions.worktreeRef')}</span><input value={baseRef} placeholder={t('sessions.worktreeRefPlaceholder')} aria-label={t('sessions.worktreeRef')} onChange={(event) => setBaseRef(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); applyBaseRef(); } }} /><Button size="sm" onClick={applyBaseRef}>{t('sessions.worktreeRefApply')}</Button></div>
+              <div className={styles.baseField}><span>{t('sessions.worktreeBranch')}</span><input value={branchDraft} placeholder={t('sessions.worktreeBranchPlaceholder')} aria-label={t('sessions.worktreeBranch')} onChange={(event) => setBranchDraft(event.target.value)} /></div>
+            </div>}
+          </div>}
+        </div>}
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>

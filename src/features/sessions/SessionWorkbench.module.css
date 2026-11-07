@@ -1243,10 +1243,10 @@
 button.gitChip:hover:not(:disabled),
 button.gitChip[aria-expanded='true'] { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 button.gitChip:disabled { opacity: .55; cursor: default; }
-.worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: grid; gap: 1px; min-width: 220px; max-width: 340px; max-height: 320px; overflow: auto; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-lg); background: var(--term-float); box-shadow: 0 20px 48px -18px var(--term-shadow), 0 2px 8px -2px var(--term-shadow); animation: wbDrop 140ms var(--ease); }
+.worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; min-width: 220px; max-width: 340px; max-height: 320px; overflow: auto; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-lg); background: var(--term-float); box-shadow: 0 20px 48px -18px var(--term-shadow), 0 2px 8px -2px var(--term-shadow); animation: wbDrop 140ms var(--ease); }
 .worktreeMenuHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-1_5) var(--space-1_5); color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 .worktreeMenuHead em { padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-well); font-style: normal; font-variant-numeric: tabular-nums; line-height: 16px; }
-.worktreeItem { display: flex; align-items: center; gap: var(--space-1_5); width: 100%; min-height: 30px; padding: var(--space-1) var(--space-2); border: 0; box-shadow: none; border-radius: var(--radius-sm); background: transparent; color: var(--term-text-2); font-size: var(--fs-caption); text-align: left; cursor: pointer; }
+.worktreeItem { display: flex; align-items: center; gap: var(--space-1_5); width: 100%; min-width: 0; min-height: 30px; padding: var(--space-1) var(--space-2); border: 0; box-shadow: none; border-radius: var(--radius-sm); background: transparent; color: var(--term-text-2); font-size: var(--fs-caption); text-align: left; cursor: pointer; }
 .worktreeItem:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
 .worktreeItem[data-current],
 .worktreeItem[data-current]:disabled { background: color-mix(in srgb, var(--term-accent) 9%, transparent); color: var(--term-fg); opacity: 1; cursor: default; }
@@ -1738,3 +1738,36 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .reviewStatusLine span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reviewError { margin: 0; padding: 0 var(--space-2) var(--space-1); color: var(--term-danger); font-size: 12px; }
 .reviewHint { margin: 0; padding: 0 var(--space-2) var(--space-1); color: var(--term-text-3); font-size: 11px; line-height: 1.4; }
+
+/* Place choice and base line in the new-session dialog --------------- */
+.placeChoices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.placeChoice { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; min-height: 34px; padding: 0 var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text-2); font-size: var(--fs-caption); text-align: left; white-space: normal; box-shadow: none; }
+.placeChoice:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
+.placeChoice[aria-checked='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); color: var(--text); }
+.placeChoice:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.placeChoice > :global(svg) { flex: none; color: var(--text-3); }
+.placeChoice[aria-checked='true'] > :global(svg) { color: var(--accent); }
+.placeChoice > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.placeCheck { display: inline-flex; flex: none; margin-left: auto; color: var(--accent); opacity: 0; }
+.placeChoice[aria-checked='true'] .placeCheck { opacity: 1; }
+.basePanel { display: grid; gap: var(--space-1_5); min-width: 0; margin-top: var(--space-1); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.baseRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2); min-width: 0; }
+.baseLabel { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
+.baseRef { min-width: 0; max-width: 100%; overflow: hidden; font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.baseOid { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--surface); color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
+.baseHint { margin: 0; color: var(--text-3); font-size: 11px; line-height: 1.4; }
+.baseError { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: 0; color: var(--danger); font-size: 12px; line-height: 1.4; }
+.baseActions { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }
+.baseCandidates { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.baseCandidate { padding: 0 var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface); color: var(--text-2); font-family: var(--font-mono); font-size: 11px; box-shadow: none; }
+.baseCandidate:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.baseAdvanced { display: grid; gap: var(--space-1_5); }
+.baseField { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; }
+.baseField > span { flex: none; color: var(--text-3); font-size: var(--fs-micro); }
+.baseField input { flex: 1 1 160px; min-width: 0; }
+/* The operation banner reuses the existing stage banner; only the path needs a rule. */
+.worktreeOpPath { min-width: 0; overflow: hidden; font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+/* Menu status: an unread value stays unknown, and long names shrink first. */
+.worktreeEnv { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-warning); font-size: 10px; }
+.worktreeChanges { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--term-text-3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.worktreeItem[data-status='unknown'] .worktreeChanges { color: var(--term-warning); }

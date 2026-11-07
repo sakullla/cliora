@@ -361,15 +361,89 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             harness.__worktreeLaunchError = null;
             return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal', worktreeLaunch: args.mode, worktreeLaunchError: null };
           }
+          if (command === 'worktree_base_preview' || command === 'worktree_base_update') {
+            const harness = window as unknown as {
+              __basePreview?: Record<string, unknown>;
+              __baseUpdateFails?: boolean;
+              __baseReads?: unknown[];
+              __baseUpdates?: unknown[];
+            };
+            const call = { directory: args.directory, base: args.base ?? null };
+            if (command === 'worktree_base_preview') harness.__baseReads = [...(harness.__baseReads ?? []), call];
+            else harness.__baseUpdates = [...(harness.__baseUpdates ?? []), call];
+            if (command === 'worktree_base_update' && harness.__baseUpdateFails) throw new Error('更新远程基点失败：网络不可用');
+            const base = args.base as { kind?: string; reference?: string } | null;
+            const reference = base?.kind === 'reference' ? base.reference ?? null : base?.kind === 'head' ? 'HEAD' : 'origin/main';
+            return {
+              kind: base?.kind ?? 'default',
+              reference,
+              commit: 'c0ffee1c0ffee1c0ffee1c0ffee1c0ffee1c0ff',
+              shortCommit: 'c0ffee1',
+              remote: reference && reference.includes('/') ? reference.split('/')[0] : null,
+              branch: reference && reference.includes('/') ? reference.split('/').slice(1).join('/') : null,
+              degraded: null,
+              candidates: [],
+              available: true,
+              reason: null,
+              ...(harness.__basePreview ?? {}),
+            };
+          }
+          if (command === 'worktree_status') {
+            const harness = window as unknown as {
+              __worktreeStatus?: Record<string, Record<string, unknown>>;
+              __worktreeStatusFails?: string[];
+              __statusReads?: string[];
+            };
+            harness.__statusReads = [...(harness.__statusReads ?? []), args.directory];
+            if ((harness.__worktreeStatusFails ?? []).includes(args.directory)) throw new Error('无法读取工作树状态');
+            return harness.__worktreeStatus?.[args.directory] ?? {
+              worktreePath: args.directory, managed: true, environment: 'prepared', branch: null, headOid: null, uncommittedFiles: 0, state: 'ready', reason: null,
+            };
+          }
           if (command === 'launch_cli') {
-            const harness = window as unknown as { __launches?: unknown[] };
-            harness.__launches = [...(harness.__launches ?? []), args.request];
-            const id = `launched-${harness.__launches.length}`;
-            sessions.unshift({ id, toolId: args.request.toolId, projectId: args.request.projectId, directory: args.request.directory || 'C:/work', mode: args.request.mode || 'normal', running: true, exitCode: null, startedAt: Date.now() });
-            return { toolId: args.request.toolId, projectId: args.request.projectId, mode: args.request.mode || 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
+            const harness = window as unknown as {
+              __launches?: unknown[];
+              __worktreeScript?: Array<{ event?: { stage: string; worktreePath?: string; branch?: string; error?: string }; hold?: boolean; fail?: string }>;
+              __worktreeRelease?: () => void;
+            };
+            const request = args.request as Record<string, any>;
+            harness.__launches = [...(harness.__launches ?? []), request];
+            const operationId: string | undefined = request?.worktree?.operationId;
+            const emit = (stage: string, extra: Record<string, unknown> = {}) => {
+              if (!operationId) return;
+              bridge.handlers[bridge.listens['cliora:worktree-launch']]?.({ payload: { operationId, stage, worktreePath: null, branch: null, sessionId: null, error: null, ...extra } });
+            };
+            const settle = (directory: string) => {
+              const id = `launched-${harness.__launches!.length}`;
+              sessions.unshift({ id, toolId: request.toolId, projectId: request.projectId, directory, mode: request.mode || 'normal', running: true, exitCode: null, startedAt: Date.now() });
+              return { toolId: request.toolId, projectId: request.projectId, mode: request.mode || 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
+            };
+            const explicit = request?.worktreeIntent === 'explicit' || request?.worktreeIntent === 'prepareRetry';
+            if (!explicit) return settle(request.directory || 'C:/work');
+            // A scripted explicit creation: real stage events, optional hold, failure or success.
+            let directory = request.worktree?.retryDirectory ?? request.directory ?? 'C:/work-feat';
+            for (const step of harness.__worktreeScript ?? []) {
+              if (step.event) {
+                directory = step.event.worktreePath ?? directory;
+                emit(step.event.stage, {
+                  ...(step.event.worktreePath ? { worktreePath: step.event.worktreePath } : {}),
+                  ...(step.event.branch ? { branch: step.event.branch } : {}),
+                  ...(step.event.error ? { error: step.event.error } : {}),
+                });
+              }
+              if (step.hold) await new Promise<void>((resolve) => { harness.__worktreeRelease = resolve; });
+              if (step.fail) throw new Error(step.fail);
+            }
+            const result = settle(directory);
+            emit('succeeded', { worktreePath: directory, sessionId: result.sessionId });
+            return result;
           }
           if (command === 'list_projects') return (window as unknown as { __projects?: unknown[] }).__projects ?? [];
-          if (command === 'git_worktrees') return (window as unknown as { __worktrees?: unknown[] }).__worktrees ?? [];
+          if (command === 'git_worktrees') {
+            const harness = window as unknown as { __worktrees?: unknown[]; __worktreeReadFails?: boolean };
+            if (harness.__worktreeReadFails) throw new Error('无法读取工作树列表');
+            return harness.__worktrees ?? [];
+          }
           if (command === 'list_worktree_ledger') return ((window as unknown as { __ledger?: unknown[] }).__ledger ?? []).map((item) => ({ ...(item as object) }));
           if (command === 'worktree_prepare') {
             const harness = window as unknown as { __prepareReads?: string[]; __prepareCommand?: string | null };
@@ -2506,4 +2580,182 @@ test('settings can save one prepare command for a project repository', async ({ 
   await input.fill('pnpm i');
   await input.press('Enter');
   await expect(page.locator('.setting-row').filter({ has: input }).getByRole('alert')).toContainText('保存失败');
+});
+test('a new worktree shows its base and is created without blocking other sessions', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __twoSessions: true,
+      __projects: [{ id: 'p1', name: 'Shop', path: 'C:/work', available: true, preferredTool: null, lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }],
+      // A scripted creation: real stages, then the test decides when it finishes.
+      __worktreeScript: [
+        { event: { stage: 'creating' } },
+        { event: { stage: 'preparing', worktreePath: 'C:/shop-feat', branch: 'feat-hello' } },
+        { hold: true },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  const place = dialog.getByRole('radiogroup', { name: '启动位置' });
+  // The saved preference (direct) seeds the choice, and the plain path needs no setup.
+  await expect(place.getByRole('radio', { name: '当前目录' })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Shop/ }).click();
+  await place.getByRole('radio', { name: '新建工作树' }).click();
+  // The repository default and its real short commit are visible before any write.
+  await expect(dialog.locator('code').filter({ hasText: 'origin/main' })).toBeVisible();
+  await expect(dialog.locator('code').filter({ hasText: 'c0ffee1' })).toBeVisible();
+  // Advanced options hold the ref and the branch name; the default creation needs neither.
+  await expect(dialog.getByLabel('基点 ref')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '高级选项' }).click();
+  await expect(dialog.getByLabel('基点 ref')).toBeVisible();
+  await dialog.getByLabel('分支名').fill('feat-hello');
+  await dialog.getByLabel('初始提示词（可选）').fill('feat: hello?');
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+
+  // The dialog closes at once; the real stage and the worktree are on screen instead.
+  await expect(dialog).toBeHidden();
+  const operation = page.locator('[data-worktree-op]');
+  await expect(operation).toHaveAttribute('data-stage', 'preparing');
+  await expect(operation).toContainText('正在准备环境');
+  await expect(operation).toContainText('shop-feat');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, any>> }).__launches.at(-1))).toMatchObject({
+    worktreeIntent: 'explicit',
+    directory: null,
+    taskText: 'feat: hello?',
+    worktree: { base: { kind: 'default' }, branch: 'feat-hello' },
+  });
+  expect(await page.evaluate(() => (window as unknown as { __launches: Array<Record<string, any>> }).__launches.at(-1)!.worktree.operationId)).toMatch(/^wt-/);
+  // Other sessions keep working while the worktree is prepared.
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.evaluate(() => (window as unknown as { __worktreeRelease: () => void }).__worktreeRelease());
+  // The finished creation must not pull the user away from the session they chose.
+  await expect(page.getByRole('tablist', { name: '会话列表' }).getByRole('tab', { name: /Claude Code/ })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: unknown[] }).__launches.length)).toBe(1);
+  await expect(page.locator('[data-pane-session^="launched-"]')).toHaveCount(1);
+});
+
+test('a failed environment setup retries inside the worktree it already created', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __projects: [{ id: 'p1', name: 'Shop', path: 'C:/work', available: true, preferredTool: null, lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }],
+      __worktreeScript: [
+        { event: { stage: 'creating' } },
+        { event: { stage: 'preparing', worktreePath: 'C:/shop-feat', branch: 'feat-hello' } },
+        { event: { stage: 'failed', worktreePath: 'C:/shop-feat', branch: 'feat-hello', error: '环境准备失败：npm ci 退出码 1' } },
+        { fail: '环境准备失败：npm ci 退出码 1' },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Shop/ }).click();
+  await dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: '新建工作树' }).click();
+  await expect(dialog.locator('code').filter({ hasText: 'origin/main' })).toBeVisible();
+  await dialog.getByRole('button', { name: '启动会话' }).click();
+
+  const operation = page.locator('[data-worktree-op]');
+  await expect(operation).toHaveAttribute('data-stage', 'failed');
+  await expect(operation).toContainText('npm ci 退出码 1');
+  // The failure keeps the created directory so the retry reuses it.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: unknown[] }).__launches.length)).toBe(1);
+  await page.evaluate(() => Object.assign(window, {
+    __worktreeScript: [
+      { event: { stage: 'preparing', worktreePath: 'C:/shop-feat', branch: 'feat-hello' } },
+      { event: { stage: 'starting', worktreePath: 'C:/shop-feat', branch: 'feat-hello' } },
+    ],
+  }));
+  await operation.getByRole('button', { name: '重试准备' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, any>> }).__launches.at(-1))).toMatchObject({
+    worktreeIntent: 'prepareRetry',
+    worktree: { retryDirectory: 'C:/shop-feat' },
+  });
+  // The retry starts in the same worktree: no second branch or directory is asked for.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, any>> }).__launches.length)).toBe(2);
+  await expect(page.locator('[data-pane-session^="launched-"]')).toHaveCount(1);
+});
+
+test('the worktree menu shows environment, real changes and unknown on a failed read', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __gitContext: { branch: 'feat-hello', commit: null, worktree: null, repository: 'repo' },
+      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work', branch: 'feat-hello', environment: 'unprepared' }],
+      __worktrees: [
+        { name: 'repo', branch: 'main', path: 'C:/repo', current: false },
+        { name: 'feat-hello', branch: 'feat-hello', path: 'C:/work', current: true },
+        { name: 'external', branch: 'a-very-long-branch-name-that-should-still-fit-inside-the-menu', path: 'C:/external', current: false },
+      ],
+      __worktreeStatus: {
+        'C:/repo': { worktreePath: 'C:/repo', managed: false, environment: null, branch: 'main', headOid: null, uncommittedFiles: 3, state: 'ready', reason: null },
+        'C:/work': { worktreePath: 'C:/work', managed: true, environment: 'unprepared', branch: 'feat-hello', headOid: null, uncommittedFiles: 0, state: 'ready', reason: null },
+      },
+      __worktreeStatusFails: ['C:/external'],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /在工作树中新开会话/ }).click();
+  const menu = page.getByRole('menu', { name: '在工作树中新开会话' });
+  await expect(menu.getByRole('menuitemradio', { name: /^repo/ })).toContainText('3 处未提交改动');
+  const current = menu.getByRole('menuitemradio', { name: /feat-hello/ });
+  await expect(current).toContainText('环境未准备');
+  await expect(current).toContainText('没有未提交改动');
+  // A read failure stays unknown instead of claiming zero changes, and can be retried.
+  const external = menu.getByRole('menuitemradio', { name: /external/ });
+  await expect(external).toContainText('改动未知');
+  await expect(external).toHaveAttribute('data-status', 'unknown');
+  await expect(menu.getByRole('menuitem', { name: '重试状态' })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __statusReads: string[] }).__statusReads.length)).toBe(3);
+  const widths = await menu.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+  expect(widths.scroll <= widths.client).toBe(true);
+  await page.setViewportSize({ width: 640, height: 760 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('a failed worktree list is retried instead of shown as an empty repository', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __gitContext: { branch: 'main', commit: null, worktree: null, repository: 'repo' },
+      __worktrees: [
+        { name: 'repo', branch: 'main', path: 'C:/repo', current: true },
+        { name: 'other', branch: 'feat-other', path: 'C:/other', current: false },
+      ],
+      __worktreeReadFails: true,
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: /在工作树中新开会话|Git 分支/ }).click();
+  const menu = page.getByRole('menu', { name: '在工作树中新开会话' });
+  await expect(menu.getByRole('alert')).toContainText('无法读取工作树列表');
+  await expect(menu.getByRole('menuitemradio')).toHaveCount(0);
+  await page.evaluate(() => { (window as unknown as { __worktreeReadFails?: boolean }).__worktreeReadFails = false; });
+  await menu.getByRole('menuitem', { name: '重试读取' }).click();
+  await expect(menu.getByRole('menuitemradio', { name: /feat-other/ })).toBeVisible();
+});
+
+test('removing a worktree that a running session still uses names the session', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work', branch: 'feat-hello', environment: 'prepared' }],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  const menu = page.getByRole('menu', { name: '终端操作' });
+  await menu.getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  await expect(menu.getByRole('alert')).toContainText('运行中的会话 Codex');
+  await expect(page.getByRole('dialog', { name: '清理这个工作树？' })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __cleanups?: unknown[] }).__cleanups ?? [])).toEqual([]);
 });

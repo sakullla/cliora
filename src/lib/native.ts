@@ -9,7 +9,7 @@ import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccou
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreePrepareCommand } from '../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
@@ -381,7 +381,14 @@ export const native = {
   getRemoteNativeHistory: (targetId: string, id: string, options?: RemoteOperationOptions) => remoteCommand<HistoryDetail>('get_remote_native_history', { targetId, id }, 'read', options),
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
+  /** Outside a repository this is an empty list; a repository that cannot be read rejects. */
   gitWorktrees: (directory: string) => command<WorkbenchWorktree[]>('git_worktrees', { directory }),
+  /** The base a creation would really use, with its short commit; `base` absent means the repository default. */
+  worktreeBasePreview: (directory: string, base?: WorktreeBase | null) => command<WorktreeBasePreview>('worktree_base_preview', { directory, base: base ?? null }),
+  /** Refresh only the selected remote base. A failure leaves the cached preview and the main checkout unchanged. */
+  worktreeBaseUpdate: (directory: string, base?: WorktreeBase | null) => command<WorktreeBasePreview>('worktree_base_update', { directory, base: base ?? null }),
+  /** Ledger environment plus real Git status of one checkout; unknown stays unknown, never zero. */
+  worktreeStatus: (directory: string) => command<WorktreeMenuStatus>('worktree_status', { directory }),
   /** Real branch, HEAD and full uncommitted count; the native side rejects remote sessions. */
   workbenchCodeStatus: (sessionId: string) => command<WorkbenchCodeStatus>('workbench_code_status', { sessionId }),
   /** Every call creates a new reviewId: an explicit retry never reuses the previous one. */

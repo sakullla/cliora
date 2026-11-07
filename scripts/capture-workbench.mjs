@@ -179,7 +179,49 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           if (command === 'replay_workbench_session') return transcripts[args.sessionId] ?? transcripts.s1;
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
-          if (command === 'git_worktrees') return [{ name: 'cliora', branch: 'main', path: '/repo/cliora', current: false }, { name: 'cliora-polish', branch: 'feature/workbench-polish', path: '/repo/cliora-polish', current: true }];
+          if (command === 'git_worktrees') {
+            if (window.__captureWorktreeReadFails) throw { message: '无法读取工作树列表：git status 失败', action: '检查仓库后重试。' };
+            return [
+              { name: 'cliora', branch: 'main', path: '/repo/cliora', current: false },
+              { name: 'cliora-polish', branch: 'feature/workbench-polish', path: '/repo/cliora-polish', current: true },
+              { name: 'cliora-long', branch: 'feature/workbench-polish-with-a-long-branch-name', path: '/repo/cliora-long', current: false },
+            ];
+          }
+          if (command === 'worktree_base_preview' || command === 'worktree_base_update') {
+            if (command === 'worktree_base_update' && window.__captureBaseUpdateFails) throw { message: '更新远程基点失败：网络不可用', action: '重试或使用缓存基点。' };
+            const base = args.base ?? null;
+            const reference = base && base.kind === 'reference' ? base.reference : 'origin/main';
+            return { kind: (base && base.kind) || 'default', reference, commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', shortCommit: 'a1b2c3d',
+              remote: 'origin', branch: reference.split('/').slice(1).join('/'), degraded: null, candidates: [], available: true, reason: null };
+          }
+          if (command === 'worktree_status') {
+            if ((window.__captureStatusFails ?? []).includes(args.directory)) throw { message: '无法读取工作树状态：git 返回非零退出码' };
+            const preset = (window.__captureStatus ?? {})[args.directory];
+            if (preset) return preset;
+            if (args.directory === '/repo/cliora') return { worktreePath: args.directory, managed: false, environment: null, branch: 'main', headOid: null, uncommittedFiles: 2, state: 'ready', reason: null };
+            return { worktreePath: args.directory, managed: true, environment: 'unprepared', branch: 'feature/workbench-polish', headOid: null, uncommittedFiles: 0, state: 'ready', reason: null };
+          }
+          if (command === 'list_worktree_ledger') return window.__captureLedger ?? [];
+          if (command === 'worktree_prepare') return null;
+          if (command === 'cleanup_worktree') return { removed: false, needsConfirmation: false, detail: '' };
+          if (command === 'launch_cli') {
+            const request = args.request ?? {};
+            const operationId = request.worktree && request.worktree.operationId;
+            const stage = (name, extra = {}) => {
+              if (!operationId) return;
+              bridge.handlers[bridge.listens['cliora:worktree-launch']]?.({ payload: { operationId, stage: name, worktreePath: null, branch: null, sessionId: null, error: null, ...extra } });
+            };
+            const directory = (request.worktree && request.worktree.retryDirectory) || 'C:\\Projects\\cliora-polish';
+            for (const step of window.__worktreeScript ?? []) {
+              if (step.event) stage(step.event.stage, { worktreePath: step.event.worktreePath ?? null, branch: step.event.branch ?? null, error: step.event.error ?? null });
+              if (step.hold) await new Promise((resolve) => { window.__releaseWorktree = resolve; });
+            }
+            if (window.__worktreeScriptFail) throw { message: window.__worktreeScriptFail, action: '修正环境准备命令后重试。' };
+            const id = 'launched-worktree';
+            sessions.unshift({ id, toolId: request.toolId ?? 'codex', projectId: request.projectId ?? 'cliora', directory, mode: request.mode ?? 'normal', running: true, exitCode: null, startedAt: now });
+            stage('succeeded', { worktreePath: directory, sessionId: id });
+            return { toolId: request.toolId ?? 'codex', projectId: request.projectId ?? 'cliora', mode: request.mode ?? 'normal', terminal: 'workbench', status: 'session_started', sessionId: id };
+          }
           if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
           if (command === 'list_remote_library_items') {
             if (args.kind !== 'prompt') return [];
@@ -441,6 +483,68 @@ for (const width of widths) {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
     await stage.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
     await page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') }).waitFor();
+  });
+  const openWorktreeDialog = async (page) => {
+    await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
+    const dialog = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
+    await dialog.getByRole('button', { name: copy('工作目录 / 项目', 'Working directory / project'), exact: true }).click();
+    await page.getByRole('option', { name: /栖点/ }).click();
+    await dialog.getByRole('radiogroup', { name: copy('启动位置', 'Start in') }).getByRole('radio', { name: copy('新建工作树', 'New worktree') }).click();
+    return dialog;
+  };
+  // A new worktree: the repository default and its short commit are visible, and the
+  // advanced ref plus branch name stay optional.
+  await shot('workbench-worktree-new-' + theme + '-' + width, theme, width, async page => {
+    const dialog = await openWorktreeDialog(page);
+    await dialog.locator('code').filter({ hasText: 'origin/main' }).first().waitFor();
+    await dialog.getByRole('button', { name: copy('高级选项', 'Advanced'), exact: true }).click();
+    await dialog.getByLabel(copy('基点 ref', 'Base ref'), { exact: true }).fill('origin/develop');
+    await dialog.getByRole('button', { name: copy('使用此 ref', 'Use this ref'), exact: true }).click();
+    await dialog.locator('code').filter({ hasText: 'origin/develop' }).first().waitFor();
+    await dialog.getByLabel(copy('分支名', 'Branch name'), { exact: true }).fill('feat/checkout-flow');
+  });
+  // Environment setup failed: the worktree is kept and the retry stays in that directory.
+  await shot('workbench-worktree-preparing-failed-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate(() => {
+      window.__worktreeScript = [
+        { event: { stage: 'creating' } },
+        { event: { stage: 'preparing', worktreePath: 'C:\\Projects\\cliora-polish', branch: 'feat/checkout-flow' } },
+        { event: { stage: 'failed', worktreePath: 'C:\\Projects\\cliora-polish', branch: 'feat/checkout-flow', error: '环境准备失败：npm ci 退出码 1' } },
+      ];
+      window.__worktreeScriptFail = '环境准备失败：npm ci 退出码 1';
+    });
+    const dialog = await openWorktreeDialog(page);
+    await dialog.locator('code').filter({ hasText: 'origin/main' }).first().waitFor();
+    await dialog.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('feat: 结算流程');
+    await dialog.getByRole('button', { name: copy('启动会话', 'Start session'), exact: true }).click();
+    await page.locator('[data-worktree-op][data-stage="failed"]').waitFor();
+    await page.getByRole('button', { name: copy('重试准备', 'Retry setup'), exact: true }).waitFor();
+  });
+  // Menu status: real changes, unprepared environment, and an unread status kept unknown.
+  await shot('workbench-worktree-status-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate(() => { window.__captureStatusFails = ['/repo/cliora-long']; });
+    await page.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
+    const menu = page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') });
+    await menu.waitFor();
+    await menu.getByRole('menuitem', { name: copy('重试状态', 'Retry status'), exact: true }).waitFor();
+  });
+  // A failed list read is an error with a retry, not an empty repository.
+  await shot('workbench-worktree-list-failed-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate(() => { window.__captureWorktreeReadFails = true; });
+    await page.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
+    const menu = page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') });
+    await menu.getByRole('alert').waitFor();
+    await menu.getByRole('menuitem', { name: copy('重试读取', 'Read again'), exact: true }).waitFor();
+  });
+  // Cleanup refused because a running session still uses that checkout.
+  await shot('workbench-worktree-cleanup-running-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate(() => {
+      window.__captureLedger = [{ mainCheckout: 'C:\\Projects\\cliora', worktreePath: 'C:\\Projects\\cliora', branch: 'feature/workbench-polish', environment: 'unprepared' }];
+    });
+    await page.getByRole('button', { name: copy('更多终端操作', 'More terminal actions') }).click();
+    const menu = page.getByRole('menu', { name: copy('终端操作', 'Terminal actions') });
+    await menu.getByRole('menuitem', { name: /清理 feature\/workbench-polish|Remove feature\/workbench-polish/ }).click();
+    await menu.getByRole('alert').waitFor();
   });
   await shot('workbench-metrics-' + theme + '-' + width, theme, width, async page => {
     // Objective layout evidence: clipped text, toolbar overflow, muted-copy contrast and the

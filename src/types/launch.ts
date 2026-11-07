@@ -7,6 +7,68 @@ export type TerminalPreset = { id: string; label: string; program: string; args:
 export type WorktreeLaunchMode = 'direct' | 'worktree';
 export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; worktreeLaunch?: WorktreeLaunchMode | null; worktreeLaunchError?: string | null };
 
+/** Whether a launch may create a worktree. Only an explicit creation reports stages. */
+export type WorktreeLaunchIntent = 'given' | 'preference' | 'explicit' | 'prepareRetry';
+
+/** Which commit a new worktree starts from; `default` follows the repository's own trunk. */
+export type WorktreeBase =
+  | { kind: 'default' }
+  | { kind: 'head' }
+  | { kind: 'reference'; reference: string };
+
+/** What a creation will really start from, resolved by native Git before anything is written. */
+export type WorktreeBasePreview = {
+  kind: 'default' | 'head' | 'reference';
+  reference: string | null;
+  commit: string | null;
+  shortCommit: string | null;
+  /** Remote name when the base is a remote-tracking branch; the 更新 action targets it. */
+  remote: string | null;
+  branch: string | null;
+  /** Visible reason when the repository default could not be used unchanged. */
+  degraded: string | null;
+  /** Bases the user has to choose from when no default is identifiable. */
+  candidates: string[];
+  available: boolean;
+  reason: string | null;
+};
+
+/** Ledger environment plus real Git status of one checkout the menu shows. A missing
+ *  value is unknown, never zero changes or "prepared". */
+export type WorktreeMenuStatus = {
+  worktreePath: string | null;
+  managed: boolean;
+  environment: 'prepared' | 'unprepared' | null;
+  branch: string | null;
+  headOid: string | null;
+  uncommittedFiles: number | null;
+  state: 'ready' | 'unknown';
+  reason: string | null;
+};
+
+export type WorktreeLaunchStage = 'creating' | 'preparing' | 'starting' | 'succeeded' | 'failed';
+
+/** `cliora:worktree-launch` payload: only an explicit creation or a prepare retry sends it. */
+export type WorktreeLaunchEvent = {
+  operationId: string;
+  stage: WorktreeLaunchStage;
+  /** The worktree directory, once it exists. */
+  worktreePath: string | null;
+  branch: string | null;
+  sessionId: string | null;
+  error: string | null;
+};
+
+/** Options only an explicit creation or a prepare retry carries. */
+export type WorktreeLaunchOptions = {
+  base?: WorktreeBase;
+  /** An explicit branch name; a taken name is an error, never silently renamed. */
+  branch?: string;
+  operationId?: string;
+  /** The directory an earlier attempt created, for a prepare retry. */
+  retryDirectory?: string;
+};
+
 /** A new local workbench session may follow the saved worktree preference. */
 export function worktreeIntentForNewWorkbench(settings: LaunchSettings | null | undefined, options?: { desktop?: boolean; remote?: boolean; resume?: boolean }): 'given' | 'preference' {
   if (options?.desktop || options?.remote || options?.resume || settings?.selected !== 'workbench') return 'given';
@@ -32,7 +94,7 @@ export type Project = {
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };
-export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: 'given' | 'preference'; taskText?: string | null };
+export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
 /** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
 export type WorkbenchReplay = { dataBase64: string; endOffset: number; cols: number; rows: number };

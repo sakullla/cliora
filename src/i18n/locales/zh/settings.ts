@@ -116,7 +116,7 @@ export default {
     projectModeHint: '项目卡片和托盘最近项目使用。此 CLI 没有 YOLO 参数时仍用普通模式。',
     projectModeAria: '项目默认启动模式',
     worktreeLaunch: '启动偏好',
-    worktreeLaunchHint: '直接开始留在所选目录。新建工作树只用于 Git 仓库里的新会话和再开一个。',
+    worktreeLaunchHint: '新建会话的初始选择。直接开始留在所选目录；新建工作树只用于 Git 仓库里的新会话和再开一个，每次新建仍可单独改选。',
     worktreeDirect: '直接开始',
     worktreeNew: '新建工作树',
     worktreeUnrecognized: '格式无法识别',
