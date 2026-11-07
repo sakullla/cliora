@@ -1,5 +1,41 @@
 use super::*;
 
+#[test]
+fn sustained_output_does_not_double_the_retained_allocation() {
+    let mut replay = ReplayBuffer::new(256 * 1024);
+    let chunk = vec![b'x'; 64 * 1024];
+    for _ in 0..32 {
+        replay.push(&chunk);
+    }
+    assert_eq!(replay.bytes.len(), 256 * 1024);
+    assert!(replay.bytes.capacity() <= 256 * 1024, "capacity: {}", replay.bytes.capacity());
+}
+
+#[test]
+fn trimming_before_append_matches_stream_modes_and_boundaries() {
+    // Include deque wraparound, an oversized chunk, split escapes and UTF-8.
+    let input = "before\x1b[?1049h\x1b[?2004h中文\x1b]0;title\x07\x1b[38;2;10;20;30mred\x1b[?1049lafter".repeat(20);
+    for limit in [0, 1, 7, 31, 128] {
+        for chunk_size in [1, 3, 17, 256, input.len()] {
+            let mut replay = ReplayBuffer::new(limit);
+            let mut reference = ReplayBuffer::new(limit);
+            for chunk in input.as_bytes().chunks(chunk_size) {
+                replay.push(chunk);
+                // Previous append-then-trim behaviour, without the allocation policy.
+                reference.bytes.extend(chunk);
+                reference.end += chunk.len() as u64;
+                if reference.bytes.len() > limit {
+                    let dropped: Vec<u8> = reference.bytes.drain(..reference.bytes.len() - limit).collect();
+                    reference.front.feed(&dropped);
+                    reference.trim_boundary();
+                }
+                assert_eq!(replay.snapshot(), reference.snapshot(), "limit={limit}, chunk={chunk_size}");
+                assert!(replay.bytes.capacity() <= limit);
+            }
+        }
+    }
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }

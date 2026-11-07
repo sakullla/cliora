@@ -130,6 +130,9 @@ export default {
   noTerminalTools: '暂无可在终端运行的已托管 CLI 工具，请先在首页或设置中启用。',
 
   restartSession: '重新启动',
+  resumeSession: '恢复会话',
+  resumingSession: '正在恢复…',
+  resumeSessionHint: '重新连接原会话，保留对话上下文',
   restarting: '正在重启…',
   cloneSession: '再开一个',
   copyPath: '复制工作目录路径',

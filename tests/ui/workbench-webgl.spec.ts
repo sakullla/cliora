@@ -135,6 +135,74 @@ test('actual WebGL context loss falls back to DOM without retaining cursor timer
   expect(errors).toEqual([]);
 });
 
+test('warm renderer reuse expires and closing a warm terminal releases its timer and references', async ({ page }) => {
+  await installRenderer(page);
+  await page.clock.install();
+  expect(await page.evaluate(() => (window as any).__open())).toBe(true);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__originalCanvas = document.querySelector('.xterm-screen canvas:not(.xterm-link-layer)');
+    w.__current.lifecycle.suspend(true);
+  });
+  expect(await page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(0);
+  await page.evaluate(() => new Promise<void>(resolve => (window as any).__current.terminal.write('\x1b[?12h\x1b[6n', resolve)));
+  expect(await page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__input)).toMatch(/\x1b\[\d+;\d+R/);
+  await page.clock.runFor(4000);
+  expect(await page.evaluate(() => {
+    const w = window as any;
+    w.__current.lifecycle.activate();
+    return document.querySelector('.xterm-screen canvas:not(.xterm-link-layer)') === w.__originalCanvas;
+  })).toBe(true);
+  // The old deadline must not dispose a renderer that is visible again.
+  await page.clock.runFor(1500);
+  await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(1);
+  await page.evaluate(() => (window as any).__current.lifecycle.suspend(true));
+  await page.clock.runFor(5001);
+  await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(0);
+  await page.evaluate(() => {
+    const w = window as any;
+    delete w.__originalCanvas;
+    w.__current.lifecycle.activate();
+    w.__current.lifecycle.suspend(true);
+    w.__close();
+  });
+  await page.clock.runFor(100);
+  await assertClosedCollected(page);
+});
+
+test('only the most recently hidden WebGL renderer stays warm', async ({ page }) => {
+  await installRenderer(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__retained = [];
+    for (let index = 0; index < 5; index++) {
+      const host = document.createElement('div');
+      host.style.cssText = 'width:600px;height:200px';
+      document.body.append(host);
+      const terminal = new w.Terminal({ cols: 60, rows: 8 });
+      terminal.open(host);
+      const lifecycle = new w.TerminalWebglLifecycle(terminal, () => new w.WebglAddon.WebglAddon());
+      lifecycle.activate();
+      lifecycle.suspend(true);
+      host.hidden = true;
+      w.__retained.push({ terminal, lifecycle, host });
+    }
+  });
+  await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(1);
+  expect(await page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(0);
+  await page.evaluate(() => {
+    const w = window as any;
+    for (const { terminal, lifecycle, host } of w.__retained) {
+      lifecycle.dispose();
+      w.__closed.push(new WeakRef(terminal));
+      setTimeout(() => { terminal.dispose(); host.remove(); }, 0);
+    }
+    delete w.__retained;
+  });
+  await assertClosedCollected(page);
+});
+
 test('failed real WebGL activation retains DOM input and releases all three closed terminals', async ({ page }) => {
   await installRenderer(page);
   const errors: string[] = [];

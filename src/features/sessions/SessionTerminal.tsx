@@ -124,7 +124,7 @@ export function terminalYieldsToIme(event: { isComposing?: boolean; keyCode?: nu
   return !!event.isComposing || event.keyCode === 229 || event.key === 'Process' || event.key === 'Unidentified';
 }
 
-function decodeBase64(value: string): Uint8Array {
+function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
   if (!value) return new Uint8Array();
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -504,12 +504,14 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, label, active, keepRendererWarm = false, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
   label: string;
   active: boolean;
+  /** Allow a bounded warm renderer only while the workbench is visible. */
+  keepRendererWarm?: boolean;
   focused?: boolean;
   running: boolean;
   /** A remote PTY pays a round trip for every resize, so layout storms are collapsed. */
@@ -889,7 +891,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (disposed) return;
       ime.schedule();
       const buffer = term.buffer.active;
-      const snapshot = `${buffer.type}:${buffer.baseY}:${buffer.viewportY}:${term.rows}:${viewportRef.current?.clientHeight ?? 0}`;
+      const snapshot = activeRef.current ? `${buffer.type}:${buffer.baseY}:${buffer.viewportY}:${term.rows}:${viewportRef.current?.clientHeight ?? 0}` : '';
       // A spinner redraw usually leaves the scroll geometry unchanged. Avoid
       // scheduling a React commit for every parsed output chunk in that case.
       if (activeRef.current && snapshot !== scrollSnapshot && !scrollUiFrame) {
@@ -904,7 +906,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       // The public buffer reports the virtual viewport's authoritative position.
       // xterm 6 no longer uses a native DOM scrollTop for terminal history.
       const away = userScrollRef.current && isAwayFromBottom();
-      if (away) scheduleRepaint();
+      if (away && activeRef.current) scheduleRepaint();
       if (away === awayFromBottom) return;
       awayFromBottom = away;
       if (away) node.dataset.scrollAway = 'true';
@@ -1134,7 +1136,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       const encoded = typeof payload === 'string' ? payload : typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : '';
       const replayEnd = typeof payload === 'object' && payload && Number.isFinite(payload.endOffset) ? payload.endOffset : null;
       let snapshot = new Uint8Array(0);
-      try { snapshot = Uint8Array.from(decodeBase64(encoded)); }
+      try { snapshot = decodeBase64(encoded); }
       catch { snapshot = new Uint8Array(0); }
       const earlier = pending.current.drain(sessionId);
       const arrived = queued.splice(0);
@@ -1255,6 +1257,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     // A hidden live CLI must still receive DSR/DA responses from its own buffer.
     term.options.disableStdin = !running;
     if (term.textarea) term.textarea.disabled = !active || !running;
+    if (active) webglRef.current?.prepareActivation();
   }, [active, running]);
 
   useEffect(() => {
@@ -1270,9 +1273,9 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
     if (!running) ptyGridRef.current = { cols: 0, rows: 0 };
     if (!active) {
       linksRef.current?.dismiss();
-      // Only one terminal renders at a time; releasing the GPU context on exit
-      // keeps many mounted sessions within the browser's WebGL context budget.
-      webglRef.current?.release(false);
+      // A quick return reuses the last renderer. Leaving the workbench or hiding
+      // the window releases it immediately; the lifecycle bounds idle contexts.
+      webglRef.current?.suspend(keepRendererWarm);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -1291,7 +1294,7 @@ export function SessionTerminal({ sessionId, label, active, focused = active, ru
       if (running && focusedRef.current && !railTabFocused && !document.querySelector('dialog[open]')) term.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [active, running, fontSize, lineHeight, sessionId, bridge]);
+  }, [active, keepRendererWarm, running, fontSize, lineHeight, sessionId, bridge]);
 
   useEffect(() => {
     const term = termRef.current;

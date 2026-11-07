@@ -212,9 +212,27 @@ impl ReplayBuffer {
     /// Append output and return the stream offset of its first byte.
     pub fn push(&mut self, data: &[u8]) -> u64 {
         let start = self.end;
-        self.bytes.extend(data);
         self.end += data.len() as u64;
-        self.trim();
+        // Make room before appending: extending a full deque first doubles its
+        // allocation permanently, even though the overflow is immediately dropped.
+        let overflow = self.bytes.len().saturating_add(data.len()).saturating_sub(self.limit);
+        let from_buffer = overflow.min(self.bytes.len());
+        if from_buffer > 0 {
+            let (first, second) = self.bytes.as_slices();
+            self.front.feed(&first[..from_buffer.min(first.len())]);
+            self.front.feed(&second[..from_buffer.saturating_sub(first.len())]);
+            self.bytes.drain(..from_buffer);
+        }
+        let from_input = overflow - from_buffer;
+        self.front.feed(&data[..from_input]);
+        let retained = &data[from_input..];
+        let required = self.bytes.len() + retained.len();
+        if required > self.bytes.capacity() {
+            let capacity = required.max(self.bytes.capacity().saturating_mul(2)).min(self.limit);
+            self.bytes.reserve_exact(capacity - self.bytes.len());
+        }
+        self.bytes.extend(retained);
+        if overflow > 0 { self.trim_boundary(); }
         start
     }
 
@@ -229,13 +247,7 @@ impl ReplayBuffer {
         (out, self.end)
     }
 
-    fn trim(&mut self) {
-        if self.bytes.len() <= self.limit {
-            return;
-        }
-        let overflow = self.bytes.len() - self.limit;
-        let dropped: Vec<u8> = self.bytes.drain(..overflow).collect();
-        self.front.feed(&dropped);
+    fn trim_boundary(&mut self) {
         // Move the start out of a partial escape sequence or UTF-8 character so the
         // replay does not begin with stray parameters or a replacement glyph.
         let mut skipped = 0;

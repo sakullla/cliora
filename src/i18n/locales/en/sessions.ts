@@ -130,6 +130,9 @@ export default {
   noTerminalTools: 'No terminal-capable managed CLI tools yet. Enable one in Home or Settings.',
 
   restartSession: 'Restart',
+  resumeSession: 'Resume session',
+  resumingSession: 'Resuming…',
+  resumeSessionHint: 'Reconnect to the original conversation',
   restarting: 'Restarting…',
   cloneSession: 'Open another',
   copyPath: 'Copy working directory path',

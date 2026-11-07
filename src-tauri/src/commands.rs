@@ -3662,10 +3662,10 @@ pub async fn restore_workbench_sessions(app: AppHandle) -> Result<crate::workben
 }
 
 #[tauri::command]
-pub async fn restore_workbench_session(app: AppHandle, session_id: String, native_id: String) -> Result<crate::workbench_restore::RestoreReport, ApiError> {
+pub async fn restore_workbench_session(app: AppHandle, session_id: String, native_id: Option<String>) -> Result<crate::workbench_restore::RestoreReport, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        crate::workbench_restore::restore_selected(&db, &adapters::Registry::builtins(), &home()?, &session_id, &native_id).map_err(native_error)
+        crate::workbench_restore::restore_selected(&db, &adapters::Registry::builtins(), &home()?, &session_id, native_id.as_deref()).map_err(native_error)
     }).await
 }
 

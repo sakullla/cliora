@@ -457,7 +457,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setSelectedId(current => {
       let previous: string | null = null;
       try { previous = localStorage.getItem('cliora:workbench-selected'); } catch { /* optional */ }
-      return (previous && report.restored[previous]) || current || listed[0]?.id || null;
+      return (selectedRestoreId && report.restored[selectedRestoreId]) || (current && report.restored[current]) || (previous && report.restored[previous]) || current || listed[0]?.id || null;
     });
   }
   async function restoreLocalSessions() {
@@ -486,6 +486,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     } catch (value) {
       setRestoreChoiceError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')));
     } finally { setRestoring(false); }
+  }
+  async function reconnectLocalSession(session: WorkbenchSession) {
+    if (busy || restoring || session.running) return;
+    setBusy(`restore:${session.id}`);
+    setRestoring(true);
+    setActionError('');
+    try {
+      const report = await native.restoreWorkbenchSession(session.id);
+      await applyRestoreReport(report, session.id);
+      const failure = report.failures.find(item => item.session.id === session.id);
+      if (failure?.candidates.length) {
+        setRestoreChoiceError('');
+        setRestoreChoice(failure);
+      } else if (failure) setActionError(failure.detail);
+    } catch (value) {
+      setActionError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.retryRestore')));
+    } finally { setBusy(''); setRestoring(false); }
   }
   useEffect(() => {
     if (!active || !nativeAvailable || autoLocalRestoreAttempted.current) return;
@@ -2127,8 +2144,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
+                  const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume.state === 'available' && tool.history.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
-                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -2145,7 +2163,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
                       <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
                       <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
-                      <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={session.reattachable ? t('sessions.reattachRemote') : t('sessions.restartHint')} onClick={() => void (session.reattachable ? reattachSession(session) : restartOrCloneSession(session, true))} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{session.reattachable ? t(busy === 'reattach:' + session.id ? 'sessions.reattaching' : 'sessions.reattachShort') : busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
+                      {canResume && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy || restoring} title={t('sessions.resumeSessionHint')} onClick={() => void reconnectLocalSession(session)} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{busy === 'restore:' + session.id ? t('sessions.resumingSession') : t('sessions.resumeSession')}</span></Button>}
+                      <Button variant={canResume ? 'secondary' : 'primary'} size="sm" className={styles.endedRestart} disabled={!!busy || restoring} title={session.reattachable ? t('sessions.reattachRemote') : t('sessions.restartHint')} onClick={() => void (session.reattachable ? reattachSession(session) : restartOrCloneSession(session, true))} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{session.reattachable ? t(busy === 'reattach:' + session.id ? 'sessions.reattaching' : 'sessions.reattachShort') : busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
                       {writeRecoveryNeeded && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('common.remoteWrite.unknown')} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={13} />}><span className={styles.endedRestartLabel}>{t('common.remoteWrite.open')}</span></Button>}
                     </div> : null} />;
                 })}

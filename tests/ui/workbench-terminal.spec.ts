@@ -248,6 +248,14 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           }
           if (command === 'restore_workbench_session') {
             Object.assign(window, { __restoreChoice: args });
+            const index = sessions.findIndex(item => item.id === args.sessionId);
+            if (index >= 0) {
+              const failure = (window as unknown as { __reconnectFailure?: { detail: string; candidates: unknown[] } }).__reconnectFailure;
+              if (failure && !args.nativeId) return { restored: {}, failures: [{ session: sessions[index], ...failure }] };
+              const id = `resumed-${args.sessionId}`;
+              sessions.splice(index, 1, { ...sessions[index], id, running: true, exitCode: null });
+              return { restored: { [args.sessionId]: id }, failures: [] };
+            }
             return { restored: { [args.sessionId]: 's1' }, failures: [] };
           }
           if (command === 'forget_workbench_restore') { Object.assign(window, { __forgottenRestore: args.sessionId }); return null; }
@@ -1640,6 +1648,45 @@ test.describe('session switching with the production renderer', () => {
     await expect.poll(async () => (await grids()).at(-1)?.cols).toBeLessThan(settled.at(-1)!.cols);
   });
 
+  test('rapid session switches reuse warm renderers with bounded contexts', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.assign(window, { __twoSessions: true, __webglCreates: 0 });
+      const original = HTMLCanvasElement.prototype.getContext;
+      const seen = new WeakSet<HTMLCanvasElement>();
+      HTMLCanvasElement.prototype.getContext = function (kind: string, ...args: unknown[]) {
+        if (kind === 'webgl2' && !seen.has(this)) {
+          seen.add(this);
+          (window as any).__webglCreates++;
+        }
+        return original.call(this, kind as any, ...args);
+      } as typeof original;
+    });
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const canvas = (id: string) => page.locator(`[data-pane-session="${id}"] .xterm-screen canvas:not(.xterm-link-layer)`);
+    await expect(canvas('s1')).toBeVisible();
+    const durations: number[] = [];
+    for (let round = 0; round < 6; round++) {
+      const id = round % 2 ? 's1' : 's2';
+      durations.push(await page.evaluate(async id => {
+        const start = performance.now();
+        document.querySelector<HTMLButtonElement>(`[role="tab"][data-session-id="${id}"]`)!.click();
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        return performance.now() - start;
+      }, id));
+      await expect(canvas(id)).toBeVisible();
+    }
+    const creates = await page.evaluate(() => (window as any).__webglCreates);
+    console.log('session switch renderer cost', { creates, durations });
+    await test.info().attach('session-switch-cost', { body: JSON.stringify({ creates, durations }), contentType: 'application/json' });
+    expect(creates).toBe(2);
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
+    await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(0);
+  });
+
   test('hiding the document releases WebGL and resumes the same terminal without losing replies', async ({ page }) => {
     await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
     await installWorkbenchMock(page);
@@ -2132,6 +2179,52 @@ test('an ended session restarts in the directory it already had', async ({ page 
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches.at(-1))).toMatchObject({
     worktreeIntent: 'given', directory: 'C:/work',
   });
+});
+
+test('a disconnected local CLI stops showing output activity and resumes its original session', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.evaluate(() => {
+    const harness = window as unknown as { __output: (text: string) => void; __exit: (code: number) => void };
+    harness.__output('Disconnected from this task. Any running work continues.\r\n');
+    harness.__exit(0);
+  });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.locator('[data-activity-slot="status"]')).toHaveAttribute('data-activity-icon', 'ended');
+  await stage.getByRole('button', { name: '恢复会话', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreChoice: unknown }).__restoreChoice)).toEqual({ sessionId: 's1', nativeId: null });
+  await expect(page.locator('[data-pane-session="resumed-s1"]')).toBeVisible();
+  await expect(page.locator('[data-pane-session="s1"]')).toHaveCount(0);
+  await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { __launches?: unknown[] }).__launches ?? [])).toEqual([]);
+});
+
+test('local reconnect keeps the ended terminal when recovery fails and offers candidate selection', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+  await page.evaluate(() => {
+    Object.assign(window, { __reconnectFailure: { detail: '尚未找到原生会话记录', candidates: [] } });
+    (window as unknown as { __exit: (code: number) => void }).__exit(0);
+  });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '恢复会话', exact: true }).click();
+  await expect(page.getByText('尚未找到原生会话记录', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('[data-pane-session="s1"]')).toBeVisible();
+  await page.evaluate(() => Object.assign(window, { __reconnectFailure: { detail: '请选择原会话', candidates: [
+    { nativeId: 'native-one', title: '第一条原会话', startedAt: null, updatedAt: null },
+    { nativeId: 'native-two', title: '第二条原会话', startedAt: null, updatedAt: null },
+  ] } }));
+  await stage.getByRole('button', { name: '恢复会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '选择要恢复的原会话' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: /第二条原会话/ }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('[data-pane-session="resumed-s1"]')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __restoreChoice: unknown }).__restoreChoice)).toEqual({ sessionId: 's1', nativeId: 'native-two' });
 });
 
 test('an unrecognized worktree preference is shown and is not rewritten', async ({ page }) => {

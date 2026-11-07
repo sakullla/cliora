@@ -133,6 +133,16 @@ pub(crate) mod process_tree {
     unsafe impl Send for Job {}
 
     impl Job {
+        pub fn active_processes(&self) -> Option<u32> {
+            unsafe {
+                let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                (QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation,
+                    &mut accounting as *mut _ as *mut c_void,
+                    std::mem::size_of_val(&accounting) as u32, std::ptr::null_mut()) != 0)
+                    .then_some(accounting.ActiveProcesses)
+            }
+        }
+
         /// Job termination is asynchronous. Drain its active process count
         /// before remote pipe readers are joined and the operation completes.
         pub fn terminate_and_wait(&self) -> bool {
@@ -635,9 +645,9 @@ fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<
         .spawn(move || read_output(reading, reader, generation))
         .map_err(|error| format!("无法接收会话输出：{error}"))?;
     // ConPTY keeps its output pipe open until the master closes, even after
-    // SSH exits. Local launch shims may transfer execution to descendants, so
-    // their lifetime remains tied to PTY EOF instead of the direct shim child.
-    if session.remote {
+    // a process exits. Windows local sessions need the same close handshake;
+    // the watcher also waits for descendants when a launch shim hands off.
+    if session.remote || cfg!(windows) {
         thread::Builder::new()
             .name(format!("cliora-session-exit-{}", session.id))
             .spawn(move || watch_child(session, generation))
@@ -651,6 +661,21 @@ fn watch_child(session: Arc<Session>, generation: u64) {
         let Ok(mut child) = session.child.lock() else { return };
         if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
         if child.wait().is_err() { let _ = child.kill(); }
+    }
+    #[cfg(windows)]
+    if !session.remote {
+        loop {
+            if session.transport_generation.load(Ordering::SeqCst) != generation
+                || !session.running.load(Ordering::SeqCst) { return; }
+            let drained = match session.job.lock() {
+                Ok(job) => job.as_ref().is_none_or(|job| job.active_processes() == Some(0)),
+                Err(_) => return,
+            };
+            if drained { break; }
+            // Never hold the operation or job lock while waiting: explicit end
+            // must still be able to stop an active descendant.
+            thread::sleep(Duration::from_millis(50));
+        }
     }
     let Ok(_operation) = session.operation.lock() else { return };
     if session.transport_generation.load(Ordering::SeqCst) == generation {
@@ -1264,6 +1289,77 @@ fn replay_text(id: &str) -> String {
         .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
         .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
         .unwrap_or_default()
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn local_process_exit_closes_conpty_and_preserves_the_tail() {
+    let _guard = lock_for_tests();
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("exit.ps1");
+    std::fs::write(&script, "[Console]::WriteLine('LOCAL_READY')\n$null = [Console]::ReadLine()\n[Console]::WriteLine('LOCAL_EXIT_TAIL')\nexit 42\n").unwrap();
+    let plan = LaunchPlan {
+        resume_native_id: None, account_version: None, account_context: None,
+        tool_id: "controlled".into(), project_id: None, mode: LaunchMode::Normal,
+        executable: script, cli_args: vec![], directory: directory.path().into(),
+        terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+        remote_session_id: None, remote_end_args: None, environment: vec![],
+    };
+    let id = start(plan, None).unwrap().session_id.unwrap();
+    struct Cleanup(String);
+    impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+    let _cleanup = Cleanup(id.clone());
+    wait_for_replay(&id, "LOCAL_READY").unwrap();
+    let session = lookup(&id).unwrap();
+    assert!(session.snapshot().running);
+    write(&id, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+    wait_for_replay(&id, "LOCAL_EXIT_TAIL").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while session.snapshot().running {
+        assert!(std::time::Instant::now() < deadline, "exited local process still reported running");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.exit_code, Some(42));
+    assert_eq!(snapshot.connection_state, "closed");
+    assert_eq!(snapshot.exit_reason, "process_exit");
+    assert!(write(&id, "YQ==").is_err());
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn local_shim_handoff_stays_live_until_its_descendant_exits() {
+    let _guard = lock_for_tests();
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("descendant.ps1");
+    std::fs::write(&script, "[Console]::WriteLine('DESCENDANT_READY')\n$null = [Console]::ReadLine()\n[Console]::WriteLine('DESCENDANT_TAIL')\n").unwrap();
+    let (program, _) = shell_executable().unwrap();
+    let plan = LaunchPlan {
+        resume_native_id: None, account_version: None, account_context: None,
+        tool_id: "controlled".into(), project_id: None, mode: LaunchMode::Normal,
+        executable: program,
+        cli_args: vec!["/d".into(), "/q".into(), "/c".into(), "start /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File descendant.ps1".into()],
+        directory: directory.path().into(), terminal: TerminalId::Workbench,
+        session_markers: &[], credential: None, remote_session_id: None,
+        remote_end_args: None, environment: vec![],
+    };
+    let id = start(plan, None).unwrap().session_id.unwrap();
+    struct Cleanup(String);
+    impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
+    let _cleanup = Cleanup(id.clone());
+    wait_for_replay(&id, "DESCENDANT_READY").unwrap();
+    let session = lookup(&id).unwrap();
+    // The watcher has reaped the shim; the live child still owns the terminal.
+    assert!(session.child.lock().unwrap().try_wait().unwrap().is_some());
+    assert!(session.snapshot().running);
+    write(&id, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+    wait_for_replay(&id, "DESCENDANT_TAIL").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while session.snapshot().running {
+        assert!(std::time::Instant::now() < deadline, "finished descendant left its session running");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(session.snapshot().exit_code, Some(0));
 }
 
 /// `start /b` leaves a grandchild attached to the pty while the shim child exits;

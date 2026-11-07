@@ -167,15 +167,20 @@ pub fn restore(db: &Database, registry: &Registry, home: &Path) -> Result<Restor
     restore_inner(db, registry, home, None)
 }
 
-pub fn restore_selected(db: &Database, registry: &Registry, home: &Path, session_id: &str, native_id: &str) -> Result<RestoreReport, String> {
+pub fn restore_selected(db: &Database, registry: &Registry, home: &Path, session_id: &str, native_id: Option<&str>) -> Result<RestoreReport, String> {
     restore_inner(db, registry, home, Some((session_id, native_id)))
 }
 
-fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Option<(&str, &str)>) -> Result<RestoreReport, String> {
+fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Option<(&str, Option<&str>)>) -> Result<RestoreReport, String> {
     let _guard = RESTORING.lock().map_err(|_| "工作台恢复正在结束，请重试")?;
-    let live: HashSet<_> = crate::session_host::list().into_iter().map(|session| session.id).collect();
+    let live: HashMap<_, _> = crate::session_host::list().into_iter().map(|session| (session.id.clone(), session)).collect();
     let all = list(db)?;
-    let saved: Vec<_> = all.iter().filter(|session| !live.contains(&session.id)).cloned().collect();
+    // Automatic startup restoration skips every existing tab. An explicit
+    // reconnect may replace an exited local tab, never a running transport.
+    let saved: Vec<_> = all.iter().filter(|session| !live.contains_key(&session.id)
+        || (selection.is_some_and(|(id, _)| id == session.id)
+            && live.get(&session.id).is_some_and(|item| !item.running && !item.project_id.as_deref().is_some_and(|id| id.starts_with("remote:")))))
+        .cloned().collect();
     if selection.is_some_and(|(id, _)| !saved.iter().any(|session| session.id == id)) {
         return Err("恢复记录不存在或已处理".into());
     }
@@ -201,8 +206,11 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
                 let sources = adapter.history_sources(home)?;
                 history_identities(adapter, &sources)
             }).as_ref().map_err(Clone::clone)?;
-            let candidates: Vec<_> = history.iter().filter(|parsed| matches(session, parsed, &saved, &all, until)).collect();
-            let parsed = match choose_candidate(&session.id, &candidates, selection) {
+            // A manual reconnect still respects the launch windows and native
+            // identities of other tabs, including tabs already in the host.
+            let candidates: Vec<_> = history.iter().filter(|parsed| matches(session, parsed, &all, &all, until)).collect();
+            let explicit_native = selection.and_then(|(id, native)| native.map(|native| (id, native)));
+            let parsed = match choose_candidate(&session.id, &candidates, explicit_native) {
                 Ok(parsed) => parsed,
                 Err(detail) => {
                     if !candidates.is_empty() { choices = candidates.iter().map(|parsed| restore_candidate(parsed)).collect(); }
@@ -212,7 +220,7 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
             let native = parsed.native_id.clone().ok_or("原会话缺少恢复 ID")?;
             // Automatic restoration never guesses which simultaneously opened tab owns a
             // conversation. An explicit user choice resolves only the selected saved tab.
-            if selection.is_none() && saved.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && matches(other, parsed, &saved, &all, until)).count() != 1 {
+            if explicit_native.is_none() && all.iter().filter(|other| other.tool_id == session.tool_id && other.context_id == session.context_id && matches(other, parsed, &all, &all, until)).count() != 1 {
                 choices = vec![restore_candidate(parsed)];
                 return Err("多个终端对应同一条可能的会话；请明确选择后恢复".into());
             }
@@ -224,7 +232,8 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
             plan.terminal = TerminalId::Workbench;
             let result = launch::spawn(db, plan)?;
             let id = result.session_id.ok_or("未创建恢复终端")?;
-            if let Err(error) = forget(db, &session.id) {
+            let cleanup = if live.contains_key(&session.id) { crate::session_host::close(&session.id) } else { Ok(()) };
+            if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
                 let _ = crate::session_host::close(&id);
                 let _ = forget(db, &id);
                 return Err(error);
@@ -340,7 +349,7 @@ mod tests {
         let line = serde_json::json!({"timestamp": started_at, "type": "session_meta", "payload": {"id": native, "cwd": home.display().to_string(), "cli_version": "0.165.0"}});
         std::fs::write(logs.join("rollout-fixture.jsonl"), format!("{line}\n")).unwrap();
         let program = home.join("fixture.ps1");
-        std::fs::write(&program, "Write-Output ('restored-args:' + ($args -join '|')); Start-Sleep -Seconds 10").unwrap();
+        std::fs::write(&program, "[Console]::WriteLine('restored-args:' + ($args -join '|')); $null = [Console]::ReadLine(); [Console]::WriteLine('RESTORE_EXIT_TAIL')").unwrap();
         let saved = SavedSession { id: "previous-process".into(), tool_id: "codex".into(), project_id: None, directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None };
         {
             let db = Database::open(&database).unwrap();
@@ -353,6 +362,7 @@ mod tests {
         assert!(report.failures.is_empty(), "{:?}", report.failures.iter().map(|failure| &failure.detail).collect::<Vec<_>>());
         let id = report.restored.get(&saved.id).unwrap();
         let output = crate::session_host::wait_for_replay(id, &format!("resume|{native}"));
+        assert!(restore_selected(&db, &registry, home, id, None).is_err(), "a running tab must not be duplicated");
         let again = restore(&db, &registry, home).unwrap();
         assert!(again.restored.is_empty());
         assert!(again.failures.is_empty());
@@ -364,12 +374,27 @@ mod tests {
         checkpoint(&db).unwrap();
         assert!(list(&db).unwrap()[0].stopped_at.is_some());
         assert!(same_directory(&list(&db).unwrap()[0].directory, &saved.directory));
-        crate::session_host::close(id).unwrap();
         output.unwrap();
+        use base64::Engine;
+        crate::session_host::write(id, &base64::engine::general_purpose::STANDARD.encode(b"\r")).unwrap();
+        crate::session_host::wait_for_replay(id, "RESTORE_EXIT_TAIL").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::session_host::list().iter().any(|session| session.id == *id && session.running) {
+            assert!(std::time::Instant::now() < deadline, "local exit was not observed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(restore(&db, &registry, home).unwrap().restored.is_empty(), "ended tabs must not auto-resume");
+        assert!(restore_selected(&db, &registry, home, id, Some("not-this-conversation")).unwrap().restored.is_empty());
+        assert!(crate::session_host::list().iter().any(|session| session.id == *id), "failed recovery must retain the old terminal");
+        let resumed = restore_selected(&db, &registry, home, id, None).unwrap();
+        let resumed_id = resumed.restored.get(id).expect("ended tab resumes its exact conversation");
+        assert!(!crate::session_host::list().iter().any(|session| session.id == *id));
+        crate::session_host::wait_for_replay(resumed_id, &format!("resume|{native}")).unwrap();
+        crate::session_host::close(resumed_id).unwrap();
         // A later restart uses the now-known native identity, regardless of
         // the original conversation's creation time.
         let next = restore(&db, &registry, home).unwrap();
-        let next_id = next.restored.get(id).unwrap();
+        let next_id = next.restored.get(resumed_id).unwrap();
         let output = crate::session_host::wait_for_replay(next_id, &format!("resume|{native}"));
         crate::session_host::close(next_id).unwrap();
         forget(&db, next_id).unwrap();

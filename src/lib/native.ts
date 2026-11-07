@@ -371,7 +371,7 @@ export const native = {
   },
   listWorkbenchSessions: () => command<WorkbenchSession[]>('list_workbench_sessions'),
   restoreWorkbenchSessions: () => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_sessions'),
-  restoreWorkbenchSession: (sessionId: string, nativeId: string) => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_session', { sessionId, nativeId }),
+  restoreWorkbenchSession: (sessionId: string, nativeId: string | null = null) => command<import('../types/launch').WorkbenchRestoreReport>('restore_workbench_session', { sessionId, nativeId }),
   checkpointWorkbenchSessions: () => command<void>('checkpoint_workbench_sessions'),
   forgetWorkbenchRestore: (sessionId: string) => command<void>('forget_workbench_restore', { sessionId }),
   listRemoteSessions: () => command<RemoteSessionIndexEntry[]>('list_remote_sessions'),
