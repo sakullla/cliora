@@ -451,8 +451,11 @@ async function captureSessionReading(page,capture,width){
  await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();
  await capture('session-reading');
  if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
- // The filter bar is always visible above the list; capture the open 时间范围 menu instead.
- await page.getByRole('group',{name:'会话筛选'}).getByRole('button',{name:'时间范围',exact:true}).click();
+ // 时间范围 lives under 更多筛选; open it first, then capture the open 时间范围 menu.
+ const filterBar=page.getByRole('group',{name:'会话筛选'});
+ const rangeButton=filterBar.getByRole('button',{name:'时间范围',exact:true});
+ if(!(await rangeButton.isVisible().catch(()=>false)))await filterBar.locator('summary').filter({hasText:'更多筛选'}).click();
+ await rangeButton.click();
  const ranges=page.getByRole('listbox',{name:'时间范围'});
  await ranges.waitFor();
  await capture('session-range-menu');
@@ -801,7 +804,7 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('dialog',{name:'自定义时间范围'}).waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await captureUsageDetails(page,capture,theme,width);
- await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
+ await nav.getByRole('button',{name:'设置',exact:true}).click();await page.locator('.skeleton-page').first().waitFor({state:'detached'}).catch(()=>{});await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:/选择配置包文件/}).click();await page.getByRole('dialog').getByRole('button',{name:/backup\.cliora/}).waitFor();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});

@@ -136,6 +136,7 @@ function TrendChart({ report, metric, now, average }: { report: UsageReport; met
           const amount = value(bucket.totals);
           const height = amount > 0 ? Math.max(1.5, (amount / top) * 100) : 0;
           return <div key={bucket.start} className={styles.column} data-peak={index === peak || undefined} data-active={active === index || undefined} data-future={bucket.start > now || undefined} data-current={bucket.start <= now && now < bucket.end || undefined} onMouseEnter={() => setActive(index)} onClick={() => setActive(index)}>
+            {index === peak && <i className={styles.peakMark} aria-hidden="true" style={{ bottom: `${height}%` }} />}
             <div className={styles.stack} style={{ height: `${height}%` }} data-metric={metric}>
               {metric === 'tokens' ? tokenParts().map((part) => bucket.totals[part.key] > 0 && <span key={part.key} data-key={part.key} style={{ flexGrow: bucket.totals[part.key] }} />) : <span data-key="cost" style={{ flexGrow: 1 }} />}
             </div>
@@ -181,11 +182,10 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
   const subtitle = (row: UsageGroup) => view === 'model' ? t('records.usage.subtitleModel', { tool: toolName(row.toolId ?? ''), count: row.totals.requests.toLocaleString(), unknown: row.totals.unknownRequestRecords ? t('records.usage.subtitleUnknown') : '' }) : t('records.usage.subtitle', { sessions: row.totals.sessions, count: row.totals.requests.toLocaleString(), unknown: row.totals.unknownRequestRecords ? t('records.usage.subtitleUnknown') : '' });
   return <section className={styles.card} aria-labelledby="usage-breakdown-title">
     <header className={styles.cardHead}>
-      <h3 id="usage-breakdown-title">{t('records.usage.breakdownTitle')}</h3>
+      <div className={styles.cardTitle}><h3 id="usage-breakdown-title">{t('records.usage.breakdownTitle')}</h3><p className={styles.cardHint}>{t('records.usage.breakdownHint')}</p></div>
       <Segmented size="sm" label={t('records.usage.breakdownAria')} value={view} onChange={(item) => { onView(item); setExpanded(false); }}
         options={(['model', 'tool', 'project'] as const).map((item) => ({ value: item, label: t(`records.usage.dim.${item}`) }))} />
     </header>
-    <p className={styles.cardHint}>{t('records.usage.breakdownHint')}</p>
     <ol className={styles.rank} aria-label={view === 'model' ? t('records.usage.byModel') : view === 'tool' ? t('records.usage.byTool') : t('records.usage.byProject')}>
       {visible.map((row) => {
         const share = ratio(row.totals.total, total);
@@ -454,8 +454,7 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
           onFilter={(next) => { if (next.toolId !== undefined) setToolId(next.toolId); if (next.model !== undefined) setModel(next.model); if (next.projectId !== undefined) setProjectId(next.projectId); }}
           onPrice={openPrice} />
         <section className={styles.card} aria-labelledby="usage-sessions-title">
-          <header className={styles.cardHead}><h3 id="usage-sessions-title">{t('records.usage.topTitle')}</h3><span className={styles.cardHint}>Top {report.topSessions.length}</span></header>
-          <p className={styles.cardHint}>{t('records.usage.topHint')}</p>
+          <header className={styles.cardHead}><div className={styles.cardTitle}><h3 id="usage-sessions-title">{t('records.usage.topTitle')}</h3><p className={styles.cardHint}>{t('records.usage.topHint')}</p></div><span className={styles.cardHint}>Top {report.topSessions.length}</span></header>
           <ol className={styles.sessions} aria-label={t('records.usage.topTitle')}>
             {report.topSessions.map((item) => <li key={item.id}><button type="button" onClick={() => onOpenSession(item.id)} title={t('records.usage.openTitle')}>
               <ToolIcon toolId={item.toolId} size={20} />

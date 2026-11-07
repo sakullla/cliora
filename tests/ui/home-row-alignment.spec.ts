@@ -80,6 +80,17 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   const heights = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(new Set(heights).size).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  // Wide cards keep identity and launch on one row: the launch button sits beside the
+  // project text block instead of on a row of its own below it.
+  const sideBySide = async () => cards.evaluateAll((nodes) => nodes.map((node) => {
+    const identity = node.querySelector('strong')!.closest('div')!.parentElement!.getBoundingClientRect();
+    const launch = node.querySelector('[data-split-variant]')!.getBoundingClientRect();
+    return launch.top >= identity.top - 1 && launch.bottom <= identity.bottom + 1 && launch.left >= identity.right;
+  }));
+  expect(await sideBySide()).toEqual([true, true]);
+  await page.setViewportSize({ width: 900, height: 900 });
+  expect(await sideBySide()).toEqual([true, true]);
+  await page.setViewportSize({ width: 1360, height: 900 });
 
   // Both split-button halves use the color tokens as backgrounds, not as invalid background images.
   const expectSplitPaint = async () => {

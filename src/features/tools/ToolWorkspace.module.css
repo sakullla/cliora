@@ -361,9 +361,11 @@ div > .feedback { margin-bottom: var(--space-3); }
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {
   .scopeBar .projectSelect { width: 160px; }
-  .installSummaryText { flex-basis: 100%; order: 5; }
+  /* Narrow chrome: the source badge and version summary stay on one line next to the CLI
+     switcher; the disclosure chevron alone carries “安装与更新”, whose name stays for AT. */
+  .pathControl > summary { flex-wrap: nowrap; }
+  .diagnosticLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .release { grid-template-columns: 1fr; }
-  .pathControl > summary::before { order: 3; }
 }
 
 .contextState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
-import { nativeAvailable } from '../../lib/native';
+import { native as localNative, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
@@ -152,6 +152,15 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const [resumeCommand, setResumeCommand] = useState<{ key: string; text: string } | null>(null);
   const [resumeError, setResumeError] = useState<{ key: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Resume follows the terminal chosen in Settings; the button names that place instead of
+  // always promising an external terminal. Unknown settings keep the external wording.
+  const [resumeTarget, setResumeTarget] = useState<'workbench' | 'external'>('external');
+  useEffect(() => {
+    if (!active || !nativeAvailable || remoteTargetId !== 'local') return;
+    let live = true;
+    void localNative.getLaunchSettings().then((settings) => { if (live) setResumeTarget(settings.selected === 'workbench' ? 'workbench' : 'external'); }).catch(() => {});
+    return () => { live = false; };
+  }, [active, remoteTargetId]);
   const [scanning, setScanning] = useState(false);
   const [backgroundScanning, setBackgroundScanning] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
@@ -336,6 +345,8 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const resumeKey = selected ? JSON.stringify([selected.session.id, selected.session.updatedAt, selected.session.projectId,
     selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
   const readyCommand = resumeCommand?.key === resumeKey ? resumeCommand.text : '';
+  // Desktop-form CLIs never open in the workbench, matching failedInWorkbench().
+  const resumeInWorkbench = resumeTarget === 'workbench' && !!selected && tools.find((item) => item.id === selected.session.toolId)?.launchForm !== 'desktop';
   const shownResumeError = resumeError?.key === resumeKey ? resumeError.text : selected?.resumeReason ?? '';
   useEffect(() => { if (selected && !yolo && mode === 'yolo') setMode('normal'); }, [selected, yolo, mode]);
   useEffect(() => {
@@ -629,7 +640,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
         {!openedChild && !listError && activeFilters.length > 0 && <p className={styles.detailScope}><Icon name="sliders" size={14} /><span>{t('records.page.readerScope', { count: sessions.length, total: Math.max(unfilteredTotal, sessions.length) })}</span><button type="button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button></p>}
         {!openedChild && (selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
         {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : remoteTargetId !== 'local' ? (selected.session.cwd ? <p className={styles.fullPath}>{displayPath(selected.session.cwd)}</p> : null) : <div className={styles.resume}>
-          {readyCommand && <Button variant="primary" size="sm" icon={<Icon name="tool" size={14} />} disabled={busy} onClick={() => void resume()}>{busy ? t('records.page.resuming') : t('records.page.resume')}{mode === 'yolo' && ' · YOLO'}</Button>}
+          {readyCommand && <Button variant="primary" size="sm" icon={<Icon name={resumeInWorkbench ? 'terminal' : 'tool'} size={14} />} disabled={busy} onClick={() => void resume()}>{busy ? t(resumeInWorkbench ? 'records.page.resumingWorkbench' : 'records.page.resuming') : t(resumeInWorkbench ? 'records.page.resumeWorkbench' : 'records.page.resume')}{mode === 'yolo' && ' · YOLO'}</Button>}
           <details className={styles.moreActions} ref={actionsRef} key={selected.session.id}><summary>{t('records.page.options')}</summary><div className={styles.actionPanel}>
             <div className={styles.resumeBar}><label>{t('records.page.resumeMode')} <select aria-label={t('records.page.resumeMode')} value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">{t('settings.terminal.modeNormal')}</option>{yolo && <option value="yolo">{t('settings.terminal.modeYolo')}</option>}</select></label>{readyCommand && <button type="button" aria-label={t('records.page.copyCommand')} data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? t('home.launcher.copied') : t('records.page.copyCommand')}</button>}</div>
             {readyCommand && <details className={styles.commandDetails} ref={commandRef}><summary>{t('records.page.viewCommand')}</summary><pre aria-label={t('records.page.commandAria')} title={readyCommand}>{readyCommand}</pre></details>}

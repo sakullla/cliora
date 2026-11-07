@@ -453,6 +453,20 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect(chart.getByRole('status')).toContainText('1.2M');
   await expect(chart.getByRole('status')).not.toContainText('1,200,000');
   await expect(chart.getByRole('status')).toContainText('40 次');
+  // The peak dot sits just above the tallest bar, not at the top of the plot.
+  const peak = await chart.evaluate((element) => {
+    const column = element.querySelector('[data-peak]')!;
+    const mark = column.querySelector('i')!.getBoundingClientRect();
+    const stack = column.lastElementChild!.getBoundingClientRect();
+    return { gap: stack.top - mark.bottom, plotTop: column.getBoundingClientRect().top, markTop: mark.top, stackHeight: stack.height, columnHeight: column.getBoundingClientRect().height };
+  });
+  expect(peak.gap).toBeGreaterThanOrEqual(0);
+  expect(peak.gap).toBeLessThanOrEqual(8);
+  if (peak.stackHeight < peak.columnHeight - 20) expect(peak.markTop).toBeGreaterThan(peak.plotTop);
+  // Search and the three selects share one line under the range presets.
+  const filterTops = await page.evaluate(() => [...document.querySelectorAll('[class*="headerFilters"] > *')].map((node) => Math.round(node.getBoundingClientRect().top)));
+  expect(filterTops).toHaveLength(4);
+  expect(new Set(filterTops).size).toBe(1);
   await page.getByRole('radiogroup', { name: '趋势指标' }).getByRole('radio', { name: '费用', exact: true }).click();
   const trend = page.getByRole('region', { name: '用量趋势' });
   await expect(trend).toContainText('峰值 $1.50');
@@ -1196,4 +1210,43 @@ test('usage data boundaries keep unknown, partial and unpriced figures apart', a
   await expect(page.getByRole('region', { name: '用量概览' })).toContainText('350K');
   await boundaries.getByRole('button', { name: /没有价格/ }).click();
   await expect(page.getByRole('dialog', { name: '设置估算价格' })).toBeVisible();
+});
+
+test('the resume button names the terminal chosen in settings', async ({ page }) => {
+  await page.addInitScript(() => {
+    const session = { id: 'record-a', toolId: 'codex', nativeId: '1111', title: 'Review change', cwd: 'C:\project', model: 'gpt', projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
+    const control = { terminal: 'workbench', launchForm: 'terminal' };
+    Object.assign(window, {
+      isTauri: true, __resumeLabel: control,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: control.launchForm, yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects') return [];
+          if (command === 'refresh_history') return [];
+          if (command === 'list_history_prices') return [];
+          if (command === 'list_history_sessions') return [session];
+          if (command === 'get_history_session') return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1 }], usage: [], resumeReason: null };
+          if (command === 'copy_history_resume_command') return 'codex resume 1111';
+          if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+          if (command === 'get_launch_settings') return { selected: control.terminal, terminals: [{ id: 'workbench', label: '工作台', available: true }, { id: 'power_shell', label: 'PowerShell', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '在工作台继续' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toHaveCount(0);
+  // A later change to an external terminal is picked up when the page is shown again.
+  await page.evaluate(() => { (window as unknown as { __resumeLabel: { terminal: string } }).__resumeLabel.terminal = 'power_shell'; });
+  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  await nav.getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '在工作台继续' })).toHaveCount(0);
 });

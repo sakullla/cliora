@@ -14,6 +14,7 @@
 }
 /* Compact rows: one line at --row-h unless a notice or a narrow layout adds a second. */
 .row {
+  position: relative;
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
@@ -31,9 +32,10 @@
 .row:nth-child(4) { animation-delay: 90ms; }
 .row:nth-child(5) { animation-delay: 120ms; }
 .row:first-child { border-top: 0; }
-.row + .row { box-shadow: 0 -1px 0 var(--line); }
-.row:hover, .row:focus-within { background: var(--surface-2); box-shadow: none; }
-.row:hover + .row, .row:focus-within + .row { box-shadow: none; }
+/* Straight inset hairlines between rows; a shadow on a rounded row would curl at both ends. */
+.row + .row::before { content: ''; position: absolute; top: -1px; right: var(--space-3); left: var(--space-3); height: 1px; background: var(--line); pointer-events: none; transition: opacity var(--fast) var(--ease); }
+.row:hover, .row:focus-within { background: var(--surface-2); }
+.row:hover::before, .row:focus-within::before, .row:hover + .row::before, .row:focus-within + .row::before { opacity: 0; }
 
 .name { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }

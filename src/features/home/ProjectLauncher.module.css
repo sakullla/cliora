@@ -97,6 +97,15 @@
   .contextLine, .metaLine { padding-left: 0; }
   .controls { justify-content: flex-start; }
 }
+/* Wide enough for identity and launch side by side: the card keeps one compact row and the
+   launch button sits level with the project name instead of on a row of its own. Notices
+   (session id, pending profile, unmanaged tool) still span the full card. */
+@container (min-width: 520px) {
+  .project { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-4); }
+  .project > * { grid-column: 1 / -1; }
+  .project > .identity { grid-column: 1; }
+  .project > .controls { grid-column: 2; align-self: center; }
+}
 @container (min-width: 620px) {
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }

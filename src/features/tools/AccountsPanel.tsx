@@ -12,6 +12,7 @@ import accountStyles from './AccountsPanel.module.css';
 import i18n from '../../i18n';
 import { statusTable, statusTone, type StatusState, type Tone } from '../../lib/statusTone';
 import { Badge, Button } from '../../components/ui';
+import { Icon } from '../../components/Icon';
 
 function NativeLoginSkeleton() {
   return <div className="skeleton-page" aria-busy="true">{[0, 1].map((index) => <div className={accountStyles.nativeSkeleton} key={index}><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block" /></div>)}</div>;
@@ -206,7 +207,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
   useFillHeight(board, 'minHeight');
   async function run(work: () => Promise<unknown>, notice: string) { setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) setMessage(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
   return <section ref={board} className={styles.panel} aria-label={t('tools.accounts.label')}>
-    <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && !remote && <Button variant={creating ? 'secondary' : 'primary'} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</Button>}</div>
+    <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && !remote && <Button variant={creating ? 'secondary' : 'primary'} icon={creating ? undefined : <Icon name="plus" size={14} />} aria-expanded={creating} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</Button>}</div>
     <div className={styles.body}>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
     <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><Button variant="ghost" size="sm" disabled={remote || nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</Button></div>
