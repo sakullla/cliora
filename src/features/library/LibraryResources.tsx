@@ -348,7 +348,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const count = (state: TargetOutcome['state']) => report?.filter((row) => row.state === state).length ?? 0;
   const stale = loaded && !!loadError;
   const installsUnknown = loaded && !remoteTargetId && !installsKnown && !loading;
-  const emptyView = loading && !loaded
+  // Before the first read commits (or while it runs) there is no outcome yet: wait, never show a failure.
+  const emptyView = !loaded && (loading || !loadError)
     ? <div role="status" aria-label={t('library.resources.skillLoading')}><SkeletonRows count={3} /></div>
     : !loaded
       ? <EmptyState icon="alert" title={t('library.resources.skillLoadFailedTitle')} detail={loadError || t('library.resources.loadFailedDetail')} action={<Button variant="primary" icon={<Icon name="refresh" size={14} />} onClick={retryLoad}>{t('library.resources.retry')}</Button>} />

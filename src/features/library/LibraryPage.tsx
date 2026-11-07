@@ -201,19 +201,32 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const markRead = (next: Partial<Record<LibrarySection, number>>) => {
       if (!live) return;
       const read = Object.keys(next) as LibrarySection[];
+      if (!read.length) return;
       setCounts((previous) => ({ ...previous, ...next }));
       setCountsFailed((previous) => previous.filter((id) => !read.includes(id)));
     };
+    // Each section's count settles on its own: one failed read marks only that badge.
+    const settle = (reads: Array<[LibrarySection, Promise<number>]>) => Promise.allSettled(reads.map(([, read]) => read)).then((results) => {
+      const next: Partial<Record<LibrarySection, number>> = {};
+      const failed: LibrarySection[] = [];
+      results.forEach((result, index) => { const id = reads[index][0]; if (result.status === 'fulfilled') next[id] = result.value; else failed.push(id); });
+      markRead(next);
+      if (failed.length) markFailed(failed);
+    });
     if (remoteTargetId !== 'local') {
       // MCP and Skill counts arrive from their own sections; a failed read is unknown, never zero.
-      void Promise.all([hostNative.listRemoteLibraryItems(remoteTargetId, 'prompt', ''), hostNative.listRemoteLibraryItems(remoteTargetId, 'rule', '')])
-        .then(([prompts, rules]) => markRead({ prompt: prompts.length, rule: rules.length }))
-        .catch(() => markFailed(['prompt', 'rule']));
+      void settle([
+        ['prompt', hostNative.listRemoteLibraryItems(remoteTargetId, 'prompt', '').then((rows) => rows.length)],
+        ['rule', hostNative.listRemoteLibraryItems(remoteTargetId, 'rule', '').then((rows) => rows.length)],
+      ]);
       return () => { live = false; };
     }
-    void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, ''), native.listMcpDefinitions(), native.listSkillPackages()])
-      .then(([prompts, rules, mcps, skills]) => markRead({ prompt: prompts.length, rule: rules.length, mcp: mcps.filter((item) => item.inLibrary !== false).length, skill: skills.filter((item) => item.inLibrary !== false).length }))
-      .catch(() => markFailed(['prompt', 'rule', 'mcp', 'skill']));
+    void settle([
+      ['prompt', native.listLibraryItems('prompt', null, '').then((rows) => rows.length)],
+      ['rule', native.listLibraryItems('rule', null, '').then((rows) => rows.length)],
+      ['mcp', native.listMcpDefinitions().then((rows) => rows.filter((item) => item.inLibrary !== false).length)],
+      ['skill', native.listSkillPackages().then((rows) => rows.filter((item) => item.inLibrary !== false).length)],
+    ]);
     return () => { live = false; };
   }, [active, countStamp, remoteTargetId, hostNative]);
   useEffect(() => {
@@ -227,7 +240,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     // native query; clearing the field skips the delay and restores the full list at once.
     const timer = window.setTimeout(() => {
       const read = remoteTargetId === 'local' ? native.listLibraryItems(kind, null, search) : native.listRemoteLibraryItems(remoteTargetId, kind, search, { signal: controller.signal });
-      void read.then((result) => { if (live) { setItems(result); setListLoaded(true); setListError(''); setListLoading(false); } })
+      void read.then((result) => {
+        if (!live) return;
+        setItems(result); setListLoaded(true); setListError(''); setListLoading(false);
+        // An unsearched read is the whole list of this kind, so it also settles that tab's count.
+        if (!search) { setCounts((previous) => previous[kind] === result.length ? previous : { ...previous, [kind]: result.length }); setCountsFailed((previous) => previous.includes(kind) ? previous.filter((id) => id !== kind) : previous); }
+      })
         // The failure stays beside the list with its own retry; older rows of the same list are kept.
         .catch((value) => { if (live) { setListLoading(false); setListError(formatFailure(value, t('library.page.listFailed'), t('library.page.listRetryNext'))); } });
     }, search ? 180 : 0);
@@ -529,7 +547,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     <div className={styles.layout}>
       {listStale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={listLoading} onClick={retryList}>{t('library.page.retryList')}</Button>}>{t('library.page.listStale', { kind: kindName(kind) })}</StatusBanner>}
       {listLoaded && <div className={styles.resultBar}>
-        <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>
+        {/* Stale rows belong to the last successful query, which may not be the current search: no hit count for them. */}
+        {!listStale && <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>}
         <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>

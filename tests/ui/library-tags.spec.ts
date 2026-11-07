@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 test('library category is edited and filtered as tags', async ({ page }) => {
   await page.addInitScript(() => {
@@ -323,4 +323,85 @@ test('library lists keep first failure, confirmed empty, no match and failed ref
   await library.getByRole('tab', { name: /长期规则/ }).click();
   await expect(library.getByRole('heading', { name: '暂时无法读取规则' })).toBeVisible();
   await expect(library.getByRole('button', { name: 'release note', exact: true })).toHaveCount(0);
+});
+
+/** One stored prompt; the first prompt read (the tab count read) fails once and the MCP count read fails until cleared. */
+async function openCountLibrary(page: Page) {
+  await page.addInitScript(() => {
+    const control = { failPromptReads: 1, failMcp: true, fail: false, holdSkills: false, releaseSkills: null as null | (() => void), library: [{ id: 'p-1', kind: 'prompt', title: 'release note', body: 'body', category: '', projectId: null, version: 1, updatedAt: 1 }] as Array<Record<string, unknown>> };
+    const seen = { skillFailure: false };
+    new MutationObserver((records) => {
+      for (const record of records) for (const node of Array.from(record.addedNodes)) if ((node.textContent ?? '').includes('暂时无法读取 Skill')) seen.skillFailure = true;
+    }).observe(document, { childList: true, subtree: true });
+    Object.assign(window, {
+      isTauri: true,
+      __libraryControl: control,
+      __librarySeen: seen,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements' || command === 'list_skill_installations') return [];
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_mcp_definitions') { if (control.failMcp) throw { message: 'mcp count fixture denied' }; return []; }
+          if (command === 'list_skill_packages') {
+            if (control.holdSkills) { control.holdSkills = false; await new Promise<void>((resolve) => { control.releaseSkills = resolve; }); }
+            return [{ id: 'pkg-1', name: 'code-review', description: 'Review fixture', compatibility: null, source: '/tmp/code-review', digest: 'd', fileCount: 1, updatedAt: 1, inLibrary: true }];
+          }
+          if (command === 'list_library_items') {
+            if (args.kind === 'prompt' && control.failPromptReads > 0) { control.failPromptReads--; throw { message: 'prompt count fixture denied' }; }
+            if (control.fail) throw { message: 'library fixture read denied' };
+            return control.library.filter((item) => item.kind === args.kind && (!args.search || String(item.title).includes(args.search)));
+          }
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  return { library, tabs: library.getByRole('tablist', { name: '资料类型' }) };
+}
+
+test('one failed count read marks only its own tab and a successful list read settles that tab', async ({ page }) => {
+  const { tabs } = await openCountLibrary(page);
+  await expect(tabs.getByRole('tab', { name: /MCP/ }).locator('[data-count-state="unknown"]')).toHaveText('?');
+  await expect(tabs.getByRole('tab', { name: /长期规则/ }).locator('[data-count-state]')).toHaveCount(0);
+  await expect(tabs.getByRole('tab', { name: /长期规则/ })).toContainText('0');
+  await expect(tabs.getByRole('tab', { name: /Skill/ }).locator('[data-count-state]')).toHaveCount(0);
+  await expect(tabs.getByRole('tab', { name: /Skill/ })).toContainText('1');
+  // The prompt count read failed, but the unsearched prompt list then loaded: its badge is that list's size.
+  const promptTab = tabs.getByRole('tab', { name: /提示词/ });
+  await expect(promptTab.locator('[data-count-state]')).toHaveCount(0);
+  await expect(promptTab).toContainText('1');
+});
+
+test('rows kept after a failed search refresh carry no hit count for the new term', async ({ page }) => {
+  const { library } = await openCountLibrary(page);
+  await expect(library.getByText('命中 1 / 共 1')).toBeVisible();
+  await page.evaluate(() => { (window as any).__libraryControl.fail = true; });
+  await library.getByLabel('搜索资料').fill('zzz-no-such-row');
+  await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toBeVisible();
+  // The kept row belongs to the previous query and does not match this term.
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  await expect(library.getByText(/命中 \d+ \/ 共/)).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__libraryControl.fail = false; });
+  await library.getByRole('button', { name: '重试读取' }).click();
+  await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toHaveCount(0);
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toHaveCount(0);
+  await expect(library.getByText('命中 0 / 共 1')).toBeVisible();
+  await expect(library.getByLabel('搜索资料')).toHaveValue('zzz-no-such-row');
+});
+
+test('the Skill section waits before its first read settles and never flashes the failure state', async ({ page }) => {
+  const { library, tabs } = await openCountLibrary(page);
+  await page.evaluate(() => { (window as any).__libraryControl.holdSkills = true; });
+  await tabs.getByRole('tab', { name: /Skill/ }).click();
+  await expect(library.getByRole('status', { name: '正在读取 Skill' })).toBeVisible();
+  await page.evaluate(() => (window as any).__libraryControl.releaseSkills?.());
+  await expect(library.getByRole('button', { name: 'code-review', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__librarySeen.skillFailure)).toBe(false);
 });
