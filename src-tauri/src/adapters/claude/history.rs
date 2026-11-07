@@ -418,6 +418,19 @@ pub fn identity_controlled(
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| format!("line-{line}"));
+        // Identity fields are read from every user/assistant row, exactly as a
+        // full parse does. The cap and the blank-body rule below only stop the
+        // message bookkeeping, never the identity.
+        if session.native_id.is_none() {
+            session.native_id = row
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .filter(|id| valid_native_id(id))
+                .map(str::to_owned);
+        }
+        if session.cwd.is_none() {
+            session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
+        }
         if seen.insert(id) {
             // A full parse drops a row whose text is blank and ignores every
             // row past the message cap, so title, timestamps and the cap are
@@ -437,16 +450,6 @@ pub fn identity_controlled(
             if kind == "user" && session.title.is_empty() {
                 session.title_from_message(kind, &body, HistoryMessageKind::Conversation);
             }
-        }
-        if session.native_id.is_none() {
-            session.native_id = row
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .filter(|id| valid_native_id(id))
-                .map(str::to_owned);
-        }
-        if session.cwd.is_none() {
-            session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
         }
     })?;
     session.partial |= partial;
@@ -704,6 +707,34 @@ mod tests {
         assert_eq!(light.title, "恢复标题");
         assert_eq!(light.native_id.as_deref(), Some(native));
         assert_eq!(light.cwd.as_deref(), Some("/fixture/project"));
+    }
+
+    /// A transcript whose rows all have blank bodies still has an identity. The
+    /// cap and the blank-body rule stop message bookkeeping only, so the light
+    /// path must return the same native id and cwd a full parse keeps instead
+    /// of failing as an empty session.
+    #[test]
+    fn recovery_identity_survives_a_transcript_without_visible_messages() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".claude").join("projects").join("fixture");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("session-blank.jsonl");
+        let native = "44444444-4444-4444-8444-444444444444";
+        let lines = [
+            serde_json::json!({"type":"user","uuid":"blank-user","sessionId":native,"cwd":"/fixture/blank","timestamp":"2026-09-29T08:00:00Z","message":{"role":"user","content":[]}}),
+            serde_json::json!({"type":"assistant","uuid":"blank-assistant","sessionId":native,"cwd":"/fixture/blank","timestamp":"2026-09-29T08:00:05Z","message":{"id":"msg-blank","role":"assistant","model":"claude-opus-4-1","content":[]}}),
+        ];
+        let text = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(&path, text).unwrap();
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        let full = parse(&found[0]).unwrap();
+        assert!(full.messages.is_empty(), "the full parse keeps no visible message");
+        assert_eq!(full.native_id.as_deref(), Some(native));
+        let light = identity(&found[0]).unwrap();
+        assert_eq!(light.native_id.as_deref(), Some(native));
+        assert_eq!(light.cwd.as_deref(), Some("/fixture/blank"));
+        assert_eq!(SessionIdentity::from_parsed(full), light);
     }
 
     fn source(path: PathBuf) -> HistorySource {
