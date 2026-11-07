@@ -1719,3 +1719,18 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .launchSectionHead small { display: none; }
 .root[data-compact] .dialogForm { min-width: min(430px, 80vw); }
 .root[data-compact] .dialogPrimaryGrid { grid-template-columns: 1fr; }
+/* 审查入口与真实状态：仍挂在现有 Git chip 的菜单里，不做常驻面板。 */
+.reviewDivider { display: block; height: 1px; margin: var(--space-1) var(--space-1_5); background: var(--term-float-line); }
+.reviewGroup { display: grid; gap: 1px; }
+.reviewLabel { display: block; padding: var(--space-1) var(--space-2) var(--space-0_5); color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
+.reviewState { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--term-well); color: var(--term-text-2); font-size: var(--fs-caption); line-height: 1.45; }
+.reviewState[data-tone="accepted"] { color: var(--term-success); }
+.reviewState[data-tone="rejected"] { color: var(--term-danger); }
+.reviewState[data-tone="unknown"],
+.reviewState[data-tone="unconfirmed"] { color: var(--term-warning); }
+.reviewState[data-tone="confirmed"] { color: var(--term-success); }
+.reviewStatusLine { display: flex; align-items: center; gap: var(--space-1_5); margin: 0; padding: 0 var(--space-2) var(--space-1); color: var(--term-text-3); font-family: var(--font-mono); font-size: 11px; }
+.reviewStatusLine > :global(svg) { flex: none; color: var(--term-accent); }
+.reviewStatusLine span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reviewError { margin: 0; padding: 0 var(--space-2) var(--space-1); color: var(--term-danger); font-size: 12px; }
+.reviewHint { margin: 0; padding: 0 var(--space-2) var(--space-1); color: var(--term-text-3); font-size: 11px; line-height: 1.4; }

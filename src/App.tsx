@@ -46,7 +46,7 @@ import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
-import type { Project, TrayRepairTarget } from './types/launch';
+import type { Project, TrayRepairTarget, TwiglaneReviewSignal } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
@@ -186,6 +186,7 @@ export default function App() {
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
   const [workbenchFailure, setWorkbenchFailure] = useState<WorkbenchFailure | null>(null);
   const [workbenchToken, setWorkbenchToken] = useState(0);
+  const [reviewSignal, setReviewSignal] = useState<TwiglaneReviewSignal | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteTargetId, setRemoteTargetId] = useState(() => { try { return localStorage.getItem('cliora:remote-target') ?? 'local'; } catch { return 'local'; } });
   const remoteIdentity = useRemoteIdentity(remoteTargetId);
@@ -319,6 +320,48 @@ export default function App() {
     }).catch(() => {});
     return () => { active = false; stops.forEach((stop) => stop()); };
   }, [canLeave]);
+
+  // cliora://review 的接收回执与返回事件走同一条路径：先交给 native 校验并更新内存态
+  // 注册表，再决定定位会话还是让工作台重读。冷启动链接与运行中链接行为一致。
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let active = true;
+    let stop: (() => void) | null = null;
+    const seen = new Set<string>();
+    const handle = (url: unknown) => {
+      if (!active || typeof url !== 'string' || seen.has(url)) return;
+      seen.add(url);
+      void native.twiglaneReviewLink(url).then((outcome) => {
+        if (!active || !outcome.sessionId || outcome.kind === 'ignored') return;
+        const sessionId = outcome.sessionId;
+        if (outcome.kind === 'returned') {
+          // 只有注册表里仍是该 session 最新的 review 才会走到这里；失效关联不创建替代会话。
+          openWorkbenchSession(sessionId);
+          return;
+        }
+        setReviewSignal((current) => ({ sessionId, token: (current?.token ?? 0) + 1 }));
+      }).catch(() => {});
+    };
+    // 浏览器 mock 或插件缺失时 unlisten 可能是拒绝的 promise；释放失败不打断任何事。
+    const release = (fn: (() => void) | null) => {
+      try {
+        const pending = fn?.() as unknown;
+        if (pending && typeof (pending as Promise<void>).catch === 'function') void (pending as Promise<void>).catch(() => {});
+      } catch { /* the listener is gone either way */ }
+    };
+    void (async () => {
+      try {
+        const { getCurrent, onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
+        const current = await getCurrent().catch(() => null);
+        for (const url of current ?? []) handle(url);
+        const unlisten = await onOpenUrl((urls) => { for (const url of urls ?? []) handle(url); });
+        if (active) stop = unlisten; else release(unlisten);
+      } catch {
+        // 没有 deep-link 运行环境时保持现有工作台行为。
+      }
+    })();
+    return () => { active = false; release(stop); };
+  }, []);
 
   async function loadBootstrap() {
     if (!nativeAvailable) return;
@@ -817,7 +860,7 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} /></Suspense>}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ...(bootstrap.preferences.remote_ssh_enabled ? [['hosts', t('settings.tabs.hosts')] as [SettingsTab, string]] : []), ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <Suspense fallback={<PageSkeleton />}><GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}

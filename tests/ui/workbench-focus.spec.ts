@@ -165,8 +165,13 @@ test('a worktree created mid-session appears and opens a new session there', asy
   const footer = page.getByRole('region', { name: '当前会话' }).locator('footer');
   const chip = footer.getByLabel(/^Git 分支 feature\/ABC-101/);
   await expect(chip).toBeVisible();
-  // One checkout: nothing to open elsewhere yet.
-  await expect(chip).not.toHaveAttribute('aria-haspopup', 'menu');
+  // One checkout: the menu holds no other checkout to open, but the review entry is there.
+  await expect(chip).toHaveAttribute('aria-haspopup', 'menu');
+  await chip.click();
+  const alone = page.getByRole('menu', { name: '在工作树中新开会话' });
+  await expect(alone.getByRole('menuitemradio')).toHaveCount(1);
+  await expect(alone.getByRole('group', { name: '在 Twiglane 中审查' })).toBeVisible();
+  await page.keyboard.press('Escape');
 
   await page.evaluate(() => (window as unknown as { __addWorktree: () => void }).__addWorktree());
   // Returning to the window re-reads the checkouts; the new worktree is offered without a restart.

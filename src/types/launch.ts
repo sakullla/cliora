@@ -66,3 +66,42 @@ export type TrayRepairTarget = {
 };
 
 export type RemoteSessionIndexEntry = { remoteSessionId: string; projectId: string; targetId: string; toolId: string; directory: string; mode: LaunchMode; startedAt: number; lastSeenAt: number };
+
+/** One review cliora asked Twiglane to open; only the native registry owns this state. */
+export type TwiglaneReviewStatus = 'opening' | 'accepted' | 'rejected' | 'returned';
+export type TwiglaneReviewOutcome = 'reviewed' | 'committed' | 'merged';
+export type TwiglaneReviewState = {
+  reviewId: string;
+  sessionId: string;
+  worktreePath: string;
+  /** HEAD when the review was sent; null for an empty repository. */
+  baseline: string | null;
+  status: TwiglaneReviewStatus;
+  reason: string | null;
+  outcome: TwiglaneReviewOutcome | null;
+  headOid: string | null;
+  /** Unix milliseconds of the attempt, used for the 10 second unknown deadline. */
+  createdAt: number;
+};
+/** The native result of one inbound cliora://review link. */
+export type TwiglaneLinkOutcome = {
+  kind: 'accepted' | 'rejected' | 'returned' | 'ignored';
+  sessionId: string | null;
+  reviewId: string | null;
+  outcome: TwiglaneReviewOutcome | null;
+  headOid: string | null;
+  reason: string | null;
+};
+/** Real branch, HEAD and full uncommitted count of a session's own worktree. */
+export type WorkbenchCodeStatus = {
+  sessionId: string;
+  worktreePath: string | null;
+  branch: string | null;
+  headOid: string | null;
+  uncommittedFiles: number | null;
+  state: 'ready' | 'unknown';
+  reason: string | null;
+};
+
+/** A routed receipt for a pending review; the workbench re-reads that session. */
+export type TwiglaneReviewSignal = { sessionId: string; token: number };

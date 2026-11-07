@@ -13,7 +13,9 @@ Cliora is a React/TypeScript desktop CLI manager powered by Tauri 2 and Rust.
 
 ## Build, Test, and Development Commands
 
-Install Node.js, Rust 1.88+, and platform-specific Tauri prerequisites, then run `npm ci`.
+Install Node.js, Rust 1.90+ (required by the deep-link and single-instance plugins), and platform-specific Tauri prerequisites, then run `npm ci`.
+
+The app registers the `cliora://` scheme through the deep-link plugin; `cliora://review` is the inbound side of `docs/integrations/twiglane-review-v1.md`. Windows development builds and Linux register the scheme at runtime, macOS only through an installed bundle, so scheme registration is not verified by a build.
 
 - `npm run tauri dev`: run the desktop application.
 - `npm run dev`: run the frontend only; native storage is unavailable in browser mode.

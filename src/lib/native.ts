@@ -9,7 +9,7 @@ import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccou
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreePrepareCommand } from '../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
@@ -382,6 +382,13 @@ export const native = {
   replayWorkbenchSession: (sessionId: string) => command<WorkbenchReplay | string>('replay_workbench_session', { sessionId }),
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
   gitWorktrees: (directory: string) => command<WorkbenchWorktree[]>('git_worktrees', { directory }),
+  /** Real branch, HEAD and full uncommitted count; the native side rejects remote sessions. */
+  workbenchCodeStatus: (sessionId: string) => command<WorkbenchCodeStatus>('workbench_code_status', { sessionId }),
+  /** Every call creates a new reviewId: an explicit retry never reuses the previous one. */
+  twiglaneStartReview: (sessionId: string) => command<TwiglaneReviewState>('twiglane_start_review', { sessionId }),
+  twiglaneReviewState: (sessionId: string) => command<TwiglaneReviewState | null>('twiglane_review_state', { sessionId }),
+  /** Hand one inbound cliora://review link to native; invalid links are ignored there. */
+  twiglaneReviewLink: (url: string) => command<TwiglaneLinkOutcome>('twiglane_review_link', { url }),
   worktreePrepare: (directory: string) => command<string | null>('worktree_prepare', { directory }),
   saveWorktreePrepare: (directory: string, commandText: string) => command<WorktreePrepareCommand>('save_worktree_prepare', { directory, command: commandText }),
   listWorktreeLedger: () => command<WorktreeLedgerEntry[]>('list_worktree_ledger'),

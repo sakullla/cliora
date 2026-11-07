@@ -100,6 +100,7 @@ pub mod workbench_restore;
 pub mod terminal_replay;
 mod terminal_paths;
 pub mod tray;
+pub mod twiglane;
 pub mod usage;
 mod windows_registry;
 #[cfg(windows)]
@@ -108,9 +109,12 @@ mod windows_security;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // single-instance 必须最先注册，并启用 deep-link feature 才能把第二个
+        // 实例的系统链接转交给已经在运行的窗口。
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             tray::show_main(app)
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -124,6 +128,7 @@ pub fn run() {
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
             session_host::install(app.handle().clone());
+            register_deep_link(app.handle());
             tray::setup(app);
             let usage_handle = app.handle().clone();
             std::thread::spawn(move || loop {
@@ -337,6 +342,10 @@ pub fn run() {
             commands::git_worktrees,
             commands::worktree_prepare,
             commands::save_worktree_prepare,
+            commands::workbench_code_status,
+            commands::twiglane_start_review,
+            commands::twiglane_review_state,
+            commands::twiglane_review_link,
             commands::list_worktree_ledger,
             commands::cleanup_worktree,
             commands::set_workbench_directory,
@@ -458,6 +467,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to run Cliora")
         .run(handle_run_event);
+}
+
+/// 开发构建和 Linux 的 packaged 应用不会经过安装包写好的 scheme 注册，
+/// 必须在这里运行期注册；已由安装包注册的 Windows 正式构建不重复写注册表。
+fn register_deep_link(app: &tauri::AppHandle) {
+    #[cfg(any(all(debug_assertions, target_os = "windows"), target_os = "linux"))]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        if let Err(error) = app.deep_link().register_all() {
+            eprintln!("cliora:// 协议没有注册成功：{error}");
+        }
+    }
+    #[cfg(not(any(all(debug_assertions, target_os = "windows"), target_os = "linux")))]
+    let _ = app;
 }
 
 /// 自动更新检查（ADR-4）：发现更新时广播事件由前端提示；无更新或失败均静默。

@@ -19,7 +19,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchSettings, Project, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeLedgerEntry } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchSettings, Project, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchSession, WorktreeLedgerEntry } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
@@ -207,6 +207,24 @@ type MenuState =
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
 const MENU_ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
+/** 等不到 accepted/rejected 的期限：超过它只能显示"打开结果未知"。 */
+const REVIEW_UNKNOWN_MS = 10_000;
+/** 协议里的稳定错误码到界面文案。未知码回退到通用说明，不显示后端原始文本。 */
+const REVIEW_REASON_KEYS: Record<string, string> = {
+  session_unknown: 'sessions.reviewCodeSessionUnknown',
+  remote_session: 'sessions.reviewCodeRemoteSession',
+  invalid_path: 'sessions.reviewCodeInvalidPath',
+  not_a_worktree: 'sessions.reviewCodeNotAWorktree',
+  git_missing: 'sessions.reviewCodeGitMissing',
+  open_failed: 'sessions.reviewCodeOpenFailed',
+  output_too_large: 'sessions.reviewCodeOutputTooLarge',
+  read_failed: 'sessions.reviewCodeReadFailed',
+  malformed_request: 'sessions.reviewCodeMalformedRequest',
+  unsupported_version: 'sessions.reviewCodeUnsupportedVersion',
+};
+function reviewReasonText(t: (key: string) => string, code: string | null | undefined): string {
+  return t(code && REVIEW_REASON_KEYS[code] ? REVIEW_REASON_KEYS[code] : 'sessions.reviewCodeUnknown');
+}
 
 function firstTaskLine(text: string | null | undefined): string | null {
   const line = text?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
@@ -240,7 +258,7 @@ function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, r
   </div>;
 }
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
   /** The app sidebar slot that shows the session list. Null keeps the list as a strip above the terminal. */
   railHost?: HTMLElement | null;
@@ -259,6 +277,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   onRemoteTargetChange?: (targetId: string) => void;
   focusSessionId: string | null;
   focusToken: number;
+  /** A routed cliora://review receipt for one session; a new token means re-read it. */
+  reviewSignal?: TwiglaneReviewSignal | null;
   failure: WorkbenchFailure | null;
   onFailure: (failure: WorkbenchFailure | null) => void;
   onOpenHome: () => void;
@@ -322,6 +342,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [gitWorktrees, setGitWorktrees] = useState<Map<string, WorkbenchWorktree[]>>(() => new Map());
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
   const [gitReadSeq, setGitReadSeq] = useState(0);
+  // 审查状态只在 native 注册表里判定；这里是它的展示副本，按 sessionId 索引。
+  const [reviewStates, setReviewStates] = useState<Map<string, TwiglaneReviewState>>(() => new Map());
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+  const [codeStatuses, setCodeStatuses] = useState<Map<string, WorkbenchCodeStatus>>(() => new Map());
+  const [codeStatusUnknown, setCodeStatusUnknown] = useState<Map<string, boolean>>(() => new Map());
+  const [codeReadSeq, setCodeReadSeq] = useState(0);
+  const [reviewClock, setReviewClock] = useState(() => Date.now());
+  // 迟到的状态读取不能覆盖较新的会话或工作区：每次读取带递增序号。
+  const codeRequests = useRef(new Map<string, number>());
+  const announcedReviews = useRef(new Set<string>());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [findCase, setFindCase] = useState(false);
   const terminalMode: TerminalTheme = themePreference === 'auto' ? appTheme : themePreference;
@@ -656,6 +687,58 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     window.addEventListener('focus', read);
     return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
   }, [gitTarget, worktreeAnchor, nativeAvailable, gitReadSeq]);
+  // 目标 worktree 的真实状态：只在本地会话上读取，按 sessionId 与递增序号写入。
+  // 迟到响应直接丢弃；读取失败保留上一次可读的值，但明确标成未知并允许重试。
+  useEffect(() => {
+    if (!nativeAvailable || !gitTarget) return;
+    let alive = true;
+    const seq = (codeRequests.current.get(gitTarget) ?? 0) + 1;
+    codeRequests.current.set(gitTarget, seq);
+    const stale = () => !alive || codeRequests.current.get(gitTarget) !== seq;
+    void native.workbenchCodeStatus(gitTarget).then((value) => {
+      if (stale() || !value || value.sessionId !== gitTarget || (value.state !== 'ready' && value.state !== 'unknown')) return;
+      setCodeStatuses((current) => { const map = new Map(current); map.set(gitTarget, value); return map; });
+      setCodeStatusUnknown((current) => { if (!current.get(gitTarget)) return current; const map = new Map(current); map.delete(gitTarget); return map; });
+    }).catch(() => {
+      if (stale()) return;
+      setCodeStatusUnknown((current) => { if (current.get(gitTarget)) return current; const map = new Map(current); map.set(gitTarget, true); return map; });
+    });
+    return () => { alive = false; };
+  }, [gitTarget, codeReadSeq, nativeAvailable, focusToken, reviewSignal?.token]);
+  // 审查状态由 native 注册表判定，这里只读取最新一条。打开菜单、收到回执和切换会话
+  // 都会重读，因此被新链接取代的旧请求不会被迟到的回执改写。
+  useEffect(() => {
+    if (!nativeAvailable || !gitTarget) return;
+    let alive = true;
+    void native.twiglaneReviewState(gitTarget).then((value) => {
+      if (!alive || !value || typeof value.reviewId !== 'string' || value.sessionId !== gitTarget) return;
+      setReviewStates((current) => { const map = new Map(current); map.set(value.sessionId, value); return map; });
+      setReviewClock(Date.now());
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [gitTarget, nativeAvailable, reviewSignal?.token, gitReadSeq, focusToken, focusSessionId]);
+  // 10 秒内没有 accepted/rejected 就是"打开结果未知"：系统接受 URL 不等于 Twiglane 已打开。
+  useEffect(() => {
+    if (!gitTarget) return;
+    const review = reviewStates.get(gitTarget);
+    if (!review || review.status !== 'opening') return;
+    const left = review.createdAt + REVIEW_UNKNOWN_MS - Date.now();
+    if (left <= 0) return;
+    const timer = window.setTimeout(() => setReviewClock(Date.now()), left + 20);
+    return () => window.clearTimeout(timer);
+  }, [gitTarget, reviewStates, reviewClock]);
+  // 返回结果只在一次新的 returned 到达时说一次；状态还没读到时先不宣布，避免把
+  // 待复核声明当成成功。
+  useEffect(() => {
+    if (!gitTarget) return;
+    const review = reviewStates.get(gitTarget);
+    if (!review || review.status !== 'returned' || announcedReviews.current.has(review.reviewId)) return;
+    const status = codeStatuses.get(gitTarget) ?? null;
+    const unknownStatus = !!codeStatusUnknown.get(gitTarget);
+    if (!status && !unknownStatus) return;
+    announcedReviews.current.add(review.reviewId);
+    setNotice(describeReview(review, status, unknownStatus).text);
+  }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
   // The dialog launches on the selected run location, so its prompts come from that host.
   const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
@@ -1462,6 +1545,66 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * CLI itself, not a shell, so typing `cd` would only send the agent a prompt and its own
    * working directory would stay put. A new session in the chosen worktree is the honest move.
    */
+
+  /**
+   * One explicit review attempt. Every call (a first try, a retry after a failure or an
+   * unanswered attempt) asks native for a new reviewId, so an old result can never be
+   * mistaken for this one. Nothing here writes to the repository.
+   */
+  async function startReview(session: WorkbenchSession) {
+    setReviewError('');
+    setReviewBusy(true);
+    try {
+      const state = await native.twiglaneStartReview(session.id);
+      setReviewStates((current) => { const map = new Map(current); map.set(state.sessionId, state); return map; });
+      setReviewClock(Date.now());
+    } catch (error) {
+      setReviewError([t('sessions.reviewFailed'), reviewReasonText(t, (error as { code?: string } | null)?.code)].join(' · '));
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  /** What the Git menu says about one review; a claim is never shown as a success. */
+  function describeReview(review: TwiglaneReviewState | null, status: WorkbenchCodeStatus | null, unknownStatus: boolean) {
+    if (!review) return { tone: 'idle', text: t('sessions.reviewIdle') };
+    if (review.status === 'opening') {
+      return reviewClock - review.createdAt >= REVIEW_UNKNOWN_MS
+        ? { tone: 'unknown', text: t('sessions.reviewUnknown') }
+        : { tone: 'pending', text: t('sessions.reviewOpening') };
+    }
+    if (review.status === 'accepted') return { tone: 'accepted', text: t('sessions.reviewAccepted') };
+    if (review.status === 'rejected') {
+      return { tone: 'rejected', text: [t('sessions.reviewRejected'), reviewReasonText(t, review.reason)].join(' · ') };
+    }
+    // 返回的 committed/merged 只是待复核声明：OID 必须与基线不同且等于当前 HEAD。
+    if (!review.outcome || review.outcome === 'reviewed') {
+      return { tone: 'returned', text: t('sessions.reviewReturnedReviewed') };
+    }
+    const confirmed = !!review.headOid
+      && /^[0-9a-f]{40}$/.test(review.headOid)
+      && review.headOid !== review.baseline
+      && !unknownStatus
+      && status?.state === 'ready'
+      && status.headOid === review.headOid;
+    if (!confirmed) return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmed') };
+    const oid = review.headOid!.slice(0, 7);
+    return {
+      tone: 'confirmed',
+      text: t(review.outcome === 'merged' ? 'sessions.reviewReturnedMerged' : 'sessions.reviewReturnedCommitted', { oid }),
+    };
+  }
+
+  /** 真实状态读不到时显示"未知"，绝不显示成 0 个文件。 */
+  function codeStatusText(status: WorkbenchCodeStatus | null, unknown: boolean): string {
+    if (!status || unknown) return t('sessions.reviewStatusUnknown');
+    return [
+      status.branch ?? t('sessions.reviewDetached'),
+      status.headOid ? status.headOid.slice(0, 7) : t('sessions.reviewNoCommit'),
+      t('sessions.reviewFiles', { count: status.uncommittedFiles ?? 0 }),
+    ].join(' · ');
+  }
+
   async function openInWorktree(session: WorkbenchSession, worktree: WorkbenchWorktree) {
     setWorktreeMenuOpen(false);
     if (worktree.current || !worktree.path) return;
@@ -2072,6 +2215,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           // Offer the worktree menu only when the repository actually has more than one checkout.
           const worktrees = current?.id === gitTarget && worktreeAnchor ? gitWorktrees.get(worktreeAnchor) ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
+          // 只有一个 checkout 时菜单没有别的选择，但仍然要提供审查入口和真实状态。
+          const canOpenGitMenu = !!current && !remote && (canSwitchWorktree || !!gitLabel);
+          const review = current ? reviewStates.get(current.id) ?? null : null;
+          const codeStatus = current ? codeStatuses.get(current.id) ?? null : null;
+          const codeStatusStale = !!current && (!!codeStatusUnknown.get(current.id) || !codeStatus || codeStatus.state !== 'ready');
+          const reviewView = describeReview(review, codeStatus, codeStatusStale);
+          const reviewWaiting = !!review && review.status === 'opening' && reviewClock - review.createdAt < REVIEW_UNKNOWN_MS;
+          // 发起中不重复点击；失败、超时或拒绝都可以重新发起，并一定拿到新的 reviewId。
+          const reviewRetryable = !!review && !reviewWaiting && (review.status === 'rejected' || review.status === 'opening');
           const gitChipTitle = [gitTitle, t('sessions.gitScopeHint')].filter(Boolean).join('\n');
           return <div className={styles.window} hidden={!current} data-split={split ? 'true' : undefined} data-tone={tone}>
             {current && <header className={styles.stageBar} onDoubleClick={(event) => {
@@ -2144,7 +2296,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
-                  const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume.state === 'available' && tool.history.state === 'available');
+                  // 适配器只在支持该能力时才带对应端口；缺少 resume 端口不能让整个工作台崩掉。
+                  const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
                   return <SessionTerminal key={session.id} sessionId={session.id} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
@@ -2175,8 +2328,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
                     and a caret only when there are other checkouts to open a session in. */}
-                {(gitLabel || canSwitchWorktree) && (canSwitchWorktree && current ? <span className={styles.worktreeSwitch} onKeyDown={(event) => { if (event.key === 'Escape' && worktreeMenuOpen) { event.stopPropagation(); setWorktreeMenuOpen(false); } }}>
-                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
+                {(gitLabel || canOpenGitMenu) && (canOpenGitMenu && current ? <span className={styles.worktreeSwitch} onKeyDown={(event) => { if (event.key === 'Escape' && worktreeMenuOpen) { event.stopPropagation(); setWorktreeMenuOpen(false); } }}>
+                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu'), t('sessions.reviewGroup')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu') + '\n' + t('sessions.reviewGroup')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
                   {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.worktreeMenu')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
                     <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeMenu')}</span><em>{worktrees.length}</em></div>
                     {worktrees.map((tree) => <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
@@ -2185,6 +2338,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       {tree.branch && <span className={styles.worktreeBranch}>{tree.branch}</span>}
                       {!tree.current && <Icon name="plus" size={12} className={styles.worktreeOpen} />}
                     </button>)}
+                    <span className={styles.reviewDivider} role="separator" />
+                    <div className={styles.reviewGroup} role="group" aria-label={t('sessions.reviewGroup')} onClick={(event) => event.stopPropagation()}>
+                      <span className={styles.reviewLabel} role="presentation">{t('sessions.reviewGroup')}</span>
+                      {reviewError && <p className={styles.reviewError} role="alert">{reviewError}</p>}
+                      <p className={styles.reviewState} data-tone={reviewView.tone} role="status">{reviewView.text}</p>
+                      <p className={styles.reviewStatusLine} title={codeStatus?.worktreePath ?? undefined}><Icon name="branch" size={12} /><span>{codeStatusText(codeStatus, codeStatusStale)}</span></p>
+                      {reviewView.tone === 'unknown' && <p className={styles.reviewHint}>{t('sessions.reviewUnknownHint')}</p>}
+                      {reviewView.tone === 'unconfirmed' && <p className={styles.reviewHint}>{t('sessions.reviewUnconfirmedHint')}</p>}
+                      <button type="button" role="menuitem" disabled={reviewBusy || !!busy} onClick={() => void startReview(current)}>
+                        <Icon name={reviewRetryable ? 'refresh' : 'branch'} size={13} />
+                        <span>{reviewRetryable ? t('sessions.reviewRetry') : t('sessions.reviewStart')}</span>
+                      </button>
+                      <button type="button" role="menuitem" disabled={reviewBusy} onClick={() => setCodeReadSeq((seq) => seq + 1)}>
+                        <Icon name="refresh" size={13} />
+                        <span>{t('sessions.reviewStatusRetry')}</span>
+                      </button>
+                      <p className={styles.reviewHint}>{t('sessions.reviewHint')}</p>
+                    </div>
                   </div>}
                 </span> : <span className={styles.gitChip} title={gitChipTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
                 {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}

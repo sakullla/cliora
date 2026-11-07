@@ -3,7 +3,7 @@ name = "cliora"
 version = "0.4.104"
 description = "Cliora desktop CLI manager"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [lints.rust]
 # rustc excludes linker_messages from the warnings lint group.
@@ -45,7 +45,8 @@ rand = "0.9"
 dirs = "7"
 chrono = { version = "0.4", features = ["serde"] }
 argon2 = "0.5"
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"

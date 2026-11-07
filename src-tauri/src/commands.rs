@@ -132,6 +132,8 @@ pub struct AppState {
     database: Mutex<Option<Arc<Database>>>,
     portable_draft: Mutex<Option<portable::ImportDraft>>,
     workspace: crate::native::workspace::DraftSessions,
+    /// 内存态审查关联：按 reviewId 记录 session、worktree 与最新状态，不持久化。
+    reviews: crate::twiglane::ReviewRegistry,
 }
 
 async fn usage_blocking<T: Send + 'static>(
@@ -3788,6 +3790,71 @@ pub async fn git_worktrees(directory: String) -> Result<Vec<crate::git_context::
         let path = std::path::PathBuf::from(directory);
         Ok(crate::git_context::worktrees(&path).unwrap_or_default())
     }).await
+}
+
+/// Branch, HEAD and the full uncommitted file count of a session's own worktree.
+/// Remote sessions are rejected here, not only hidden in the UI.
+#[tauri::command]
+pub async fn workbench_code_status(session_id: String) -> Result<crate::twiglane::CodeStatus, ApiError> {
+    blocking(move || {
+        let directory = review_directory(&session_id)?;
+        Ok(crate::twiglane::code_status(&session_id, &directory))
+    })
+    .await
+}
+
+/// Only a local session in a real worktree root can be sent to Twiglane.
+fn review_directory(session_id: &str) -> Result<PathBuf, ApiError> {
+    let directory = crate::session_host::local_directory(session_id)
+        .map_err(|_| crate::twiglane::api_error("session_unknown"))?;
+    crate::twiglane::review_target(directory).map_err(crate::twiglane::api_error)
+}
+
+/// Start one review: a fresh reviewId, the canonical worktree path and its HEAD.
+/// Nothing is registered when the system refuses to open the link, so a failed
+/// attempt never looks like a pending one.
+#[tauri::command]
+pub async fn twiglane_start_review(
+    app: AppHandle,
+    session_id: String,
+) -> Result<crate::twiglane::ReviewState, ApiError> {
+    blocking(move || {
+        let directory = review_directory(&session_id)?;
+        let root = crate::twiglane::checked_worktree(&directory).map_err(crate::twiglane::api_error)?;
+        let path = crate::twiglane::url_path(&root).map_err(crate::twiglane::api_error)?;
+        let baseline = crate::twiglane::baseline(&root);
+        let state = crate::twiglane::new_review(&session_id, &path, baseline.clone());
+        let url = crate::twiglane::review_url(&state.review_id, &session_id, &path, baseline.as_deref());
+        tauri_plugin_opener::open_url(&url, None::<&str>)
+            .map_err(|_| crate::twiglane::api_error("open_failed"))?;
+        app.state::<AppState>().reviews.begin(state.clone());
+        Ok(state)
+    })
+    .await
+}
+
+/// The latest review of one session, so the workbench can render after a restart
+/// of the webview or a menu reopen without inventing state.
+#[tauri::command]
+pub async fn twiglane_review_state(
+    app: AppHandle,
+    session_id: String,
+) -> Result<Option<crate::twiglane::ReviewState>, ApiError> {
+    Ok(app.state::<AppState>().reviews.latest_for_session(&session_id))
+}
+
+/// Apply one inbound cliora://review link. Invalid, unknown and superseded links
+/// are ignored without touching any session or repository.
+#[tauri::command]
+pub async fn twiglane_review_link(
+    app: AppHandle,
+    url: String,
+) -> Result<crate::twiglane::LinkOutcome, ApiError> {
+    let outcome = match crate::twiglane::parse_event_url(&url) {
+        Ok(event) => app.state::<AppState>().reviews.apply(event),
+        Err(code) => crate::twiglane::LinkOutcome::ignored(code),
+    };
+    Ok(outcome)
 }
 
 #[tauri::command]
