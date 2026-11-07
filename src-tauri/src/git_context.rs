@@ -51,6 +51,14 @@ pub fn read(directory: &Path) -> Option<GitContext> {
     Some(GitContext { branch, commit, worktree, repository })
 }
 
+/// Resolve only the main checkout. Launch/settings callers do not need to enumerate
+/// every sibling worktree and read all their HEAD/gitdir files just to get this path.
+pub(crate) fn main_checkout(directory: &Path) -> Option<PathBuf> {
+    let (root, git_dir, linked) = locate(directory)?;
+    let common = if linked { common_dir(&git_dir)? } else { git_dir };
+    Some(common.parent().map(Path::to_path_buf).unwrap_or(root))
+}
+
 /// Every checkout of the repository that contains `directory`: the main working
 /// tree first, then each linked worktree. Reads `.git` metadata directly, like
 /// [`read`], so it never spawns `git`. Returns `None` outside a repository and

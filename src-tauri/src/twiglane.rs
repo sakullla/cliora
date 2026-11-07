@@ -24,7 +24,7 @@ const HOST: &str = "review";
 pub(crate) const MAX_URL_BYTES: usize = 2048;
 /// 协议规定的路径长度上限（字符）。
 const MAX_PATH_CHARS: usize = 1000;
-/// `git status --porcelain=v1 --untracked-files=all` 的输出上限。超过即未知，不伪造 0。
+/// Git 输出上限。超过即未知，不伪造 0。
 const MAX_GIT_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 /// 入站事件允许的查询参数名。任何其它名字都是无效输入。
@@ -492,7 +492,7 @@ fn git_command(git: PathBuf) -> Command {
     use std::os::windows::process::CommandExt;
     let mut command = Command::new(git);
     crate::process_environment::apply(&mut command);
-    // workbench_code_status 每 15 秒轮询一次，没有这个标志桌面上会不断闪现 cmd 窗口。
+    // 后台读取不能在桌面上闪现控制台窗口。
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW); // CREATE_NO_WINDOW
     command
@@ -500,6 +500,13 @@ fn git_command(git: PathBuf) -> Command {
 
 /// 用参数数组运行 Git，不经 shell，不访问网络；输出超限即失败，不截断计数。
 fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
+    let mut out = Vec::new();
+    let ok = stream_git(cwd, args, |chunk| { out.extend_from_slice(chunk); Ok(()) })?;
+    Ok((ok, String::from_utf8_lossy(&out).into_owned()))
+}
+
+/// Drain stdout without retaining file paths; all consumers share the same output bound.
+fn stream_git(cwd: &Path, args: &[&str], mut consume: impl FnMut(&[u8]) -> Result<(), &'static str>) -> Result<bool, &'static str> {
     let git = find_git().ok_or("git_missing")?;
     let mut child = git_command(git)
         .arg("-C")
@@ -515,19 +522,24 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "git_missing")?;
-    let mut out = Vec::new();
+    let mut bytes = 0;
     if let Some(mut stdout) = child.stdout.take() {
         let mut chunk = [0u8; 8192];
         loop {
             match stdout.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => {
-                    if out.len() + read > MAX_GIT_OUTPUT_BYTES {
+                    bytes += read;
+                    if bytes > MAX_GIT_OUTPUT_BYTES {
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err("output_too_large");
                     }
-                    out.extend_from_slice(&chunk[..read]);
+                    if let Err(reason) = consume(&chunk[..read]) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(reason);
+                    }
                 }
                 Err(_) => {
                     let _ = child.kill();
@@ -538,7 +550,7 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'static str> {
         }
     }
     let status = child.wait().map_err(|_| "read_failed")?;
-    Ok((status.success(), String::from_utf8_lossy(&out).into_owned()))
+    Ok(status.success())
 }
 
 /// 工作树根目录（rev-parse --show-toplevel 的规范结果）。
@@ -572,15 +584,66 @@ fn head_oid(root: &Path) -> Option<String> {
     (ok && is_oid(text)).then(|| text.to_owned())
 }
 
-fn branch_name(root: &Path) -> Option<String> {
-    let (ok, stdout) = run_git(root, &["symbolic-ref", "--short", "-q", "HEAD"]).ok()?;
-    let text = stdout.trim();
-    (ok && !text.is_empty()).then(|| text.to_owned())
+/// Porcelain v2 includes HEAD and branch in the same snapshot as the count.
+/// Only headers are retained (at most 4 KiB); file records are counted and discarded.
+/// Without -z, Git quotes embedded newlines in paths, including rename paths.
+#[derive(Default)]
+struct StatusSummary {
+    branch: Option<String>,
+    head_oid: Option<String>,
+    files: u64,
+    first: Option<u8>,
+    header: Vec<u8>,
+    saw_branch: bool,
+    saw_head: bool,
 }
 
-/// 按完整 porcelain 记录计数：清理预览的 take(40) 截断不能用于这里。
-pub(crate) fn count_porcelain(output: &str) -> u64 {
-    output.lines().filter(|line| line.trim_end().len() >= 3).count() as u64
+impl StatusSummary {
+    fn push(&mut self, chunk: &[u8]) -> Result<(), &'static str> {
+        for &byte in chunk {
+            if byte == b'\n' {
+                self.finish_line()?;
+                continue;
+            }
+            let first = *self.first.get_or_insert(byte);
+            if first == b'#' {
+                if self.header.len() == 4096 { return Err("output_too_large"); }
+                self.header.push(byte);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_line(&mut self) -> Result<(), &'static str> {
+        match self.first.take() {
+            Some(b'#') => {
+                let header = std::str::from_utf8(&self.header).map_err(|_| "read_failed")?.trim_end();
+                if let Some(oid) = header.strip_prefix("# branch.oid ") {
+                    let sha256 = oid.len() == 64 && oid.bytes().all(|byte| byte.is_ascii_hexdigit());
+                    if oid != "(initial)" && !is_oid(oid) && !sha256 { return Err("read_failed"); }
+                    // The review protocol accepts SHA-1 only; preserve the previous
+                    // unknown HEAD for SHA-256 without losing branch/file status.
+                    self.head_oid = is_oid(oid).then(|| oid.to_owned());
+                    self.saw_head = true;
+                } else if let Some(branch) = header.strip_prefix("# branch.head ") {
+                    if branch.is_empty() { return Err("read_failed"); }
+                    self.branch = (branch != "(detached)").then(|| branch.to_owned());
+                    self.saw_branch = true;
+                }
+                self.header.clear();
+            }
+            Some(b'1' | b'2' | b'u' | b'?') => self.files += 1,
+            None => {},
+            _ => return Err("read_failed"),
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), &'static str> {
+        self.finish_line()?;
+        if !self.saw_head || !self.saw_branch { return Err("read_failed"); }
+        Ok(())
+    }
 }
 
 /// 读取目标 worktree 的真实分支、HEAD 与完整未提交文件数。
@@ -593,19 +656,23 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
         }
     };
     let path = crate::launch::terminal_path(&root).ok();
-    let (ok, stdout) = match run_git(&root, &["status", "--porcelain=v1", "--untracked-files=all"]) {
+    let mut summary = StatusSummary::default();
+    let ok = match stream_git(&root, &["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=all"], |chunk| summary.push(chunk)) {
         Ok(result) => result,
         Err(reason) => return CodeStatus::unknown(session_id, path, reason),
     };
     if !ok {
         return CodeStatus::unknown(session_id, path, "read_failed");
     }
+    if let Err(reason) = summary.finish() {
+        return CodeStatus::unknown(session_id, path, reason);
+    }
     CodeStatus {
         session_id: session_id.into(),
         worktree_path: path,
-        branch: branch_name(&root),
-        head_oid: head_oid(&root),
-        uncommitted_files: Some(count_porcelain(&stdout)),
+        branch: summary.branch,
+        head_oid: summary.head_oid,
+        uncommitted_files: Some(summary.files),
         state: "ready",
         reason: None,
     }
@@ -885,15 +952,38 @@ mod tests {
     }
 
     #[test]
-    fn the_porcelain_count_is_not_truncated_at_forty() {
-        let mut output = String::new();
+    fn status_stream_counts_all_record_types_across_chunk_boundaries() {
+        let mut output = format!("# branch.oid {OID}\n# branch.head feature/中文\n# future.header ignored\n");
         for index in 0..57 {
-            output.push_str(&format!("?? file-{index}.txt\n"));
+            output.push_str(&format!("? file-{index}.txt\n"));
         }
-        output.push_str("R  old.txt -> new.txt\n");
-        output.push_str(" M tracked.txt\n");
-        assert_eq!(count_porcelain(&output), 59);
-        assert_eq!(count_porcelain(""), 0);
+        output.push_str("2 R. N... 100644 100644 100644 oid oid R100 new.txt\told.txt\n");
+        output.push_str("1 .M N... 100644 100644 100644 oid oid tracked.txt\n");
+        output.push_str("u UU N... modes oids conflict.txt\n? \"line\\nbreak.txt\"");
+        for size in [1, 7, 8192] {
+            let mut summary = StatusSummary::default();
+            for chunk in output.as_bytes().chunks(size) { summary.push(chunk).unwrap(); }
+            summary.finish().unwrap();
+            assert_eq!(summary.files, 61);
+            assert_eq!(summary.branch.as_deref(), Some("feature/中文"));
+            assert_eq!(summary.head_oid.as_deref(), Some(OID));
+        }
+    }
+
+    #[test]
+    fn status_stream_does_not_retain_paths_and_rejects_incomplete_headers() {
+        let mut summary = StatusSummary::default();
+        summary.push(b"# branch.oid (initial)\n# branch.head main\n? ").unwrap();
+        let retained = summary.header.capacity();
+        for _ in 0..1024 { summary.push(&[b'x'; 4096]).unwrap(); }
+        summary.push(b"\n").unwrap();
+        summary.finish().unwrap();
+        assert_eq!(summary.files, 1);
+        assert_eq!(summary.header.capacity(), retained);
+        assert_eq!(StatusSummary::default().finish(), Err("read_failed"));
+        let mut oversized = StatusSummary::default();
+        oversized.push(b"# ").unwrap();
+        assert_eq!(oversized.push(&[b'x'; 4096]), Err("output_too_large"));
     }
 
     #[test]
@@ -994,6 +1084,41 @@ mod tests {
         assert!(status.head_oid.is_none());
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!(status.uncommitted_files, Some(0));
+    }
+
+    #[test]
+    fn linked_worktree_status_counts_a_rename_once_and_keeps_its_own_branch() {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(repo) = init_repo(temp.path()) else { return };
+        std::fs::write(repo.join("old name.txt"), "one\n").unwrap();
+        assert!(commit_all(&repo, "root"));
+        let linked = temp.path().join("linked");
+        assert!(git(&repo, &["worktree", "add", "-b", "feature/linked", linked.to_str().unwrap()]));
+        assert!(git(&linked, &["mv", "old name.txt", "new name.txt"]));
+        std::fs::write(linked.join("中文.txt"), "new\n").unwrap();
+        let status = code_status(SESSION_ID, &linked);
+        assert_eq!(status.state, "ready", "{status:?}");
+        assert_eq!(status.branch.as_deref(), Some("feature/linked"));
+        assert_eq!(status.uncommitted_files, Some(2));
+        assert_eq!(code_status(SESSION_ID, &repo).uncommitted_files, Some(0));
+    }
+
+    #[test]
+    fn status_counts_an_unmerged_file_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(repo) = init_repo(temp.path()) else { return };
+        std::fs::write(repo.join("file.txt"), "base\n").unwrap();
+        assert!(commit_all(&repo, "root"));
+        assert!(git(&repo, &["checkout", "-b", "other"]));
+        std::fs::write(repo.join("file.txt"), "other\n").unwrap();
+        assert!(commit_all(&repo, "other"));
+        assert!(git(&repo, &["checkout", "main"]));
+        std::fs::write(repo.join("file.txt"), "main\n").unwrap();
+        assert!(commit_all(&repo, "main"));
+        assert!(!git(&repo, &["-c", "user.name=cliora", "-c", "user.email=cliora@example.com", "merge", "other"]));
+        let status = code_status(SESSION_ID, &repo);
+        assert_eq!(status.state, "ready", "{status:?}");
+        assert_eq!(status.uncommitted_files, Some(1));
     }
 
     #[test]

@@ -18,6 +18,7 @@ fn branch_is_read_from_a_nested_directory() {
     let nested = repo.join("src/orders");
     std::fs::create_dir_all(&nested).unwrap();
     let context = read(&nested).expect("context");
+    assert_eq!(main_checkout(&nested), Some(repo.clone()));
     assert_eq!(context.branch.as_deref(), Some("feature/checkout"));
     assert_eq!(context.commit, None);
     assert_eq!(context.worktree, None);
@@ -44,6 +45,7 @@ fn linked_worktree_names_the_worktree_and_the_main_checkout() {
     let checkout = base.join("cliora-hotfix");
     write(&checkout.join(".git"), &format!("gitdir: {}\n", admin.display()));
     let context = read(&checkout.join("src")).expect("context");
+    assert_eq!(main_checkout(&checkout.join("src")), Some(main));
     assert_eq!(context.branch.as_deref(), Some("hotfix/replay"));
     assert_eq!(context.worktree.as_deref(), Some("cliora-hotfix"));
     assert_eq!(context.repository.as_deref(), Some("cliora"));

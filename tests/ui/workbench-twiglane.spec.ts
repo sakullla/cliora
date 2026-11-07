@@ -172,6 +172,61 @@ async function openGitMenu(page: Page, label: RegExp) {
   return page.getByRole('menu', { name: '在工作树中新开会话' });
 }
 
+test('worktrees are read only for the open menu, including after idle polling and focus', async ({ page }) => {
+  await installDesktop(page);
+  await page.clock.install();
+  await openWorkbench(page);
+  const chip = page.getByRole('region', { name: '当前会话' }).locator('footer').getByLabel(/^Git 分支 feature\/twiglane/);
+  await expect(chip).toBeVisible();
+  const reads = () => page.evaluate(() => (window as unknown as { __harness: { calls: string[] } }).__harness.calls.filter((name) => name === 'git_worktrees').length);
+  await page.clock.fastForward(45_000);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __harness: { calls: string[] } }).__harness.calls.filter((name) => name === 'workbench_code_status'))).toEqual([]);
+  await chip.click();
+  await expect.poll(reads).toBe(1);
+  await page.keyboard.press('Escape');
+  await page.clock.fastForward(45_000);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await reads()).toBe(1);
+  await chip.click();
+  await expect.poll(reads).toBe(2);
+});
+
+test('repeated refreshes serialize Git scans and discard the obsolete result', async ({ page }) => {
+  await installDesktop(page);
+  await page.addInitScript(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, any>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    const scans = { started: 0, active: 0, peak: 0, release: () => {} };
+    Object.assign(window, { __scans: scans });
+    internals.invoke = async (command, args = {}) => {
+      if (command !== 'workbench_code_status') return original(command, args);
+      scans.started += 1;
+      scans.active += 1;
+      scans.peak = Math.max(scans.peak, scans.active);
+      const result = await original(command, args);
+      if (scans.started === 1) await new Promise<void>((resolve) => { scans.release = resolve; });
+      scans.active -= 1;
+      return result;
+    };
+  });
+  await openWorkbench(page);
+  const menu = await openGitMenu(page, /^Git 分支 feature\/twiglane/);
+  const retry = menu.getByRole('menuitem', { name: '重新读取状态' });
+  for (let index = 0; index < 6; index += 1) await retry.click();
+  expect(await page.evaluate(() => (window as unknown as { __scans: { started: number } }).__scans.started)).toBe(1);
+  await page.evaluate(() => {
+    (window as unknown as { __harness: { files: number } }).__harness.files = 99;
+    (window as unknown as { __scans: { release: () => void } }).__scans.release();
+  });
+  await expect(menu).toContainText('99 个未提交文件');
+  expect(await page.evaluate(() => {
+    const { started, peak } = (window as unknown as { __scans: { started: number; peak: number } }).__scans;
+    return { started, peak };
+  })).toEqual({ started: 2, peak: 1 });
+});
+
 test('a local session can start a review and sees the receipt', async ({ page }) => {
   await installDesktop(page);
   await openWorkbench(page);
@@ -234,13 +289,14 @@ test('a rejected review shows the stable reason instead of a raw Git error', asy
   await expect(group.getByRole('status')).toHaveText('Twiglane 没有打开这个工作区 · 目标不是 Git 工作树根目录。');
 });
 
-test('a returned commit is shown as done only when it is the current HEAD of the session worktree', async ({ page }) => {
+test('a returned commit is verified even with the Git menu closed', async ({ page }) => {
   await installDesktop(page);
   await openWorkbench(page);
   const menu = await openGitMenu(page, /^Git 分支 feature\/twiglane/);
   const group = menu.getByRole('group', { name: '在 Twiglane 中审查' });
   await group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
   const started = await page.evaluate(() => (window as unknown as { __harness: { starts: Array<{ reviewId: string }> } }).__harness.starts);
+  await page.keyboard.press('Escape');
 
   // Twiglane really committed: the worktree HEAD is now the returned OID.
   await page.evaluate((oid) => { (window as unknown as { __harness: { headOid: string } }).__harness.headOid = oid; }, NEXT);
@@ -248,9 +304,10 @@ test('a returned commit is shown as done only when it is the current HEAD of the
     'cliora://review?v=1&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=' + '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
   ), started[0].reviewId);
 
-  await expect(group.getByRole('status')).toHaveText('Twiglane 已提交 1a2b3c4。');
-  // 返回结果也在现有提示横幅里说一次，关闭菜单后仍然可见。
+  // A closed menu must still verify HEAD before announcing the returned result.
   await expect(page.getByText('Twiglane 已提交 1a2b3c4。').first()).toBeVisible();
+  await openGitMenu(page, /^Git 分支 feature\/twiglane/);
+  await expect(group.getByRole('status')).toHaveText('Twiglane 已提交 1a2b3c4。');
 });
 
 test('a returned result that no longer matches HEAD stays unconfirmed and keeps the real status', async ({ page }) => {

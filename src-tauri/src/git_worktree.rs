@@ -60,7 +60,7 @@ pub(crate) fn prepare_worktree(
     directory: &Path,
     task_text: Option<&str>,
 ) -> Result<Option<PreparedWorktree>, String> {
-    if crate::git_context::worktrees(directory).is_none() {
+    if crate::git_context::main_checkout(directory).is_none() {
         return Ok(None);
     }
     let git = find_git().ok_or_else(|| "找不到 Git，无法新建工作树。".to_string())?;
@@ -74,16 +74,12 @@ fn prepare_with(
     task_text: Option<&str>,
 ) -> Result<Option<PreparedWorktree>, String> {
     let _guard = CREATE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(trees) = crate::git_context::worktrees(directory) else {
+    let Some(main) = crate::git_context::main_checkout(directory) else {
         return Ok(None);
     };
-    if trees.is_empty() {
-        return Ok(None);
-    }
     if !git.is_file() {
         return Err("找不到 Git，无法新建工作树。".into());
     }
-    let main = PathBuf::from(&trees[0].path);
     let main = main.canonicalize().unwrap_or(main);
     let parent = main.parent().filter(|path| !path.as_os_str().is_empty()).ok_or_else(|| {
         "无法在主检出同级创建工作树。".to_string()
@@ -238,8 +234,7 @@ pub fn cleanup_worktree(db: &Database, path: &Path, confirm: bool) -> Result<Cle
 }
 
 fn canonical_main(directory: &Path) -> Result<PathBuf, String> {
-    let trees = crate::git_context::worktrees(directory).ok_or("这个目录不是 Git 仓库，不能保存环境准备命令。")?;
-    let main = PathBuf::from(&trees[0].path);
+    let main = crate::git_context::main_checkout(directory).ok_or("这个目录不是 Git 仓库，不能保存环境准备命令。")?;
     main.canonicalize().map_err(|_| "主检出目录不可用。".to_string())
 }
 

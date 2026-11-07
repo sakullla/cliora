@@ -42,6 +42,7 @@ docs/verification/*
 !docs/verification/usage-audit-2026-10.md
 !docs/verification/usage-audit-2026-10-18.md
 !docs/verification/performance-after-0.4.17.md
+!docs/verification/git-worktree-performance.md
 !docs/verification/performance-installation/
 docs/verification/performance-installation/*
 !docs/verification/performance-installation/README.md

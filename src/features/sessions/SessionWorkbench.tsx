@@ -339,8 +339,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [split, setSplit] = useState<[string, string] | null>(null);
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
   const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
-  // Checkouts of each session's repository, keyed by the folder they were read from.
-  const [gitWorktrees, setGitWorktrees] = useState<Map<string, WorkbenchWorktree[]>>(() => new Map());
+  // Keep only the current menu's list, rather than every repository ever visited.
+  const [gitWorktrees, setGitWorktrees] = useState<{ anchor: string; trees: WorkbenchWorktree[] } | null>(null);
+  const gitReadPending = useRef<Promise<unknown> | null>(null);
+  const codeReadPending = useRef<Promise<unknown> | null>(null);
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
   const [gitReadSeq, setGitReadSeq] = useState(0);
   // 审查状态只在 native 注册表里判定；这里是它的展示副本，按 sessionId 索引。
@@ -349,10 +351,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [reviewError, setReviewError] = useState('');
   const [codeStatuses, setCodeStatuses] = useState<Map<string, WorkbenchCodeStatus>>(() => new Map());
   const [codeStatusUnknown, setCodeStatusUnknown] = useState<Map<string, boolean>>(() => new Map());
+  const [codeStatusReviews, setCodeStatusReviews] = useState<Map<string, string>>(() => new Map());
   const [codeReadSeq, setCodeReadSeq] = useState(0);
   const [reviewClock, setReviewClock] = useState(() => Date.now());
-  // 迟到的状态读取不能覆盖较新的会话或工作区：每次读取带递增序号。
-  const codeRequests = useRef(new Map<string, number>());
   const announcedReviews = useRef(new Set<string>());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [findCase, setFindCase] = useState(false);
@@ -646,66 +647,125 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     [terminalTools, effectiveLaunchToolId],
   );
   const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
-  // Git branch and the repository's worktrees are a quiet, best-effort hint for local sessions.
-  // Agents switch branches and add worktrees mid-session, so both are re-read together on the
-  // same cadence (and when the window regains focus or the menu opens); reading the worktree
-  // list only once left a worktree created during the session invisible to the switcher.
-  // The list is read from where the session sits, falling back to its project's folder, so a
-  // session started outside a saved project still sees its repository's checkouts.
+  // Refresh the cheap branch hint while visible; enumerate checkouts only in the open menu.
+  // A newly created worktree is read on each opening and while that menu remains visible.
   const gitTarget = active && selected && !selected.projectId?.startsWith('remote:') ? selected.id : null;
   const worktreeAnchor = gitTarget && selected
     ? selected.directory || projects.find((item) => item.id === selected.projectId)?.path || null
     : null;
+  const selectedReview = gitTarget ? reviewStates.get(gitTarget) : null;
+  const returnedReviewId = selectedReview?.status === 'returned' ? selectedReview.reviewId : null;
+  const codeStatusNeeded = worktreeMenuOpen || !!returnedReviewId;
+  useEffect(() => {
+    const ids = new Set(sessions.map((session) => session.id));
+    const retain = <T,>(current: Map<string, T>) => {
+      if ([...current.keys()].every((id) => ids.has(id))) return current;
+      return new Map([...current].filter(([id]) => ids.has(id)));
+    };
+    setGitContexts(retain);
+    setCodeStatuses(retain);
+    setCodeStatusUnknown(retain);
+    setCodeStatusReviews(retain);
+    setReviewStates(retain);
+  }, [sessions]);
+  useEffect(() => {
+    const reviews = new Set([...reviewStates.values()].map((review) => review.reviewId));
+    for (const id of announcedReviews.current) {
+      if (!reviews.has(id)) announcedReviews.current.delete(id);
+    }
+  }, [reviewStates]);
+  useEffect(() => {
+    setGitWorktrees(null);
+  }, [worktreeAnchor]);
   useEffect(() => {
     if (!nativeAvailable || !gitTarget) return;
     let alive = true;
-    const read = () => {
-      if (document.visibilityState === 'hidden') return;
-      void native.workbenchGitContext(gitTarget).then((value) => {
+    let requested = false;
+    let fallbackRead = false;
+    const visible = () => document.visibilityState !== 'hidden';
+    const read = async () => {
+      if (!visible() || requested) return;
+      requested = true;
+      // An effect restart (menu/focus/session change) waits for the prior read.
+      // Its obsolete queued work is discarded before starting more native I/O.
+      await gitReadPending.current;
+      if (!alive || !visible()) { requested = false; return; }
+      let needsFallback = false;
+      const context = native.workbenchGitContext(gitTarget).then((value) => {
         if (!alive) return;
         const next = value && (value.branch || value.commit) ? value : null;
+        // A missing/unreadable HEAD must not hide otherwise discoverable worktrees.
+        // Probe once for this target, rather than enumerating on every idle tick.
+        needsFallback = !next && !fallbackRead;
+        if (needsFallback) fallbackRead = true;
         setGitContexts((current) => {
           if (current.has(gitTarget) && JSON.stringify(current.get(gitTarget)) === JSON.stringify(next)) return current;
           const map = new Map(current);
           map.set(gitTarget, next);
           return map;
         });
-      }).catch(() => {});
-      if (!worktreeAnchor) return;
-      void native.gitWorktrees(worktreeAnchor).then((list) => {
-        if (!alive) return;
-        const next = Array.isArray(list) ? list : [];
-        setGitWorktrees((current) => {
-          if (current.has(worktreeAnchor) && JSON.stringify(current.get(worktreeAnchor)) === JSON.stringify(next)) return current;
-          const map = new Map(current);
-          map.set(worktreeAnchor, next);
-          return map;
+      }).catch(() => {
+        needsFallback = alive && !fallbackRead;
+        if (needsFallback) fallbackRead = true;
+      });
+      const worktrees = context.then(() => {
+        if (!alive || !worktreeAnchor || (!worktreeMenuOpen && !needsFallback)) return;
+        return native.gitWorktrees(worktreeAnchor).then((list) => {
+          if (!alive) return;
+          const next = Array.isArray(list) ? list : [];
+          setGitWorktrees((current) => {
+            if (current?.anchor === worktreeAnchor && JSON.stringify(current.trees) === JSON.stringify(next)) return current;
+            return { anchor: worktreeAnchor, trees: next };
+          });
         });
       }).catch(() => {});
+      const pending = Promise.all([context, worktrees]);
+      gitReadPending.current = pending;
+      await pending;
+      if (gitReadPending.current === pending) gitReadPending.current = null;
+      requested = false;
     };
     read();
     const timer = window.setInterval(read, 15_000);
     window.addEventListener('focus', read);
-    return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); };
-  }, [gitTarget, worktreeAnchor, nativeAvailable, gitReadSeq]);
-  // 目标 worktree 的真实状态：只在本地会话上读取，按 sessionId 与递增序号写入。
+    document.addEventListener('visibilitychange', read);
+    return () => { alive = false; window.clearInterval(timer); window.removeEventListener('focus', read); document.removeEventListener('visibilitychange', read); };
+  }, [gitTarget, worktreeAnchor, nativeAvailable, gitReadSeq, worktreeMenuOpen]);
+  // Full status is needed only in the menu or to verify a returned review.
+  // Keep at most one native scan in flight, even across session switches.
   // 迟到响应直接丢弃；读取失败保留上一次可读的值，但明确标成未知并允许重试。
   useEffect(() => {
-    if (!nativeAvailable || !gitTarget) return;
+    if (!nativeAvailable || !gitTarget || !codeStatusNeeded) return;
     let alive = true;
-    const seq = (codeRequests.current.get(gitTarget) ?? 0) + 1;
-    codeRequests.current.set(gitTarget, seq);
-    const stale = () => !alive || codeRequests.current.get(gitTarget) !== seq;
-    void native.workbenchCodeStatus(gitTarget).then((value) => {
-      if (stale() || !value || value.sessionId !== gitTarget || (value.state !== 'ready' && value.state !== 'unknown')) return;
-      setCodeStatuses((current) => { const map = new Map(current); map.set(gitTarget, value); return map; });
-      setCodeStatusUnknown((current) => { if (!current.get(gitTarget)) return current; const map = new Map(current); map.delete(gitTarget); return map; });
-    }).catch(() => {
-      if (stale()) return;
-      setCodeStatusUnknown((current) => { if (current.get(gitTarget)) return current; const map = new Map(current); map.set(gitTarget, true); return map; });
-    });
+    const markReviewRead = () => {
+      if (!returnedReviewId) return;
+      setCodeStatusReviews((current) => {
+        if (current.get(gitTarget) === returnedReviewId) return current;
+        const map = new Map(current);
+        map.set(gitTarget, returnedReviewId);
+        return map;
+      });
+    };
+    const read = async () => {
+      await codeReadPending.current;
+      if (!alive) return;
+      const pending = native.workbenchCodeStatus(gitTarget).then((value) => {
+        if (!alive || !value || value.sessionId !== gitTarget || (value.state !== 'ready' && value.state !== 'unknown')) return;
+        setCodeStatuses((current) => { const map = new Map(current); map.set(gitTarget, value); return map; });
+        setCodeStatusUnknown((current) => { if (!current.get(gitTarget)) return current; const map = new Map(current); map.delete(gitTarget); return map; });
+        markReviewRead();
+      }).catch(() => {
+        if (!alive) return;
+        setCodeStatusUnknown((current) => { if (current.get(gitTarget)) return current; const map = new Map(current); map.set(gitTarget, true); return map; });
+        markReviewRead();
+      });
+      codeReadPending.current = pending;
+      await pending;
+      if (codeReadPending.current === pending) codeReadPending.current = null;
+    };
+    void read();
     return () => { alive = false; };
-  }, [gitTarget, codeReadSeq, nativeAvailable, focusToken, reviewSignal?.token]);
+  }, [gitTarget, worktreeAnchor, codeStatusNeeded, returnedReviewId, codeReadSeq, nativeAvailable, focusToken, reviewSignal?.token]);
   // 审查状态由 native 注册表判定，这里只读取最新一条。打开菜单、收到回执和切换会话
   // 都会重读，因此被新链接取代的旧请求不会被迟到的回执改写。
   useEffect(() => {
@@ -734,12 +794,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!gitTarget) return;
     const review = reviewStates.get(gitTarget);
     if (!review || review.status !== 'returned' || announcedReviews.current.has(review.reviewId)) return;
+    if (codeStatusReviews.get(gitTarget) !== review.reviewId) return;
     const status = codeStatuses.get(gitTarget) ?? null;
     const unknownStatus = !!codeStatusUnknown.get(gitTarget);
     if (!status && !unknownStatus) return;
     announcedReviews.current.add(review.reviewId);
     setNotice(describeReview(review, status, unknownStatus).text);
-  }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown]);
+  }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown, codeStatusReviews]);
   const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
   // The dialog launches on the selected run location, so its prompts come from that host.
   const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
@@ -2214,14 +2275,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const remoteHost = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined;
           const hostLabel = remote ? remoteHost?.name ?? 'SSH' : t('common.host.local');
           // Offer the worktree menu only when the repository actually has more than one checkout.
-          const worktrees = current?.id === gitTarget && worktreeAnchor ? gitWorktrees.get(worktreeAnchor) ?? [] : [];
+          const worktrees = current?.id === gitTarget && worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees?.trees ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
           // 只有一个 checkout 时菜单没有别的选择，但仍然要提供审查入口和真实状态。
           const canOpenGitMenu = !!current && !remote && (canSwitchWorktree || !!gitLabel);
           const review = current ? reviewStates.get(current.id) ?? null : null;
           const codeStatus = current ? codeStatuses.get(current.id) ?? null : null;
           const codeStatusStale = !!current && (!!codeStatusUnknown.get(current.id) || !codeStatus || codeStatus.state !== 'ready');
-          const reviewView = describeReview(review, codeStatus, codeStatusStale);
+          const reviewUnverified = !!current && review?.status === 'returned' && codeStatusReviews.get(current.id) !== review.reviewId;
+          const reviewView = describeReview(review, codeStatus, codeStatusStale || reviewUnverified);
           const reviewWaiting = !!review && review.status === 'opening' && reviewClock - review.createdAt < REVIEW_UNKNOWN_MS;
           // 发起中不重复点击；失败、超时或拒绝都可以重新发起，并一定拿到新的 reviewId。
           const reviewRetryable = !!review && !reviewWaiting && (review.status === 'rejected' || review.status === 'opening');
