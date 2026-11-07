@@ -98,6 +98,26 @@ test('project cards keep one launch action and home never scrolls sideways', asy
     const buttons = split.getByRole('button');
     await expect(buttons).toHaveCount(2);
     await buttons.nth(1).hover();
+    const mainButton = split.locator('[data-variant="primary"]');
+    const tokens = await split.evaluate((element) => {
+      const resolve = (token: string) => {
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = `var(${token})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      return { fill: resolve('--accent-fill'), ink: resolve('--on-accent') };
+    });
+    // The button paints animate (base.css transitions background-color and color), so a sampled
+    // style right after a theme switch or re-render can be a mid-transition color under parallel
+    // worker CPU contention. Wait for the transition to settle before sampling the full paint.
+    await expect.poll(() => mainButton.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return `${style.backgroundColor}|${style.color}`;
+    })).toBe(`${tokens.fill}|${tokens.ink}`);
+    await expect.poll(() => buttons.nth(1).evaluate((element) => getComputedStyle(element).color)).toBe(tokens.ink);
     const paint = await split.evaluate((element) => {
       const resolve = (token: string) => {
         const probe = document.createElement('span');
@@ -141,6 +161,17 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   await remoteSwitch.click();
   await expect(remoteSwitch).toBeChecked();
   const expectSwitchPaint = async () => {
+    const fill = await remoteSwitch.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = 'var(--accent-fill)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    // base.css transitions the switch track background-color over --medium; poll until the
+    // transition has reached the resolved accent fill instead of reading a mid-transition color.
+    await expect.poll(() => remoteSwitch.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(fill);
     const paint = await remoteSwitch.evaluate((element) => {
       const resolve = (token: string) => {
         const probe = document.createElement('span');
