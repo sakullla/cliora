@@ -1,7 +1,7 @@
 /** Native Windows IME acceptance for the workbench terminal (R14).
  *
- * Drives nothing on its own: an operator types with the real system IME into an
- * explicitly isolated Cliora instance while this script records, through the
+ * Drives nothing on its own: an operator types with the real system IME into a
+ * separately built Cliora test instance while this script records, through the
  * instance's WebView2 CDP endpoint,
  *   - composition / key / input event order on the terminal helper textarea,
  *   - the textarea's screen rectangle,
@@ -11,23 +11,47 @@
  * the expected text exactly once and a candidate window was seen next to the input
  * cell. Synthetic events are never recorded as native evidence.
  *
- * Preconditions (all required, see docs/verification/ui-ux-2026-11-07/ime/manifest.json):
- *   - a separately built release Cliora with its own identifier, e.g.
- *     `npm run tauri build -- --no-bundle --config '{"identifier":"com.cliora.imetest"}'`
- *     (own data/profile; the single-instance plugin cannot hand input to the user's
- *     running app; a debug build would re-register cliora:// on Windows), started with
- *     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>;
- *   - a scratch workbench session (a plain shell in an empty folder) as receiver;
- *   - CLIORA_IME_ISOLATED=1 to confirm the above, CLIORA_CDP_URL for the endpoint,
- *     CLIORA_IME_PID (or --pid) for the isolated cliora.exe process.
+ * What the test instance does and does not separate (read before running):
+ *   Separate, because they derive from the bundle identifier (com.cliora.imetest):
+ *     - app data and the SQLite database (%APPDATA%\com.cliora.imetest\cliora.db),
+ *     - the WebView2 profile (%LOCALAPPDATA%\com.cliora.imetest\EBWebView),
+ *     - the single-instance lock, so input is never handed to the user's running app.
+ *   A release build does not register cliora:// at runtime (a Windows debug build would).
+ *   NOT separate (same Windows user, same machine):
+ *     - the credential store namespace is the fixed service name com.cliora.desktop
+ *       (src-tauri/src/credentials.rs), shared with the user's Cliora. The fresh
+ *       database references no credential, but adding an account, connection, WebDAV
+ *       or API key in the test instance would write into the user's namespace;
+ *     - native CLI directories and configs in the user profile (~/.codex, ~/.claude, …),
+ *       PATH, Git and SSH configuration. The tools/config/library screens can read and
+ *       write them. Use only the workbench, in an empty scratch folder.
+ *   It is a separate process and profile, not a sandbox.
+ *   Workbench sessions always run an installed CLI (there is no plain shell), so the
+ *   receiving session is a real CLI started by the operator in an empty folder. It
+ *   uses the user's own CLI login and native directories; never press Enter on IME
+ *   test text in an agent prompt.
+ *
+ * Preconditions (see docs/verification/ui-ux-2026-11-07/ime/manifest.json):
+ *   - `node scripts/verify-ime.mjs build` (release, identifier com.cliora.imetest,
+ *     private frontend and cargo target under --work, default .vite/ime-native);
+ *   - `node scripts/verify-ime.mjs launch` starts it with a WebView2 CDP port
+ *     (default 9333) and prints its pid;
+ *   - CLIORA_IME_ISOLATED=1, CLIORA_CDP_URL=http://127.0.0.1:<port> and --pid
+ *     (or CLIORA_IME_PID). preflight and record refuse to attach unless the CDP
+ *     port is opened by a WebView2 browser process whose parent is --pid and whose
+ *     profile lies under the test identifier, never com.cliora.desktop.
+ *   - a scratch workbench session (an installed CLI started in an empty folder) as receiver.
  *
  * Usage:
- *   node scripts/verify-ime.mjs preflight [--pid <cliora.exe pid>]
- *   node scripts/verify-ime.mjs record [--pid <pid>] [--only basic,repeat] [--out <dir>]
+ *   node scripts/verify-ime.mjs build [--work <dir>]
+ *   node scripts/verify-ime.mjs launch [--work <dir>] [--port 9333]
+ *   node scripts/verify-ime.mjs preflight --pid <pid>
+ *   node scripts/verify-ime.mjs record --pid <pid> [--only basic,repeat] [--out <dir>]
+ *   node scripts/verify-ime.mjs stop --pid <pid>
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -38,13 +62,77 @@ export const SCENARIOS = [
   { id: 'repeat', expected: '哈哈', steps: 'Type "ha", confirm 哈 with Space, then type "ha" and confirm 哈 again.' },
   { id: 'cancel', expected: '', steps: 'Type "shengji" and press Esc until the composition disappears.' },
   { id: 'english-paste-emoji', expected: null, steps: 'Switch to English, type "ok", paste a short text, then insert one emoji with Win+.; enter the expected text when asked.' },
-  { id: 'output', expected: '升级', steps: 'Start continuous output in the scratch shell (e.g. ping -t 127.0.0.1), then type "shengji" and confirm 升级 with Space. Stop the output afterwards.' },
+  { id: 'output', expected: '升级', steps: 'Before starting the recording, make the scratch session print continuously (for example in Claude Code type "! ping -n 60 127.0.0.1" and press Enter). Then start the recording, type "shengji" and confirm 升级 with Space while it prints.' },
   { id: 'session-switch', expected: '', steps: 'Start "shengji" in session A, switch to session B (rail tab or Ctrl+Tab) before confirming, then return to A. Nothing may be sent.' },
   { id: 'split-focus', expected: '升级', steps: 'Open a split, click the other pane, then type "shengji" and confirm 升级 there. Only that pane may receive it.' },
   { id: 'leave-return', expected: '升级', steps: 'Go to 首页 and back to 工作台, then type "shengji" and confirm 升级.' },
   { id: 'window-blur', expected: '升级', steps: 'Alt+Tab to another window and back, then type "shengji" and confirm 升级.' },
   { id: 'resize-zoom', expected: '升级', steps: 'Make the window narrower and shorter, press Ctrl+= once, then type "shengji" and confirm 升级. Reset with Ctrl+0.' },
+  // Orders only a native trace can show (review of T2-A1); `orders` in the report records them.
+  { id: 'commit-then-key', expected: '升级', steps: 'Type "shengji", confirm 升级 with Space and at once type "s", then press Esc until that new composition disappears. A late repeat of 升级 after the "s" key would show as a double send.' },
+  { id: 'ctrl-c-after', expected: '升级\u0003', steps: 'Type "shengji", confirm 升级 with Space, then press Ctrl+C once. The interrupt must still reach the shell after the composition.' },
+  { id: 'ctrl-c-composing', expected: '\u0003', steps: 'Type "shengji" and, while the pinyin is still shown, press Ctrl+C once. Press Esc until the composition disappears, then press Ctrl+C once more. (A CLI may offer to exit on a second Ctrl+C; do not press a third.)' },
 ];
+
+/** Event orders the bridge cannot settle without a native trace. Informational, not pass checks. */
+export function traceOrders(events) {
+  const orders = { nonImeKeyWhileComposing: [], repeatAfterKeydown: 0, endDataWithoutInsert: 0, openWithoutEnd: false };
+  let composing = false;
+  let ended = null;
+  const settle = () => {
+    if (ended && ended.data && !ended.inserted && ended.valueLength === 0) orders.endDataWithoutInsert += 1;
+    ended = null;
+  };
+  for (const item of events) {
+    if (item.type === 'compositionstart') { settle(); composing = true; }
+    else if (item.type === 'compositionend') { composing = false; ended = { data: item.data ?? '', valueLength: item.valueLength ?? null, keyAfter: false, inserted: false }; }
+    else if (item.type === 'keydown') {
+      if (composing && item.keyCode !== 229) orders.nonImeKeyWhileComposing.push({ key: item.key, keyCode: item.keyCode, isComposing: item.isComposing });
+      if (ended) ended.keyAfter = true;
+    } else if (item.type === 'input' && item.inputType === 'insertText' && ended) {
+      if (ended.keyAfter && item.data === ended.data) orders.repeatAfterKeydown += 1;
+      ended.inserted = true;
+    }
+  }
+  settle();
+  orders.openWithoutEnd = composing;
+  return orders;
+}
+
+/**
+ * Refuse to attach unless the CDP port belongs to the isolated test instance: a
+ * WebView2 browser process (no --type) opened that exact port, its parent is `pid`,
+ * and its profile lies under the test identifier. Pure; exported for the contract test.
+ */
+export function checkIsolation({ pid, port, identifier, processes }) {
+  const problems = [];
+  const lower = (value) => String(value ?? '').toLowerCase();
+  if (!identifier || lower(identifier) === 'com.cliora.desktop') problems.push(`Identifier ${identifier || '(empty)'} is the user app's identifier.`);
+  const app = processes.find((item) => item.ProcessId === pid);
+  if (!app) problems.push(`No process with pid ${pid}.`);
+  else if (!/^cliora/i.test(app.Name ?? '')) problems.push(`Process ${pid} is ${app.Name}, not a Cliora executable.`);
+  const portOf = (line) => /--remote-debugging-port=(\d+)/.exec(line ?? '')?.[1];
+  const browsers = processes.filter((item) => /msedgewebview2/i.test(item.Name ?? '') && !/--type=/.test(item.CommandLine ?? '') && portOf(item.CommandLine) === String(port));
+  if (!browsers.length) problems.push(`No WebView2 browser process opened CDP port ${port}.`);
+  for (const browser of browsers) {
+    if (browser.ParentProcessId !== pid) problems.push(`CDP port ${port} is opened by WebView2 ${browser.ProcessId} under process ${browser.ParentProcessId}, not ${pid}.`);
+    const profile = lower(/--user-data-dir=(?:"([^"]+)"|(\S+))/.exec(browser.CommandLine ?? '')?.slice(1).find(Boolean));
+    if (!profile) problems.push(`WebView2 ${browser.ProcessId} has no explicit profile.`);
+    else if (profile.includes('com.cliora.desktop')) problems.push(`WebView2 ${browser.ProcessId} uses the user's profile ${profile}.`);
+    else if (!profile.replace(/\//g, '\\').includes(`\\${lower(identifier)}\\`)) problems.push(`WebView2 ${browser.ProcessId} profile ${profile} is not under ${identifier}.`);
+  }
+  return problems;
+}
+
+function listProcesses() {
+  const script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'cliora*' -or $_.Name -eq 'msedgewebview2.exe' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress -Depth 2";
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (result.status !== 0) throw new Error(`Failed: process list ${result.stderr?.trim() || result.status}`);
+  const text = result.stdout.trim();
+  if (!text) return [];
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
 
 /** Pure evaluation of one recorded scenario; exported for the contract test. */
 export function summarizeScenario(scenario, record) {
@@ -67,7 +155,7 @@ export function summarizeScenario(scenario, record) {
     checks.push({ name: 'candidate window observed', ok: candidates.length > 0, detail: candidates.length });
     checks.push({ name: 'candidate window next to the input cell', ok: placed.length > 0 && atOrigin.length === 0, detail: { placed: placed.length, atOrigin: atOrigin.length } });
   }
-  return { id: scenario.id, sent, sessions, writes: record.writes.length, checks, ok: checks.every((item) => item.ok) };
+  return { id: scenario.id, sent, sessions, writes: record.writes.length, checks, orders: traceOrders(record.events), ok: checks.every((item) => item.ok) };
 }
 
 // Win32 sampler: visible top-level windows with class, process and rect, plus the
@@ -135,7 +223,7 @@ const PROBE = String.raw`(() => {
     if (!(target instanceof HTMLTextAreaElement) || !target.classList.contains('xterm-helper-textarea')) return;
     events.push({
       t: performance.now(), type: event.type, key: event.key, keyCode: event.keyCode, isComposing: event.isComposing,
-      inputType: event.inputType, data: event.data ?? null,
+      inputType: event.inputType, data: event.data ?? null, valueLength: target.value.length,
       pane: target.closest('[data-pane-session]')?.getAttribute('data-pane-session') ?? null,
       rect: rect(target), style: { left: target.style.left, top: target.style.top, width: target.style.width, height: target.style.height },
     });
@@ -161,8 +249,8 @@ const PROBE = String.raw`(() => {
 
 async function connect(url) {
   const list = await (await fetch(`${url}/json`, { signal: AbortSignal.timeout(10000) })).json();
-  const page = list.find((item) => item.type === 'page');
-  if (!page) throw new Error('Failed: no page on the CDP endpoint');
+  const page = list.find((item) => item.type === 'page' && /^https?:\/\/tauri\.localhost\//.test(item.url ?? ''));
+  if (!page) throw new Error(`Failed: no Cliora release page on the CDP endpoint (pages: ${JSON.stringify(list.filter((item) => item.type === 'page').map((item) => item.url))})`);
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   let id = 0;
   const pending = new Map();
@@ -217,13 +305,77 @@ function newWindows(baseline, samples, pid) {
   return [...seen.values()];
 }
 
+export const IDENTIFIER = 'com.cliora.imetest';
+
+/** Tauri config overlay for the test build; the frontend and cargo output stay under `work`. */
+export function testBuildConfig(work, root) {
+  // An absolute Windows path would parse as a URL with scheme "c:"; Tauri resolves
+  // frontendDist relative to src-tauri, so pass it that way.
+  const dist = relative(resolve(root, 'src-tauri'), resolve(work, 'dist')).replace(/\\/g, '/');
+  // Tauri passes the script to the shell as is; quotes would reach vite literally.
+  const outDir = relative(root, resolve(work, 'dist')).replace(/\\/g, '/');
+  if (/\s/.test(outDir)) throw new Error(`Failed: --work must not contain spaces (${outDir})`);
+  return {
+    identifier: IDENTIFIER,
+    productName: 'Cliora IME Test',
+    build: { beforeBuildCommand: { script: `npx vite build --outDir ${outDir} --emptyOutDir`, cwd: root.replace(/\\/g, '/') }, frontendDist: dist },
+    bundle: { createUpdaterArtifacts: false },
+    app: { windows: [{ title: 'Cliora IME Test (isolated)', width: 1160, height: 780, minWidth: 720, minHeight: 560, backgroundColor: '#f5f5f1', titleBarStyle: 'Overlay', hiddenTitle: true }] },
+  };
+}
+
+const builtExecutable = (work) => ['cliora.exe', 'Cliora IME Test.exe'].map((name) => resolve(work, 'target', 'release', name)).find((file) => existsSync(file));
+
 async function main() {
   const args = process.argv.slice(2);
   const option = (name, fallback) => { const index = args.indexOf(name); return index < 0 ? fallback : args[index + 1]; };
   const mode = args[0] ?? 'preflight';
-  const out = resolve(option('--out', 'docs/verification/ui-ux-2026-11-07/ime/native'));
+  const root = resolve(import.meta.dirname, '..');
+  const work = resolve(option('--work', resolve(root, '.vite', 'ime-native')));
+  if (process.platform !== 'win32') { console.error('Failed: native IME acceptance needs Windows.'); process.exit(2); }
+
+  if (mode === 'build') {
+    mkdirSync(work, { recursive: true });
+    const config = resolve(work, 'tauri.imetest.json');
+    writeFileSync(config, JSON.stringify(testBuildConfig(work, root), null, 2) + '\n');
+    // Release only: a Windows debug build registers cliora:// at runtime.
+    const result = spawnSync('npx', ['tauri', 'build', '--no-bundle', '--config', `"${config}"`], { cwd: root, shell: true, stdio: 'inherit', env: { ...process.env, CARGO_TARGET_DIR: resolve(work, 'target') } });
+    const exe = builtExecutable(work);
+    if (result.status !== 0 || !exe) { console.error(`Failed: tauri build exited ${result.status}${exe ? '' : '; no executable under target/release'}`); process.exit(1); }
+    console.log(`built: ${exe}`);
+    process.exit(0);
+  }
+
+  if (mode === 'launch') {
+    const exe = builtExecutable(work);
+    if (!exe) { console.error(`Failed: no test executable under ${work}; run build first.`); process.exit(2); }
+    const port = Number(option('--port', '9333'));
+    const busy = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) }).then(() => true, () => false);
+    if (busy) { console.error(`Failed: something already answers on port ${port}; choose another --port.`); process.exit(2); }
+    const child = spawn(exe, [], { detached: true, stdio: 'ignore', env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` } });
+    child.unref();
+    console.log(`launched ${exe}\npid ${child.pid}\n$env:CLIORA_IME_ISOLATED='1'; $env:CLIORA_CDP_URL='http://127.0.0.1:${port}'; $env:CLIORA_IME_PID='${child.pid}'`);
+    process.exit(0);
+  }
+
   const pid = Number(option('--pid', process.env.CLIORA_IME_PID ?? '0'));
   const cdp = process.env.CLIORA_CDP_URL;
+  const ownership = () => {
+    const url = new URL(cdp);
+    if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return [`CDP endpoint ${cdp} is not local.`];
+    return checkIsolation({ pid, port: Number(url.port), identifier: IDENTIFIER, processes: listProcesses() });
+  };
+
+  if (mode === 'stop') {
+    if (!Number.isInteger(pid) || pid <= 0 || !cdp) { console.error('Failed: pass --pid and CLIORA_CDP_URL of the test instance.'); process.exit(2); }
+    const problems = ownership();
+    if (problems.length) { console.error(`Refused: ${problems.join(' ')}`); process.exit(2); }
+    const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+    console.log(result.status === 0 ? `stopped ${pid} and its child processes` : `Failed: taskkill exited ${result.status}`);
+    process.exit(result.status === 0 ? 0 : 1);
+  }
+
+  const out = resolve(option('--out', 'docs/verification/ui-ux-2026-11-07/ime/native'));
   const report = { schemaVersion: 1, synthetic: false, mode, capturedAt: new Date().toISOString(), status: 'not_verified', environment: {}, scenarios: [], limitations: [] };
   const finish = (code) => {
     mkdirSync(out, { recursive: true });
@@ -232,12 +384,14 @@ async function main() {
     console.log(`${report.status}: ${file}`);
     process.exit(code);
   };
-  if (process.platform !== 'win32') { report.limitations.push('Native IME acceptance needs Windows.'); finish(2); }
-  if (process.env.CLIORA_IME_ISOLATED !== '1') { report.limitations.push('Set CLIORA_IME_ISOLATED=1 only for a separately built instance with its own data; the user app is never driven.'); finish(2); }
-  if (!cdp) { report.limitations.push('Set CLIORA_CDP_URL to the isolated instance WebView2 endpoint.'); finish(2); }
-  if (!Number.isInteger(pid) || pid <= 0) { report.limitations.push('Pass --pid or CLIORA_IME_PID for the isolated cliora.exe.'); finish(2); }
+  if (process.env.CLIORA_IME_ISOLATED !== '1') { report.limitations.push('Set CLIORA_IME_ISOLATED=1 only for the separately built test instance; the user app is never driven.'); finish(2); }
+  if (!cdp) { report.limitations.push('Set CLIORA_CDP_URL to the test instance WebView2 endpoint.'); finish(2); }
+  if (!Number.isInteger(pid) || pid <= 0) { report.limitations.push('Pass --pid or CLIORA_IME_PID for the test cliora.exe.'); finish(2); }
+  // Nothing is installed in a page before the endpoint is proven to be the test instance's.
+  const problems = ownership();
+  if (problems.length) { report.status = 'refused'; report.limitations.push(...problems); finish(2); }
   const page = await connect(cdp);
-  report.environment = { ...(await page.evaluate(PROBE)), pid, cdp };
+  report.environment = { ...(await page.evaluate(PROBE)), pid, cdp, identifier: IDENTIFIER };
   if (!report.environment.bridge.length || report.environment.bridge.some((value) => value !== 'ready')) report.limitations.push(`Terminal IME bridge is not ready: ${JSON.stringify(report.environment.bridge)}.`);
   const sampler = startSampler(pid);
   await new Promise((done) => setTimeout(done, 1500));
@@ -250,7 +404,7 @@ async function main() {
   const only = option('--only', '');
   const chosen = SCENARIOS.filter((item) => !only || only.split(',').includes(item.id));
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  console.log('Use the scratch session only. Do not type private text. Press Enter in this console to start and again to finish each scenario.');
+  console.log('Use the scratch session only. Do not type private text and never press Enter on test text in an agent prompt. Press Enter in this console to start and again to finish each scenario.');
   for (const scenario of chosen) {
     let expected = scenario.expected;
     await prompt.question(`\n[${scenario.id}] ${scenario.steps}\nFocus the terminal, then press Enter here to start recording… `);

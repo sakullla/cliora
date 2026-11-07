@@ -300,3 +300,50 @@ test('native IME report rejects double sends, origin candidates and missing cand
   const leaked = summarizeScenario({ id: 'session-switch', expected: '' }, { events, writes: [{ sessionId: 's2', text: '升级' }], candidates: [{ left: 500, top: 425, right: 800, bottom: 470 }] });
   assert.equal(leaked.ok, false);
 });
+
+test('native IME attach refuses any CDP port that is not the test instance', async () => {
+  const { checkIsolation, IDENTIFIER } = await import('../../scripts/verify-ime.mjs');
+  const app = { ProcessId: 500, ParentProcessId: 1, Name: 'cliora.exe' };
+  const browser = (parent, profile, port = 9333) => ({ ProcessId: parent + 1, ParentProcessId: parent, Name: 'msedgewebview2.exe',
+    CommandLine: `"msedgewebview2.exe" --embedded-browser-webview=1 --user-data-dir="${profile}" --remote-debugging-port=${port}` });
+  const own = 'C:\\Users\\u\\AppData\\Local\\com.cliora.imetest\\EBWebView';
+  const user = 'C:\\Users\\u\\AppData\\Local\\com.cliora.desktop\\EBWebView';
+  const renderer = { ProcessId: 900, ParentProcessId: 501, Name: 'msedgewebview2.exe', CommandLine: 'msedgewebview2.exe --type=renderer --remote-debugging-port=9333' };
+  assert.deepEqual(checkIsolation({ pid: 500, port: 9333, identifier: IDENTIFIER, processes: [app, browser(500, own), renderer] }), []);
+  // The user's app opened the port: refused even when --pid names a real Cliora.
+  const userApp = { ProcessId: 14696, ParentProcessId: 1, Name: 'cliora.exe' };
+  assert.ok(checkIsolation({ pid: 500, port: 9333, identifier: IDENTIFIER, processes: [app, userApp, browser(14696, user)] }).some((item) => /not 500/.test(item)));
+  // --pid pointing at the user's app with its profile: refused.
+  assert.ok(checkIsolation({ pid: 14696, port: 9333, identifier: IDENTIFIER, processes: [userApp, browser(14696, user)] }).some((item) => /user's profile/.test(item)));
+  assert.ok(checkIsolation({ pid: 500, port: 9333, identifier: IDENTIFIER, processes: [app] }).some((item) => /No WebView2/.test(item)));
+  assert.ok(checkIsolation({ pid: 500, port: 9333, identifier: IDENTIFIER, processes: [app, browser(500, own, 9222)] }).some((item) => /No WebView2/.test(item)));
+  assert.ok(checkIsolation({ pid: 500, port: 9333, identifier: 'com.cliora.desktop', processes: [app, browser(500, user)] }).length > 0);
+  assert.ok(checkIsolation({ pid: 500, port: 9333, identifier: IDENTIFIER, processes: [{ ...app, Name: 'notepad.exe' }, browser(500, own)] }).some((item) => /not a Cliora/.test(item)));
+});
+
+test('native IME build config isolates identifier and output without touching the shared dist', async () => {
+  const { testBuildConfig, IDENTIFIER } = await import('../../scripts/verify-ime.mjs');
+  const config = testBuildConfig('C:\\repo\\.vite\\ime-native', 'C:\\repo');
+  assert.equal(config.identifier, IDENTIFIER);
+  assert.notEqual(config.identifier, 'com.cliora.desktop');
+  assert.equal(config.build.frontendDist, '../.vite/ime-native/dist');
+  assert.match(config.build.beforeBuildCommand.script, /--outDir \.vite\/ime-native\/dist /);
+  assert.doesNotMatch(config.build.beforeBuildCommand.script, /"/);
+  assert.throws(() => testBuildConfig('C:\\repo\\my dir', 'C:\\repo'), /spaces/);
+});
+
+test('native IME trace records the orders only a real IME can produce', async () => {
+  const { traceOrders, SCENARIOS } = await import('../../scripts/verify-ime.mjs');
+  for (const id of ['commit-then-key', 'ctrl-c-after', 'ctrl-c-composing']) assert.ok(SCENARIOS.some((item) => item.id === id), id);
+  // (a) the commit repeated as insertText after another keydown.
+  assert.equal(traceOrders([{ type: 'compositionstart' }, { type: 'compositionend', data: '升级', valueLength: 2 }, { type: 'keydown', keyCode: 229 }, { type: 'input', inputType: 'insertText', data: '升级' }]).repeatAfterKeydown, 1);
+  // (b) compositionend data with an empty textarea and no trailing insertText.
+  assert.equal(traceOrders([{ type: 'compositionstart' }, { type: 'compositionend', data: '升级', valueLength: 0 }, { type: 'keydown', keyCode: 65 }]).endDataWithoutInsert, 1);
+  assert.equal(traceOrders([{ type: 'compositionstart' }, { type: 'compositionend', data: '升级', valueLength: 0 }, { type: 'input', inputType: 'insertText', data: '升级' }]).endDataWithoutInsert, 0);
+  // (c) a composition without an end, and non-IME keys seen while it is open.
+  const open = traceOrders([{ type: 'compositionstart' }, { type: 'keydown', key: 'c', keyCode: 67, isComposing: false }]);
+  assert.equal(open.openWithoutEnd, true);
+  assert.deepEqual(open.nonImeKeyWhileComposing, [{ key: 'c', keyCode: 67, isComposing: false }]);
+  const clean = traceOrders([{ type: 'compositionstart' }, { type: 'keydown', keyCode: 229 }, { type: 'compositionend', data: '升级', valueLength: 2 }, { type: 'input', inputType: 'insertText', data: '升级' }]);
+  assert.deepEqual(clean, { nonImeKeyWhileComposing: [], repeatAfterKeydown: 0, endDataWithoutInsert: 0, openWithoutEnd: false });
+});
