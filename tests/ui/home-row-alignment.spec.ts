@@ -80,16 +80,21 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   const heights = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(new Set(heights).size).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
-  // Wide cards keep identity and launch on one row: the launch button sits beside the
-  // project text block instead of on a row of its own below it.
-  const sideBySide = async () => cards.evaluateAll((nodes) => nodes.map((node) => {
-    const identity = node.querySelector('strong')!.closest('div')!.parentElement!.getBoundingClientRect();
+  // Every card stacks the same parts at any width: identity first, then one action row whose
+  // launch button ends the row, so cards in a column line their launch buttons up.
+  const layout = async () => cards.evaluateAll((nodes) => nodes.map((node) => {
+    const card = node.getBoundingClientRect();
+    const title = node.querySelector('strong')!;
+    const identity = title.closest('div')!.parentElement!.getBoundingClientRect();
     const launch = node.querySelector('[data-split-variant]')!.getBoundingClientRect();
-    return launch.top >= identity.top - 1 && launch.bottom <= identity.bottom + 1 && launch.left >= identity.right;
+    return { below: launch.top >= identity.bottom - 1, endGap: Math.round(card.right - launch.right), nameShown: title.clientWidth >= title.scrollWidth - 1 };
   }));
-  expect(await sideBySide()).toEqual([true, true]);
-  await page.setViewportSize({ width: 900, height: 900 });
-  expect(await sideBySide()).toEqual([true, true]);
+  for (const width of [1360, 900]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await layout();
+    expect(rows.every((row) => row.below && row.nameShown)).toBe(true);
+    expect(new Set(rows.map((row) => row.endGap)).size).toBe(1);
+  }
   await page.setViewportSize({ width: 1360, height: 900 });
 
   // Both split-button halves use the color tokens as backgrounds, not as invalid background images.
@@ -208,4 +213,86 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   const edges = await rows.getByRole('button', { name: /^(启动|重新检测)$/ }).evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().left) + '-' + Math.round(node.getBoundingClientRect().right)));
   expect(new Set(edges).size).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});
+
+// The reported screenshot: five remote projects on one host, Claude Code and Codex mixed, every
+// card carrying both the 远程 and YOLO badges in a two-column grid. Names must stay readable and
+// the picker / launch / more row must line up the same way on every card.
+async function installRemoteFive(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:remote-target', 'fixture-host');
+    const tools = [['claude_code', 'Claude Code'], ['codex', 'Codex']];
+    const target = { id: 'fixture-host', name: 'Remote fixture', host: '192.0.2.10', port: 22, user: 'fixture', authMethod: 'key', enabled: true, createdAt: 1, updatedAt: 1 };
+    const projects = ['website', 'admin-dashboard', 'cliora', 'documentation', 'backend'].map((name, index) => ({ id: `p${index}`, targetId: target.id, name, path: `/srv/teams/product/projects/${name}`, preferredTool: index === 2 || index === 4 ? 'codex' : 'claude_code', updatedAt: 1 }));
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 0,
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map((x) => x[0]), theme: 'light', remote_ssh_enabled: true }, tools: tools.map(([id, name]) => ({ id, name })) };
+          if (command === 'list_cli_adapters') return { registered: tools.map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launch: { state: 'available', reason: '' } })), managedIds: tools.map((x) => x[0]), preservedUnknown: [] };
+          if (command === 'list_remote_targets') return [target];
+          if (command === 'list_remote_projects') return projects;
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'yolo' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'probe_remote_clis') return (args.toolIds as string[]).map((toolId) => ({ targetId: target.id, toolId, executable: toolId, installed: true, version: 'fixture', detail: null }));
+          if (command === 'get_remote_tool_store') return { profiles: [], common: null, currentFiles: {} };
+          if (command === 'get_registered_tool_workspace') return { probe: { tool: args.toolId, selectedPath: '/fixture/cli', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [] }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+          if (command.startsWith('plugin:event|')) return 0;
+          return [];
+        },
+      },
+    });
+  });
+}
+
+test('five remote projects with mixed tools and both badges keep names and actions aligned', async ({ page }) => {
+  await installRemoteFive(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+  const cards = page.locator('[data-project-id^="remote:"]');
+  await expect(cards).toHaveCount(5);
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    for (const width of [1360, 1280, 900, 640]) {
+      await page.setViewportSize({ width, height: 900 });
+      const rows = await cards.evaluateAll((nodes) => nodes.map((node) => {
+        const card = node.getBoundingClientRect();
+        const title = node.querySelector('strong')!;
+        const titleBox = title.getBoundingClientRect();
+        const select = node.querySelector<HTMLElement>('button[aria-haspopup="listbox"]')!.getBoundingClientRect();
+        const split = node.querySelector('[data-split-variant]')!.getBoundingClientRect();
+        const more = node.querySelector('button[aria-haspopup="menu"][aria-label$="的更多操作"]')!.getBoundingClientRect();
+        const badges = [...node.querySelectorAll('[data-tone]')].map((badge) => badge.textContent);
+        const inside = [...node.querySelectorAll('button, strong, [data-tone]')].every((element) => {
+          const box = element.getBoundingClientRect();
+          return box.left >= card.left - 0.5 && box.right <= card.right + 0.5;
+        });
+        return {
+          name: title.textContent,
+          nameShown: title.clientWidth >= title.scrollWidth - 1 && titleBox.width > 30,
+          badges,
+          top: Math.round(card.top),
+          launchTop: Math.round(split.top - card.top),
+          launchEnd: Math.round(card.right - split.right),
+          moreEnd: Math.round(card.right - more.right),
+          noOverlap: select.right <= split.left + 0.5 && split.right <= more.left + 0.5 && split.top >= titleBox.bottom,
+          inside,
+        };
+      }));
+      const label = `${theme} ${width}`;
+      for (const row of rows) {
+        expect(row.nameShown, `${label} ${row.name}`).toBe(true);
+        expect(row.badges, `${label} ${row.name}`).toEqual(['远程', 'YOLO']);
+        expect(row.noOverlap, `${label} ${row.name}`).toBe(true);
+        expect(row.inside, `${label} ${row.name}`).toBe(true);
+      }
+      // One arrangement for every card: same launch row offset and the same end edge.
+      expect(new Set(rows.map((row) => row.launchTop)).size, label).toBe(1);
+      expect(new Set(rows.map((row) => row.launchEnd)).size, label).toBe(1);
+      expect(new Set(rows.map((row) => row.moreEnd)).size, label).toBe(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), label).toBeLessThanOrEqual(0);
+    }
+  }
 });

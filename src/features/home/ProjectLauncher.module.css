@@ -1,4 +1,4 @@
-.workspace { display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; container-type: inline-size; }
+.workspace { display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; container: launcher / inline-size; }
 
 /* Advanced resume by id stays folded behind one disclosure. */
 .quick { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
@@ -20,9 +20,11 @@
 .projectSearch > input { width: 100%; }
 .noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); text-align: center; }
 
-/* Identity and current context lead; launch is the only primary action. */
+/* Identity and current context lead; launch is the only primary action. Every card stacks the same
+   three parts at any width: name (own line), status/context and directory, then one action row.
+   The card is its own container so narrow cards adapt to their width, not the page width. */
 .projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: var(--space-2_5); }
-.project { position: relative; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+.project { position: relative; align-content: start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); container: project-card / inline-size; animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
 .project:hover { border-color: var(--line-strong); }
 .project:focus-visible { outline: var(--focus-ring); outline-offset: -1px; border-color: var(--accent); }
 .repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: var(--focus-ring); outline-offset: -1px; box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -31,19 +33,40 @@
 .projectTitle > svg, .projectTitle > :first-child { flex: none; }
 .projectTitle > svg { color: var(--text-2); }
 .projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
-.projectTitle > [data-tone] { flex: none; }
-.contextLine, .metaLine { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
+.contextLine, .metaLine { display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
 .contextLine { color: var(--text-2); font-size: var(--fs-caption); }
 .contextLine > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Status badges never shrink; the host address gives way first, then the tool name. */
+.contextLine > .badges { display: inline-flex; flex: none; gap: var(--space-1); overflow: visible; }
+.contextTool { flex: 0 1 auto; }
+.contextHost { flex: 0 100 auto; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
 .contextProfile { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
 .cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .remoteProject { border-color: var(--accent-line); }
-.controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-1_5); min-width: 0; }
-.controls .toolSelect { flex: 1 1 112px; min-width: 0; }
+/* One action row: the tool picker (or an empty lead) takes the flexible start, launch and more
+   always end the row, so equal-width cards line their buttons up regardless of tool names. */
+.controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-width: 0; }
+.controls .toolSelect { justify-self: start; width: 100%; max-width: 260px; min-width: 0; }
 .controls .toolSelect > button { min-height: var(--control-h-sm); font-size: var(--fs-caption); }
-.controls .actions { flex: none; flex-wrap: nowrap; }
+.controls .actions { flex-wrap: nowrap; justify-content: flex-end; }
+.controlsLead { min-width: 0; }
+.cardError { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-caption); line-height: 1.5; }
+.cardError > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.cardErrorClose { display: grid; flex: none; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
+.cardErrorClose:hover { background: var(--danger-soft); }
+.cardErrorClose:focus-visible { outline: var(--focus-ring); }
 .currentTool { margin-left: auto; padding-left: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); }
+
+/* Full project identity: every value in full, selectable, with its own copy action. */
+.infoList { display: grid; gap: var(--space-2_5); margin: 0; }
+.infoRow { display: grid; gap: var(--space-1); min-width: 0; }
+.infoRow > dt { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.infoRow > dd { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.infoValue, .infoValueMono { flex: 1 1 220px; min-width: 0; color: var(--text); font-size: var(--fs-body); overflow-wrap: anywhere; user-select: text; }
+.infoValueMono { font-family: var(--font-mono); font-size: var(--fs-caption); }
+.infoActions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
+.infoCopyFailed { color: var(--danger); font-size: var(--fs-caption); }
 
 .emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-height: var(--row-h); padding: var(--space-4); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); }
 .emptyIcon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
@@ -89,24 +112,24 @@
 .error, .feedback { padding: var(--space-2_5) var(--space-3); border: 1px solid; border-radius: var(--radius-sm); font-size: var(--fs-body); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 .errorText { flex: 1 1 220px; min-width: 0; }
+.errorTitle { font-weight: var(--fw-semibold); }
 .errorAction, .errorAction:hover:not(:disabled) { flex: none; border-color: var(--danger-line); color: var(--danger); }
 .errorHint { flex: 1 1 auto; min-width: 0; color: var(--text-2); font-size: var(--fs-micro); }
 .feedback { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-@container (max-width: 420px) {
+@container launcher (max-width: 420px) {
   .quick > summary small { display: none; }
+}
+@container project-card (max-width: 420px) {
   .contextLine, .metaLine { padding-left: 0; }
-  .controls { justify-content: flex-start; }
 }
-/* Wide enough for identity and launch side by side: the card keeps one compact row and the
-   launch button sits level with the project name instead of on a row of its own. Notices
-   (session id, pending profile, unmanaged tool) still span the full card. */
-@container (min-width: 520px) {
-  .project { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-4); }
-  .project > * { grid-column: 1 / -1; }
-  .project > .identity { grid-column: 1; }
-  .project > .controls { grid-column: 2; align-self: center; }
+/* Very narrow cards give the tool picker its own row; launch and more stay together at the end. */
+@container project-card (max-width: 330px) {
+  .controls { grid-template-columns: minmax(0, 1fr); }
+  .controls .toolSelect { max-width: none; }
+  .controlsLead { display: none; }
+  .controls .actions { justify-self: end; }
 }
-@container (min-width: 620px) {
+@container launcher (min-width: 620px) {
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }
 }

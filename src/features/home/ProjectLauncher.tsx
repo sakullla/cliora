@@ -21,7 +21,38 @@ import { Badge, Button, Card, SplitButton, Toolbar } from '../../components/ui';
 import { ensureRemoteProject, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
+import { ProjectInfoDialog, type ProjectInfoRow } from './ProjectInfoDialog';
 import styles from './ProjectLauncher.module.css';
+
+/** Remote reads keep their own outcome so a failed read never looks like an empty host. */
+type RemoteRead = { state: 'idle' | 'loading' | 'ready' | 'failed'; error: string; loaded: boolean; failures: number };
+const remoteIdle: RemoteRead = { state: 'idle', error: '', loaded: false, failures: 0 };
+
+/** Same address form as the host switcher: the default SSH port is implied. */
+function remoteAddress(target: RemoteTarget): string {
+  return `${target.user}@${target.host}${target.port && target.port !== 22 ? `:${target.port}` : ''}`;
+}
+
+/**
+ * Directory labels keep the most telling tail of each path. Two segments by default; more
+ * segments are kept only while another project in the same list ends the same way.
+ */
+function distinctPaths(paths: string[]): Map<string, string> {
+  const items = [...new Set(paths)].map((path) => {
+    const normal = displayPath(path);
+    const sep = normal.includes('\\') ? '\\' : '/';
+    return { path, normal, sep, parts: normal.split(/[\\/]/).filter(Boolean) };
+  });
+  const tail = (item: typeof items[number], count: number) => item.parts.slice(-count).join('/');
+  const labels = new Map<string, string>();
+  for (const item of items) {
+    if (/^https?:\/\//i.test(item.normal)) { labels.set(item.path, shortPath(item.path)); continue; }
+    let count = Math.min(2, item.parts.length);
+    while (count < item.parts.length && items.some((other) => other !== item && tail(other, count) === tail(item, count))) count += 1;
+    labels.set(item.path, count >= item.parts.length ? item.normal : `…${item.sep}${item.parts.slice(-count).join(item.sep)}`);
+  }
+  return labels;
+}
 
 export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
@@ -56,6 +87,11 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
+  const [remoteRead, setRemoteRead] = useState<RemoteRead>(remoteIdle);
+  const remoteGeneration = useRef(0);
+  // Card-level failures (open directory) stay on the card that triggered them.
+  const [cardError, setCardError] = useState<{ id: string; message: string } | null>(null);
+  const [infoId, setInfoId] = useState<string | null>(null);
   const remotePicker = useRemoteFolderPicker();
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
@@ -154,16 +190,43 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     return () => { active = false; };
   }, []);
 
+  /** Reads hosts and remote projects together; a failure keeps the last good list and says so. */
+  async function loadRemote(retry = false, withTargets = true) {
+    const generation = ++remoteGeneration.current;
+    setRemoteRead((old) => ({ ...old, state: 'loading', error: retry ? old.error : '' }));
+    try {
+      // Hosts and projects settle separately so a failed project read still names its host.
+      const [targetRead, itemRead] = await Promise.allSettled([withTargets ? native.listRemoteTargets() : Promise.resolve(null), native.listRemoteProjects()]);
+      if (generation !== remoteGeneration.current || !mounted.current) return;
+      const targets = targetRead.status === 'fulfilled' ? targetRead.value : null;
+      if (Array.isArray(targets)) setRemoteTargets(targets.filter((target) => target.enabled));
+      if (targetRead.status === 'rejected') throw targetRead.reason;
+      if (itemRead.status === 'rejected') throw itemRead.reason;
+      const items = itemRead.value;
+      if ((targets !== null && !Array.isArray(targets)) || !Array.isArray(items)) throw new Error(t('home.launcher.invalidData'));
+      setRemoteProjects(items);
+      setRemoteRead({ state: 'ready', error: '', loaded: true, failures: 0 });
+    } catch (value) {
+      // A late failure from an older read must not replace the outcome of a newer one.
+      if (generation !== remoteGeneration.current || !mounted.current) return;
+      setRemoteRead((old) => ({ state: 'failed', error: formatFailure(value, t('home.remote.listFailed'), t('home.remote.listNext')), loaded: old.loaded, failures: retry ? old.failures + 1 : 0 }));
+    }
+  }
+
   useEffect(() => {
-    if (!nativeAvailable || !remoteSshEnabled) { setRemoteTargets([]); setRemoteProjects([]); return; }
-    let active = true;
-    void Promise.all([native.listRemoteTargets(), native.listRemoteProjects()]).then(([targets, projects]) => {
-      if (!active) return;
-      setRemoteTargets(targets.filter((target) => target.enabled));
-      setRemoteProjects(projects);
-    }).catch(() => {});
-    return () => { active = false; };
+    if (!nativeAvailable || !remoteSshEnabled) { remoteGeneration.current += 1; setRemoteTargets([]); setRemoteProjects([]); setRemoteRead(remoteIdle); return; }
+    void loadRemote();
+    return () => { remoteGeneration.current += 1; };
   }, [remoteSshEnabled]);
+
+  // Entering another host re-reads its projects; a failed re-read keeps the last good list marked stale.
+  const remoteScopeSeen = useRef(remoteTargetId);
+  useEffect(() => {
+    if (remoteScopeSeen.current === remoteTargetId) return;
+    remoteScopeSeen.current = remoteTargetId;
+    if (!nativeAvailable || !remoteSshEnabled || remoteTargetId === 'local') return;
+    void loadRemote(false, false);
+  }, [remoteTargetId]);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -287,10 +350,15 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     finally { setBusy(''); }
   }
 
-  async function openProject(project: Project) {
+  /** The editor shows its own error; a card menu shows the failure on that card, not in a closed dialog. */
+  async function openProject(project: Project, surface: 'card' | 'dialog' = 'dialog') {
     setDialogError(''); setDialogFeedback('');
+    setCardError((current) => current?.id === project.id ? null : current);
     try { await native.openProjectDirectory(project.id); }
-    catch (value) { showDialogError(value); }
+    catch (value) {
+      if (surface === 'dialog') showDialogError(value);
+      else setCardError({ id: project.id, message: formatFailure(value, t('home.launcher.openDirFailed'), t('home.launcher.openDirNext')) });
+    }
   }
 
   async function copyPath(project: Project) {
@@ -351,6 +419,23 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     finally { launchPending.current = false; setBusy(''); }
   }
 
+  function localInfo(project: Project, toolName?: string): ProjectInfoRow[] {
+    return [
+      { id: 'name', label: t('home.launcher.infoName'), value: project.name },
+      { id: 'host', label: t('home.launcher.infoHost'), value: t('home.launcher.infoLocal') },
+      { id: 'path', label: t('home.launcher.infoPath'), value: project.path ? displayPath(project.path) : t('home.launcher.noDirectory'), mono: !!project.path },
+      ...(toolName ? [{ id: 'tool', label: t('home.launcher.infoTool'), value: toolName }] : []),
+    ];
+  }
+  function remoteInfo(project: RemoteProject, target?: RemoteTarget): ProjectInfoRow[] {
+    return [
+      { id: 'name', label: t('home.launcher.infoName'), value: project.name },
+      ...(target?.name ? [{ id: 'host', label: t('home.launcher.infoHost'), value: target.name }] : []),
+      { id: 'address', label: t('home.launcher.infoAddress'), value: target ? remoteAddress(target) : t('home.launcher.infoHostUnknown'), mono: !!target },
+      { id: 'path', label: t('home.launcher.infoRemotePath'), value: project.path, mono: true },
+    ];
+  }
+
   async function removeRemote(project: RemoteProject) {
     if (!await confirmAction(t('home.remote.removeConfirm', { name: project.name }), () => mounted.current, { title: t('home.remote.remove'), confirmLabel: t('home.remote.remove'), destructive: true })) return;
     begin(`remote:${project.id}`);
@@ -369,14 +454,25 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const visibleProjects = projectNeedle ? scopedProjects.filter((project) => `${project.name} ${project.path ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedProjects;
   const visibleRemoteProjects = projectNeedle ? scopedRemoteProjects.filter((project) => `${project.name} ${project.path} ${remoteTargets.find((target) => target.id === project.targetId)?.host ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedRemoteProjects;
   const totalProjects = scopedProjects.length + scopedRemoteProjects.length;
+  const remoteScope = remoteTargetId !== 'local';
+  const scopeTarget = remoteScope ? remoteTargets.find((target) => target.id === remoteTargetId) : undefined;
+  // A remote read failure is kept until a later read succeeds, including while the retry runs.
+  const remoteFailed = remoteScope && !!remoteRead.error;
+  const remoteLoading = remoteScope && remoteRead.state === 'loading';
+  const remoteUnread = remoteScope && !remoteRead.loaded;
+  const scopeReadFailed = remoteScope ? remoteUnread && remoteFailed : listFailed;
+  const scopeLoading = (listLoading && !totalProjects) || (remoteUnread && remoteLoading && !scopedRemoteProjects.length) || (remoteScope && remoteRead.state === 'idle' && remoteSshEnabled);
+  const remoteHostLabel = scopeTarget?.name || t('home.remote.currentHost');
+  const pathLabels = distinctPaths(remoteScope ? scopedRemoteProjects.map((project) => project.path) : scopedProjects.flatMap((project) => project.path ? [project.path] : []));
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
     <Toolbar className={styles.heading} title={t('home.continue.title')} count={totalProjects || undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button> : undefined} />
     {error && <div className={styles.error} role="alert" aria-busy={listLoading || undefined}><span className={styles.errorText}>{error}</span>{listFailed && reloadFailures > 0 && !listLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} loading={listLoading} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
+    {remoteFailed && <div className={styles.error} role="alert" aria-busy={remoteLoading || undefined} data-remote-read={remoteRead.loaded ? 'stale' : 'failed'}><span className={styles.errorText}><strong className={styles.errorTitle}>{remoteRead.loaded ? t('home.remote.refreshFailed', { host: remoteHostLabel }) : t('home.remote.readFailed', { host: remoteHostLabel })}</strong> {remoteRead.error}</span>{remoteRead.failures > 0 && !remoteLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}<Button size="sm" variant="ghost" className={styles.errorAction} loading={remoteLoading} disabled={remoteLoading} onClick={() => void loadRemote(true)}>{t('home.remote.retry')}</Button></div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
     {totalProjects > 0 && <p className={styles.sectionHint}>{t('home.continue.hint')}</p>}
     {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
-    {listLoading && !totalProjects ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
+    {scopeLoading ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
     {visibleProjects.map((project) => {
       const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
@@ -390,20 +486,23 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const profileId = project.selectedProfiles[toolId] ?? project.appliedProfiles[toolId];
       return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
         <div className={styles.identity}>
-          <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</div>
-          <div className={styles.contextLine}><span>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileId}>{t('home.launcher.currentProfile', { id: profileId })}</span>}</div>
-          <div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div>
+          <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div>
+          <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileId}>{t('home.launcher.currentProfile', { id: profileId })}</span>}</div>
+          <div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? pathLabels.get(project.path) ?? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div>
         </div>
         <div className={styles.controls}>
+          <span className={styles.controlsLead} aria-hidden="true" />
           <div className={styles.actions}>
-            <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
             {descriptor?.resumeLatestAvailable && <Button size="sm" variant="ghost" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</Button>}
+            <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
             <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
               <button type="button" role="menuitem" onClick={() => setEditingId(project.id)}><Icon name="pencil" size={14} /><span>{t('home.launcher.edit')}</span></button>
-              <button type="button" role="menuitem" aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="folder" size={14} /><span>{t('home.launcher.openDir')}</span></button>
+              <button type="button" role="menuitem" onClick={() => setInfoId(project.id)}><Icon name="info" size={14} /><span>{t('home.launcher.info')}</span></button>
+              <button type="button" role="menuitem" aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project, 'card')}><Icon name="folder" size={14} /><span>{t('home.launcher.openDir')}</span></button>
             </RowMenu>
           </div>
         </div>
+        {cardError?.id === project.id && <div className={styles.cardError} role="alert"><span>{cardError.message}</span><button type="button" className={styles.cardErrorClose} aria-label={t('home.launcher.dismissError')} title={t('home.launcher.dismissError')} onClick={() => setCardError(null)}><Icon name="close" size={13} /></button></div>}
         {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} /></label><Button size="sm" disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</Button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
         {!toolId && <div className={styles.hint}>{t('home.launcher.toolUnmanaged')}</div>}
         {pendingProfile && <div className={styles.extra} data-tone="pending"><span>{project.reapplyProfiles?.[toolId] ? t('home.launcher.reapplyRelinked') : t('home.launcher.pendingProfile')}</span><Button size="sm" disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>{t('home.launcher.apply')}</Button></div>}
@@ -419,7 +518,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
           </section>
           <section className={styles.editSection} aria-labelledby={`${project.id}-directory`}>
             <h3 id={`${project.id}-directory`}>{t('home.launcher.sectionDirectory')}</h3>
-            {project.path && <div className={styles.projectPath}><Icon name="folder" size={15} /><small>{displayPath(project.path)}</small><span className={styles.pathActions}><Button size="sm" variant="ghost" icon={<Icon name="copy" size={13} />} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}>{copiedPath === displayPath(project.path) ? t('home.launcher.copied') : copiedPath === `fail:${displayPath(project.path)}` ? t('home.launcher.copyFailed') : t('home.launcher.copyPath')}</Button><Button size="sm" variant="ghost" icon={<Icon name="arrowUpRight" size={13} />} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>{t('home.launcher.openDir')}</Button></span></div>}
+            {project.path && <div className={styles.projectPath}><Icon name="folder" size={15} /><small>{displayPath(project.path)}</small><span className={styles.pathActions}><Button size="sm" variant="ghost" icon={<Icon name="copy" size={13} />} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}>{copiedPath === displayPath(project.path) ? t('home.launcher.copied') : copiedPath === `fail:${displayPath(project.path)}` ? t('home.launcher.copyFailed') : t('home.launcher.copyPath')}</Button><Button size="sm" variant="ghost" icon={<Icon name="arrowUpRight" size={13} />} disabled={!!busy || !project.available} onClick={() => void openProject(project, 'dialog')}>{t('home.launcher.openDir')}</Button></span></div>}
             <div className={styles.editRow} data-tone={project.available ? undefined : 'warning'}><span>{project.available ? t('home.launcher.relink') : t('home.launcher.relinkMoved')}</span><span className={styles.editRowActions}><Button size="sm" disabled={busy === project.id} onClick={() => void chooseDirectory(project)}>{t('home.launcher.chooseDir')}</Button><Button size="sm" aria-expanded={pasteExpanded} onClick={() => setPasteOpen((old) => ({ ...old, [project.id]: !pasteExpanded }))}>{t('home.launcher.pastePath')}</Button></span></div>
             {pasteExpanded && <div className={styles.editInline}><input ref={repair?.projectId === project.id ? repairDirectoryInput : undefined} aria-label={t('home.launcher.newDirAria', { name: project.name })} value={relink[project.id] ?? ''} placeholder={t('home.launcher.newDirPlaceholder')} onChange={(event) => setRelink((old) => ({ ...old, [project.id]: event.target.value }))} /><Button disabled={busy === project.id || !relink[project.id]?.trim()} onClick={() => void relinkProject(project)}>{t('home.launcher.link')}</Button></div>}
           </section>
@@ -433,6 +532,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
           </section>
           </div>
         </GuideDialog>
+        <ProjectInfoDialog open={infoId === project.id} title={t('home.launcher.infoTitle', { name: project.name })} rows={localInfo(project, descriptor?.name)} onClose={() => setInfoId(null)} />
       </Card>;
     })}
     </div>}
@@ -444,23 +544,27 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
         const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
         return <Card padding="compact" className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
           <div className={styles.identity}>
-            <div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong><Badge tone="accent">{t('home.remote.badge')}</Badge>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</div>
-            <div className={styles.contextLine}><span>{descriptor?.name ?? t('home.launcher.pickTool')}</span></div>
-            <div className={styles.metaLine}><span className={styles.cardPath} title={`${target?.user ?? ''}@${target?.host ?? ''}:${target?.port ?? ''} · ${project.path}`}>{target ? `${target.user}@${target.host}:${target.port} · ${project.path}` : project.path}</span></div>
+            <div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong></div>
+            <div className={styles.contextLine}><span className={styles.badges}><Badge tone="accent">{t('home.remote.badge')}</Badge>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</span><span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{target && <span className={styles.contextHost} title={remoteAddress(target)}>{remoteAddress(target)}</span>}</div>
+            <div className={styles.metaLine}><span className={styles.cardPath} title={project.path}>{pathLabels.get(project.path) ?? shortPath(project.path)}</span></div>
           </div>
           <div className={styles.controls}>
             <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} />
             <div className={styles.actions}>
               <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
-              <RowMenu label={t('home.launcher.moreActions', { name: project.name })}><button type="button" role="menuitem" data-danger="true" onClick={() => void removeRemote(project)}><Icon name="trash" size={14} /><span>{t('home.remote.remove')}</span></button></RowMenu>
+              <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
+                <button type="button" role="menuitem" onClick={() => setInfoId(`remote:${project.id}`)}><Icon name="info" size={14} /><span>{t('home.launcher.info')}</span></button>
+                <button type="button" role="menuitem" data-danger="true" onClick={() => void removeRemote(project)}><Icon name="trash" size={14} /><span>{t('home.remote.remove')}</span></button>
+              </RowMenu>
             </div>
           </div>
+          <ProjectInfoDialog open={infoId === `remote:${project.id}`} title={t('home.launcher.infoTitle', { name: project.name })} rows={remoteInfo(project, target)} onClose={() => setInfoId(null)} />
         </Card>;
       })}
     </div>}
     {/* A failed read keeps its own error band above; only a successful empty read offers the empty state. */}
     </> : projectQuery.trim() ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p>
-    : listFailed ? null
+    : scopeReadFailed ? null
     : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t('home.continue.emptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>

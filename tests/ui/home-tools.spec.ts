@@ -1484,3 +1484,105 @@ test('recent sessions expose empty and failed reads, then recover to a resumable
   }
 });
 
+
+/** One host with two projects that share a name and a tail directory, plus a long Chinese name. */
+async function installProjectDetails(page: Page) {
+  await page.addInitScript(() => {
+    const host = { id: 'host-1', name: '测试主机', host: '10.0.0.2', port: 22, user: 'dev', authMethod: 'key', identityFile: null, sshConfig: null, defaultPath: '/srv', enabled: true, createdAt: 1, updatedAt: 1 };
+    localStorage.setItem('cliora:remote-target', host.id);
+    const remote = [
+      { id: 'a', targetId: host.id, name: 'api', path: '/srv/team-a/services/api', preferredTool: 'codex', updatedAt: 1 },
+      { id: 'b', targetId: host.id, name: 'api', path: '/srv/team-b/services/api', preferredTool: 'codex', updatedAt: 1 },
+      { id: 'c', targetId: host.id, name: '栖点桌面工具远程开发环境主仓库与发布脚本', path: '/srv/teams/product/projects/cliora-desktop-release-pipeline', preferredTool: 'codex', updatedAt: 1 },
+    ];
+    const state = { copied: [] as string[], failCopy: false, launches: 0 };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { if (state.failCopy) throw new Error('denied'); state.copied.push(value); } } });
+    const exec = document.execCommand.bind(document);
+    document.execCommand = (command: string, ...rest: unknown[]) => command === 'copy' && state.failCopy ? false : exec(command, ...(rest as [boolean, string]));
+    Object.assign(window, {
+      isTauri: true,
+      __details: state,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', yoloAvailable: false }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_remote_targets') return [host];
+        if (command === 'list_remote_projects') return remote;
+        if (command === 'probe_remote_clis') return (args.toolIds as string[]).map((toolId) => ({ targetId: host.id, toolId, executable: toolId, installed: true, version: '1.0.0', detail: null }));
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'launch_cli') { state.launches += 1; return { mode: 'normal', status: 'terminal_requested' }; }
+        if (command.startsWith('list_')) return [];
+        return null;
+      } },
+    });
+  });
+}
+
+const details = (page: Page) => page.evaluate(() => (window as unknown as { __details: { copied: string[]; failCopy: boolean; launches: number } }).__details);
+
+test('remote project details are keyboard readable and copyable, and the same host keeps directories apart', async ({ page }) => {
+  await installProjectDetails(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+  const projects = page.getByRole('region', { name: '项目与启动' });
+  const first = projects.locator('[data-project-id="remote:a"]');
+  const second = projects.locator('[data-project-id="remote:b"]');
+  // Same name on the same host: the directory label keeps the segment that tells them apart.
+  await expect(first.locator('[class*="cardPath"]')).toHaveText('…/team-a/services/api');
+  await expect(second.locator('[class*="cardPath"]')).toHaveText('…/team-b/services/api');
+  await expect(first.locator('[class*="contextHost"]')).toHaveText('dev@10.0.0.2');
+
+  // Keyboard only: the more menu opens on 项目信息 and the dialog shows every value in full.
+  const more = first.getByRole('button', { name: 'api 的更多操作', exact: true });
+  await more.focus();
+  await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu', { name: 'api 的更多操作' });
+  await expect(menu.getByRole('menuitem').first()).toBeFocused();
+  await expect(menu.getByRole('menuitem').first()).toHaveText('项目信息');
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'api 的项目信息' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('/srv/team-a/services/api');
+  await expect(dialog).toContainText('dev@10.0.0.2');
+  await expect(dialog).toContainText('测试主机');
+  const copyPath = dialog.getByRole('button', { name: '复制远程目录', exact: true });
+  await copyPath.focus();
+  await page.keyboard.press('Enter');
+  await expect(copyPath).toHaveText('已复制');
+  expect((await details(page)).copied).toEqual(['/srv/team-a/services/api']);
+
+  // A copy failure stays beside its row and the value stays readable.
+  await page.evaluate(() => { (window as unknown as { __details: { failCopy: boolean } }).__details.failCopy = true; });
+  await dialog.getByRole('button', { name: '复制连接地址', exact: true }).click();
+  await expect(dialog.locator('[data-info-row="address"]').getByRole('alert')).toContainText('复制失败');
+  await expect(dialog.locator('[data-info-row="path"]').getByRole('alert')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(more).toBeFocused();
+  expect((await details(page)).launches).toBe(0);
+
+  // A long Chinese name keeps its own title line and the full name is in its details.
+  const long = projects.locator('[data-project-id="remote:c"]');
+  const title = await long.locator('strong').first().evaluate((node) => ({ width: node.getBoundingClientRect().width, card: node.closest('[data-project-id]')!.getBoundingClientRect().width }));
+  expect(title.width).toBeGreaterThan(title.card * 0.6);
+  await long.getByRole('button', { name: /的更多操作$/ }).click();
+  await page.getByRole('menuitem', { name: '项目信息', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('栖点桌面工具远程开发环境主仓库与发布脚本');
+  await expect(page.getByRole('dialog')).toContainText('/srv/teams/product/projects/cliora-desktop-release-pipeline');
+});
+
+test('local project details show the full directory and never launch', async ({ page }) => {
+  await installSplitLaunch(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="demo"]');
+  await card.getByRole('button', { name: 'Demo 的更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: 'Demo 的更多操作' }).getByRole('menuitem', { name: '项目信息', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Demo 的项目信息' });
+  await expect(dialog.locator('[data-info-row="path"]')).toContainText('C:/demo');
+  await expect(dialog.locator('[data-info-row="host"]')).toContainText('本机');
+  await expect(dialog.getByRole('button', { name: '复制目录', exact: true })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  expect(await splitCalls(page)).toEqual([]);
+});
