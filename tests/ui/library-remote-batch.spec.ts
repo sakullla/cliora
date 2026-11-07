@@ -29,7 +29,7 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
     }));
     const calls: Array<Record<string, unknown>> = [];
-    const state = { fail: false, delay: false, name: 'node_repl', skillFailure: initialSkillFailure };
+    const state = { fail: false, delay: false, name: 'node_repl', skillFailure: initialSkillFailure, libraryFail: false };
     const versions: Record<string, string> = {};
     const snapshots = new Map<string, Record<string, string>>();
     const skillStores: Record<string, any> = {};
@@ -99,6 +99,8 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
             calls.push({ command, kind: args.kind, toolId: args.toolId });
             return { entries: [] };
           }
+          if (command === 'list_remote_library_items') calls.push({ command, kind: args.kind, targetId: args.targetId, search: args.search });
+          if (command === 'list_remote_library_items' && state.libraryFail) throw { message: 'remote library fixture denied' };
           if (command === 'list_remote_library_items' && args.search === 'bad') throw { message: 'bad query denied' };
           if (command === 'list_remote_library_items' && args.search === 'good') return [{ id: 'good', kind: args.kind, title: 'fresh-good-row', body: 'good-body', category: '', projectId: null, version: 1, updatedAt: 1 }];
           if (command === 'list_remote_library_items' || command === 'list_library_items' || command === 'list_projects' || command === 'list_accounts' || command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages') return [];
@@ -349,3 +351,29 @@ for (const [mode, message] of [['blank', '操作失败'], ['nested', 'fixture Sk
     await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toHaveCount(0);
   });
 }
+
+test('a failed remote library read is an error with retry and its counts stay unknown instead of zero', async ({ page }) => {
+  await installRemoteLibrary(page); await page.goto('/');
+  await expect(page.locator('.sidebar-host').getByRole('button', { name: '运行位置：测试远程主机' })).toBeVisible();
+  await page.evaluate(() => { (window as any).__resourceState.libraryFail = true; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  const tabs = library.getByRole('tablist', { name: '资料类型' });
+  await expect(library.getByRole('heading', { name: '暂时无法读取提示词' })).toBeVisible();
+  await expect(library.getByText('remote library fixture denied')).toBeVisible();
+  await expect(library.getByText('还没有提示词')).toHaveCount(0);
+  await expect(tabs.getByRole('tab', { name: /提示词/ }).locator('[data-count-state="unknown"]')).toHaveText('?');
+  await expect(tabs.getByRole('tab', { name: /长期规则/ }).locator('[data-count-state="unknown"]')).toHaveText('?');
+  // MCP and Skill have not been read on this host: no count rather than a fabricated 0.
+  await expect(tabs.getByRole('tab', { name: 'MCP' })).toHaveText('MCP');
+  await expect(tabs.getByRole('tab', { name: 'Skill' })).toHaveText('Skill');
+  await page.evaluate(() => { (window as any).__resourceState.libraryFail = false; });
+  await library.getByRole('button', { name: '重试读取' }).click();
+  await expect(library.getByRole('heading', { name: '还没有提示词' })).toBeVisible();
+  await expect(tabs.locator('[data-count-state]')).toHaveCount(0);
+  await expect(tabs.getByRole('tab', { name: /提示词/ })).toContainText('0');
+  // The retry read the selected host, not the local library.
+  const reads = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'list_remote_library_items'));
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every((call: any) => call.targetId === 'host-1')).toBe(true);
+});

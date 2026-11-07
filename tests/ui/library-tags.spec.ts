@@ -253,3 +253,74 @@ test('library rows lead with the title, name their source, and stay inside 640',
     expect(await card.evaluate((node) => node.scrollWidth - node.clientWidth), String(width)).toBeLessThanOrEqual(1);
   }
 });
+
+test('library lists keep first failure, confirmed empty, no match and failed refresh apart', async ({ page }) => {
+  await page.addInitScript(() => {
+    const control = { fail: true, library: [] as Array<Record<string, unknown>> };
+    Object.assign(window, {
+      isTauri: true,
+      __libraryControl: control,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements') return [];
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
+          if (command === 'list_library_items') {
+            if (control.fail) throw { message: 'library fixture read denied' };
+            return control.library.filter((item) => item.kind === args.kind && (!args.search || String(item.title).includes(args.search)));
+          }
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  const promptTab = library.getByRole('tab', { name: /提示词/ });
+  // First failure: an error with an in-place retry, never the empty library or a zero count.
+  await expect(library.getByRole('heading', { name: '暂时无法读取提示词' })).toBeVisible();
+  await expect(library.getByText('library fixture read denied')).toBeVisible();
+  await expect(library.getByText('还没有提示词')).toHaveCount(0);
+  await expect(library.getByText(/命中 \d+ \/ 共/)).toHaveCount(0);
+  await expect(promptTab.locator('[data-count-state="unknown"]')).toHaveText('?');
+  await page.evaluate(() => { (window as any).__libraryControl.fail = false; });
+  await library.getByRole('button', { name: '重试读取' }).click();
+  // A successful empty read is a confirmed empty list with its create action.
+  await expect(library.getByRole('heading', { name: '还没有提示词' })).toBeVisible();
+  await expect(library.getByRole('heading', { name: '暂时无法读取提示词' })).toHaveCount(0);
+  await expect(promptTab.locator('[data-count-state]')).toHaveCount(0);
+  await expect(promptTab).toContainText('0');
+  // Rows added elsewhere appear on the next read.
+  await page.evaluate(() => { (window as any).__libraryControl.library.push({ id: 'p-1', kind: 'prompt', title: 'release note', body: 'body', category: '', projectId: null, version: 1, updatedAt: 1 }); });
+  await library.getByLabel('搜索资料').fill('release');
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  // No match offers a direct way back to the full list.
+  await library.getByLabel('搜索资料').fill('nothing');
+  await expect(library.getByText('筛选结果为空，没有符合条件的提示词。请使用上方的「新建」。')).toBeVisible();
+  await library.getByRole('button', { name: '清除筛选' }).click();
+  await expect(library.getByLabel('搜索资料')).toHaveValue('');
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  // A failed refresh keeps the rows on screen, marks them stale and retries in place.
+  await page.evaluate(() => { (window as any).__libraryControl.fail = true; });
+  await library.getByLabel('搜索资料').fill('rel');
+  await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toBeVisible();
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  await expect(library.getByRole('heading', { name: '暂时无法读取提示词' })).toHaveCount(0);
+  await expect(library.getByLabel('搜索资料')).toHaveValue('rel');
+  await page.evaluate(() => { (window as any).__libraryControl.fail = false; });
+  const retry = library.getByRole('button', { name: '重试读取' });
+  await retry.focus();
+  await page.keyboard.press('Enter');
+  await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toHaveCount(0);
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
+  await expect(library.getByText('命中 1 / 共 1')).toBeVisible();
+  // Rows of one kind never stand in for another kind while it loads or fails.
+  await page.evaluate(() => { (window as any).__libraryControl.fail = true; });
+  await library.getByRole('tab', { name: /长期规则/ }).click();
+  await expect(library.getByRole('heading', { name: '暂时无法读取规则' })).toBeVisible();
+  await expect(library.getByRole('button', { name: 'release note', exact: true })).toHaveCount(0);
+});

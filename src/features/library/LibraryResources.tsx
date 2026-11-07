@@ -12,6 +12,8 @@ import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
 import { Badge, Button, Card } from '../../components/ui';
 import { RowMenu } from '../../components/RowMenu';
+import { StatusBanner } from '../../components/StatusBanner';
+import { SkeletonRows } from '../../components/Skeleton';
 import { native } from '../../lib/native';
 import { useFeedback } from '../../lib/toast';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -73,6 +75,13 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const native = remoteReads.native;
   const [packages, setPackages] = useState<LibrarySkill[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
+  // Package list and install locations are read separately; each keeps its own
+  // outcome so a failed read never looks like an empty library or "not installed".
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [installsKnown, setInstallsKnown] = useState(false);
+  const [installsError, setInstallsError] = useState('');
   const [busy, setBusy] = useState(false);
   // Page results float as toasts so the card grid never jumps.
   const { setError, setNotice } = useFeedback();
@@ -87,37 +96,65 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const [search, setSearch] = useState('');
   const [outcomes, setOutcomes] = useState<OutcomeReport | null>(null);
 
-  useEffect(() => {
-    if (!active) return;
-    if (remoteTargetId) {
-      let live = true;
-      const sequence = ++reloadSequence.current;
-      void readRemoteSkillStores(remoteTargetId, remoteToolIds, native).then(values => {
-        if (!live || sequence !== reloadSequence.current) return;
+  const reloadSequence = useRef(0);
+  const skillContext = JSON.stringify([remoteTargetId, remoteToolIds]);
+  const loadedContext = useRef('');
+
+  /** Reads packages, then (locally) their install locations. Superseded reads resolve silently. */
+  async function loadSkills(fresh: boolean) {
+    const sequence = ++reloadSequence.current;
+    const context = skillContext;
+    const current = () => sequence === reloadSequence.current;
+    let stage: 'packages' | 'installs' = 'packages';
+    setLoading(true);
+    try {
+      if (remoteTargetId) {
+        const values = await readRemoteSkillStores(remoteTargetId, remoteToolIds, native, fresh);
+        if (!current()) return;
         const items = remoteSkillPackages(remoteToolIds, values);
+        loadedContext.current = context;
         setPackages(items);
         setInstallations(remoteSkillInstallations(items));
-      }).catch(value => { if (live) setError(failure(value)); });
-      return () => { live = false; };
+        setLoaded(true); setLoadError(''); setInstallsKnown(true); setInstallsError('');
+        return;
+      }
+      const items = await native.listSkillPackages();
+      if (!current()) return;
+      loadedContext.current = context;
+      setPackages(items); setLoaded(true); setLoadError('');
+      stage = 'installs';
+      const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
+      if (!current()) return;
+      setInstallations(found); setInstallsKnown(true); setInstallsError('');
+    } catch (value) {
+      if (!current()) return;
+      // Known packages stay; only the part that failed becomes unknown.
+      if (stage === 'installs') { setInstallsKnown(false); setInstallsError(failure(value)); throw Object.assign(new Error(failure(value)), { installsOnly: true }); }
+      setLoadError(failure(value));
+      throw value;
+    } finally {
+      if (current()) setLoading(false);
     }
-    let live = true;
-    const load = native.listSkillPackages().then(async (items) => {
-        if (!live) return;
-        setPackages(items);
-        const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
-        if (live) setInstallations(found);
-      });
-    void load.catch((value) => { if (live) setError(failure(value)); });
-    return () => { live = false; };
-  }, [active, remoteTargetId, remoteToolIds.join('|')]);
+  }
+
+  useEffect(() => {
+    if (!active) return;
+    if (loadedContext.current !== skillContext) {
+      // Another host or CLI set: rows of the previous one never stand in for this one.
+      setPackages([]); setInstallations([]); setLoaded(false); setLoadError(''); setInstallsKnown(false); setInstallsError('');
+    }
+    void loadSkills(false).catch(toastLoadFailure);
+    return () => { reloadSequence.current++; };
+  }, [active, skillContext]);
 
   // A report names the targets of one run: leaving the page or changing the host drops it,
   // so old rows never sit next to another host's Skill list.
   useEffect(() => { setOutcomes(null); }, [remoteTargetId, active]);
 
   useEffect(() => {
-    onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
-  }, [packages, onCountChange]);
+    // An unread list has no count; the tab keeps its last known value instead of 0.
+    if (loaded) onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
+  }, [loaded, packages, onCountChange]);
 
   const handledCreate = useRef(createSignal);
   useEffect(() => {
@@ -126,22 +163,17 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (!busy && (!remoteTargetId || remoteWritableTools.length > 0)) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
 
-  const reloadSequence = useRef(0);
-  useEffect(() => () => { reloadSequence.current++; }, [remoteTargetId, active]);
   async function reloadSkills() {
     remoteReads.rebaseWriteAction();
-    const sequence = ++reloadSequence.current;
-    if (remoteTargetId) {
-      const values = await readRemoteSkillStores(remoteTargetId, remoteToolIds, native, true);
-      if (sequence !== reloadSequence.current) return;
-      const items = remoteSkillPackages(remoteToolIds, values);
-      setPackages(items);
-      setInstallations(remoteSkillInstallations(items));
-      return;
-    }
-    const items = await native.listSkillPackages();
-    setPackages(items);
-    setInstallations((await Promise.all(items.map((entry) => native.listSkillInstallations(entry.id)))).flat());
+    await loadSkills(true);
+  }
+  // The install-location banner already carries that failure and its retry; packages failures keep the alert.
+  function toastLoadFailure(value: unknown) { if (!(value as { installsOnly?: boolean } | null)?.installsOnly) setError(failure(value)); }
+  function retryLoad() { void loadSkills(true).catch(toastLoadFailure); }
+  function openSkill(item: SkillPackage) {
+    // Distribution edits depend on where the package is installed; unknown locations are not "none".
+    if (!remoteTargetId && !installsKnown) { setError(t('library.resources.installsFailed')); return; }
+    setSkillSeed([]); setSkillTarget(item);
   }
 
   function closeSkill() {
@@ -248,7 +280,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function confirmSkillImport() {
-    if (!pendingImport) return;
+    if (!pendingImport || (!remoteTargetId && !installsKnown)) return;
     setBusy(true); setDialogError('');
     try {
       const { preview, kind, source, subdirectory } = pendingImport;
@@ -264,7 +296,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     if (!packageWritable(item)) return;
     remoteReads.beginWriteAction();
     const placed = !remoteTargetId && installations.some((entry) => entry.packageId === item.id);
-    const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
+    const message = !remoteTargetId && !installsKnown ? t('library.resources.confirmDeleteUnknown', { name: item.name }) : placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
@@ -283,7 +315,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    if (remoteTargetId || !packageWritable(item)) return;
+    if (remoteTargetId || !packageWritable(item) || !installsKnown) return;
     remoteReads.beginWriteAction();
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
@@ -314,23 +346,36 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const report = outcomes && outcomes.host === (remoteTargetId ?? null) ? outcomes.rows : null;
   const allOk = !!report && report.every((row) => row.state === 'ok');
   const count = (state: TargetOutcome['state']) => report?.filter((row) => row.state === state).length ?? 0;
-  return <div className={styles.layout}><RemoteReadStatus state={remoteReads} />
+  const stale = loaded && !!loadError;
+  const installsUnknown = loaded && !remoteTargetId && !installsKnown && !loading;
+  const emptyView = loading && !loaded
+    ? <div role="status" aria-label={t('library.resources.skillLoading')}><SkeletonRows count={3} /></div>
+    : !loaded
+      ? <EmptyState icon="alert" title={t('library.resources.skillLoadFailedTitle')} detail={loadError || t('library.resources.loadFailedDetail')} action={<Button variant="primary" icon={<Icon name="refresh" size={14} />} onClick={retryLoad}>{t('library.resources.retry')}</Button>} />
+      : libraryPackages.length
+        ? null
+        : needle
+          ? <EmptyState icon="search" title={t('library.resources.noSkillMatch', { query: search.trim() })} action={<Button onClick={() => setSearch('')}>{t('library.resources.clearSearch')}</Button>} />
+          : <EmptyState icon="sparkle" title={t('library.resources.emptySkillTitle')} detail={t('library.resources.emptySkillDetail')} action={!remoteTargetId ? <Button icon={<Icon name="plus" size={14} />} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</Button> : undefined} />;
+  return <div className={styles.layout}>{!stale && <RemoteReadStatus state={remoteReads} />}
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
-    <div className={styles.resultBar}>
+    {stale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={loading} onClick={retryLoad}>{t('library.resources.retry')}</Button>}>{t('library.resources.skillStale')}</StatusBanner>}
+    {installsUnknown && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} onClick={retryLoad}>{t('library.resources.retryInstalls')}</Button>}>{installsError ? `${t('library.resources.installsFailed')} ${installsError}` : t('library.resources.installsFailed')}</StatusBanner>}
+    {loaded && <div className={styles.resultBar}>
       <Badge tone={needle ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: libraryPackages.length, total: packages.filter((entry) => entry.inLibrary !== false).length })}</Badge>
       <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
-    </div>
+    </div>}
     {report && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
       <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{t(allOk ? 'library.resources.resultOk' : count('conflict') ? 'library.resources.resultConflict' : 'library.resources.resultMixed', { total: report.length, ok: count('ok'), failed: count('failed'), conflict: count('conflict') })}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
       <ul className={styles.resultList}>{report.map((row, index) => <li key={`${row.name}:${index}`} data-state={row.state}><Icon name={row.state === 'ok' ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
     </section>}
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
-      {libraryPackages.length ? libraryPackages.map((item) => {
+      {emptyView ?? libraryPackages.map((item) => {
         return <Card className={styles.card} interactive key={item.id} data-skill-id={item.id} data-source={sourceOf(item)}>
           <div className={styles.cardHead}>
-            <button className={styles.cardTitle} type="button" data-card-title onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+            <button className={styles.cardTitle} type="button" data-card-title onClick={() => openSkill(item)}>{item.name}</button>
             {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
-            <div className={styles.cardActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId} title={remoteTargetId ? t('library.page.remoteUnavailable') : undefined} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
+            <div className={styles.cardActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}><Button variant="ghost" size="sm" disabled={busy || !!remoteTargetId || !installsKnown} title={remoteTargetId ? t('library.page.remoteUnavailable') : !installsKnown ? t('library.resources.installsFailed') : undefined} onClick={() => openSkill(item)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('library.resources.rowMenu', { name: item.name })}><button type="button" role="menuitem" data-danger="true" disabled={busy || !packageWritable(item)} onClick={() => void removePackage(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
           <p className={styles.cardBody}>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardMeta}>
@@ -339,7 +384,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
             {!!item.updatedAt && <span className={styles.cardTime} title={new Date(item.updatedAt * 1000).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN')}><Icon name="clock" size={12} />{new Date(item.updatedAt * 1000).toLocaleDateString(i18n.language === 'en' ? 'en-US' : 'zh-CN')}</span>}
           </div>
           {packageWritable(item) ? <div className={styles.cardFoot}>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteWritableTools : tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy || !installsKnown} unavailable={remoteTargetId ? toolId => installations.some(entry => entry.packageId === item.id && entry.toolId === toolId) ? t('library.resources.remoteSkillInstalled') : t('library.resources.remoteSkillDistributionUnavailable') : undefined} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+              if (!installsKnown) return { pressed: false, state: 'unavailable', status: t('library.resources.installsUnknown') };
               if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
               if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
               if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
@@ -347,9 +393,7 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
             }} />
           </div> : null}
         </Card>;
-      }) : needle
-        ? <EmptyState icon="search" title={t('library.resources.noSkillMatch', { query: search.trim() })} />
-        : <EmptyState icon="sparkle" title={t('library.resources.emptySkillTitle')} detail={t('library.resources.emptySkillDetail')} action={!remoteTargetId ? <Button icon={<Icon name="plus" size={14} />} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</Button> : undefined} />}
+      })}
     </div>
     <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
       <div className={styles.skillAdd}>
@@ -377,7 +421,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           <h3>{t('library.resources.existingTitle', { name: pendingImport.preview.name })}</h3>
           <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
           {isSkillManifest(pendingImport.preview.manifest) && <SkillManifestView manifest={pendingImport.preview.manifest} directory={pendingImport.preview.name} />}
-          <div className={styles.actions}><Button onClick={() => setPendingImport(null)}>{t('library.resources.back')}</Button><Button variant="primary" disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</Button></div>
+          {!remoteTargetId && !installsKnown && <p className={styles.error}>{t('library.resources.installsFailed')}</p>}
+          <div className={styles.actions}><Button onClick={() => setPendingImport(null)}>{t('library.resources.back')}</Button><Button variant="primary" disabled={busy || (!remoteTargetId && !installsKnown)} title={!remoteTargetId && !installsKnown ? t('library.resources.installsFailed') : undefined} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</Button></div>
         </section>}
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
       </div>

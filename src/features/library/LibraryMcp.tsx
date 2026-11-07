@@ -110,8 +110,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }, [active, remoteTargetId, remoteToolIds.join('|')]);
 
   useEffect(() => {
-    onCountChange?.(definitions.filter((item) => item.inLibrary !== false).length);
-  }, [definitions, onCountChange]);
+    // An unread list has no count; the tab keeps its last known value instead of 0.
+    if (loaded) onCountChange?.(definitions.filter((item) => item.inLibrary !== false).length);
+  }, [loaded, definitions, onCountChange]);
 
   const current: EditorState | null = draft ? { draft, envRows, headerRows } : null;
   remoteReads.bindWriteDraft(draft || batchItems ? `mcp:${formKey}` : null);

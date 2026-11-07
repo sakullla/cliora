@@ -11,11 +11,16 @@ type Config = {
   previews?: Record<string, 'ready' | 'conflict'>;
   /** Per-target install result; anything missing is installed. */
   installs?: Record<string, 'installed' | 'failed'>;
+  /** Initial read failures; tests flip them through `window.__skillReads`. */
+  reads?: { packagesFail?: boolean; installsFail?: boolean };
+  /** Starts with one library package installed on Codex. */
+  seeded?: boolean;
 };
 
 async function mockLibrary(page: Page, config: Config = {}) {
   await page.addInitScript(({ tools, config }) => {
-    const packages: Array<Record<string, unknown>> = [];
+    const packages: Array<Record<string, unknown>> = config.seeded ? [{ id: 'pkg-seed', name: 'seeded-skill', description: 'Seeded fixture', compatibility: null, source: '/tmp/seed', digest: 'seed', fileCount: 1, updatedAt: 1, inLibrary: true }] : [];
+    const reads = { packagesFail: !!config.reads?.packagesFail, installsFail: !!config.reads?.installsFail };
     const writes: unknown[] = [];
     const descriptor = (tool: { id: string; name: string }) => ({
       id: tool.id, name: tool.name, interfaceFormats: [], projectModelOverride: false, yoloAvailable: false,
@@ -26,6 +31,7 @@ async function mockLibrary(page: Page, config: Config = {}) {
     Object.assign(window, {
       isTauri: true,
       __distWrites: writes,
+      __skillReads: reads,
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map((tool) => tool.id), theme: 'system' }, tools: tools.map((tool) => ({ id: tool.id, name: tool.name, installation: 'not_checked', configuration: 'not_checked' })) };
@@ -39,8 +45,14 @@ async function mockLibrary(page: Page, config: Config = {}) {
             probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
             profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
           };
-          if (command === 'list_skill_packages') return packages;
-          if (command === 'list_skill_installations') return [];
+          if (command === 'list_skill_packages') {
+            if (reads.packagesFail) throw { message: 'skill package fixture denied' };
+            return packages;
+          }
+          if (command === 'list_skill_installations') {
+            if (reads.installsFail) throw { message: 'skill install fixture denied' };
+            return args.packageId === 'pkg-seed' ? [{ packageId: 'pkg-seed', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/codex/skills/seeded-skill', state: 'current', digest: 'seed' }] : [];
+          }
           if (command === 'list_skill_zip_entries') return [''];
           if (command === 'preview_skill_https_zip') return { name: 'alpha', source: args.source, digest: 'new-digest', existingDigest: null, fileCount: 2, changes: [], compatibility: null };
           if (command === 'import_skill_https_zip') {
@@ -135,4 +147,41 @@ test('an import without targets shows no result panel', async ({ page }) => {
   await importSkill(page, []);
   await expect(page.getByRole('button', { name: 'alpha', exact: true })).toBeVisible();
   await expect(resultPanel(page)).toHaveCount(0);
+});
+
+test('Skill package and install-location failures are not shown as an empty library or "not installed"', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, reads: { packagesFail: true } });
+  await page.goto('/');
+  await openSkills(page);
+  const library = page.getByRole('region', { name: '资料库内容' });
+  // First package failure: an error with retry, not the empty Skill state and not a count of zero.
+  await expect(library.getByRole('heading', { name: '暂时无法读取 Skill' })).toBeVisible();
+  await expect(library.getByText('还没有 Skill')).toHaveCount(0);
+  await expect(library.getByText(/命中 \d+ \/ 共/)).toHaveCount(0);
+  await expect(library.getByRole('tab', { name: 'Skill', exact: true }).locator('[data-count-state="unknown"]')).toHaveText('?');
+  // Packages recover, but their install locations fail: packages stay, marks are unknown and locked.
+  await page.evaluate(() => { const reads = (window as any).__skillReads; reads.packagesFail = false; reads.installsFail = true; });
+  await library.getByRole('button', { name: '重试', exact: true }).click();
+  const card = library.locator('[data-skill-id="pkg-seed"]');
+  await expect(card.getByRole('button', { name: 'seeded-skill', exact: true })).toBeVisible();
+  await expect(library.getByRole('status').getByText(/安装位置读取失败/)).toBeVisible();
+  await expect(library.getByRole('status').getByText(/skill install fixture denied/)).toBeVisible();
+  const codex = card.getByRole('button', { name: 'Codex · 安装状态未知' });
+  await expect(codex).toBeDisabled();
+  await expect(card.getByRole('button', { name: /未安装/ })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '修改', exact: true })).toBeDisabled();
+  await expect(library.getByRole('tab', { name: 'Skill', exact: true }).locator('[data-count-state]')).toHaveCount(0);
+  // Retrying the locations restores real state and the marks become usable.
+  await page.evaluate(() => { (window as any).__skillReads.installsFail = false; });
+  await library.getByRole('button', { name: '重试读取安装位置' }).click();
+  await expect(library.getByText(/安装位置读取失败/)).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /^Codex · 已/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByRole('button', { name: /^Codex · 已/ })).toBeEnabled();
+  await expect(card.getByRole('button', { name: '修改', exact: true })).toBeEnabled();
+  // A no-match search offers a way back; a failed refresh keeps the rows and says they may be stale.
+  await library.getByLabel('搜索资料').fill('nothing');
+  await expect(library.getByText('没有匹配「nothing」的 Skill。')).toBeVisible();
+  await library.getByRole('button', { name: '清除搜索' }).click();
+  await expect(card.getByRole('button', { name: 'seeded-skill', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__distWrites.length)).toBe(0);
 });

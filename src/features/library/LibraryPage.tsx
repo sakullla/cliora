@@ -103,8 +103,18 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const currentBindingContext = useRef(bindingContext); currentBindingContext.current = bindingContext;
   const bindingSequence = useRef(0);
   const [items, setItems] = useState<LibraryItem[]>([]);
-  useEffect(() => { if (remoteTargetId !== 'local') setItems([]); }, [remoteTargetId, section, kind, search]);
+  // `listLoaded` says the shown rows came from a successful read of this kind and
+  // host; `listError` is the latest read failure. Together they keep a first
+  // failure, a confirmed empty list and a failed refresh of older rows apart.
+  const [listLoaded, setListLoaded] = useState(false);
+  const [listError, setListError] = useState('');
+  const [listAttempt, setListAttempt] = useState(0);
+  // Remote rows are per query; local rows stay while a new search is debounced.
+  const listContext = JSON.stringify([remoteTargetId, kind, remoteTargetId === 'local' ? '' : search]);
+  useEffect(() => { setItems([]); setListLoaded(false); setListError(''); }, [listContext]);
   const [counts, setCounts] = useState<Partial<Record<LibrarySection, number>>>({});
+  // Sections whose count could not be read: the badge keeps the last value marked as stale, or says unknown.
+  const [countsFailed, setCountsFailed] = useState<LibrarySection[]>([]);
   const [countStamp, setCountStamp] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
@@ -186,38 +196,43 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   }, [active, remoteTargetId, hostNative]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
+    let live = true;
+    const markFailed = (sections: LibrarySection[]) => { if (live) setCountsFailed((previous) => [...new Set([...previous, ...sections])]); };
+    const markRead = (next: Partial<Record<LibrarySection, number>>) => {
+      if (!live) return;
+      const read = Object.keys(next) as LibrarySection[];
+      setCounts((previous) => ({ ...previous, ...next }));
+      setCountsFailed((previous) => previous.filter((id) => !read.includes(id)));
+    };
     if (remoteTargetId !== 'local') {
-      let live = true;
-      void Promise.all([hostNative.listRemoteLibraryItems(remoteTargetId, 'prompt', ''), hostNative.listRemoteLibraryItems(remoteTargetId, 'rule', '')]).then(([prompts, rules]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length, mcp: 0, skill: 0 }); }).catch(() => { if (live) setCounts({ prompt: 0, rule: 0, mcp: 0, skill: 0 }); });
+      // MCP and Skill counts arrive from their own sections; a failed read is unknown, never zero.
+      void Promise.all([hostNative.listRemoteLibraryItems(remoteTargetId, 'prompt', ''), hostNative.listRemoteLibraryItems(remoteTargetId, 'rule', '')])
+        .then(([prompts, rules]) => markRead({ prompt: prompts.length, rule: rules.length }))
+        .catch(() => markFailed(['prompt', 'rule']));
       return () => { live = false; };
     }
-    let live = true;
     void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, ''), native.listMcpDefinitions(), native.listSkillPackages()])
-      .then(([prompts, rules, mcps, skills]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length, mcp: mcps.filter((item) => item.inLibrary !== false).length, skill: skills.filter((item) => item.inLibrary !== false).length }); })
-      .catch(() => {});
+      .then(([prompts, rules, mcps, skills]) => markRead({ prompt: prompts.length, rule: rules.length, mcp: mcps.filter((item) => item.inLibrary !== false).length, skill: skills.filter((item) => item.inLibrary !== false).length }))
+      .catch(() => markFailed(['prompt', 'rule', 'mcp', 'skill']));
     return () => { live = false; };
   }, [active, countStamp, remoteTargetId, hostNative]);
   useEffect(() => {
     // The editor/launch draft owns its own copy; the hidden list need not retain every body.
-    if (!active || (section !== 'prompt' && section !== 'rule')) { setItems([]); return; }
+    if (!active || (section !== 'prompt' && section !== 'rule')) { setItems([]); setListLoaded(false); setListError(''); return; }
     if (!nativeAvailable) return;
-    if (remoteTargetId !== 'local') {
-      let live = true;
-      const controller = new AbortController();
-      setListLoading(true);
-      const timer = window.setTimeout(() => { void native.listRemoteLibraryItems(remoteTargetId, kind, search, { signal: controller.signal }).then((result) => { if (live) { setItems(result); setListLoading(false); } }).catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } }); }, search ? 180 : 0);
-      return () => { live = false; controller.abort(); window.clearTimeout(timer); };
-    }
     let live = true;
+    const controller = new AbortController();
     setListLoading(true);
     // Search keystrokes debounce like Records (180ms) so fast typing merges into one
     // native query; clearing the field skips the delay and restores the full list at once.
     const timer = window.setTimeout(() => {
-      void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
-        .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
+      const read = remoteTargetId === 'local' ? native.listLibraryItems(kind, null, search) : native.listRemoteLibraryItems(remoteTargetId, kind, search, { signal: controller.signal });
+      void read.then((result) => { if (live) { setItems(result); setListLoaded(true); setListError(''); setListLoading(false); } })
+        // The failure stays beside the list with its own retry; older rows of the same list are kept.
+        .catch((value) => { if (live) { setListLoading(false); setListError(formatFailure(value, t('library.page.listFailed'), t('library.page.listRetryNext'))); } });
     }, search ? 180 : 0);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [active, section, kind, search, remoteTargetId]);
+    return () => { live = false; controller.abort(); window.clearTimeout(timer); };
+  }, [active, section, kind, search, remoteTargetId, listAttempt]);
   // Spotlight from the command palette: settle the section and filters first, then
   // open the entry's edit dialog (its view/copy surface) once the list shows it.
   // Waiting is event-driven: the reveal simply fires when a matching item arrives.
@@ -272,7 +287,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     remoteReads.rebaseWriteAction();
     const sequence = ++refreshSequence.current;
     const items = await (remoteTargetId === 'local' ? native.listLibraryItems(nextKind, null, search) : native.listRemoteLibraryItems(remoteTargetId, nextKind, search, { fresh: true }));
-    if (sequence === refreshSequence.current && mounted.current) setItems(items);
+    if (sequence === refreshSequence.current && mounted.current) { setItems(items); setListLoaded(true); setListError(''); }
   }
   function keepSaved(saved: LibraryItem) {
     setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
@@ -459,19 +474,42 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['skill', 'package', 'Skill'],
   ];
   const activeSection = sectionTabs.find(([id]) => id === section)!;
-  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}><RemoteReadStatus state={remoteReads} /><ToastScope toasts={toasts}>
+  const listSection = section === 'prompt' || section === 'rule';
+  // A failed refresh of rows already on screen: the rows stay, marked stale, with a retry here.
+  const listStale = listSection && listLoaded && !!listError;
+  const filtering = !!search.trim() || projectFilter !== '*' || categoryFilter !== '*';
+  function retryList() { setListError(''); setListAttempt((value) => value + 1); if (countsFailed.length) setCountStamp((value) => value + 1); }
+  function childCount(id: 'mcp' | 'skill', count: number) {
+    setCounts((prev) => prev[id] === count ? prev : { ...prev, [id]: count });
+    setCountsFailed((prev) => prev.includes(id) ? prev.filter((entry) => entry !== id) : prev);
+  }
+  function clearFilters() { setSearch(''); setProjectFilter('*'); setCategoryFilter('*'); }
+  function countBadge(id: LibrarySection) {
+    const failed = countsFailed.includes(id);
+    if (counts[id] == null && !failed) return null;
+    const label = failed ? t(counts[id] == null ? 'library.page.countUnknown' : 'library.page.countStale') : undefined;
+    return <Badge className={styles.tabCount} tone={failed ? 'warning' : section === id ? 'accent' : 'neutral'} title={label} data-count-state={failed ? counts[id] == null ? 'unknown' : 'stale' : undefined} aria-hidden="true">{counts[id] ?? '?'}</Badge>;
+  }
+  function listBody() {
+    if (listLoading && !items.length) return <SkeletonRows count={3} />;
+    if (!listLoaded && listError) return <EmptyState icon="alert" title={t('library.page.loadFailedTitle', { kind: kindName(kind) })} detail={listError} action={<Button variant="primary" icon={<Icon name="refresh" size={14} />} onClick={retryList}>{t('library.page.retryList')}</Button>} />;
+    if (!shown.length && !items.length && !filtering) return <EmptyState icon="library" title={t('library.page.emptyTitle', { kind: kindName(kind) })} detail={kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')} action={<Button icon={<Icon name="plus" size={14} />} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</Button>} />;
+    if (!shown.length) return <EmptyState icon="search" title={t('library.page.noResults', { kind: kindName(kind) })} action={filtering ? <Button onClick={clearFilters}>{t('library.page.clearFilters')}</Button> : undefined} />;
+    return null;
+  }
+  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}>{!listStale && <RemoteReadStatus state={remoteReads} />}<ToastScope toasts={toasts}>
     <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
           <span className={styles.tabIcon} aria-hidden="true"><Icon name={icon} size={15} /></span>
           <span>{label}</span>
-          {counts[id] != null && <Badge className={styles.tabCount} tone={section === id ? 'accent' : 'neutral'} aria-hidden="true">{counts[id]}</Badge>}
+          {countBadge(id)}
         </button>)}
       </div>
     </Toolbar>
     <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span><Badge>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</Badge></div>
-    {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
-    {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
+    {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} />}
+    {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} />}
     {(section === 'prompt' || section === 'rule') && <>
     {section === 'rule' && bindingFeedback()}
     <div className={styles.filters}>
@@ -489,12 +527,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       </div>
     </div>
     <div className={styles.layout}>
-      {(!listLoading || items.length > 0) && <div className={styles.resultBar}>
+      {listStale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={listLoading} onClick={retryList}>{t('library.page.retryList')}</Button>}>{t('library.page.listStale', { kind: kindName(kind) })}</StatusBanner>}
+      {listLoaded && <div className={styles.resultBar}>
         <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>
         <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
-        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>
+        {listBody() ?? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>
           <div className={styles.cardHead}>
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -521,9 +560,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} />
           </div> : null}
-        </Card>) : !items.length && !search.trim()
-          ? <EmptyState icon="library" title={t('library.page.emptyTitle', { kind: kindName(kind) })} detail={kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')} action={<Button icon={<Icon name="plus" size={14} />} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</Button>} />
-          : <EmptyState icon="search" title={t('library.page.noResults', { kind: kindName(kind) })} />}
+        </Card>)}
       </div>
     </div>
     <GuideDialog open={!!draft} closeDisabled={busy} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
