@@ -32,7 +32,7 @@ const MAX_LINE_BYTES: usize = 256 * 1024 * 1024;
 /// Line filters only look at this many leading bytes before deciding to skip a row.
 const LINE_PREFIX_BYTES: usize = 1024;
 pub(crate) const MAX_SOURCES: usize = 5_000;
-const MAX_MESSAGES: usize = 2_000;
+pub(crate) const MAX_MESSAGES: usize = 2_000;
 const MAX_MESSAGE_CHARS: usize = 16_000;
 /// A source that parsed cleanly but holds nothing to show is skipped, not a failure.
 pub const EMPTY_SESSION: &str = "会话没有可展示的内容";

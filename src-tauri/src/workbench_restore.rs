@@ -3,7 +3,7 @@
 use crate::history::SessionIdentity;
 use crate::{adapters::{LaunchMode, Registry}, database::Database, launch::{self, LaunchPlan, TerminalId}};
 use serde::{Deserialize, Serialize};
-use std::{collections::{HashMap, HashSet}, path::Path, sync::{Mutex, atomic::{AtomicU64, Ordering}}, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, path::Path, sync::{Mutex, atomic::{AtomicU64, AtomicUsize, Ordering}}, time::{SystemTime, UNIX_EPOCH}};
 
 const PREFIX: &str = "workbench_session_v1:";
 /// Bounds how many CLI/account contexts discover and start at the same time.
@@ -269,23 +269,34 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
         claimed: &claimed, restore_id: &restore_id, reporter, selection,
     };
     let mut outcomes: Vec<Option<ItemOutcome>> = targets.iter().map(|_| None).collect();
-    for batch in groups.chunks(MAX_PARALLEL_CONTEXTS) {
-        std::thread::scope(|threads| {
-            let handles: Vec<_> = batch.iter()
-                .map(|(_, indices)| threads.spawn(|| restore_context(&scope, indices)))
-                .collect();
-            for handle in handles {
-                for (index, outcome) in handle.join().unwrap_or_default() {
-                    outcomes[index] = Some(outcome);
+    // Bounded concurrency over a shared queue: a worker that finishes its
+    // context takes the next one immediately, so a slow context never holds
+    // back a context that has not started yet.
+    let next = AtomicUsize::new(0);
+    let workers = groups.len().min(MAX_PARALLEL_CONTEXTS);
+    std::thread::scope(|threads| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| threads.spawn(|| {
+                let mut done = Vec::new();
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((_, indices)) = groups.get(index) else { break };
+                    done.extend(restore_context(&scope, indices));
                 }
+                done
+            }))
+            .collect();
+        for handle in handles {
+            for (index, outcome) in handle.join().unwrap_or_default() {
+                outcomes[index] = Some(outcome);
             }
-        });
-        for (_, indices) in batch {
-            for &index in indices.iter() {
-                outcomes[index].get_or_insert_with(|| ItemOutcome::Failed {
-                    detail: "恢复工作线程中断，请重试".into(), candidates: Vec::new(),
-                });
-            }
+        }
+    });
+    for (_, indices) in &groups {
+        for &index in indices.iter() {
+            outcomes[index].get_or_insert_with(|| ItemOutcome::Failed {
+                detail: "恢复工作线程中断，请重试".into(), candidates: Vec::new(),
+            });
         }
     }
     let mut report = RestoreReport::default();
@@ -303,9 +314,8 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
 /// start its saved tabs in order. Tabs of other contexts run on their own
 /// worker, so one slow or failing item never blocks them.
 fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, ItemOutcome)> {
-    let RestoreScope { db, registry, home, targets, all, live, until, claimed, selection, .. } = *scope;
-    let session = &targets[indices[0]];
-    let Some(adapter) = registry.get(&session.tool_id) else {
+    let session = &scope.targets[indices[0]];
+    let Some(adapter) = scope.registry.get(&session.tool_id) else {
         return fail_group(scope, indices, "此 CLI 已不可用，恢复记录已保留");
     };
     if !adapter.history_supported() {
@@ -313,7 +323,7 @@ fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, I
     }
     let context = match (&session.account_id, &session.context_id) {
         (Some(account), Some(context)) => {
-            match crate::accounts::resolve_retained(db, home, account, &session.tool_id, context) {
+            match crate::accounts::resolve_retained(scope.db, scope.home, account, &session.tool_id, context) {
                 Ok(context) => Some((account.clone(), context)),
                 Err(detail) => return fail_group(scope, indices, &detail),
             }
@@ -321,6 +331,20 @@ fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, I
         (None, None) => None,
         _ => return fail_group(scope, indices, "原账号上下文不完整，不能恢复到其他账号"),
     };
+    restore_items(scope, indices, adapter, context.as_ref())
+}
+
+/// Discovery and launching for one resolved context. The account context is
+/// thread-local and it selects the native history root, so this worker thread
+/// enters it before discovery. The same guard then covers the launches below.
+fn restore_items(
+    scope: &RestoreScope<'_>,
+    indices: &[usize],
+    adapter: &dyn crate::adapters::CliAdapter,
+    context: Option<&(String, crate::accounts::NativeContext)>,
+) -> Vec<(usize, ItemOutcome)> {
+    let RestoreScope { db, registry, home, targets, all, live, until, claimed, selection, .. } = *scope;
+    let _context = crate::accounts::selection::enter(context.as_ref().map(|(_, context)| context.clone()));
     for &index in indices {
         progress(scope, &targets[index], RestoreStage::Discovering, None, Vec::new(), None);
     }
@@ -330,9 +354,6 @@ fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, I
         Ok(history) => history,
         Err(detail) => return fail_group(scope, indices, &detail),
     };
-    // The account context is thread-local, so it is entered on this worker
-    // thread for both the native history read above and the launches below.
-    let _context = crate::accounts::selection::enter(context.as_ref().map(|(_, context)| context.clone()));
     let explicit_native = selection.and_then(|(id, native)| native.map(|native| (id, native)));
     let mut outcomes = Vec::with_capacity(indices.len());
     for &index in indices {
@@ -377,7 +398,7 @@ fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, I
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
                 tool_id: session.tool_id.clone(), project_id: session.project_id.clone(), session_id: Some(native),
                 directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None,
-            }, Path::new(&session.directory), context.clone()).map_err(|error| error.message)?;
+            }, Path::new(&session.directory), context.cloned()).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
             let result = launch::spawn(db, plan)?;
             let id = result.session_id.ok_or("未创建恢复终端")?;
@@ -514,6 +535,101 @@ mod tests {
         assert_eq!(json["toolId"], "codex");
         assert_eq!(json["startedAt"], 1);
         assert!(json.get("nativeId").is_some());
+    }
+
+    /// The account context selects the native history root and it is
+    /// thread-local, so a restore worker must enter it before discovery.
+    /// Otherwise an account-scoped conversation, which the default root never
+    /// holds, is invisible and the tab fails to restore.
+    #[cfg(windows)]
+    #[test]
+    fn an_account_scoped_history_root_is_discovered_inside_the_account_context() {
+        let _guard = crate::session_host::lock_for_tests();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let account_root = home.join("account");
+        let account_history = account_root.join("sessions");
+        std::fs::create_dir_all(&account_history).unwrap();
+        // The default native root exists but never holds this conversation.
+        std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+        std::fs::write(account_root.join("config.toml"), "model = \"gpt-6-astra\"\n").unwrap();
+        let native = "33333333-3333-4333-8333-333333333333";
+        let started_at = now();
+        let meta = serde_json::json!({"timestamp": started_at, "type": "session_meta", "payload": {"id": native, "cwd": home.display().to_string(), "cli_version": "0.165.0"}});
+        let user = serde_json::json!({"timestamp": started_at, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "账号上下文内的会话"}]}});
+        std::fs::write(account_history.join("rollout-account.jsonl"), format!("{meta}\n{user}\n")).unwrap();
+        let program = home.join("fixture.ps1");
+        std::fs::write(&program, "[Console]::WriteLine('restored-args:' + ($args -join '|')); $null = [Console]::ReadLine(); [Console]::WriteLine('RESTORE_EXIT_TAIL')").unwrap();
+        let context = crate::accounts::NativeContext {
+            id: "ctx-fixture".into(), tool_id: "codex".into(),
+            root: account_root.clone(), config_root: account_root.clone(),
+            auth_files: Vec::new(), history_roots: vec![account_history.clone()],
+            resource_root: account_root.clone(),
+            environment: std::collections::BTreeMap::new(), remove_environment: Vec::new(), cli_args: Vec::new(),
+        };
+        let db = Database::open(&home.join("restore.db")).unwrap();
+        // The launch path revalidates the stored account binding, so the record
+        // exists; what this test drives is the discovery/guard ordering.
+        let account = crate::accounts::AuthAccount {
+            id: "account-fixture".into(), tool_id: "codex".into(), provider: "chatgpt".into(), label: "fixture".into(), version: 1,
+            state: crate::accounts::AccountState::SignedIn,
+            identity: Some(crate::accounts::AccountIdentity {
+                subject: "fixture@example.com".into(), email: Some("fixture@example.com".into()), plan: None, source: "test".into(),
+            }),
+            context: Some(context.clone()), retired_contexts: Vec::new(), pending_login: None,
+            checked_at: Some(started_at as i64), detail: None,
+        };
+        let data = serde_json::to_string(&account).unwrap();
+        db.with_connection(|conn| conn.execute("INSERT INTO auth_accounts(id,tool,version,data) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![account.id, account.tool_id, account.version, data]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+        let saved = SavedSession { id: "account-tab".into(), tool_id: "codex".into(), project_id: None,
+            directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()),
+            native_id: Some(native.into()), account_id: Some(account.id.clone()), context_id: Some(context.id.clone()) };
+        save(&db, &saved).unwrap();
+        let mut registry = Registry::builtins();
+        registry.fixture_installations.insert("codex".into(), vec![crate::native::adapter::Installation {
+            path: program.display().to_string(), version: Some("0.165.0".into()), source: "test", status: "available", detail: None,
+        }]);
+        let adapter = registry.get("codex").unwrap();
+        let targets = [saved.clone()];
+        let all = targets.clone();
+        let live = HashMap::new();
+        let claimed = Mutex::new(HashSet::new());
+        let scope = RestoreScope {
+            db: &db, registry: &registry, home, targets: &targets, all: &all, live: &live,
+            until: now(), claimed: &claimed, restore_id: "restore-account", reporter: &|_| {}, selection: None,
+        };
+        // The conversation exists only under the account's history root, and
+        // only that root answers while the account context is entered.
+        {
+            let _entered = crate::accounts::selection::enter(Some(context.clone()));
+            let sources = adapter.history_sources(home).unwrap();
+            assert_eq!(sources.len(), 1);
+            assert!(sources[0].path.starts_with(&account_history), "{:?}", sources[0].path);
+        }
+        assert!(adapter.history_sources(home).unwrap().is_empty(), "the default root never holds it");
+        let binding = (account.id.clone(), context.clone());
+        // Each run starts a fresh worker thread, so the account context has to
+        // be entered there; it is never inherited from this thread.
+        let run = |context: Option<&(String, crate::accounts::NativeContext)>| std::thread::scope(|threads| {
+            threads.spawn(|| restore_items(&scope, &[0], adapter, context)).join().unwrap()
+        });
+        let missed = run(None);
+        assert!(matches!(&missed[0].1,
+            ItemOutcome::Failed { detail, .. } if detail.contains("尚未找到原生会话记录")), "{:?}", missed.len());
+        let found = run(Some(&binding));
+        let id = match &found[0].1 {
+            ItemOutcome::Restored(id) => id.clone(),
+            ItemOutcome::Failed { detail, .. } => panic!("{detail}"),
+        };
+        crate::session_host::wait_for_replay(&id, &format!("resume|{native}")).unwrap();
+        let record = list(&db).unwrap();
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0].native_id.as_deref(), Some(native));
+        assert_eq!(record[0].account_id.as_deref(), Some("account-fixture"));
+        assert_eq!(record[0].context_id.as_deref(), Some("ctx-fixture"));
+        assert!(same_directory(&record[0].directory, &saved.directory));
+        crate::session_host::close(&id).unwrap();
     }
 
     /// A context that cannot produce an identity must not keep another context

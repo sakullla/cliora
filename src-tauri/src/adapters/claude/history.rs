@@ -393,6 +393,7 @@ pub fn identity_controlled(
 ) -> Result<SessionIdentity, String> {
     let mut session = ParsedSession::new();
     let mut seen = HashSet::new();
+    let mut accepted = 0usize;
     let mut earliest: Option<i64> = None;
     let mut latest: Option<i64> = None;
     let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
@@ -418,12 +419,22 @@ pub fn identity_controlled(
             .map(str::to_owned)
             .unwrap_or_else(|| format!("line-{line}"));
         if seen.insert(id) {
+            // A full parse drops a row whose text is blank and ignores every
+            // row past the message cap, so title, timestamps and the cap are
+            // applied the same way here.
+            if accepted >= crate::history::MAX_MESSAGES {
+                return;
+            }
+            let body = row.get("message").and_then(|message| message.get("content")).map(text_content).unwrap_or_default();
+            if body.trim().is_empty() {
+                return;
+            }
+            accepted += 1;
             if let Some(time) = time {
                 earliest = Some(earliest.map_or(time, |value| value.min(time)));
                 latest = Some(latest.map_or(time, |value| value.max(time)));
             }
             if kind == "user" && session.title.is_empty() {
-                let body = row.get("message").and_then(|message| message.get("content")).map(text_content).unwrap_or_default();
                 session.title_from_message(kind, &body, HistoryMessageKind::Conversation);
             }
         }
@@ -669,10 +680,14 @@ mod tests {
         let native = "22222222-2222-4222-8222-222222222222";
         let lines = [
             serde_json::json!({"type":"ai-title","aiTitle":"恢复标题"}),
+            // Blank bodies are not messages for a full parse, so they must not
+            // move the timestamps of the recovery identity either.
+            serde_json::json!({"type":"user","uuid":"user-blank","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T07:59:00Z","message":{"role":"user","content":[]}}),
             serde_json::json!({"type":"user","uuid":"user-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:00Z","message":{"role":"user","content":"解释恢复"}}),
             serde_json::json!({"type":"assistant","uuid":"assistant-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:05Z","message":{"id":"msg-1","role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"说明"}],"usage":{"input_tokens":5,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}),
             serde_json::json!({"type":"assistant","uuid":"assistant-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:30Z","message":{"id":"msg-1","role":"assistant","model":"claude-opus-4-1","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}),
             serde_json::json!({"type":"user","uuid":"tool-1","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:31Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"output"}]}}),
+            serde_json::json!({"type":"assistant","uuid":"assistant-blank","sessionId":native,"cwd":"/fixture/project","timestamp":"2026-09-29T08:00:40Z","message":{"id":"msg-blank","role":"assistant","model":"claude-opus-4-1","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}),
         ];
         let text = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n") + "\n";
         std::fs::write(&path, text).unwrap();

@@ -364,6 +364,7 @@ pub fn identity_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<SessionIdentity, String> {
     let mut session = ParsedSession::new();
+    let mut accepted = 0usize;
     let mut earliest: Option<i64> = None;
     let mut latest: Option<i64> = None;
     let partial = read_jsonl_filtered(source, cancelled, skip_row, |_line, row| {
@@ -387,14 +388,22 @@ pub fn identity_controlled(
             {
                 let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
                 if role == "user" || role == "assistant" {
+                    // A full parse drops a row whose text is blank and ignores
+                    // every row past the message cap, so the title, the
+                    // timestamps and the cap are applied the same way here.
+                    if accepted >= crate::history::MAX_MESSAGES {
+                        return;
+                    }
+                    let body = payload.get("content").map(text_content).unwrap_or_default();
+                    if body.trim().is_empty() {
+                        return;
+                    }
+                    accepted += 1;
                     if let Some(time) = time {
                         earliest = Some(earliest.map_or(time, |value| value.min(time)));
                         latest = Some(latest.map_or(time, |value| value.max(time)));
                     }
-                    // The picker title comes from the first user conversation
-                    // row, so only those rows are decoded.
                     if role == "user" && session.title.is_empty() {
-                        let body = payload.get("content").map(text_content).unwrap_or_default();
                         session.title_from_message(role, &body, message_kind(role, &body));
                     }
                 }
@@ -425,8 +434,12 @@ mod tests {
         let lines = [
             json!({"timestamp":"2026-09-29T08:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/fixture/project","cli_version":"0.165.0"}}),
             json!({"timestamp":"2026-09-29T08:00:01Z","type":"turn_context","payload":{"model":"gpt-6-astra"}}),
+            // Blank bodies are not messages for a full parse, so they must not
+            // move the timestamps of the recovery identity either.
+            json!({"timestamp":"2026-09-29T07:59:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"   "}]}}),
             json!({"timestamp":"2026-09-29T08:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请检查恢复链路"}]}}),
             json!({"timestamp":"2026-09-29T08:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已核对"}]}}),
+            json!({"timestamp":"2026-09-29T08:00:44Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}),
             json!({"timestamp":"2026-09-29T08:00:09Z","type":"response_item","payload":{"type":"reasoning","content":[]}}),
             json!({"timestamp":"2026-09-29T08:00:10Z","type":"token_usage_record","payload":{"response_id":"resp-1","usage":{"input_tokens":10,"cached_input_tokens":4,"cache_write_input_tokens":0,"output_tokens":2}}}),
             json!({"type":"unknown-shape","payload":{}}),
@@ -440,6 +453,36 @@ mod tests {
         assert_eq!(SessionIdentity::from_parsed(full), light);
         assert_eq!(light.native_id.as_deref(), Some("11111111-1111-4111-8111-111111111111"));
         assert_eq!(light.cwd.as_deref(), Some("/fixture/project"));
+    }
+
+    /// The full parse stops recording messages at the cap, so the light path
+    /// must stop counting their timestamps at the same row.
+    #[test]
+    fn recovery_identity_stops_at_the_message_cap_like_a_full_parse() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".codex").join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-cap.jsonl");
+        let mut lines = vec![
+            json!({"timestamp":"2026-09-29T08:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","cwd":"/fixture/project","cli_version":"0.165.0"}}),
+        ];
+        for index in 0..crate::history::MAX_MESSAGES + 5 {
+            let second = 1 + index % 59;
+            let minute = index / 59;
+            lines.push(json!({
+                "timestamp": format!("2026-09-29T09:{minute:02}:{second:02}Z"),
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": format!("第 {index} 行")}]},
+            }));
+        }
+        let text = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("
+") + "
+";
+        std::fs::write(&path, text).unwrap();
+        let found = sources(home.path()).unwrap();
+        let full = parse(&found[0]).unwrap();
+        assert_eq!(full.messages.len(), crate::history::MAX_MESSAGES);
+        assert_eq!(SessionIdentity::from_parsed(full), identity(&found[0]).unwrap());
     }
 
     #[test]
