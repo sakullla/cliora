@@ -54,3 +54,8 @@ docs/verification/configuration-redesign-ui/*
 !docs/verification/configuration-redesign-ui/kimi-wide-1600x960.png
 !docs/verification/configuration-redesign-ui/kimi-first-screen-1160x780.png
 .zcode/
+
+# Track the cross-app review protocol contract.
+!docs/integrations/
+docs/integrations/*
+!docs/integrations/twiglane-review-v1.md
