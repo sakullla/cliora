@@ -9,6 +9,22 @@ export type FilterSelectOption = { value: string; label: string; detail?: string
 const searchThreshold = 4;
 // Strip the leading verb so the search input label stays concise in both languages.
 const stripLabelVerb = (label: string) => label.replace(/^(筛选|切换|Filter\s+|Switch\s+)/, '');
+const wordCharacter = /[a-z0-9]/;
+
+// A single letter or digit matches a whole word. "d" then hits "Plan D" and "model-d", and misses the letter inside "model".
+function matchesFilterToken(haystack: string, token: string): boolean {
+  let from = 0;
+  while (from <= haystack.length) {
+    const at = haystack.indexOf(token, from);
+    if (at < 0) return false;
+    if (token.length !== 1 || !wordCharacter.test(token)) return true;
+    const before = at > 0 ? haystack[at - 1] : '';
+    const after = haystack[at + token.length] ?? '';
+    if (!wordCharacter.test(before) && !wordCharacter.test(after)) return true;
+    from = at + 1;
+  }
+  return false;
+}
 
 export function FilterSelect({ label, value, options, placeholder, disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder, emptyText, onChange, variant = 'default', className, triggerRef, onTriggerKeyDown, onPickFolder, pickFolderLabel, onPickRemote, pickRemoteLabel, triggerDetail = true }: {
   label: string;
@@ -51,7 +67,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const matches = options.filter((item) => {
     if (!tokens.length) return true;
     const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.value}`.toLowerCase();
-    return tokens.every((token) => haystack.includes(token));
+    return tokens.every((token) => matchesFilterToken(haystack, token));
   });
 
   useLayoutEffect(() => {
