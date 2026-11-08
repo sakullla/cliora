@@ -62,6 +62,10 @@ pub struct WorktreeBasePreview {
     pub remote: Option<String>,
     /// Branch name without the remote prefix.
     pub branch: Option<String>,
+    /// The branch `prepare_with` would create for this task text, computed by the
+    /// same `branch_base`/`unique_branch` pair so the preview cannot drift from
+    /// the creation. Absent when the existing branches could not be read.
+    pub proposed_branch: Option<String>,
     /// Visible reason when the default could not be used unchanged.
     pub degraded: Option<String>,
     /// Candidates the user has to choose from when no default is identifiable.
@@ -207,11 +211,7 @@ fn prepare_with(
     let parent = main.parent().filter(|path| !path.as_os_str().is_empty()).ok_or_else(|| {
         "无法在主检出同级创建工作树。".to_string()
     })?;
-    let repo_name = main
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-        .ok_or_else(|| "无法确定仓库目录名。".to_string())?;
+    let repo_name = repository_name(&main).ok_or_else(|| "无法确定仓库目录名。".to_string())?;
     // The base is resolved once here and pinned to its commit, so a ref that
     // moves after the preview cannot change where the worktree starts.
     let commit = match &options.base {
@@ -818,13 +818,45 @@ fn command_failure(prefix: &str, stderr: &str, stdout: &str) -> String {
 }
 
 /// What a creation would start from, resolved without writing anything.
+///
+/// This keeps the historical two-argument shape for callers that only need the
+/// base: the branch proposal then follows an empty task text, exactly what a
+/// creation without a task would use.
 pub fn base_preview(directory: &Path, base: Option<&WorktreeBase>) -> Result<WorktreeBasePreview, String> {
+    base_preview_for(directory, base, None)
+}
+
+/// The same preview, with the branch a creation would really use for `task_text`.
+///
+/// The branch is never invented here: it comes from `branch_base` and
+/// `unique_branch`, the pair `prepare_with` uses, so what the dialog shows and
+/// what the creation allocates are the same rule.
+pub fn base_preview_for(
+    directory: &Path,
+    base: Option<&WorktreeBase>,
+    task_text: Option<&str>,
+) -> Result<WorktreeBasePreview, String> {
     let git = find_git().ok_or_else(|| "找不到 Git，无法读取工作树基点。".to_string())?;
-    if crate::git_context::main_checkout(directory).is_none() {
+    let Some(main) = crate::git_context::main_checkout(directory) else {
         return Err("这个目录不是 Git 仓库，不能新建工作树。".into());
-    }
+    };
     let base = base.cloned().unwrap_or_default();
-    Ok(preview_of(&base, resolve_base(&git, directory, &base)?))
+    let mut preview = preview_of(&base, resolve_base(&git, directory, &base)?);
+    // A branch list that cannot be read leaves the branch unknown instead of
+    // promising a name the creation might not be able to use.
+    preview.proposed_branch = branch_names(&git, directory).ok().map(|existing| {
+        let repo_name = repository_name(&main).unwrap_or("task");
+        unique_branch(&branch_base(task_text, repo_name), &existing)
+    });
+    Ok(preview)
+}
+
+/// The repository directory name an automatic branch is derived from. The
+/// preview and the creation both read it here, so they cannot disagree.
+fn repository_name(main: &Path) -> Option<&str> {
+    main.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
 }
 
 /// Refresh only the selected remote branch. Nothing else is fetched and no
@@ -866,6 +898,7 @@ fn preview_of(base: &WorktreeBase, resolution: BaseResolution) -> WorktreeBasePr
             commit: Some(commit),
             remote,
             branch,
+            proposed_branch: None,
             degraded,
             candidates: Vec::new(),
             available: true,
@@ -1517,6 +1550,49 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("gone-ref"), "{error}");
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), before);
+    }
+
+    /// The dialog shows the branch before anything is written. That name must be
+    /// the one the creation really allocates: same task text, same clash handling.
+    #[test]
+    fn the_preview_names_the_branch_the_creation_will_use() {
+        let (temp, db) = database();
+        let Some(main) = repo_with_origin(temp.path()) else {
+            eprintln!("git unavailable; skipping proposed branch test");
+            return;
+        };
+        let task = Some("feat: hello?\nsecond line");
+        let preview = base_preview_for(&main, Some(&WorktreeBase::Default), task).expect("preview");
+        assert!(preview.available, "{preview:?}");
+        assert_eq!(preview.proposed_branch.as_deref(), Some("feat-hello"));
+        let created = prepare_worktree_with(&db, &main, task, &explicit(WorktreeBase::Default, None), &mut |_| {})
+            .unwrap()
+            .expect("worktree");
+        assert_eq!(created.branch, "feat-hello");
+        assert_eq!(preview.proposed_branch.as_deref(), Some(created.branch.as_str()));
+
+        // A taken name is avoided identically in the preview and in the creation.
+        assert!(run_git(&main, &["branch", "shop-task"]));
+        let taken = base_preview_for(&main, Some(&WorktreeBase::Default), Some("shop task")).expect("preview");
+        assert_eq!(taken.proposed_branch.as_deref(), Some("shop-task-2"), "{taken:?}");
+        let second = prepare_worktree_with(&db, &main, Some("shop task"), &explicit(WorktreeBase::Default, None), &mut |_| {})
+            .unwrap()
+            .expect("worktree");
+        assert_eq!(second.branch, "shop-task-2");
+
+        // No task text falls back to the repository name, the historical default.
+        let empty = base_preview_for(&main, Some(&WorktreeBase::Default), None).expect("preview");
+        assert_eq!(empty.proposed_branch.as_deref(), Some("shop"));
+        assert_eq!(base_preview(&main, None).expect("preview").proposed_branch, empty.proposed_branch);
+
+        // An explicit branch name is what the user sees instead: the proposal keeps
+        // following the task, while the creation uses the given name verbatim.
+        let explicit_preview = base_preview_for(&main, Some(&WorktreeBase::Default), task).expect("preview");
+        assert_eq!(explicit_preview.proposed_branch.as_deref(), Some("feat-hello-2"));
+        let named = prepare_worktree_with(&db, &main, task, &explicit(WorktreeBase::Default, Some("manual-name")), &mut |_| {})
+            .unwrap()
+            .expect("worktree");
+        assert_eq!(named.branch, "manual-name");
     }
 
     #[test]

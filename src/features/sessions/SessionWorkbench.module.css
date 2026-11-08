@@ -1780,6 +1780,8 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .baseLabel { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 .baseRef { min-width: 0; max-width: 100%; overflow: hidden; font-family: var(--font-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .baseOid { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--surface); color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
+.baseBranch { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); color: var(--text); font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.baseBranch[data-source='explicit'] { background: var(--surface); color: var(--text-2); }
 .baseHint { margin: 0; color: var(--text-3); font-size: 11px; line-height: 1.4; }
 .baseError { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: 0; color: var(--danger); font-size: 12px; line-height: 1.4; }
 .baseActions { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); }

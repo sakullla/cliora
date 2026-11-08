@@ -3910,9 +3910,15 @@ pub async fn save_worktree_prepare(app: AppHandle, directory: String, command: S
 pub async fn worktree_base_preview(
     directory: String,
     base: Option<crate::git_worktree::WorktreeBase>,
+    task_text: Option<String>,
 ) -> Result<crate::git_worktree::WorktreeBasePreview, ApiError> {
     blocking(move || {
-        crate::git_worktree::base_preview(Path::new(&directory), base.as_ref()).map_err(native_error)
+        crate::git_worktree::base_preview_for(
+            Path::new(&directory),
+            base.as_ref(),
+            task_text.as_deref(),
+        )
+        .map_err(native_error)
     })
     .await
 }

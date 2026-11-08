@@ -217,8 +217,11 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             if (command === 'worktree_base_update' && window.__captureBaseUpdateFails) throw { message: '更新远程基点失败：网络不可用', action: '重试或使用缓存基点。' };
             const base = args.base ?? null;
             const reference = base && base.kind === 'reference' ? base.reference : 'origin/main';
+            const taskLine = String(args.taskText ?? '').trim().split(/\r?\n/).map((line) => line.trim()).find(Boolean);
             return { kind: (base && base.kind) || 'default', reference, commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', shortCommit: 'a1b2c3d',
-              remote: 'origin', branch: reference.split('/').slice(1).join('/'), degraded: null, candidates: [], available: true, reason: null };
+              remote: 'origin', branch: reference.split('/').slice(1).join('/'), degraded: null, candidates: [], available: true, reason: null,
+              // Same rule as native: the first task line, else the repository name.
+              proposedBranch: taskLine ? taskLine.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : 'cliora' };
           }
           if (command === 'worktree_status') {
             if ((window.__captureStatusFails ?? []).includes(args.directory)) throw { message: '无法读取工作树状态：git 返回非零退出码' };
@@ -523,11 +526,13 @@ for (const width of widths) {
   await shot('workbench-worktree-new-' + theme + '-' + width, theme, width, async page => {
     const dialog = await openWorktreeDialog(page);
     await dialog.locator('code').filter({ hasText: 'origin/main' }).first().waitFor();
+    // The branch the creation will allocate is visible with the advanced panel closed.
+    await dialog.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('feat: 结算流程');
+    await dialog.locator('code[data-source="proposed"]').filter({ hasText: 'feat' }).first().waitFor();
     await dialog.getByRole('button', { name: copy('高级选项', 'Advanced'), exact: true }).click();
     await dialog.getByLabel(copy('基点 ref', 'Base ref'), { exact: true }).fill('origin/develop');
     await dialog.getByRole('button', { name: copy('使用此 ref', 'Use this ref'), exact: true }).click();
     await dialog.locator('code').filter({ hasText: 'origin/develop' }).first().waitFor();
-    await dialog.getByLabel(copy('分支名', 'Branch name'), { exact: true }).fill('feat/checkout-flow');
   });
   // Environment setup failed: the worktree is kept and the retry stays in that directory.
   await shot('workbench-worktree-preparing-failed-' + theme + '-' + width, theme, width, async page => {

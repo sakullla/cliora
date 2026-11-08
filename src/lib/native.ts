@@ -385,8 +385,9 @@ export const native = {
   workbenchGitContext: (sessionId: string) => command<WorkbenchGitContext | null>('workbench_git_context', { sessionId }),
   /** Outside a repository this is an empty list; a repository that cannot be read rejects. */
   gitWorktrees: (directory: string) => command<WorkbenchWorktree[]>('git_worktrees', { directory }),
-  /** The base a creation would really use, with its short commit; `base` absent means the repository default. */
-  worktreeBasePreview: (directory: string, base?: WorktreeBase | null) => command<WorktreeBasePreview>('worktree_base_preview', { directory, base: base ?? null }),
+  /** The base a creation would really use, with its short commit and the branch the
+   *  creation would allocate for `taskText`; `base` absent means the repository default. */
+  worktreeBasePreview: (directory: string, base?: WorktreeBase | null, taskText?: string | null) => command<WorktreeBasePreview>('worktree_base_preview', { directory, base: base ?? null, taskText: taskText ?? null }),
   /** Refresh only the selected remote base. A failure leaves the cached preview and the main checkout unchanged. */
   worktreeBaseUpdate: (directory: string, base?: WorktreeBase | null) => command<WorktreeBasePreview>('worktree_base_update', { directory, base: base ?? null }),
   /** Ledger environment plus real Git status of one checkout; unknown stays unknown, never zero. */

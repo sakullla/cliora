@@ -385,6 +385,9 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
               candidates: [],
               available: true,
               reason: null,
+              // The branch the creation would allocate for the current task text.
+              proposedBranch: String(args.taskText ?? '').trim().split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+                ?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'shop',
               ...(harness.__basePreview ?? {}),
             };
           }
@@ -3141,4 +3144,82 @@ test('removing a worktree that a running session still uses names the session', 
   await expect(menu.getByRole('alert')).toContainText('运行中的会话 Codex');
   await expect(page.getByRole('dialog', { name: '清理这个工作树？' })).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __cleanups?: unknown[] }).__cleanups ?? [])).toEqual([]);
+});
+test('the dialog shows the branch it will create without opening the advanced options', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __projects: [{ id: 'p1', name: 'Shop', path: 'C:/work', available: true, preferredTool: null, lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Shop/ }).click();
+  await dialog.getByRole('radio', { name: '新建工作树' }).click();
+  // Nothing advanced is open, yet the branch the creation would use is on screen.
+  await expect(dialog.getByLabel('基点 ref')).toHaveCount(0);
+  const branch = dialog.locator('code[data-source]');
+  await expect(branch).toBeVisible();
+  await expect(branch).toHaveText('shop');
+  await expect(branch).toHaveAttribute('data-source', 'proposed');
+  // The first task line drives it, and it follows further edits.
+  await dialog.getByLabel('初始提示词（可选）').fill('feat: checkout flow');
+  await expect(branch).toHaveText('feat-checkout-flow');
+  await dialog.getByLabel('初始提示词（可选）').fill('fix: cart total\nsecond line');
+  await expect(branch).toHaveText('fix-cart-total');
+  // An explicit name replaces the proposal, because that is what Git receives.
+  await dialog.getByRole('button', { name: '高级选项' }).click();
+  await dialog.getByLabel('分支名').fill('feature/manual');
+  await expect(branch).toHaveText('feature/manual');
+  await expect(branch).toHaveAttribute('data-source', 'explicit');
+  await dialog.getByLabel('初始提示词（可选）').fill('feat: changed again');
+  await expect(branch).toHaveText('feature/manual');
+});
+
+test('the worktree menu is fully usable from the keyboard', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __gitContext: { branch: 'main', commit: null, worktree: null, repository: 'repo' },
+      __worktrees: [
+        { name: 'repo', branch: 'main', path: 'C:/repo', current: false },
+        { name: 'work', branch: 'feat-work', path: 'C:/work', current: true },
+        { name: 'other', branch: 'feat-other', path: 'C:/other', current: false },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const chip = page.getByRole('button', { name: /在工作树中新开会话/ });
+  const menu = page.getByRole('menu', { name: '在工作树中新开会话' });
+  const repo = menu.getByRole('menuitemradio', { name: /^repo/ });
+  const other = menu.getByRole('menuitemradio', { name: /^other/ });
+  // No pointer at all: an arrow key opens the menu on its first item.
+  await chip.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(repo).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(other).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(repo).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(menu.getByRole('menuitem').last()).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(repo).toBeFocused();
+  // Escape closes and puts focus back on the chip.
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(chip).toBeFocused();
+  // Enter activates the focused item exactly like a click.
+  await page.keyboard.press('ArrowDown');
+  await expect(repo).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, any>> }).__launches.at(-1))).toMatchObject({
+    directory: 'C:/repo',
+    worktreeIntent: 'given',
+  });
+  await expect(menu).toHaveCount(0);
 });

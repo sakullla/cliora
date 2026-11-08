@@ -25,6 +25,9 @@ export type WorktreeBasePreview = {
   /** Remote name when the base is a remote-tracking branch; the 更新 action targets it. */
   remote: string | null;
   branch: string | null;
+  /** The branch the creation would allocate for the current task text; `null` when
+   *  the existing branches could not be read, so the name stays unknown. */
+  proposedBranch: string | null;
   /** Visible reason when the repository default could not be used unchanged. */
   degraded: string | null;
   /** Bases the user has to choose from when no default is identifiable. */

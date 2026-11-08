@@ -429,6 +429,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const launchMenuRef = useRef<HTMLDivElement>(null);
+  const worktreeMenuRef = useRef<HTMLDivElement>(null);
+  const gitChipRef = useRef<HTMLButtonElement>(null);
   const [launchMenuOpen, setLaunchMenuOpen] = useState(false);
   const [worktreeSaveError, setWorktreeSaveError] = useState('');
   const [worktreeSaving, setWorktreeSaving] = useState(false);
@@ -2321,6 +2323,56 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     items[next].focus();
   }
 
+  /** Items a menu can move focus between: the same set the other menus use. */
+  function worktreeMenuItems(): HTMLButtonElement[] {
+    return [...worktreeMenuRef.current?.querySelectorAll<HTMLButtonElement>(MENU_ITEM) ?? []];
+  }
+
+  function focusWorktreeItem(index: number) {
+    const items = worktreeMenuItems();
+    if (!items.length) return;
+    const target = index < 0 ? items[items.length - 1] : items[Math.min(index, items.length - 1)];
+    target.focus();
+    // A long list must keep the focused row in view without scrolling the page.
+    target.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** The worktree menu is keyboard reachable like the other menus: arrows, Home,
+   *  End, Enter/Space on the focused item, Escape closes and returns to the chip.
+   *  Tab is left alone so it keeps moving out of the menu. */
+  function worktreeMenuKeys(event: ReactKeyboardEvent<HTMLSpanElement>) {
+    if (event.key === 'Escape' && worktreeMenuOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setWorktreeMenuOpen(false);
+      gitChipRef.current?.focus();
+      return;
+    }
+    // Modified arrows stay with the workbench shortcuts (Alt+Arrow switches sessions).
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!worktreeMenuOpen) {
+      // Closed: ArrowDown/ArrowUp opens the menu and lands on its first/last item.
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      setGitReadSeq((seq) => seq + 1);
+      setWorktreeMenuOpen(true);
+      const opening = event.key === 'ArrowUp';
+      window.setTimeout(() => focusWorktreeItem(opening ? -1 : 0), 0);
+      return;
+    }
+    if (event.key === 'Tab') return;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const items = worktreeMenuItems();
+    if (!items.length) return;
+    event.preventDefault();
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? items.length - 1
+        : index < 0 ? (event.key === 'ArrowDown' ? 0 : -1)
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    focusWorktreeItem(next);
+  }
+
   function launchMenuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -2497,7 +2549,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!newDialogOpen) { setDialogDirectory(null); return; }
     setDialogDirectory(dialogPrepareDirectory());
   }, [newDialogOpen, workspaceValue, availableProjects, activeRemoteTarget]);
-  // The confirmed base and its short commit are visible before anything is written.
+  // The branch a creation would allocate follows the task text, so the first line
+  // of the prompt is part of the preview request.
+  const dialogTaskLine = useMemo(() => firstTaskLine(initialPrompt), [initialPrompt]);
+  // The confirmed base, its short commit and the proposed branch are visible before
+  // anything is written. A keystroke only re-reads after a short pause, and the
+  // previous preview stays on screen meanwhile.
   useEffect(() => {
     if (!nativeAvailable || !newDialogOpen || dialogPlace !== 'worktree' || !dialogDirectory) {
       setBasePreview(null);
@@ -2505,19 +2562,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return;
     }
     const request = ++baseRequest.current;
+    let cancelled = false;
     setBaseBusy(true);
     setBaseError('');
-    void native.worktreeBasePreview(dialogDirectory, baseChoice).then((value) => {
-      if (baseRequest.current !== request) return;
-      setBasePreview(value && typeof value === 'object' ? value : null);
-      setBaseBusy(false);
-    }).catch((error) => {
-      if (baseRequest.current !== request) return;
-      setBasePreview(null);
-      setBaseBusy(false);
-      setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
-    });
-  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, t]);
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      void native.worktreeBasePreview(dialogDirectory, baseChoice, dialogTaskLine).then((value) => {
+        if (cancelled || baseRequest.current !== request) return;
+        setBasePreview(value && typeof value === 'object' ? value : null);
+        setBaseBusy(false);
+      }).catch((error) => {
+        if (cancelled || baseRequest.current !== request) return;
+        setBasePreview(null);
+        setBaseBusy(false);
+        setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
+      });
+    }, 240);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, dialogTaskLine, t]);
 
   function chooseDialogPlace(place: 'direct' | 'worktree') {
     dialogPlaceTouched.current = true;
@@ -2537,7 +2599,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     try {
       const value = await native.worktreeBaseUpdate(dialogDirectory, baseChoice);
       if (baseRequest.current !== request) return;
-      setBasePreview(value && typeof value === 'object' ? value : null);
+      // Only the base is refreshed: the branch proposal stays what the task text
+      // asked for, so an update never blanks the name in the dialog.
+      setBasePreview((previous) => (value && typeof value === 'object'
+        ? { ...value, proposedBranch: value.proposedBranch ?? previous?.proposedBranch ?? null }
+        : null));
       setBaseStale(false);
     } catch (error) {
       if (baseRequest.current !== request) return;
@@ -2933,9 +2999,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
                     and a caret only when there are other checkouts to open a session in. */}
-                {(gitLabel || canOpenGitMenu) && (canOpenGitMenu && current ? <span className={styles.worktreeSwitch} onKeyDown={(event) => { if (event.key === 'Escape' && worktreeMenuOpen) { event.stopPropagation(); setWorktreeMenuOpen(false); } }}>
-                  <button type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu'), t('sessions.reviewGroup')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu') + '\n' + t('sessions.reviewGroup')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
-                  {worktreeMenuOpen && <div className={styles.worktreeMenu} role="menu" aria-label={t('sessions.worktreeMenu')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
+                {(gitLabel || canOpenGitMenu) && (canOpenGitMenu && current ? <span className={styles.worktreeSwitch} onKeyDown={worktreeMenuKeys}>
+                  <button ref={gitChipRef} type="button" className={styles.gitChip} data-switch="" aria-haspopup="menu" aria-expanded={worktreeMenuOpen} aria-label={[gitTitle, t('sessions.worktreeMenu'), t('sessions.reviewGroup')].filter(Boolean).join(' · ')} title={gitChipTitle + '\n' + t('sessions.worktreeMenu') + '\n' + t('sessions.reviewGroup')} disabled={!!busy} onClick={() => { if (!worktreeMenuOpen) setGitReadSeq((seq) => seq + 1); setWorktreeMenuOpen(!worktreeMenuOpen); }}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel || t('sessions.worktreeCount', { count: worktrees.length })}</span><Icon name="chevronDown" size={11} /></button>
+                  {worktreeMenuOpen && <div ref={worktreeMenuRef} className={styles.worktreeMenu} role="menu" aria-label={t('sessions.worktreeMenu')} onMouseLeave={() => setWorktreeMenuOpen(false)}>
                     <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeMenu')}</span>{worktreeListState === 'ready' && <em>{worktrees.length}</em>}</div>
                     {worktreeListState === 'loading' && !gitWorktrees && <p className={styles.menuHint} role="status">{t('sessions.worktreeListLoading')}</p>}
                     {worktreeListState === 'error' && <p className={styles.menuError} role="alert">{worktreeListError}</p>}
@@ -3091,9 +3157,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               <span className={styles.baseLabel}>{t('sessions.worktreeBase')}</span>
               <code className={styles.baseRef} title={basePreview?.reference ?? undefined}>{baseBusy && !basePreview ? t('sessions.worktreeBaseLoading') : basePreview?.available ? basePreview.reference ?? '' : '—'}</code>
               {basePreview?.available && basePreview.shortCommit && <code className={styles.baseOid} title={basePreview.commit ?? undefined}>{t('sessions.worktreeBaseOid', { short: basePreview.shortCommit })}</code>}
+              {/* The branch the creation would allocate, readable without opening the
+                  advanced options. A typed name replaces it because that is what Git gets. */}
+              <span className={styles.baseLabel}>{t('sessions.worktreeBranchLabel')}</span>
+              <code className={styles.baseBranch} data-source={branchDraft.trim() ? 'explicit' : 'proposed'} title={branchDraft.trim() ? t('sessions.worktreeBranchExplicitHint') : t('sessions.worktreeBranchProposedHint')}>{branchDraft.trim() || basePreview?.proposedBranch || t('sessions.worktreeBranchUnknown')}</code>
               {basePreview?.available && basePreview.remote && <Button size="sm" disabled={baseBusy} onClick={() => void updateBase()}>{baseBusy ? t('sessions.worktreeBaseUpdating') : t('sessions.worktreeBaseUpdate')}</Button>}
               <Button size="sm" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen((value) => !value)}>{advancedOpen ? t('sessions.worktreeAdvancedHide') : t('sessions.worktreeAdvanced')}</Button>
             </div>
+            {!branchDraft.trim() && !dialogTaskLine && <p className={styles.baseHint}>{t('sessions.worktreeBranchDefaultHint')}</p>}
             {basePreview?.degraded && <p className={styles.baseHint}>{basePreview.degraded}</p>}
             {baseStale && <p className={styles.baseHint} role="status">{t('sessions.worktreeBaseStale')}</p>}
             {basePreview && !basePreview.available && <p className={styles.baseError} role="alert">{basePreview.reason || t('sessions.worktreeBaseUnavailable')}</p>}
