@@ -8,6 +8,7 @@ export default {
   restoreQueued: 'Waiting to restore',
   restoreDiscovering: 'Looking for the original session…',
   restoreStarting: 'Starting the session…',
+  restoreOutcomeUnknown: 'Nothing left to restore; retry it or forget it.',
   retryRestore: 'Retry restoration',
   dismissRestore: 'Forget this tab',
   chooseRestore: 'Choose session',

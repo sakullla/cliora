@@ -325,6 +325,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
     const resizes: Array<{ sessionId: string; cols: number; rows: number }> = [];
     Object.assign(window, {
       isTauri: true,
+      // A session that shows up later (a launch, another process) must heal a stale pending row.
+      __addSession: (session: Record<string, unknown>) => { if (!sessions.some((item) => item.id === session.id)) sessions.push(session as never); },
       __resizes: resizes,
       __writes: writes,
       __writeBytes: writeBytes,
@@ -487,14 +489,17 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
               __restoreReport?: { restored?: Record<string, string>; failures?: Array<Record<string, any>> };
             };
             if (harness.__savedRestoreFails) throw new Error('无法读取上次会话');
+            harness.__restoreListCalls = (harness.__restoreListCalls ?? 0) + 1;
             if (harness.__savedRestores) return harness.__savedRestores.map((item) => ({ ...item }));
             // Tests written before the saved-record read only declare a batch report; derive the
             // pending rows from it so the same fixture still exercises the queue.
             const report = harness.__restoreReport;
             if (!report) return [];
-            const base = { projectId: null, mode: 'normal', startedAt: Date.now(), stoppedAt: null, nativeId: null, accountId: null, contextId: null };
+            // A record from an earlier run: an old start time and its own directory, so it never
+            // looks like one of the live fixture sessions.
+            const base = { projectId: null, mode: 'normal', startedAt: Date.now() - 3_600_000, stoppedAt: null, nativeId: null, accountId: null, contextId: null };
             return [
-              ...Object.keys(report.restored ?? {}).map((id) => ({ ...base, id, toolId: 'codex', directory: 'C:/work' })),
+              ...Object.keys(report.restored ?? {}).map((id) => ({ ...base, id, toolId: 'codex', directory: 'C:/previous-run' })),
               ...(report.failures ?? []).map((item) => ({ ...base, ...item.session })),
             ];
           }
@@ -2305,6 +2310,66 @@ test('a slow saved record does not block the ones that are already usable', asyn
   await expect(page.locator('[data-session-id="slow-1"]')).toBeVisible();
   await expect(page.locator('[data-restore-row]')).toHaveCount(1);
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
+});
+
+test('a saved record for a session that is already running never becomes a pending row', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    // The default mock already has s1 running in C:/work. One record carries that session id
+    // (a launch writes the record with the session's own id); the other was written for the same
+    // terminal a moment earlier under another id.
+    __savedRestores: [
+      { id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', startedAt: Date.now(), stoppedAt: null, nativeId: null, accountId: null, contextId: null },
+      { id: 'record-for-s1', toolId: 'codex', projectId: null, directory: 'C:\\work\\', mode: 'normal', startedAt: Date.now(), stoppedAt: null, nativeId: null, accountId: null, contextId: null },
+    ],
+  }));
+  await openWorkbench(page);
+  // The record was read (so this is the live filter, not a skipped read) but nothing is pending.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __restoreListCalls?: number }).__restoreListCalls ?? 0)).toBe(1);
+  await expect(page.locator('[data-restore-row]')).toHaveCount(0);
+  await expect(page.getByRole('group', { name: '待恢复的会话' })).toHaveCount(0);
+  // Nothing to restore means the batch is not replayed at all.
+  expect(await page.evaluate(() => (window as unknown as { __restoreCalls?: number }).__restoreCalls ?? 0)).toBe(0);
+  // The live session itself is still there.
+  await expect(page.locator('[data-session-id="s1"]')).toBeVisible();
+});
+
+test('a pending row disappears once its session shows up', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __savedRestores: [{ id: 'ghost', toolId: 'codex', projectId: null, directory: 'C:/ghost', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null }],
+    // The batch never answers: the row would otherwise wait forever.
+    __restoreScript: [{ hold: true }],
+  }));
+  await openWorkbench(page);
+  await expect(page.locator('[data-restore-row="ghost"]')).toHaveCount(1);
+  // Another launch creates that session (same id, as the store writes it).
+  await page.evaluate(() => (window as unknown as { __addSession: (session: Record<string, unknown>) => void }).__addSession({
+    id: 'ghost', toolId: 'codex', projectId: null, directory: 'C:/ghost', mode: 'normal', running: true, exitCode: null, startedAt: Date.now(),
+  }));
+  // Coming back re-reads the list; the row is healed instead of staying forever.
+  const navigation = page.getByRole('navigation', { name: '页面' });
+  await navigation.getByRole('button', { name: '首页', exact: true }).click();
+  await navigation.getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('[data-session-id="ghost"]')).toBeVisible();
+  await expect(page.locator('[data-restore-row="ghost"]')).toHaveCount(0);
+  await expect(page.getByRole('group', { name: '待恢复的会话' })).toHaveCount(0);
+});
+
+test('a waiting row can be forgotten from the keyboard', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __savedRestores: [{ id: 'waiting', toolId: 'codex', projectId: null, directory: 'C:/waiting', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null }],
+    // No stage ever arrives for this record.
+    __restoreScript: [{ hold: true }],
+  }));
+  await openWorkbench(page);
+  const row = page.locator('[data-restore-row="waiting"]');
+  await expect(row).toContainText('等待恢复');
+  // A row that never progresses still offers its own exit, reachable with the keyboard.
+  const dismiss = row.getByRole('button', { name: '不再恢复' });
+  await dismiss.focus();
+  await expect(dismiss).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(row).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __forgottenRestore: string }).__forgottenRestore)).toBe('waiting');
 });
 
 /** More saved records than fit: the queue must scroll, not clip, at any window size. */

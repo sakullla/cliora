@@ -182,6 +182,21 @@ function readStoredSelection(): string | null {
   try { return localStorage.getItem('cliora:workbench-selected'); } catch { return null; }
 }
 
+/** Native skips a saved record whose id is already live (`restore_with` keeps `!live`), and a
+ *  launch writes the record with the session's own id. The view must agree, or a session started
+ *  before the workbench opened leaves a "waiting to restore" row that nothing can clear.
+ *  A record with another id still describes the same terminal when the directory, the CLI and the
+ *  start time (the store's own 2 s precision window) match a running session. */
+function savedRecordIsLive(saved: SavedWorkbenchSession, sessions: WorkbenchSession[]): boolean {
+  return sessions.some((session) => {
+    if (session.projectId?.startsWith('remote:')) return false;
+    if (session.id === saved.id) return true;
+    if (!session.running || session.toolId !== saved.toolId || !sameDirectory(session.directory, saved.directory)) return false;
+    const started = session.startedAt ?? 0;
+    return started > 0 && started >= saved.startedAt - 2000 && started <= saved.startedAt + 2000;
+  });
+}
+
 /** One saved record on screen before it becomes a real session again. */
 type RestoreRow = {
   saved: SavedWorkbenchSession;
@@ -342,12 +357,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** A restored snapshot can arrive before any list contains it. It survives the list reads
    *  that have not seen it yet; once the native list names that id, the list is authoritative. */
   const pendingRestored = useRef(new Map<string, WorkbenchSession>());
+  /** Ids the workbench has listed or restored. Kept in step with every list, so a restore can tell
+   *  whether a real session is already on screen without waiting for a render. */
+  const liveSessionIds = useRef(new Set<string>());
   function applyListedSessions(listed: WorkbenchSession[]) {
     const known = new Set(listed.map((item) => item.id));
     for (const id of [...pendingRestored.current.keys()]) if (known.has(id)) pendingRestored.current.delete(id);
     const extra = [...pendingRestored.current.values()].filter((item) => !known.has(item.id));
     if (pendingRestored.current.size > 16) pendingRestored.current.clear();
     const rows = extra.length ? [...listed, ...extra] : listed;
+    liveSessionIds.current = new Set(rows.map((item) => item.id));
+    pruneLiveRestoreRows(rows);
     setSessions((current) => rows.map((item) => {
       const candidates = [item, current.find(session => session.id === item.id), sessionStateUpdates.current.get(item.id)];
       return candidates.reduce<WorkbenchSession>((newest, candidate) => candidate && (candidate.stateRevision ?? 0) > (newest.stateRevision ?? 0) ? { ...item, ...candidate } : newest, item);
@@ -564,6 +584,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
   // Until the saved-record read answers, an empty session list means "unknown", not "empty".
   const [restoreListReady, setRestoreListReady] = useState(false);
+  // The saved-record read can land before the session list. Rows may show at once, but the batch
+  // waits for that first list so a record for an already-running session starts no pointless
+  // restore. The promise resolves on success, on failure and when the list is not read at all.
+  const sessionListReady = useRef<Promise<void> | null>(null);
+  const resolveSessionList = useRef<(() => void) | null>(null);
+  if (!sessionListReady.current) {
+    sessionListReady.current = new Promise<void>((resolve) => { resolveSessionList.current = resolve; });
+  }
   const [restoringIds, setRestoringIds] = useState<Set<string>>(() => new Set());
   const [restoreChoice, setRestoreChoice] = useState<import('../../types/launch').WorkbenchRestoreReport['failures'][number] | null>(null);
   const [restoreChoiceError, setRestoreChoiceError] = useState('');
@@ -595,6 +623,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!restoreRowsRef.current.some((item) => item.saved.id === savedId)) return;
     writeRestoreRows(restoreRowsRef.current.filter((item) => item.saved.id !== savedId));
   }
+  /** Forget one saved record and its row: the exit every row has, whatever its stage. */
+  function forgetRestoreRow(savedId: string) {
+    void native.forgetWorkbenchRestore(savedId)
+      .then(() => dropRestoreRow(savedId))
+      .catch((value) => setActionError(String(value?.message ?? value)));
+  }
+  /** The session list is the authority on what already runs: a saved record that is live must not
+   *  keep a pending row, or it would wait forever for a restore that native deliberately skips. */
+  function pruneLiveRestoreRows(sessions: WorkbenchSession[]) {
+    const current = restoreRowsRef.current;
+    if (!current.length) return;
+    const next = current.filter((row) => !savedRecordIsLive(row.saved, sessions));
+    if (next.length !== current.length) writeRestoreRows(next);
+  }
   /** Replace one pending row with the real session, without waiting for a second list IPC. */
   function applyRestoredSession(savedId: string, snapshot: WorkbenchSession) {
     if (!firstSeenAt.current.has(snapshot.id)) firstSeenAt.current.set(snapshot.id, snapshot.startedAt ?? Date.now());
@@ -608,8 +650,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     });
     dropRestoreRow(savedId);
     setArrangement((current) => remapArrangement(current, { [savedId]: snapshot.id }));
-    // The selection already belongs to a live session the user chose: leave it alone.
-    if (allSessionsRef.current.some((item) => item.id === selectedIdRef.current)) return;
+    liveSessionIds.current.add(snapshot.id);
+    // The workbench already shows a real session: a restore fills a gap, it never takes the
+    // selection from what the user is working in.
+    if (liveSessionIds.current.size > 1) return;
     if (restoreSelectionTaken.current && restorePreferred.current !== savedId) return;
     restoreSelectionTaken.current = true;
     setSelectedId(snapshot.id);
@@ -647,9 +691,28 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     writeRestoreRows(restoreRowsRef.current.map((row) => row.stage === 'failed' ? row : { ...row, stage: 'queued', detail: '' }));
     restoreSelectionTaken.current = false;
     restoreStages.current.clear();
-    try { await applyRestoreReport(await native.restoreWorkbenchSessions()); }
-    catch (value) { setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext'))); }
+    try {
+      const report = await native.restoreWorkbenchSessions();
+      await applyRestoreReport(report);
+      await settleRestoreRows(report);
+    } catch (value) { setRestoreError(formatFailure(value, t('sessions.restoreFailed'), t('sessions.closeNext'))); }
     finally { setRestoring(false); }
+  }
+  /** The batch has answered: every record is either restored (row gone), failed (row kept with its
+   *  retry) or already running (row pruned). Anything else would wait forever, so reconcile the
+   *  leftovers against the real list once, then say so instead of leaving a dead row. */
+  async function settleRestoreRows(report: import('../../types/launch').WorkbenchRestoreReport | null) {
+    const restored = report?.restored ?? {};
+    const failed = new Set((report?.failures ?? []).map((item) => item.session?.id));
+    const unsettled = () => restoreRowsRef.current.filter((row) => !restored[row.saved.id] && !failed.has(row.saved.id));
+    if (!unsettled().length) return;
+    const listed = await native.listWorkbenchSessions().catch(() => null);
+    const sessions = Array.isArray(listed) ? listed : allSessionsRef.current;
+    if (Array.isArray(listed)) applyListedSessions(listed);
+    for (const row of unsettled()) {
+      if (savedRecordIsLive(row.saved, sessions)) dropRestoreRow(row.saved.id);
+      else markRestoreRowFailed(row.saved, t('sessions.restoreOutcomeUnknown'), []);
+    }
   }
   /** Retry one saved record on its own: a failure never re-runs the other rows. */
   async function retryRestoreRow(row: RestoreRow, nativeId: string | null = null): Promise<boolean> {
@@ -710,11 +773,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!alive) return;
       if (!Array.isArray(saved)) { void restoreLocalSessions(); return; }
       const rows = toRestoreRows(saved.filter((item) => !!item && typeof item.id === 'string'));
-      if (rows.length) {
-        const known = new Set(restoreRowsRef.current.map((row) => row.saved.id));
-        writeRestoreRows([...restoreRowsRef.current, ...rows.filter((row) => !known.has(row.saved.id))]);
+      const known = new Set(restoreRowsRef.current.map((row) => row.saved.id));
+      // A record whose session is already running is not pending: native skips exactly those
+      // records without an event or a failure, so a row for one could never settle.
+      const pending = rows.filter((row) => !known.has(row.saved.id) && !savedRecordIsLive(row.saved, allSessionsRef.current));
+      if (!pending.length) return;
+      writeRestoreRows([...restoreRowsRef.current, ...pending]);
+      const ids = new Set(pending.map((row) => row.saved.id));
+      void sessionListReady.current?.then(() => {
+        if (!alive) return;
+        // Every row was healed as already live: there is nothing to restore.
+        if (!restoreRowsRef.current.some((row) => ids.has(row.saved.id))) return;
         void restoreLocalSessions();
-      }
+      });
     }).catch(() => { if (alive) void restoreLocalSessions(); })
       .finally(() => { if (alive) setRestoreListReady(true); });
     return () => { alive = false; };
@@ -1367,7 +1438,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       }
     }).catch((value) => {
       if (alive) setListError(formatFailure(value, t('sessions.listFailed'), t('sessions.listNext')));
-    }).finally(() => { if (alive) setLoading(false); });
+    }).finally(() => {
+      if (alive) setLoading(false);
+      // Whatever the outcome, the restore batch must not wait on this forever.
+      resolveSessionList.current?.();
+    });
     void native.listProjects().then((listed) => {
       if (alive) setProjects(Array.isArray(listed) ? listed : []);
     }).catch(() => {});
@@ -2834,9 +2909,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 ? <div className={styles.restoreRowActions}>
                   {row.candidates.length > 0 && <Button variant="primary" size="sm" disabled={rowBusy} onClick={() => { setRestoreChoice({ session: row.saved, detail: row.detail, candidates: row.candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}
                   <Button size="sm" disabled={rowBusy} icon={<Icon name="refresh" size={13} />} onClick={() => void retryRestoreRow(row)}>{t('sessions.retryRestore')}</Button>
-                  <Button size="sm" disabled={rowBusy} onClick={() => void native.forgetWorkbenchRestore(row.saved.id).then(() => dropRestoreRow(row.saved.id)).catch((value) => setActionError(String(value?.message ?? value)))}>{t('sessions.dismissRestore')}</Button>
+                  <Button size="sm" disabled={rowBusy} onClick={() => forgetRestoreRow(row.saved.id)}>{t('sessions.dismissRestore')}</Button>
                 </div>
-                : <span className={styles.restoreRowWait} aria-hidden="true" />}
+                // A row that is still waiting keeps a visible exit: a record native never answers
+                // for must not become an operation the user cannot cancel.
+                : <div className={styles.restoreRowActions}>
+                  <span className={styles.restoreRowWait} aria-hidden="true" />
+                  <IconButton size="sm" disabled={rowBusy} icon={<Icon name="close" size={13} />} onClick={() => forgetRestoreRow(row.saved.id)} aria-label={t('sessions.dismissRestore')} title={t('sessions.dismissRestore')} />
+                </div>}
             </div>;
           })}
         </div>}

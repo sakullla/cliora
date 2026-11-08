@@ -8,6 +8,7 @@ export default {
   restoreQueued: '等待恢复',
   restoreDiscovering: '正在查找原会话…',
   restoreStarting: '正在启动会话…',
+  restoreOutcomeUnknown: '没有可恢复的变化，可以重试或不再恢复。',
   retryRestore: '重试恢复',
   dismissRestore: '不再恢复',
   chooseRestore: '选择会话',
