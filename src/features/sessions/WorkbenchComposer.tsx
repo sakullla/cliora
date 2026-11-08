@@ -39,7 +39,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, pro
     <div className={styles.composerCard}>
       <div className={styles.composerHead}>
         <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={14} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>{place}</span></span>
-        <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} prompts={prompts} onPick={(prompt) => { onChange(draft ? draft + '\n' + prompt.body : prompt.body); inputRef.current?.focus(); }} />
+        <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} prompts={prompts} onPick={(prompt) => { const next = draft ? draft + '\n' + prompt.body : prompt.body; onChange(next); requestAnimationFrame(() => { const node = inputRef.current; if (node) { node.focus(); node.setSelectionRange(next.length, next.length); } }); }} />
         {lines > 1 && <span className={styles.composerLines}>{t('sessions.composerLines', { count: lines })}</span>}
         <IconButton size="sm" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose} icon={<Icon name="close" size={14} />} />
       </div>

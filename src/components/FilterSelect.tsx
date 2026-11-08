@@ -47,7 +47,12 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const selected = options.find((item) => item.value === value);
   const showSearch = searchable && (forceSearch || options.length > searchThreshold);
   const needle = query.trim().toLowerCase();
-  const matches = options.filter((item) => `${item.label} ${item.detail ?? ''}`.toLowerCase().includes(needle));
+  const tokens = needle ? needle.split(/\s+/).filter(Boolean) : [];
+  const matches = options.filter((item) => {
+    if (!tokens.length) return true;
+    const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.value}`.toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
 
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
@@ -119,6 +124,10 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   function onPanelKey(event: KeyboardEvent<HTMLElement>) {
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 1, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => { const next = Math.max(index - 1, 0); revealIndex.current = next; return next; }); return; }
+    if (event.key === 'PageDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 5, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }
+    if (event.key === 'PageUp') { event.preventDefault(); setActive((index) => { const next = Math.max(index - 5, 0); revealIndex.current = next; return next; }); return; }
+    if (event.key === 'Home' && (!showSearch || !query)) { event.preventDefault(); revealIndex.current = 0; setActive(0); return; }
+    if (event.key === 'End' && (!showSearch || !query)) { event.preventDefault(); const last = Math.max(matches.length - 1, 0); revealIndex.current = last; setActive(last); return; }
     const current = matches[Math.min(active, matches.length - 1)];
     if (event.key === 'Enter' && current) { event.preventDefault(); choose(current); return; }
     if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); triggerRef?.current?.focus(); }

@@ -143,4 +143,19 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await expect(page.getByRole('heading', { name: '工具', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex', level: 2 })).toBeVisible();
   await expect(picker).toHaveAccessibleName('Codex，切换 CLI');
+
+  // Command palette supports multi-keyword search, PageDown/PageUp navigation, and backdrop click dismissal.
+  await page.keyboard.press('ControlOrMeta+K');
+  const palette = page.getByRole('dialog', { name: '快速前往' });
+  await expect(palette).toBeVisible();
+  const paletteInput = palette.getByRole('combobox', { name: '搜索页面、工具或项目' });
+  await paletteInput.fill('grok 打开配置');
+  await expect(palette.getByRole('option', { name: /Grok/ })).toHaveAttribute('aria-selected', 'true');
+  await paletteInput.fill('');
+  await page.keyboard.press('PageDown');
+  expect(await palette.getByRole('option').evaluateAll((nodes) => nodes.findIndex((node) => node.getAttribute('aria-selected') === 'true'))).toBeGreaterThan(0);
+  await page.keyboard.press('PageUp');
+  await expect(palette.getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
+  await page.mouse.click(8, 8);
+  await expect(palette).toHaveCount(0);
 });

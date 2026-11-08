@@ -189,7 +189,7 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
         <details className={styles.pathCustom} open={Boolean(customPath.trim()) || undefined}>
           <summary>{t('tools.install.customPath')}</summary>
           <div className={styles.pathCustomRow}>
-            <input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} />
+            <input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy) { event.preventDefault(); onSavePath(); } }} placeholder={t('tools.install.pathPlaceholder')} />
             <Button disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</Button>
           </div>
         </details>

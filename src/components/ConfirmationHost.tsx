@@ -34,7 +34,14 @@ export function ConfirmationHost() {
       <div><h2 id="confirmation-title">{request.title ?? t('common.dialog.confirmTitle')}</h2>
       <p id="confirmation-message">{request.message}</p></div>
     </div>
-    <div className="confirmation-actions">
+    <div className="confirmation-actions" onKeyDown={(event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (current < 0 || buttons.length < 2) return;
+      event.preventDefault();
+      buttons[(current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length].focus();
+    }}>
       <Button autoFocus onClick={() => answerConfirmation(request.id, false)}>{t('common.dialog.cancel')}</Button>
       <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
     </div>

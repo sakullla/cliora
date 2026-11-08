@@ -1185,14 +1185,17 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   await expect(stage.getByRole('button', { name: '退出专注模式（显示侧栏）' })).toBeVisible();
   await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
 
-  // Open New Session Modal from the rail and search among 40+ CLIs
+  // Open New Session Modal from the rail, search among 40+ CLIs by ID, and submit with Mod+Enter from the prompt field
   const rail = page.getByRole('complementary', { name: '会话列表' });
   await rail.getByRole('button', { name: '新建会话' }).click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'CLI 工具' }).click();
-  await page.getByRole('textbox', { name: '搜索 40+ CLI 工具名称或标识' }).fill('CLI Tool 38');
+  await page.getByRole('textbox', { name: '搜索 40+ CLI 工具名称或标识' }).fill('cli_tool_38');
   await page.getByRole('option', { name: /CLI Tool 38/ }).click();
-  await dialog.getByRole('button', { name: '启动会话' }).click();
+  const promptField = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
+  await promptField.focus();
+  await page.keyboard.press('ControlOrMeta+Enter');
+  await expect(dialog).toBeHidden();
   await expect(page.getByRole('tab', { name: /CLI Tool 38/ })).toBeVisible();
 
   // Mark wb-1 exited; the ended group folds away and its clear action removes it

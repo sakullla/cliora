@@ -610,8 +610,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
           <label>{t('sessions.pickWorkspaceLabel')}<FilterSelect label={t('sessions.pickWorkspaceLabel')} value={launchPlace} options={launchPlaces} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickLaunchFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={setLaunchPlace} /></label>
         </div>
-        <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
-        <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>{t('library.page.launchSubmit')}</Button></div>
+        <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchBusy && launchTool && launchText.trim()) { event.preventDefault(); void startSession(); } }} /></label>
+        <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" data-dialog-save disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>{t('library.page.launchSubmit')}</Button></div>
       </div>}
     </GuideDialog>
     </>}

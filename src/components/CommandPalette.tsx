@@ -25,16 +25,23 @@ function matchScore(item: CommandItem, needle: string): number {
   const group = item.group.trim().toLowerCase();
   const hint = (item.hint ?? '').trim().toLowerCase();
   const keywords = (item.keywords ?? '').trim().toLowerCase();
+  const toolId = (item.toolId ?? '').trim().toLowerCase();
   const boost = item.contextBoost ?? 0;
 
   if (label === needle) return 100 + boost;
   if (label.startsWith(needle)) return 85 + boost;
-  if (keywords === needle || (item.toolId && item.toolId.toLowerCase() === needle)) return 75 + boost;
+  if (keywords === needle || (toolId && toolId === needle)) return 75 + boost;
   if (label.includes(needle)) return 65 + boost;
   if (keywords.startsWith(needle)) return 55 + boost;
-  if (keywords.includes(needle)) return 45 + boost;
+  if (keywords.includes(needle) || (toolId && toolId.includes(needle))) return 45 + boost;
   if (group.includes(needle) || hint.includes(needle)) return 30 + boost;
-  if (`${label} ${group} ${hint} ${keywords}`.includes(needle)) return 15 + boost;
+  const haystack = `${label} ${group} ${hint} ${keywords} ${toolId}`;
+  if (haystack.includes(needle)) return 15 + boost;
+  const tokens = needle.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1 && tokens.every((token) => haystack.includes(token))) {
+    const labelHits = tokens.filter((token) => label.includes(token) || toolId.includes(token)).length;
+    return 20 + labelHits * 10 + boost;
+  }
   return 0;
 }
 
@@ -107,10 +114,12 @@ export function CommandPalette({ open, commands, sourceFailed = false, onRetrySo
     input.current?.focus();
   }
 
-  return <dialog ref={dialog} className="command-dialog" aria-labelledby="command-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
+  return <dialog ref={dialog} className="command-dialog" aria-labelledby="command-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => {
     if (withMod(event) && event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopPropagation(); onClose(); return; }
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive(shown.length ? (index + 1) % shown.length : 0); return; }
-    if (event.key === 'ArrowUp') { event.preventDefault(); setActive(shown.length ? (index - 1 + shown.length) % shown.length : 0); return; }
+    if (event.key === 'ArrowDown' || (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'n')) { event.preventDefault(); setActive(shown.length ? (index + 1) % shown.length : 0); return; }
+    if (event.key === 'ArrowUp' || (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'p')) { event.preventDefault(); setActive(shown.length ? (index - 1 + shown.length) % shown.length : 0); return; }
+    if (event.key === 'PageDown') { event.preventDefault(); setActive(shown.length ? Math.min(shown.length - 1, index + 5) : 0); return; }
+    if (event.key === 'PageUp') { event.preventDefault(); setActive(shown.length ? Math.max(0, index - 5) : 0); return; }
     if (event.key === 'Home') { event.preventDefault(); setActive(0); return; }
     if (event.key === 'End') { event.preventDefault(); setActive(Math.max(0, shown.length - 1)); return; }
     if (event.key === 'Enter' && event.altKey && !event.nativeEvent.isComposing && activeItem?.onSecondary) {
