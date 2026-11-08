@@ -2792,20 +2792,25 @@ test('the new-session dialog can change the launch preference before the first s
   await expect(dialog.getByRole('heading', { name: '新建工作台会话' })).toHaveCount(1);
   await expect(dialog.locator('[data-variant="primary"]')).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: '启动会话' })).toHaveAttribute('data-variant', 'primary');
-  await dialog.getByRole('button', { name: '更多', exact: true }).click();
-  const pref = dialog.getByRole('menu', { name: '启动偏好' });
-  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
-  await expect(pref.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'false');
+  // Worktree setup opens as its own dialog on top of the new-session dialog.
+  await dialog.getByRole('button', { name: '工作树设置' }).click();
+  const setup = page.getByRole('dialog', { name: '工作树设置' });
+  const pref = setup.getByRole('radiogroup', { name: '启动偏好' });
+  await expect(pref.getByRole('radio', { name: /^直接开始/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(pref.getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'false');
   await page.evaluate(() => { (window as unknown as { __worktreeSaveFails?: boolean }).__worktreeSaveFails = true; });
-  await pref.getByRole('menuitemradio', { name: '新建工作树' }).click();
-  await expect(pref.getByRole('alert')).toContainText('保存失败');
-  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'true');
+  await pref.getByRole('radio', { name: /^新建工作树/ }).click();
+  await expect(setup.getByRole('alert')).toContainText('保存失败');
+  await expect(pref.getByRole('radio', { name: /^直接开始/ })).toHaveAttribute('aria-checked', 'true');
   expect(await page.evaluate(() => (window as unknown as { __worktreeLaunch?: string }).__worktreeLaunch ?? 'direct')).toBe('direct');
   await page.evaluate(() => { (window as unknown as { __worktreeSaveFails?: boolean }).__worktreeSaveFails = false; });
-  await pref.getByRole('menuitemradio', { name: '新建工作树' }).click();
-  await expect(pref).toBeHidden();
-  await dialog.getByRole('button', { name: '更多', exact: true }).click();
-  await expect(dialog.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'true');
+  await pref.getByRole('radio', { name: /^新建工作树/ }).click();
+  await expect(pref.getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(setup.getByRole('alert')).toHaveCount(0);
+  await setup.getByRole('button', { name: '关闭' }).click();
+  await expect(setup).toBeHidden();
+  // The new-session dialog follows the preference it just saved.
+  await expect(dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
   await dialog.getByLabel('初始提示词（可选）').fill('feat: hello?\nmore');
   await dialog.getByRole('button', { name: '启动会话' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches)).toEqual([
@@ -2924,11 +2929,12 @@ test('an unrecognized worktree preference is shown and is not rewritten', async 
   await expect(page.locator('.setting-row').filter({ hasText: '启动偏好' }).getByRole('alert')).toContainText('格式无法识别');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
-  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '更多', exact: true }).click();
-  const pref = page.getByRole('menu', { name: '启动偏好' });
-  await expect(pref.getByRole('alert')).toContainText('格式无法识别');
-  await expect(pref.getByRole('menuitemradio', { name: '直接开始' })).toHaveAttribute('aria-checked', 'false');
-  await expect(pref.getByRole('menuitemradio', { name: '新建工作树' })).toHaveAttribute('aria-checked', 'false');
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作树设置' }).click();
+  const setup = page.getByRole('dialog', { name: '工作树设置' });
+  const pref = setup.getByRole('radiogroup', { name: '启动偏好' });
+  await expect(setup.getByRole('alert')).toContainText('格式无法识别');
+  await expect(pref.getByRole('radio', { name: /^直接开始/ })).toHaveAttribute('aria-checked', 'false');
+  await expect(pref.getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'false');
   expect(await page.evaluate(() => (window as unknown as { __worktreeSaves?: string[] }).__worktreeSaves ?? [])).toEqual([]);
 });
 
@@ -2955,12 +2961,28 @@ test('a new worktree without a prepare command is marked, and only ledger worktr
   await expect(stage).toContainText('环境未准备');
   await page.getByRole('button', { name: '更多终端操作' }).click();
   const menu = page.getByRole('menu', { name: '终端操作' });
-  await expect(menu.getByRole('menuitem', { name: /清理 feat-hello/ })).toBeVisible();
-  await expect(menu.getByRole('menuitem', { name: /清理 main/ })).toHaveCount(0);
-  await expect(menu.getByRole('menuitem', { name: /清理 external/ })).toHaveCount(0);
-  await expect(menu.getByRole('menuitem', { name: /清理 repo/ })).toHaveCount(0);
+  // The menu holds one entry; cleanup and setup live in the worktree settings dialog.
   await expect(menu.getByRole('textbox', { name: '环境准备' })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: /清理/ })).toHaveCount(0);
+  await menu.getByRole('menuitem', { name: /工作树设置/ }).click();
+  const setup = page.getByRole('dialog', { name: '工作树设置' });
+  await expect(setup.getByRole('button', { name: /清理 feat-hello/ })).toBeVisible();
+  await expect(setup.getByRole('button', { name: /清理 main/ })).toHaveCount(0);
+  await expect(setup.getByRole('button', { name: /清理 external/ })).toHaveCount(0);
+  await expect(setup.getByRole('button', { name: /清理 repo/ })).toHaveCount(0);
+  // The session's repository setup command is offered in the same dialog.
+  await expect(setup.getByRole('textbox', { name: '环境准备' })).toBeVisible();
+  await expect(setup.getByText('环境未准备', { exact: true })).toBeVisible();
 });
+
+/** Worktree setup (preference, setup command, cleanup) opens as a dialog from the terminal menu. */
+async function openWorktreeSetup(page: Page) {
+  await page.getByRole('button', { name: '更多终端操作' }).click();
+  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: /工作树设置/ }).click();
+  const setup = page.getByRole('dialog', { name: '工作树设置' });
+  await expect(setup).toBeVisible();
+  return setup;
+}
 
 test('removing a dirty worktree waits for confirmation and can be cancelled', async ({ page }) => {
   await page.addInitScript(() => {
@@ -2974,15 +2996,15 @@ test('removing a dirty worktree waits for confirmation and can be cancelled', as
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('region', { name: '当前会话' })).not.toContainText('环境未准备');
-  await page.getByRole('button', { name: '更多终端操作' }).click();
-  const menu = page.getByRole('menu', { name: '终端操作' });
-  await menu.getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  const setup = await openWorktreeSetup(page);
+  await setup.getByRole('button', { name: /清理 feat-hello/ }).click();
   const confirm = page.getByRole('dialog', { name: '清理这个工作树？' });
   await expect(confirm).toContainText('note.txt');
   await confirm.getByRole('button', { name: '取消' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: Array<{ confirm: boolean }> }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
-  await page.getByRole('button', { name: '更多终端操作' }).click();
-  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: /清理 feat-hello/ }).click();
+  // Cancelling keeps the settings dialog open on the same list.
+  await expect(setup).toBeVisible();
+  await setup.getByRole('button', { name: /清理 feat-hello/ }).click();
   await page.getByRole('dialog', { name: '清理这个工作树？' }).getByRole('button', { name: '丢弃并清理' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: Array<{ confirm: boolean }> }).__cleanups)).toEqual([
     { path: 'C:/work-task', confirm: false },
@@ -3001,9 +3023,9 @@ test('a git failure while removing a worktree keeps the reason on screen', async
   await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
-  await page.getByRole('button', { name: '更多终端操作' }).click();
-  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: /清理 feat-hello/ }).click();
-  await expect(page.getByRole('menu', { name: '终端操作' }).getByRole('alert')).toContainText('locked');
+  const setup = await openWorktreeSetup(page);
+  await setup.getByRole('button', { name: /清理 feat-hello/ }).click();
+  await expect(setup.getByRole('alert')).toContainText('locked');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
 });
 
@@ -3203,10 +3225,11 @@ test('removing a worktree that a running session still uses names the session', 
   await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
-  await page.getByRole('button', { name: '更多终端操作' }).click();
-  const menu = page.getByRole('menu', { name: '终端操作' });
-  await menu.getByRole('menuitem', { name: /清理 feat-hello/ }).click();
-  await expect(menu.getByRole('alert')).toContainText('运行中的会话 Codex');
+  const setup = await openWorktreeSetup(page);
+  // The row says who holds the checkout before anything is attempted.
+  await expect(setup.getByText('使用中：Codex')).toBeVisible();
+  await setup.getByRole('button', { name: /清理 feat-hello/ }).click();
+  await expect(setup.getByRole('alert')).toContainText('运行中的会话 Codex');
   await expect(page.getByRole('dialog', { name: '清理这个工作树？' })).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __cleanups?: unknown[] }).__cleanups ?? [])).toEqual([]);
 });

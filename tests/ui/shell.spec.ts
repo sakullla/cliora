@@ -1093,7 +1093,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('Alpha');
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toContainText('YOLO');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches)).toEqual([
-    { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动', worktreeIntent: 'preference', taskText: '请审查当前改动' },
+    { toolId: 'claude_code', projectId: 'p1', sessionId: null, mode: 'yolo', directory: null, initialPrompt: '请审查当前改动', worktreeIntent: 'given', taskText: '请审查当前改动' },
   ]);
 
   // Open the docked quick-input composer and send multi-line / prompt text

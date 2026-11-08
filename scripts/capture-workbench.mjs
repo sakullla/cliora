@@ -567,15 +567,31 @@ for (const width of widths) {
     await menu.getByRole('alert').waitFor();
     await menu.getByRole('menuitem', { name: copy('重试读取', 'Read again'), exact: true }).waitFor();
   });
+  // Worktree settings is a dialog: start preference, the repository setup command and cleanup.
+  const openWorktreeSetup = async (page) => {
+    await page.getByRole('button', { name: copy('更多终端操作', 'More terminal actions') }).click();
+    await page.getByRole('menu', { name: copy('终端操作', 'Terminal actions') }).getByRole('menuitem', { name: new RegExp(copy('工作树设置', 'Worktree settings')) }).click();
+    const setup = page.getByRole('dialog', { name: copy('工作树设置', 'Worktree settings') });
+    await setup.waitFor();
+    return setup;
+  };
+  await shot('workbench-worktree-setup-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate(() => {
+      window.__captureLedger = [
+        { mainCheckout: 'C:\\Projects\\cliora', worktreePath: 'C:\\Projects\\cliora-checkout-flow', branch: 'feat/checkout-flow', environment: 'prepared' },
+        { mainCheckout: 'C:\\Projects\\cliora', worktreePath: 'C:\\Projects\\cliora-very-long-worktree-folder-name-for-layout', branch: 'fix/a-very-long-branch-name-that-should-truncate-cleanly', environment: 'unprepared' },
+      ];
+    });
+    await openWorktreeSetup(page);
+  });
   // Cleanup refused because a running session still uses that checkout.
   await shot('workbench-worktree-cleanup-running-' + theme + '-' + width, theme, width, async page => {
     await page.evaluate(() => {
       window.__captureLedger = [{ mainCheckout: 'C:\\Projects\\cliora', worktreePath: 'C:\\Projects\\cliora', branch: 'feature/workbench-polish', environment: 'unprepared' }];
     });
-    await page.getByRole('button', { name: copy('更多终端操作', 'More terminal actions') }).click();
-    const menu = page.getByRole('menu', { name: copy('终端操作', 'Terminal actions') });
-    await menu.getByRole('menuitem', { name: /清理 feature\/workbench-polish|Remove feature\/workbench-polish/ }).click();
-    await menu.getByRole('alert').waitFor();
+    const setup = await openWorktreeSetup(page);
+    await setup.getByRole('button', { name: /清理 feature\/workbench-polish|Remove feature\/workbench-polish/ }).click();
+    await setup.getByRole('alert').waitFor();
   });
   // Saved records come first: their own rows and the new-session entry are on screen before
   // any session exists, and each finished record replaces only its own row.

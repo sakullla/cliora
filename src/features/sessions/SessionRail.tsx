@@ -207,7 +207,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     cancelDrag();
   }
 
-  const renderSession = (item: RailSession, group: string, groupIds: string[]) => {
+  const renderSession = (item: RailSession, group: string) => {
     const { session } = item;
     const selected = session.id === selectedId;
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
@@ -221,14 +221,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const quietState = !pending && item.tone === 'idle';
     const dragging = drag?.id === session.id;
     const dropMark = drag && !dragging && drag.group === group && drag.target === session.id ? (drag.after ? 'after' : 'before') : undefined;
-    const groupIndex = groupIds.indexOf(session.id);
-    const canMoveUp = canDrag && groupIndex > 0;
-    const canMoveDown = canDrag && groupIndex >= 0 && groupIndex < groupIds.length - 1;
-    const moveStep = (step: -1 | 1) => {
-      const targetIndex = groupIndex + step;
-      if (targetIndex < 0 || targetIndex >= groupIds.length) return;
-      onReorder?.(group, moveWithin(groupIds, session.id, groupIds[targetIndex], step > 0));
-    };
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
       data-drag-group={group} data-drag-id={session.id} data-dragging={dragging || undefined} data-drop={dropMark}
       style={dragging ? { transform: `translateY(${drag.offset}px)` } : undefined}>
@@ -277,8 +269,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         </span>
       </button>
       <div className={styles.rowActions}>
-        {canMoveUp && <IconButton size="sm" tabIndex={-1} className={styles.rowMoveBtn} aria-label={t('sessions.moveSessionUp') + '：' + item.name} title={t('sessions.moveSessionUp') + ' (Alt+Shift+↑)'} icon={<Icon name="arrowUp" size={13} />} onClick={() => moveStep(-1)} />}
-        {canMoveDown && <IconButton size="sm" tabIndex={-1} className={styles.rowMoveBtn} aria-label={t('sessions.moveSessionDown') + '：' + item.name} title={t('sessions.moveSessionDown') + ' (Alt+Shift+↓)'} icon={<Icon name="arrowDown" size={13} />} onClick={() => moveStep(1)} />}
         <IconButton size="sm" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           onOpenMenu(session, rect.left, rect.bottom + 5);
@@ -319,7 +309,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             : <>{group.key === 'running' && !compact && <span className={styles.liveDot} data-live="" aria-hidden="true" />}<span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
           {group.key === 'ended' && !compact && !narrow && <button type="button" className={styles.groupAction} disabled={busy} aria-label={t('sessions.clearEnded')} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEndedShort')}</span></button>}
         </div>}
-        {group.items.map((item) => renderSession(item, group.key, group.items.map((entry) => entry.session.id)))}
+        {group.items.map((item) => renderSession(item, group.key))}
       </div>)}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.railNoMatchClear} onClick={() => onSearch('')}>{t('sessions.clearFilter')}</button></div>}
     </div>

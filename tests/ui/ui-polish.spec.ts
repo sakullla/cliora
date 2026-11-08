@@ -447,7 +447,7 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   }
 });
 
-test('workbench session rail exposes single-pointer reorder controls alongside drag and keyboard', async ({ page }) => {
+test('workbench session rail rows stay free of reorder arrows; drag and the keyboard reorder', async ({ page }) => {
   await page.addInitScript(() => {
     const sessions = [
       { id: 's1', toolId: 'codex', projectId: null, directory: 'C:/alpha', mode: 'normal', running: true, exitCode: null },
@@ -480,16 +480,12 @@ test('workbench session rail exposes single-pointer reorder controls alongside d
   const codexRow = codex.locator('..');
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
   await codex.hover();
-  const moveDown = codexRow.getByRole('button', { name: '下移会话：Codex' });
-  await expect(moveDown).toBeVisible();
-  const moveDownBox = await moveDown.boundingBox();
-  expect(moveDownBox!.width).toBeGreaterThanOrEqual(24);
-  expect(moveDownBox!.height).toBeGreaterThanOrEqual(24);
-  await moveDown.click();
+  // Hover shows only the row menu (and close for an ended session): no move arrows over the title.
+  await expect(codexRow.getByRole('button', { name: /上移会话|下移会话/ })).toHaveCount(0);
+  await expect(codexRow.getByRole('button', { name: /会话操作/ })).toBeVisible();
+  await codex.focus();
+  await page.keyboard.press('Alt+Shift+ArrowDown');
   await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
-  await codex.hover();
-  const moveUp = codexRow.getByRole('button', { name: '上移会话：Codex' });
-  await expect(moveUp).toBeVisible();
-  await moveUp.click();
+  await page.keyboard.press('Alt+Shift+ArrowUp');
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
 });
