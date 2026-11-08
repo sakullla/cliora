@@ -125,7 +125,8 @@ export function CommandPalette({ open, commands, sourceFailed = false, onRetrySo
     }
   }}>
     <h2 id="command-dialog-title" className="sr-only">{t('common.palette.title')}</h2>
-    <div className="command-input-row">
+    {/* The header row is the field: the input stays flat instead of drawing its own focus box. */}
+    <div className="command-input-row" data-field-frame="">
       <Icon name="search" size={16} />
       <input ref={input} role="combobox" aria-expanded="true" aria-controls="command-list" aria-autocomplete="list" aria-activedescendant={shown.length ? `command-option-${index}` : undefined} aria-label={t('common.palette.search')} placeholder={t('common.palette.search')} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
       {query && <button type="button" className="command-clear" aria-label={t('common.palette.clearQuery')} title={t('common.palette.clearQuery')} onClick={clearQuery}><Icon name="close" size={15} /></button>}

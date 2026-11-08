@@ -591,7 +591,7 @@ export function RemoteFolderPicker({ open, targetId, initialPath, title, onClose
 
           <section className={styles.browser} aria-label={t('home.remote.picker.folders')}>
             <div className={styles.browserHead}>
-              <label className={styles.filter}><Icon name="search" size={13} /><input aria-label={t('home.remote.picker.filter')} placeholder={t('home.remote.picker.filter')} value={filter} spellCheck={false} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); listRef.current?.focus(); if (folders[0]) setSelected(folders[0].path); } }} /></label>
+              <label className={styles.filter} data-field-frame=""><Icon name="search" size={13} /><input aria-label={t('home.remote.picker.filter')} placeholder={t('home.remote.picker.filter')} value={filter} spellCheck={false} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); listRef.current?.focus(); if (folders[0]) setSelected(folders[0].path); } }} /></label>
               <button type="button" className={styles.hiddenToggle} aria-pressed={showHidden} title={t('home.remote.picker.showHidden')} onClick={toggleHidden}><Icon name={showHidden ? 'eye' : 'eyeOff'} size={13} /><span>{t('home.remote.picker.hiddenCount', { count: hiddenCount })}</span></button>
             </div>
             <RemoteReadStatus state={reads} />

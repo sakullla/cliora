@@ -8,6 +8,7 @@ export function ShortcutHelp({ open, onClose }: { open: boolean; onClose: () => 
     <div className="shortcut-help">
       <section><h3>{t('common.shortcuts.global')}</h3><dl>
         <div><dt><kbd>{modLabel}+K</kbd></dt><dd>{t('common.shortcuts.palette')}</dd></div>
+        <div><dt><kbd>Alt+N</kbd></dt><dd>{t('common.shortcuts.newSession')}</dd></div>
         <div><dt><kbd>{modLabel}+1…6</kbd></dt><dd>{t('common.shortcuts.switchPage')}</dd></div>
         <div><dt><kbd>{modLabel}+\</kbd></dt><dd>{t('common.shortcuts.toggleSidebar')}</dd></div>
         <div><dt><kbd>/</kbd> {t('common.shortcuts.or')} <kbd>{modLabel}+F</kbd></dt><dd>{t('common.shortcuts.focusSearch')}</dd></div>

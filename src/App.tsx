@@ -479,6 +479,7 @@ export default function App() {
 
   const updateOffer = useUpdateOffer();
   const goRef = useRef<(next: Page) => void>(() => {});
+  const newSessionRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     let pendingSearch = 0;
     const onKey = (event: KeyboardEvent) => {
@@ -524,6 +525,15 @@ export default function App() {
         }
         return;
       }
+      // Alt+N starts a session from any page. The workbench keeps its own Alt+N handler while open,
+      // so this one only covers the other pages and opens the same new-session dialog there.
+      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && (event.code === 'KeyN' || event.key.toLowerCase() === 'n')) {
+        const start = newSessionRef.current;
+        if (!start || activePage.current === 'sessions' || document.querySelector('dialog[open]') || isEditableTarget(event.target)) return;
+        event.preventDefault();
+        start();
+        return;
+      }
       if (!withMod(event)) return;
       const index = Number(event.key) - 1;
       if (!Number.isInteger(index) || index < 0 || index >= pages.length || document.querySelector('dialog[open]')) return;
@@ -556,6 +566,11 @@ export default function App() {
     return true;
   }
   goRef.current = go;
+  const canStartSession = nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop');
+  function startNewSession() {
+    window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { targetId: remoteTargetId } }));
+  }
+  newSessionRef.current = canStartSession ? startNewSession : null;
 
   // The header CLI switcher and palette tool items share one channel. On the tools page only the
   // open sequence moves, so ToolWorkspace's own discard prompt is the single confirmation.
@@ -761,6 +776,10 @@ export default function App() {
       } : undefined,
     };
   });
+  // Starting a session is the most common action, so it leads the palette instead of trailing the actions.
+  const startCommands: CommandItem[] = canStartSession ? [
+    { id: 'new-session', group: t('common.palette.groupStart'), label: t('home.hero.newSession'), hint: 'Alt+N', keywords: 'new session terminal 新建 会话 终端', icon: 'plus', contextBoost: 4, run: startNewSession },
+  ] : [];
   const actionCommands: CommandItem[] = [
     { id: 'sidebar', group: t('common.palette.groupActions'), label: sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse'), hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
     ...themes.map((item) => ({ id: `theme-${item.id}`, group: t('common.palette.groupActions'), label: t(`common.theme.${item.id}`), hint: bootstrap.preferences.theme === item.id ? t('common.theme.current') : t('common.theme.switch'), icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
@@ -769,6 +788,7 @@ export default function App() {
   const hasRecentWork = projectCommands.length > 0 || sessionCommands.length > 0;
   const commands: CommandItem[] = hasRecentWork
     ? [
+      ...startCommands,
       ...projectCommands.slice(0, 5),
       ...sessionCommands,
       ...pageCommands,
@@ -778,6 +798,7 @@ export default function App() {
       ...projectCommands.slice(5),
     ]
     : [
+      ...startCommands,
       ...pageCommands,
       ...toolCommands,
       ...libraryCommands,
@@ -858,7 +879,7 @@ export default function App() {
     <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}${page === 'sessions' ? ' content-workbench' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      {page === 'home' && <PageHeader title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={t('home.hero.newSessionTitle')} onClick={() => window.dispatchEvent(new CustomEvent('cliora:open-remote-session-request', { detail: { targetId: remoteTargetId } }))}>{t('home.hero.newSession')}</Button> : undefined} />}
+      {page === 'home' && <PageHeader title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
       {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard

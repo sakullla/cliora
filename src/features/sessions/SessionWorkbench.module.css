@@ -739,7 +739,9 @@
 .statusState > span { display: inline-flex; align-items: center; gap: var(--space-1); }
 .identityTitleRow .statusChip[data-state='live'] { box-shadow: 0 0 0 1px var(--success-line); }
 .identityTitleRow .statusChip[data-state='bell'] { box-shadow: 0 0 0 1px var(--warning-line); }
-.statusLabel { display: inline-grid; }
+/* Reserved widths keep the button steady; the visible label hugs its icon instead of centering
+   inside the widest reserved label. */
+.statusLabel { display: inline-grid; text-align: start; }
 .statusLabel > span { grid-area: 1 / 1; }
 .statusLabel > span[aria-hidden='true'] { visibility: hidden; }
 .statusDot { width: 10px; height: 10px; color: inherit; }

@@ -651,6 +651,63 @@ test('command palette lists indexed sessions and library entries without scannin
   expect(await page.evaluate(() => (window as typeof window & { __commands: string[] }).__commands)).not.toContain('refresh_history');
 });
 
+/** One terminal CLI, no projects or sessions: enough for the new-session entry points. */
+async function installTerminalTool(page: Page) {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 0,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+}
+
+test('new session leads the palette and Alt+N opens it from any page', async ({ page }) => {
+  await installTerminalTool(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const palette = page.getByRole('dialog', { name: '快速前往' });
+  const combobox = palette.getByRole('combobox', { name: '搜索页面、工具或项目' });
+  await expect(combobox).toBeFocused();
+  // The header row is the field; the input itself draws no second focus box.
+  expect(await combobox.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('none');
+  const first = palette.getByRole('option').first();
+  await expect(first).toHaveAccessibleName(/新建会话/);
+  await expect(first).toHaveAttribute('aria-selected', 'true');
+  await expect(first).toContainText('Alt+N');
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
+  // Typing in a field keeps Alt+N for the field.
+  const search = page.locator('main input[data-page-search]').first();
+  await search.focus();
+  await page.keyboard.press('Alt+N');
+  await expect(dialog).toHaveCount(0);
+  await search.blur();
+  await page.keyboard.press('Alt+N');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+
+  await page.keyboard.press('?');
+  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('Alt+N');
+});
+
 test('a desktop command-palette resume failure stays on the current page', async ({ page }) => {
   await page.addInitScript(() => {
     const sessions = [
@@ -711,8 +768,10 @@ test('command palette library entry jumps to the library page and opens the item
   await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
-  // Empty query prioritizes recent sessions ahead of pages.
-  await expect(dialog.locator('.command-group').first()).toHaveText('最近会话');
+  // Empty query: the new-session action leads, then recent sessions ahead of pages.
+  await expect.poll(async () => (await dialog.locator('.command-group').allTextContents()).slice(0, 2)).toEqual(['开始', '最近会话']);
+  const groups = await dialog.locator('.command-group').allTextContents();
+  expect(groups.indexOf('最近会话')).toBeLessThan(groups.indexOf('页面'));
   // Secondary action on a recent session jumps to Records instead of resuming.
   await dialog.getByRole('button', { name: '面板会话1 · 在记录中查看' }).click();
   await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
