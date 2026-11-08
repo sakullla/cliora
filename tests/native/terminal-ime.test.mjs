@@ -45,7 +45,9 @@ function fixture({ breakHelper = false } = {}) {
     compositionend() { this._isComposing = false; sent.push(`xterm-end:${textarea.value}`); },
     keydown(event) {
       if (this._isComposing) { this._isComposing = false; sent.push(`xterm-keydown:${textarea.value}`); return true; }
-      return event.keyCode !== 229;
+      // _handleAnyTextareaChanges: a later diff of the textarea is sent as its own copy.
+      if (event.keyCode === 229) { sent.push('xterm-diff'); return false; }
+      return true;
     },
     updateCompositionElements() {},
   };
@@ -74,6 +76,8 @@ function fixture({ breakHelper = false } = {}) {
     keyDownSeen = true;
     if (core._compositionHelper.keydown(event) && event.key.length === 1) sent.push(event.key);
   }, true);
+  // _keyPress: sends the character itself (and cancels its default insertion).
+  textarea.addEventListener('keypress', (event) => { sent.push(event.key); }, true);
   textarea.addEventListener('compositionstart', () => core._compositionHelper.compositionstart());
   textarea.addEventListener('compositionupdate', (event) => core._compositionHelper.compositionupdate(event));
   textarea.addEventListener('compositionend', () => core._compositionHelper.compositionend());
@@ -94,6 +98,9 @@ function fixture({ breakHelper = false } = {}) {
     update: (word) => { textarea.value += word; dispatch('compositionupdate', { data: word }); },
     key: (key, keyCode, extra = {}) => dispatch('keydown', { key, keyCode, ...extra }),
     keyup: (key, keyCode) => dispatch('keyup', { key, keyCode }),
+    keypress: (key) => dispatch('keypress', { key }),
+    /** A change the textarea really shows (insert or delete), reported as one input event. */
+    edit: (value, inputType, data = null) => { textarea.value = value; dispatch('input', { data, inputType, composed: true, isComposing: false }); },
     end: (data) => dispatch('compositionend', { data }),
     insert: (data, composed = true) => dispatch('input', { data, inputType: 'insertText', composed, isComposing: false }),
     blur: () => { focused = false; dispatch('blur'); textarea.value = ''; },
@@ -171,6 +178,44 @@ test('a commit the textarea shows only at the trailing insertText is still sent 
   ev.insert('升级');
   ev.insert('升级');
   assert.deepEqual(sent, ['升级', '升级']);
+});
+
+test('IME text outside a composition is sent once whichever xterm senders report it', () => {
+  // Chinese punctuation: keydown 229, the textarea gains the character, keyup.
+  const punctuation = fixture();
+  punctuation.ev.key('Process', 229);
+  punctuation.ev.edit('，', 'insertText', '，');
+  punctuation.ev.keyup('Process', 229);
+  assert.deepEqual(punctuation.sent, ['，']);
+
+  // A commit some IMEs deliver as keypress characters followed by the inserted text:
+  // keypress, insertText and the 229 diff all describe the same two characters.
+  const legacy = fixture();
+  legacy.ev.key('Process', 229);
+  legacy.ev.keypress('修');
+  legacy.ev.keypress('复');
+  legacy.ev.edit('修复', 'insertText', '修复');
+  legacy.ev.keyup('Process', 229);
+  assert.deepEqual(legacy.sent, ['修复']);
+
+  // The same text again after a new keystroke is the user's input; an IME backspace is one DEL.
+  legacy.ev.key('Process', 229);
+  legacy.ev.edit('修复修复', 'insertText', '修复');
+  legacy.ev.key('Process', 229);
+  legacy.ev.edit('修复修', 'deleteContentBackward');
+  assert.deepEqual(legacy.sent, ['修复', '修复', '\x7f']);
+
+  // A plain key ends the cycle: ordinary typing keeps xterm's own path.
+  legacy.ev.key('a', 65);
+  legacy.ev.keypress('a');
+  assert.deepEqual(legacy.sent.slice(-2), ['a', 'a']);
+
+  // An unfocused terminal never turns a late IME change into input.
+  const away = fixture();
+  away.ev.key('Process', 229);
+  away.setFocused(false);
+  away.ev.edit('，', 'insertText', '，');
+  assert.deepEqual(away.sent, []);
 });
 
 test('blur or deactivation during a composition never sends it later or elsewhere', () => {

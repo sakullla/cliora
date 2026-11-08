@@ -163,6 +163,15 @@ export function createTerminalIme(term: Terminal, options: {
   const helper = core._compositionHelper as Required<CompositionHelperInternals>;
   let disposed = false;
   let txn: Transaction | null = null;
+  /**
+   * An IME keystroke outside any composition (keyCode 229 / Process): Chinese punctuation,
+   * full-width digits, or a commit some IMEs deliver without composition events. xterm has
+   * three senders for that text (keypress, insertText and a delayed textarea diff) and two
+   * of them can fire for one keystroke, which typed every word twice. The textarea is the
+   * single truth instead: each change it really shows is sent once, by this bridge.
+   */
+  let cycle: { text: string } | null = null;
+  const imeKey = (event: { keyCode?: number; key?: string }) => event.keyCode === 229 || event.key === 'Process';
 
   // ---------- placement ----------
   let anchor: ImeCell | null = null;
@@ -270,6 +279,7 @@ export function createTerminalIme(term: Terminal, options: {
     term.input(text, true);
   };
   const cancel = () => {
+    cycle = null;
     if (!txn) return;
     const wasComposing = txn.state === 'composing';
     txn = null;
@@ -284,6 +294,7 @@ export function createTerminalIme(term: Terminal, options: {
   const originalKeydown = helper.keydown.bind(helper);
 
   helper.compositionstart = () => {
+    cycle = null;
     originalStart();
     txn = { start: textarea.value.length, state: 'composing', committed: null, endData: '' };
     // Typing reads the prompt, not the history: bring the input row back into view first.
@@ -323,6 +334,9 @@ export function createTerminalIme(term: Terminal, options: {
       // commit arrives as compositionend; sending here too produced 升级升级.
       return false;
     }
+    // Outside a composition the bridge sends what this keystroke puts into the textarea;
+    // xterm's delayed diff of the same text would be a second copy.
+    if (imeKey(event)) return false;
     return originalKeydown(event);
   };
   helper.updateCompositionElements = () => { if (composingNow()) apply(false); };
@@ -334,12 +348,39 @@ export function createTerminalIme(term: Terminal, options: {
     txn.endData = (event as CompositionEvent).data ?? '';
   };
   const onKeydown = (event: Event) => {
+    if (event.target !== textarea) return;
     // Any further keystroke closes an ended composition: later insertText is new input.
-    if (event.target === textarea && txn?.state === 'ended') txn = null;
+    if (txn?.state === 'ended') txn = null;
+    // Each keystroke opens or closes the IME cycle; inside a composition the IME owns keys.
+    cycle = !composingNow() && imeKey(event as KeyboardEvent) ? { text: textarea.value } : null;
+  };
+  const onKeypress = (event: Event) => {
+    // Inside an IME cycle the character reaches the textarea through its default action and
+    // is sent from there; xterm's keypress sender would add a second copy.
+    if (event.target === textarea && cycle && !composingNow()) event.stopImmediatePropagation();
+  };
+  /** Send exactly what the textarea changed by during an IME cycle. */
+  const deliverCycle = (current: { text: string }, input: InputEvent) => {
+    const before = current.text;
+    const value = textarea.value;
+    current.text = value;
+    if (input.inputType.startsWith('delete')) {
+      term.input('\x7f'.repeat(Math.max(1, before.length - value.length)), true);
+      return;
+    }
+    // A cleared or rewritten textarea no longer extends the old text: its event data is the change.
+    const text = value.length > before.length && value.startsWith(before) ? value.slice(before.length) : input.data ?? '';
+    if (text) term.input(text, true);
   };
   const onInput = (event: Event) => {
     const input = event as InputEvent;
-    if (input.target !== textarea || input.inputType !== 'insertText') return;
+    if (input.target !== textarea) return;
+    if (cycle && !composingNow() && !txn && !input.isComposing && /^(insert|delete)/.test(input.inputType ?? '')) {
+      event.stopImmediatePropagation();
+      if (options.ownsInput()) deliverCycle(cycle, input);
+      return;
+    }
+    if (input.inputType !== 'insertText') return;
     if (!options.ownsInput()) {
       // A hidden, ended or unfocused terminal never turns a late insertText into PTY input.
       event.stopImmediatePropagation();
@@ -370,6 +411,7 @@ export function createTerminalIme(term: Terminal, options: {
 
   options.host.addEventListener('compositionend', onCompositionEndData, true);
   options.host.addEventListener('keydown', onKeydown, true);
+  options.host.addEventListener('keypress', onKeypress, true);
   options.host.addEventListener('input', onInput, true);
   textarea.addEventListener('blur', onBlur);
   textarea.addEventListener('focus', onFocus);
@@ -387,6 +429,7 @@ export function createTerminalIme(term: Terminal, options: {
       cancelAnimationFrame(frame);
       options.host.removeEventListener('compositionend', onCompositionEndData, true);
       options.host.removeEventListener('keydown', onKeydown, true);
+      options.host.removeEventListener('keypress', onKeypress, true);
       options.host.removeEventListener('input', onInput, true);
       textarea.removeEventListener('blur', onBlur);
       textarea.removeEventListener('focus', onFocus);

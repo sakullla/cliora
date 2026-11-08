@@ -1038,6 +1038,16 @@
   /* The shared field style gives every textarea a control height; this one must be exactly one cell. */
   min-height: 0;
   min-width: 0;
+  /* Before the IME bridge has a measured cell (first focus, a layout still settling) xterm
+     parks this field at -9999em with no size, and WebView2 then opens the candidate window
+     at the screen origin. Its fallback is the terminal's own bottom-left, where prompts sit;
+     the bridge's inline top/left/size replace it as soon as an input cell is known. */
+  left: 0;
+  top: auto;
+  bottom: 0;
+  width: 1px;
+  height: 1.25em;
+  z-index: 1;
   opacity: 1;
   color: transparent;
   caret-color: transparent;
