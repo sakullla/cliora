@@ -1197,7 +1197,7 @@ test('connection fields follow provider, address, sign-in, then model', async ({
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '登录', '模型']);
   const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
   const provider = await top(dialog.getByText('供应商连接', { exact: true }));
   const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
@@ -1219,7 +1219,7 @@ test('compatible connection keeps sign-in between the address and the model', as
   const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
   await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
   await expect(dialog.getByLabel('供应商 ID', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '登录', '模型']);
   const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
   const address = await top(dialog.getByLabel('请求地址', { exact: true }));
   const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
@@ -1269,7 +1269,7 @@ test('sign-in sits between the request address and the model for every dedicated
     await page.getByRole('button', { name: '新建配置' }).click();
     const dialog = page.getByRole('dialog');
     const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
-    await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
+    await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '登录', '模型']);
     const address = await top(dialog.getByLabel('请求地址', { exact: true }));
     const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
     const model = await top(tool === 'claude_code' ? dialog.getByLabel('默认模型', { exact: true }) : dialog.getByRole('article', { name: '模型 one', exact: true }));

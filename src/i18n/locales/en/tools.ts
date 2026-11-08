@@ -1182,7 +1182,7 @@ export default {
     namePlaceholder: 'e.g. Daily dev, GLM plan',
     sourcesLabel: 'Credential source',
     chainLabel: 'Connection order',
-    chainConnection: 'Provider & address',
+    chainConnection: 'Provider',
     stepJump: 'Jump to “{{step}}”',
     stepDoneAria: '{{step}} (done)',
     modelStepTitle: 'Model',

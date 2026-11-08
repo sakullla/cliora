@@ -1182,7 +1182,7 @@ export default {
     namePlaceholder: '例如：日常开发、GLM 套餐',
     sourcesLabel: '凭据来源',
     chainLabel: '连接顺序',
-    chainConnection: '供应商与地址',
+    chainConnection: '供应商',
     stepJump: '跳到「{{step}}」',
     stepDoneAria: '{{step}}（已完成）',
     modelStepTitle: '模型',

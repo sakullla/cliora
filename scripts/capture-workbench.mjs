@@ -231,7 +231,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             return { worktreePath: args.directory, managed: true, environment: 'unprepared', branch: 'feature/workbench-polish', headOid: null, uncommittedFiles: 0, state: 'ready', reason: null };
           }
           if (command === 'list_worktree_ledger') return window.__captureLedger ?? [];
-          if (command === 'worktree_prepare') return null;
+          if (command === 'worktree_prepare') return window.__capturePrepare ?? null;
+          if (command === 'save_worktree_prepare') { window.__capturePrepare = args.command; return { mainCheckout: args.directory, command: args.command }; }
           if (command === 'cleanup_worktree') return { removed: false, needsConfirmation: false, detail: '' };
           if (command === 'launch_cli') {
             const request = args.request ?? {};
@@ -522,17 +523,18 @@ for (const width of widths) {
     return dialog;
   };
   // A new worktree: the repository default and its short commit are visible, and the
-  // advanced ref plus branch name stay optional.
+  // base, branch and setup command are edited in place.
   await shot('workbench-worktree-new-' + theme + '-' + width, theme, width, async page => {
     const dialog = await openWorktreeDialog(page);
     await dialog.locator('code').filter({ hasText: 'origin/main' }).first().waitFor();
     // The branch the creation will allocate is visible with the advanced panel closed.
     await dialog.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('feat: 结算流程');
     await dialog.locator('code[data-source="proposed"]').filter({ hasText: 'feat' }).first().waitFor();
-    await dialog.getByRole('button', { name: copy('高级选项', 'Advanced'), exact: true }).click();
+    await dialog.getByRole('button', { name: copy('更改基点', 'Change base'), exact: true }).click();
     await dialog.getByLabel(copy('基点 ref', 'Base ref'), { exact: true }).fill('origin/develop');
-    await dialog.getByRole('button', { name: copy('使用此 ref', 'Use this ref'), exact: true }).click();
+    await dialog.getByLabel(copy('基点 ref', 'Base ref'), { exact: true }).press('Enter');
     await dialog.locator('code').filter({ hasText: 'origin/develop' }).first().waitFor();
+    await dialog.getByLabel(copy('准备命令', 'Setup command'), { exact: true }).fill('npm ci');
   });
   // Environment setup failed: the worktree is kept and the retry stays in that directory.
   await shot('workbench-worktree-preparing-failed-' + theme + '-' + width, theme, width, async page => {
@@ -543,6 +545,7 @@ for (const width of widths) {
         { event: { stage: 'failed', worktreePath: 'C:\\Projects\\cliora-polish', branch: 'feat/checkout-flow', error: '环境准备失败：npm ci 退出码 1' } },
       ];
       window.__worktreeScriptFail = '环境准备失败：npm ci 退出码 1';
+      window.__capturePrepare = 'npm ci';
     });
     const dialog = await openWorktreeDialog(page);
     await dialog.locator('code').filter({ hasText: 'origin/main' }).first().waitFor();
@@ -551,7 +554,7 @@ for (const width of widths) {
     await page.locator('[data-worktree-op][data-stage="failed"]').waitFor();
     await page.getByRole('button', { name: copy('重试准备', 'Retry setup'), exact: true }).waitFor();
   });
-  // Menu status: real changes, unprepared environment, and an unread status kept unknown.
+  // Menu status: real changes and an unread status kept unknown.
   await shot('workbench-worktree-status-' + theme + '-' + width, theme, width, async page => {
     await page.evaluate(() => { window.__captureStatusFails = ['/repo/cliora-long']; });
     await page.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
@@ -567,11 +570,11 @@ for (const width of widths) {
     await menu.getByRole('alert').waitFor();
     await menu.getByRole('menuitem', { name: copy('重试读取', 'Read again'), exact: true }).waitFor();
   });
-  // Worktree settings is a dialog: start preference, the repository setup command and cleanup.
+  // Worktree management is a dialog: cleanup first, then the repository setup command.
   const openWorktreeSetup = async (page) => {
     await page.getByRole('button', { name: copy('更多终端操作', 'More terminal actions') }).click();
-    await page.getByRole('menu', { name: copy('终端操作', 'Terminal actions') }).getByRole('menuitem', { name: new RegExp(copy('工作树设置', 'Worktree settings')) }).click();
-    const setup = page.getByRole('dialog', { name: copy('工作树设置', 'Worktree settings') });
+    await page.getByRole('menu', { name: copy('终端操作', 'Terminal actions') }).getByRole('menuitem', { name: new RegExp(copy('管理工作树', 'Manage worktrees')) }).click();
+    const setup = page.getByRole('dialog', { name: copy('管理工作树', 'Manage worktrees') });
     await setup.waitFor();
     return setup;
   };
