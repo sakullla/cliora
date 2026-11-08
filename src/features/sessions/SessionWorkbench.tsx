@@ -191,6 +191,9 @@ function savedRecordIsLive(saved: SavedWorkbenchSession, sessions: WorkbenchSess
   return sessions.some((session) => {
     if (session.projectId?.startsWith('remote:')) return false;
     if (session.id === saved.id) return true;
+    // A record that names its native session has an exact identity: a shared
+    // directory and a close start time must not make it look like that terminal.
+    if (saved.nativeId) return false;
     if (!session.running || session.toolId !== saved.toolId || !sameDirectory(session.directory, saved.directory)) return false;
     const started = session.startedAt ?? 0;
     return started > 0 && started >= saved.startedAt - 2000 && started <= saved.startedAt + 2000;
@@ -1909,12 +1912,33 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // be confirmed, which keeps the historical plain-directory behaviour.
       const wantsWorktree = !remoteLaunch && !resume && useWorkbench && dialogPlace === 'worktree';
       const target = wantsWorktree ? dialogPrepareDirectory() : null;
-      const confirmed = wantsWorktree && !!target && !!basePreview?.available;
-      const preferenceFallback = wantsWorktree && !confirmed && !dialogPlaceTouched.current;
+      // The creation always follows the current task text, so a preview left over
+      // from an earlier keystroke must not decide this launch: re-read it now.
+      let preview = basePreview;
+      if (wantsWorktree && target) {
+        try {
+          const fresh = await native.worktreeBasePreview(target, baseChoice, taskLine);
+          preview = fresh && typeof fresh === 'object' ? fresh : null;
+          setBasePreview(preview);
+          setBaseError('');
+        } catch (error) {
+          preview = null;
+          setBasePreview(null);
+          setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
+        }
+      }
+      const confirmed = wantsWorktree && !!target && !!preview?.available;
+      // A repository that answered "no usable base" has to be answered by the
+      // user, never silently created from HEAD (R2). An unanswered preview means
+      // the directory is not a repository, where R1 keeps the historical direct
+      // start and the saved preference still decides.
+      const preferenceFallback = wantsWorktree && !confirmed
+        && (preview === null || !preview.reference)
+        && !dialogPlaceTouched.current;
       if (wantsWorktree && !confirmed && !preferenceFallback) {
         setDialogError(!target
           ? t('sessions.worktreeNeedsFolder')
-          : baseError || basePreview?.reason || t('sessions.worktreeBaseUnavailable'));
+          : baseError || preview?.reason || t('sessions.worktreeBaseUnavailable'));
         return;
       }
       const branchName = branchDraft.trim();
@@ -1927,7 +1951,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (preferenceFallback && target) setNotice(t('sessions.worktreePreferenceFallback'));
       const explicitBranch = confirmed && branchName ? branchName : undefined;
       const baseOptions: { base?: WorktreeBase; branch?: string } = confirmed
-        ? { ...(basePreview ? { base: baseOf(basePreview) } : {}), ...(explicitBranch ? { branch: explicitBranch } : {}) }
+        ? { ...(preview ? { base: baseOf(preview) } : {}), ...(explicitBranch ? { branch: explicitBranch } : {}) }
         : {};
       const request: LaunchRequest = {
         toolId: effectiveLaunchToolId,

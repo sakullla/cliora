@@ -788,8 +788,13 @@ fn git_ok(git: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn git_output(git: &Path, cwd: &Path, args: &[&str]) -> Result<GitOutput, String> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
     let mut command = Command::new(git);
     crate::process_environment::apply(&mut command);
+    // A background preview or cleanup must not flash a console window on Windows.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let output = command
         .arg("-C")
         .arg(cwd)
@@ -1006,12 +1011,9 @@ fn resolve_tracking(
             candidates: Vec::new(),
         });
     };
-    let (remote, branch) = match reference.split_once('/') {
-        Some((remote, branch)) if !remote.is_empty() && !branch.is_empty() => {
-            (Some(remote.to_owned()), Some(branch.to_owned()))
-        }
-        _ => (None, None),
-    };
+    // A local branch may contain a slash; only a real remote-tracking ref has a
+    // remote, so the split is verified against refs/remotes like the explicit ref.
+    let (remote, branch) = split_remote(git, directory, reference)?;
     Ok(BaseResolution::Resolved { reference: reference.to_owned(), commit, remote, branch, degraded })
 }
 
@@ -1620,6 +1622,26 @@ mod tests {
         assert!(error.contains("请选择基点"), "{error}");
         assert!(error.contains("release"), "{error}");
         assert!(!temp.path().join("solo-task").exists());
+    }
+
+    #[test]
+    fn a_local_branch_with_a_slash_is_not_reported_as_a_remote_base() {
+        let (temp, _db) = database();
+        let Some(repo) = init_repo(temp.path(), "slash") else {
+            eprintln!("git unavailable; skipping slash branch test");
+            return;
+        };
+        assert!(run_git(&repo, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        assert!(run_git(&repo, &["branch", "-m", "feat/orders"]));
+        let preview = base_preview(&repo, None).expect("preview");
+        assert!(preview.available, "{preview:?}");
+        assert_eq!(preview.reference.as_deref(), Some("feat/orders"));
+        // The name contains a slash but no remote owns it: the 更新 action and the
+        // remote fetch must not be offered for it.
+        assert_eq!(preview.remote, None, "{preview:?}");
+        assert_eq!(preview.branch, None, "{preview:?}");
+        let error = base_update(&repo, None).unwrap_err();
+        assert!(error.contains("只能更新远程分支基点"), "{error}");
     }
 
     #[test]
