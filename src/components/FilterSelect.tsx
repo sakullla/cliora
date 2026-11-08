@@ -74,10 +74,13 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     revealIndex.current = index;
     setActive(index);
   }, [open]);
-  useEffect(() => {
+  /** A new query starts on its first match in the same render that filters the list: an
+   *  Enter typed right after the text must never see the previous, longer list's index. */
+  function changeQuery(next: string) {
     revealIndex.current = 0;
     setActive(0);
-  }, [query]);
+    setQuery(next);
+  }
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {
@@ -116,7 +119,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   function onPanelKey(event: KeyboardEvent<HTMLElement>) {
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 1, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => { const next = Math.max(index - 1, 0); revealIndex.current = next; return next; }); return; }
-    if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active]); return; }
+    const current = matches[Math.min(active, matches.length - 1)];
+    if (event.key === 'Enter' && current) { event.preventDefault(); choose(current); return; }
     if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); triggerRef?.current?.focus(); }
   }
 
@@ -131,7 +135,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
       {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected?.label ?? placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
     </button>
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
-      {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
+      {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => changeQuery(event.target.value)} />}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
         {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
           {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
