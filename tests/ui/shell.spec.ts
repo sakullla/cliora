@@ -924,8 +924,13 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   await codex.click();
   await expect(codex).toHaveAttribute('aria-selected', 'true');
   await expect(railList.getByRole('tab').first()).toHaveText(/Claude Code/);
+  // Selecting a session focuses its terminal on a deferred frame. Under full-suite
+  // load that frame can land after the next commands, stealing focus mid-test; wait
+  // for the real focus to settle before moving it to the rail (ADR-7).
+  await expect(page.locator('.xterm-helper-textarea:visible')).toBeFocused();
   // The keyboard twin moves the focused card back down.
   await claude.focus();
+  await expect(claude).toBeFocused();
   await page.keyboard.press('Alt+Shift+ArrowDown');
   await expect(railList.getByRole('tab').first()).toHaveText(/Codex/);
   await expect(claude).toBeFocused();

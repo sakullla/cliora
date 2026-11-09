@@ -1,5 +1,32 @@
 import { expect, test, type Page } from '@playwright/test';
 
+/**
+ * ADR-7 initial-load recovery for the proven environment class only: the preview
+ * occasionally drops the document with net::ERR_NO_BUFFER_SPACE under parallel
+ * load, and the recorded "navigation buttons never appeared after goto" failures
+ * are that half-loaded page. Reload a bounded three times, gated on the app
+ * shell actually mounting, and never retry a behavior assertion: after the
+ * budget is spent the spec's own waits report the real failure unchanged.
+ */
+async function loadApp(page: Page) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await page.goto('/');
+    } catch (error) {
+      if (!/net::ERR_NO_BUFFER_SPACE/.test(String(error)) || attempt >= 3) throw error;
+      process.stdout.write(`\n[env-retry] page.goto net::ERR_NO_BUFFER_SPACE, load attempt ${attempt + 1}/3\n`);
+      continue;
+    }
+    try {
+      await page.getByRole('navigation', { name: '页面' }).waitFor({ state: 'attached', timeout: 8000 });
+      return;
+    } catch {
+      if (attempt >= 3) return;
+      process.stdout.write(`\n[env-retry] app shell not mounted after goto, load attempt ${attempt + 1}/3\n`);
+    }
+  }
+}
+
 async function setup(page: Page, theme = 'light') {
   await page.addInitScript((theme) => {
     const callbacks = new Map<number, (event: unknown) => void>();
@@ -34,7 +61,7 @@ async function setup(page: Page, theme = 'light') {
       },
     });
   }, theme);
-  await page.goto('/');
+  await loadApp(page);
 }
 
 test('an automatic update offer surfaces in the sidebar and opens the settings card', async ({ page }, testInfo) => {
@@ -100,3 +127,4 @@ test('the General tab lists its sections beside them from 900px and scrolls to t
   await expect(anchors).toBeHidden();
   await expect(page.locator('#settings-managed')).toBeVisible();
 });
+
