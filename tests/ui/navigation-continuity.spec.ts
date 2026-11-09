@@ -259,6 +259,7 @@ test('a tray repair for a project hidden by the saved home search opens its edit
   await expect(editor).toHaveCount(0);
   // Same page: a query that still shows the target is kept; one that hides it is cleared.
   await search(page).fill('desk');
+  await expect(editor).toHaveCount(0);
   await repair('p3');
   await expect(page.getByRole('dialog', { name: '修改desktop' })).toBeVisible();
   await expect(search(page)).toHaveValue('desk');
@@ -268,6 +269,43 @@ test('a tray repair for a project hidden by the saved home search opens its edit
   await repair('p4');
   await expect(page.getByRole('dialog', { name: '修改docs' })).toBeVisible();
   await expect(search(page)).toHaveValue('');
+});
+
+const trayRepair = (page: Page, projectId: string) => page.evaluate(projectId => (window as any).navigationFixture.emit('cliora:tray-repair', { page: 'home', toolId: 'codex', scope: 'project', projectId, projectPath: null, profileId: null }), projectId);
+
+test('a tray repair for a local project while a remote host is selected switches home to local and opens its editor', async ({ page }) => {
+  await install(page);
+  await changeHost(page, '开发主机 a');
+  await expect(page.locator('[data-project-id]').first()).toContainText('远程项目');
+  await nav(page, '资料库').click();
+  await trayRepair(page, 'p2');
+  await expect(nav(page, '首页')).toHaveAttribute('aria-current', 'page');
+  await expect.poll(() => page.evaluate(() => (window as any).navigationFixture.hostChanges)).toEqual(['remote-a', 'local']);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:remote-target'))).toBe('local');
+  const editor = page.getByRole('dialog', { name: '修改website' });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'website 的工具' })).toBeFocused();
+});
+
+test('cancelling the draft confirmation for a tray repair keeps the page and arms no editor for later', async ({ page }) => {
+  // The remote tool workspace in this fixture cannot open a draft, so the dirty edit is local.
+  await install(page);
+  await dirtyConfiguration(page);
+  await trayRepair(page, 'p2');
+  const confirmation = page.getByRole('dialog', { name: '放弃未保存修改？' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole('dialog').getByLabel('配置名称')).toHaveValue('仍在编辑的配置');
+  await expect(nav(page, '工具')).toHaveAttribute('aria-current', 'page');
+  expect(await page.evaluate(() => (window as any).navigationFixture.hostChanges)).toEqual([]);
+  // Leaving later (discarding the draft) must not replay the cancelled repair.
+  await nav(page, '首页').dispatchEvent('click');
+  await confirmation.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(nav(page, '首页')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-project-id]')).toHaveCount(5);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.getByRole('dialog', { name: '修改website' })).toHaveCount(0);
 });
 
 test('a late configuration-name read from an earlier context does not overwrite current names', async ({ page }) => {

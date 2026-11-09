@@ -129,11 +129,13 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
 
   useEffect(() => {
     if (!repair?.projectId || focusedRepair.current === repair.sequence || revealedRepair.current === repair.sequence) return;
+    // Repairs target local projects; nothing is armed until the local list is the one shown.
+    if (remoteTargetId !== 'local') return;
     const project = projects.find((item) => item.id === repair.projectId);
     if (!project) return;
     // An explicit repair outranks the restored search: a query that hides the target gives way,
     // and the effect continues once the cleared list renders the card.
-    if (!projectMatches(project, projectQuery) && remoteTargetId === 'local') {
+    if (!projectMatches(project, projectQuery)) {
       setProjectQuery('');
       return;
     }

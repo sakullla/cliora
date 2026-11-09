@@ -321,7 +321,10 @@ export default function App() {
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
       if (!active || !['home', 'connections', 'settings'].includes(event.payload.page)) return;
-      void transitionRef.current(event.payload.page).then((allowed) => {
+      // A home project repair names a local project, so it goes through the guarded move to
+      // the local host; a cancelled move arms nothing.
+      const host = event.payload.page === 'home' && event.payload.projectId ? 'local' : activeHost.current;
+      void transitionRef.current(event.payload.page, host).then((allowed) => {
         if (!active || !allowed) return;
         pageScroll.cancel();
         setScrollIntent(value => value + 1);
