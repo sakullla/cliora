@@ -66,12 +66,10 @@ test('wrapped rows in full-width brackets and Chinese prose hand the native laye
     'inoutarea-kafka.md），详见上述文档。',
   ];
   const joined = rows.join('');
-  assert.ok(!joined.includes('\n') && !joined.includes('\r'));
   const matches = findTerminalLinks(joined);
   assert.equal(matches.length, 1);
   assert.equal(matches[0].kind, 'path');
   assert.equal(matches[0].value, expected);
-  assert.equal(matches[0].value.length, expected.length);
   assert.equal(joined.slice(matches[0].start, matches[0].end), expected);
   // The same path unwrapped on one row must yield the identical value.
   const single = findTerminalLinks('分析完成（' + expected + '），详见上述文档。');

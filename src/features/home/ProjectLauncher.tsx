@@ -269,12 +269,20 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
     let active = true;
     const ids = profileTools.split('\n').filter(Boolean);
     setProfileNames(old => Object.fromEntries(Object.entries(old).filter(([id]) => ids.includes(id))));
-    for (const id of ids) {
-      void native.getRegisteredToolWorkspace(id, 'global', undefined, true).then(workspace => {
-        if (!Array.isArray(workspace?.profiles)) throw new Error('Profile metadata unavailable');
-        if (active) setProfileNames(old => ({ ...old, [id]: Object.fromEntries(workspace.profiles.map(profile => [profile.id, profile.name])) }));
-      }).catch(() => { if (active) setProfileNames(old => ({ ...old, [id]: null })); });
-    }
+    let next = 0;
+    const worker = async () => {
+      while (active && next < ids.length) {
+        const id = ids[next++];
+        try {
+          const workspace = await native.getRegisteredToolWorkspace(id, 'global', undefined, true);
+          if (!Array.isArray(workspace?.profiles)) throw new Error('Profile metadata unavailable');
+          if (active) setProfileNames(old => ({ ...old, [id]: Object.fromEntries(workspace.profiles.map(profile => [profile.id, profile.name])) }));
+        } catch { if (active) setProfileNames(old => ({ ...old, [id]: null })); }
+      }
+    };
+    // Summary reads can probe the CLI, just like the managed-tool list. Bound
+    // fan-out and stop starting reads as soon as this page/context is left.
+    for (let index = 0; index < Math.min(3, ids.length); index++) void worker();
     return () => { active = false; };
   }, [profileTools, projects]);
   const defaultTool = managed.some((tool) => tool.id === globalTool) ? globalTool : managed[0]?.id ?? '';

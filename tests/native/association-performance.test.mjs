@@ -1,15 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
-
-async function load(path) {
-  const source = readFileSync(new URL(`../../src/features/${path}`, import.meta.url), 'utf8');
-  const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
-}
-const { childSummary, timelineRows } = await load('records/sessionTimeline.ts');
-const { memoryLinks } = await load('memory/memoryLinks.ts');
+import { childSummary, timelineRows } from '../../src/features/records/sessionTimeline.ts';
+import { memoryLinks } from '../../src/features/memory/memoryLinks.ts';
 
 const message = (id, role, text, timestamp = null, kind = 'conversation') => ({ id, role, text, timestamp, kind });
 const child = (key, messages) => ({ key, messages, readable: true, children: [] });

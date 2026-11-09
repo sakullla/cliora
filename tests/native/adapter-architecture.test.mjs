@@ -57,10 +57,7 @@ test('memory port resolves directories in adapters and publishes only complete d
   const memory = await readFile('src-tauri/src/adapters/memory.rs', 'utf8');
   assert.match(memory, /fn directory\(/);
   assert.match(memory, /fn publish\(declaration: &MemoryDeclaration\) -> Option<MemoryManagement>/);
-  // Publication keeps requiring a complete declaration.
-  assert.match(memory, /unverified_reason\.trim\(\)\.is_empty\(\)/);
-  assert.match(memory, /scope\.declared\(\)/);
-  assert.match(memory, /operations\.is_empty\(\)/);
+  // Declaration completeness is exercised by adapters::memory behavior tests.
   assert.doesNotMatch(memory, /claude|codex|grok|opencode|qoder|deepseek|codebuddy|cursor|minimax|kiro|devin|cline|antigravity|mimo|kimi_code|command_code|zcode|\.claude|\.codex/i);
   // The shared engine consumes the resolved directory and never dispatches on CLI ids.
   const engine = (await readFile('src-tauri/src/resources/memory.rs', 'utf8')).split('#[cfg(test)]')[0];

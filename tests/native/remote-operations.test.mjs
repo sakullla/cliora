@@ -271,3 +271,31 @@ test('writes freeze expected versions and publish only confirmed commit versions
   finish(); await handle.promise;
   assert.deepEqual(observed, [{ '/config': 'after' }]);
 });
+
+// The deadline cases share the same transport/module as the operation tests.
+test('operation deadlines preserve short budgets and enforce default and upload ceilings', async () => {
+  for (const [timeoutMs, timeoutCeilingMs, expected, ceiling] of [
+    [600_000, 600_000, 600_000, 600_000],
+    [600_000, undefined, 120_000, undefined],
+    [900_000, 900_000, 600_000, 600_000],
+    [5_000, undefined, 5_000, undefined],
+  ]) {
+    let request;
+    const operations = new RemoteOperations(async (_name, args) => { request = args.operation; return 'ok'; });
+    const before = Date.now();
+    const handle = operations.start('upload_session_files', {}, 'host', 'write', { timeoutMs, timeoutCeilingMs });
+    assert.equal(await handle.promise, 'ok');
+    assert.equal(request.deadlineCeilingMs, ceiling);
+    assert.ok(request.deadlineUnixMs >= before + expected && request.deadlineUnixMs <= Date.now() + expected);
+  }
+});
+
+test('the upload wrappers in native.ts request the dedicated 600-second budget', () => {
+  const native = readFileSync(new URL('../../src/lib/native.ts', import.meta.url), 'utf8');
+  const wrappers = native.match(/upload_session_files[\s\S]{0,220}/g) ?? [];
+  assert.ok(wrappers.length >= 2, 'both upload wrappers found');
+  for (const wrapper of wrappers) {
+    assert.match(wrapper, /timeoutMs: 600_000/, 'the request deadline is 600 seconds');
+    assert.match(wrapper, /timeoutCeilingMs: 600_000/, 'the explicit ceiling lifts the 120-second clamp');
+  }
+});

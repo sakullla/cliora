@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
-
-const source = readFileSync(new URL('../../src/lib/mcp.ts', import.meta.url), 'utf8');
-const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const mcp = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+import * as mcp from '../../src/lib/mcp.ts';
 
 test('paste import accepts mcpServers, servers, name maps, snippets and bare servers', () => {
   const wrapped = mcp.parseMcpServerJson(JSON.stringify({ mcpServers: { fs: { command: 'npx', args: ['-y', 'pkg'] }, other: { url: 'https://x.test/mcp' } } }));

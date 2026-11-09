@@ -62,15 +62,6 @@ fn expand(value: &str, directory: &Path, home: &Path) -> Result<PathBuf, String>
             return Err("请使用完整的盘符路径".into());
         }
     }
-    #[cfg(windows)]
-    // A POSIX-shaped absolute path (`/Users/x`, `\Windows\notepad.exe`) is rooted but has
-    // no drive prefix, so `is_absolute` is false and joining it onto the session directory
-    // is wrong. The Windows API resolves such paths against the current drive root; do the same.
-    let path = if matches!(path.components().next(), Some(Component::RootDir)) {
-        std::path::absolute(&path).unwrap_or_else(|_| directory.join(&path))
-    } else {
-        path
-    };
     #[cfg(not(windows))]
     {
         let value = path.to_string_lossy();
@@ -78,6 +69,9 @@ fn expand(value: &str, directory: &Path, home: &Path) -> Result<PathBuf, String>
             return Err("Windows 路径无法在此系统打开".into());
         }
     }
+    // On Windows, joining a rooted, drive-less path keeps only the session's
+    // drive/share prefix (D:\work + /Users/x => D:\Users\x). The desktop
+    // process's working drive is unrelated to the terminal that printed it.
     Ok(if path.is_absolute() { path } else { directory.join(path) })
 }
 
@@ -190,30 +184,26 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn posix_form_paths_resolve_against_the_current_drive_root_not_the_session_directory() {
+    fn rooted_paths_use_the_session_drive_without_its_subdirectories() {
         let temp = tempfile::tempdir().unwrap();
         let real = temp.path().join("y.md");
         std::fs::write(&real, "test").unwrap();
         let display = real.to_string_lossy().into_owned();
         assert_eq!(&display[1..2], ":", "{display}");
-        let current_drive = match std::env::current_dir().unwrap().components().next() {
-            Some(Component::Prefix(prefix)) => prefix.as_os_str().to_string_lossy().into_owned(),
-            other => panic!("expected a drive-prefixed current directory, got {other:?}"),
-        };
-        assert_eq!(current_drive.len(), 2, "{current_drive}");
-        assert_eq!(&display[..2], current_drive, "temp path must sit on the current drive");
         // The same file written in POSIX form: `/Users/...` with no drive prefix.
         let posix = format!("/{}", display[2..].trim_start_matches(['\\', '/']).replace('\\', "/"));
         let expected = real.canonicalize().unwrap();
-        // A session directory on another drive must not change the resolution target.
-        let session = Path::new("D:\\sessions\\elsewhere");
-        assert_eq!(resolve(Some(session), temp.path(), &posix).unwrap(), expected);
-        assert_eq!(resolve(Some(session), temp.path(), &posix.replace('/', "\\")).unwrap(), expected);
-        // A missing drive-less root reports the resolved absolute target on the current
-        // drive, never a path under the session directory.
-        let missing = resolve(Some(session), temp.path(), "/Users/sakullla-t6-missing/y.md").unwrap_err();
-        assert!(missing.contains(&format!("{current_drive}\\Users\\sakullla-t6-missing\\y.md")), "{missing}");
-        assert!(!missing.contains("D:"), "{missing}");
+        let session = temp.path().join("sessions/elsewhere");
+        assert_eq!(resolve(Some(&session), temp.path(), &posix).unwrap(), expected);
+        assert_eq!(resolve(Some(&session), temp.path(), &posix.replace('/', "\\")).unwrap(), expected);
+        // Check multiple drives without requiring any particular drive to exist
+        // or assuming TEMP and the desktop process are on the same drive.
+        for drive in ["C:", "D:"] {
+            let session = PathBuf::from(format!("{drive}\\sessions\\elsewhere"));
+            for value in ["/Users/example/y.md", "\\Users\\example\\y.md"] {
+                assert_eq!(expand(value, &session, temp.path()).unwrap(), PathBuf::from(format!("{drive}\\Users\\example\\y.md")));
+            }
+        }
     }
 
     #[cfg(windows)]
@@ -233,6 +223,17 @@ mod tests {
         let unc = resolve(Some(temp.path()), temp.path(), "\\\\server\\share\\file.txt");
         assert!(unc.is_err());
         assert!(unc.unwrap_err().contains("\\\\server\\share\\file.txt"));
+    }
+
+    #[test]
+    fn missing_absolute_paths_report_the_exact_target_without_searching_elsewhere() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = temp.path().join("session");
+        std::fs::create_dir(&session).unwrap();
+        std::fs::write(session.join("missing.md"), "a different file").unwrap();
+        let missing = temp.path().join("missing.md");
+        let error = resolve(Some(&session), temp.path(), &missing.to_string_lossy()).unwrap_err();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
     }
 
     #[cfg(unix)]

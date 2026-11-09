@@ -1,7 +1,8 @@
+import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic memory screens (工具 → 记忆) for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 
 // CLIs are chosen from the h2 switcher in the 工具 header (a single managed CLI has no switcher).
 async function openCli(page, name) {
@@ -25,6 +26,7 @@ const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-memory`;
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
 fs.mkdirSync(out, { recursive: true });
+const prunePrevious = previousCaptureCleanup(out, 'capture-memory-manifest.json');
 
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
 const doc = (name, description, type, daysAgo, body) => `---\nname: ${name}\ndescription: "${description}"\nmetadata:\n  node_type: memory\n  type: ${type}\n  originSessionId: 0f6c2a5e-8f0b-4f61-9a43-2d1b6f0c11aa\n  modified: ${iso(daysAgo)}\n---\n\n${body}\n`;
@@ -154,10 +156,11 @@ try {
       await page.goto(previewUrl);
       await openCli(page, scenario.tool);
       await page.getByRole('tab', { name: '记忆', exact: true }).click();
-      await page.waitForTimeout(700);
+      await expect(page.getByRole('button', { name: '刷新记忆', exact: true })).toBeEnabled();
+      await settleCapture(page);
       stage = 'action';
       try { await scenario.run?.(page); } catch (error) { problems.push(`${label}: ${firstLine(error)}`); }
-      await page.waitForTimeout(700);
+      await settleCapture(page);
       stage = 'overflow check';
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
       if (overflow) problems.push(`${label}: horizontal overflow`);
@@ -181,3 +184,5 @@ fs.writeFileSync(`${out}/README.md`, `# Memory captures\n\nSynthetic native IPC;
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Memory captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:680px;border:1px solid #555}</style>${shots.map((file) => `<figure><img src="${file}"><figcaption>${file}</figcaption></figure>`).join('')}`);
 console.log(JSON.stringify({ out, count: shots.length, problems }, null, 2));
 if (problems.length) process.exitCode = 1;
+
+if (!problems.length) prunePrevious(shots);

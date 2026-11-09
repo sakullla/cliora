@@ -2721,20 +2721,31 @@ mod tests {
 
     #[test]
     fn read_retries_share_one_deadline_including_backoff() {
-        let directory = tempfile::tempdir().unwrap();
-        let counter = directory.path().join("attempts");
+        // Process startup/cancellation have separate real-child tests. Exercise
+        // the retry budget without requiring Windows to start this executable
+        // within a 350 ms deadline under suite load.
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        let status = std::process::ExitStatus::from_raw(255);
+        #[cfg(unix)]
+        let status = std::process::ExitStatus::from_raw(255 << 8);
+        let mut attempts = 0;
         let context = operations::Context::local(operations::Kind::Read, Duration::from_millis(350));
         let target = gate_target("read-deadline.invalid");
         let started = std::time::Instant::now();
         let error = operations::scoped(context, || run_ssh(&target, || {
-            wait_for_output(&mut operation_child("closed", &counter), SSH_COMMAND_DEADLINE)
+            attempts += 1;
+            Ok(std::process::Output { status, stdout: Vec::new(), stderr: b"Connection closed by fixture".to_vec() })
         })).unwrap_err();
         let RemoteError::Operation(failure) = error else { panic!("missing typed failure") };
         assert_eq!(failure.reason, "timeout");
-        assert!(matches!(failure.stage.as_str(), "retry_wait" | "process_wait"));
-        assert!((1..=2).contains(&child_count(&counter)));
+        assert_eq!(failure.stage, "retry_wait");
+        assert!((1..=2).contains(&attempts));
         assert!(started.elapsed() < Duration::from_millis(1000));
-        eprintln!("REMOTE_OPERATION_METRIC read_retry_deadline attempts={} elapsed_ms={}", child_count(&counter), started.elapsed().as_millis());
+        eprintln!("REMOTE_OPERATION_METRIC read_retry_deadline attempts={attempts} elapsed_ms={}", started.elapsed().as_millis());
     }
 
     #[cfg(windows)]

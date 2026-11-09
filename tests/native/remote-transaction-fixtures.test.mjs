@@ -96,8 +96,6 @@ test('native transaction diagnostics retain failure stage/outcome without arbitr
 
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 test('owned native fault wrappers affect only adjacent transaction replacement and protected backups', t => {
-  const probe = spawnSync(process.platform === 'win32' ? 'wsl.exe' : 'sh', process.platform === 'win32' ? ['--exec', 'sh', '-c', 'printf ready'] : ['-c', 'printf ready'], { encoding: 'utf8', windowsHide: true });
-  if (probe.status !== 0) return t.skip('No POSIX shell; native acceptance is still required.');
   // Fixed paths are confined to a fresh isolated /tmp directory created here.
   const scripts = ['mv', 'cp'].map(tool => `printf %s ${quote(Buffer.from(transactionToolWrapper(tool, '/tmp/placeholder', '/tmp/control')).toString('base64'))} | base64 -d > "$task_root/${tool}.template"`).join('\n');
   const shell = `set -eu
@@ -127,7 +125,16 @@ test('owned native fault wrappers affect only adjacent transaction replacement a
  [ "$(cat "$HOME/ordinary-copy")" = first ]
  printf passed
 `;
-  const result = spawnSync(process.platform === 'win32' ? 'wsl.exe' : 'sh', process.platform === 'win32' ? ['--exec', 'sh', '-s'] : ['-s'], { input: shell, encoding: 'utf8', windowsHide: true });
+  // One WSL startup establishes availability and executes the real assertions.
+  // The outer shell prints readiness before parsing the fixture, so a broken
+  // fixture can never be mistaken for an unavailable shell.
+  const command = "printf 'cliora-shell-ready\\n'; sh -s";
+  const result = spawnSync(process.platform === 'win32' ? 'wsl.exe' : 'sh', process.platform === 'win32' ? ['--exec', 'sh', '-c', command] : ['-c', command], { input: shell, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  assert.notEqual(result.error?.code, 'ETIMEDOUT', 'POSIX fixture timed out');
+  if (!result.stdout?.startsWith('cliora-shell-ready\n')) {
+    if (result.error && result.error.code !== 'ENOENT') throw result.error;
+    return t.skip('No POSIX shell; native acceptance is still required.');
+  }
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'passed');
+  assert.equal(result.stdout, 'cliora-shell-ready\npassed');
 });

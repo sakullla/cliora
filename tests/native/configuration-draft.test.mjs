@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
-import ts from 'typescript';
-const source = readFileSync(new URL('../../src/lib/configurationDraft.ts', import.meta.url), 'utf8');
-const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { createConfigurationSession, configurationAction, configurationApplicationState, configurationLiveState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+import { test } from 'node:test';
+import { createConfigurationSession, configurationAction, configurationApplicationState, configurationLiveState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } from '../../src/lib/configurationDraft.ts';
 const initial = { sessionId: 'one', revision: 0, issues: [], profile: { files: {} } };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 

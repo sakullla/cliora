@@ -61,9 +61,11 @@ The Skill fixture treats the directory name as the skill. `crud-page` has a mism
 
 `scripts/capture-workbench.mjs` captures the 工作台 screen: the session rail with long titles, terminal canvas and scrollbar, display preferences, quick input and find bar, ended-session state, the folded sidebar (including the macOS title-bar layout), the worktree menu, the new-session dialog, and the empty launchpad in both themes at 1360, 900, and 640. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes `docs/verification/ui-workbench` unless `CLIORA_CAPTURE_OUT` is set.
 
+Workbench captures wait for fixture content and paint readiness. The ended-session capture also records layout metrics. Add `--performance` to run the remote-stream stress measurement once, at the first selected theme/size; ordinary captures omit it. `scripts/capture-product-ux.mjs` forwards `--theme`, `--size`, and `--performance`, and its pages gallery omits the migration overview covered by the sync gallery.
+
 `scripts/capture-memory.mjs` captures only 工具与连接 → 记忆: the grouped list, reading, frontmatter properties, editing, creating, type filtering, no-match, the CLI-wide switch off, per-store and per-entry switches, a read-only CLI, and the empty state. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes to `docs/verification/ui-memory` unless `CLIORA_CAPTURE_OUT` is set.
 
-Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and `capture-ui[-mode]-manifest.json`. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
+Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and a mode-specific manifest. A successful nonempty run removes obsolete PNGs listed in that gallery's previous manifest; unrelated files remain. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
 
 ## Commit & Pull Request Guidelines
 

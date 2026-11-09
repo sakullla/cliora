@@ -11,7 +11,7 @@ const out = path.resolve(process.env.CLIORA_PRODUCT_CAPTURE_OUT ?? path.join(roo
 const buildDirectory = path.resolve(root, process.env.CLIORA_PRODUCT_BUILD_OUT ?? 'dist');
 if (!fs.existsSync(path.join(buildDirectory, 'index.html'))) throw new Error('Run npm run build before capturing the product.');
 const allScenes = [
-  { id: 'pages', script: 'capture-ui.mjs', args: ['--quick'] },
+  { id: 'pages', script: 'capture-ui.mjs', args: ['--quick', '--skip-migration'] },
   { id: 'home', script: 'capture-ui.mjs', args: ['--home'] },
   { id: 'workbench', script: 'capture-workbench.mjs', args: [] },
   { id: 'memory', script: 'capture-memory.mjs', args: [] },
@@ -21,6 +21,15 @@ const onlyIndex = process.argv.indexOf('--only');
 const requested = onlyIndex < 0 ? allScenes.map(scene => scene.id) : (process.argv[onlyIndex + 1] ?? '').split(',');
 if (requested.some(id => !allScenes.some(scene => scene.id === id))) throw new Error('--only accepts pages,home,workbench,memory,sync');
 const scenes = allScenes.filter(scene => requested.includes(scene.id));
+const option = (flag, fallback) => {
+  const index = process.argv.indexOf(flag);
+  if (index < 0) return fallback;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
+  return value;
+};
+const theme = option('--theme', 'all');
+const size = option('--size', '1360,900,640');
 fs.mkdirSync(out, { recursive: true });
 const port = await new Promise((resolve, reject) => {
   const reservation = net.createServer();
@@ -45,8 +54,9 @@ try {
     const directory = path.join(out, scene.id);
     fs.mkdirSync(directory, { recursive: true });
     const log = fs.createWriteStream(path.join(directory, 'capture.log'));
-    const args = [path.join(root, 'scripts', scene.script), ...scene.args, '--theme', 'all', '--size', '1360,900,640'];
-    console.log(`Capturing ${scene.id}: light/dark × 1360/900/640`);
+    const args = [path.join(root, 'scripts', scene.script), ...scene.args, '--theme', theme, '--size', size];
+    if (scene.id === 'workbench' && process.argv.includes('--performance')) args.push('--performance');
+    console.log(`Capturing ${scene.id}: ${theme} × ${size}`);
     const exitCode = await new Promise(resolve => {
       child = spawn(process.execPath, args, { cwd: root, windowsHide: true, env: { ...process.env, CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory }, stdio: ['ignore', 'pipe', 'pipe'] });
       child.stdout.pipe(log, { end: false });
@@ -56,7 +66,8 @@ try {
     });
     await new Promise(resolve => log.end(resolve));
     child = undefined;
-    const manifests = fs.readdirSync(directory).filter(name => /^capture-.*manifest\.json$/.test(name));
+    const expectedManifest = scene.id === 'pages' ? 'capture-ui-manifest.json' : scene.id === 'home' ? 'capture-ui-home-manifest.json' : `capture-${scene.id}-manifest.json`;
+    const manifests = fs.existsSync(path.join(directory, expectedManifest)) ? [expectedManifest] : [];
     const failures = manifests.flatMap(name => {
       try {
         const manifest = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));

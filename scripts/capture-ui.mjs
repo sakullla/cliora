@@ -1,3 +1,4 @@
+import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic, populated native-IPC fixtures for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +39,7 @@ const manifestName=`capture-ui${['features','sessions','records','connections','
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
+const prunePrevious=previousCaptureCleanup(out,manifestName);
 const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
 let previewReady=false;
 for(let attempt=0;attempt<50;attempt++){
@@ -214,8 +216,8 @@ function findOverflow(){
 }
 async function captureImage(page,name,theme,width,metadata={}){
  await page.mouse.move(0,0);
- await page.waitForTimeout(100);
  await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ await settleCapture(page);
  const file=`${name}-${theme}-${width}.png`;
  const path=`${out}/${file}`;
  await page.screenshot({path});
@@ -225,7 +227,7 @@ async function captureImage(page,name,theme,width,metadata={}){
  if(measure&&theme==='light'&&width===measureViewport.width&&pageScenarioNames.has(name)&&!(name in firstScreen)){
   const previous=page.viewportSize();
   const resize=previous.width!==measureViewport.width||previous.height!==measureViewport.height;
-  if(resize){await page.setViewportSize(measureViewport);await page.waitForTimeout(100);}
+  if(resize){await page.setViewportSize(measureViewport);await settleCapture(page);}
   firstScreen[name]=await page.evaluate(countFirstScreen);
   captures[captures.length-1].firstScreen=firstScreen[name];
   if(resize)await page.setViewportSize(previous);
@@ -822,8 +824,8 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
   await nav.getByRole('button',{name:'记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
   await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
-  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.waitForTimeout(600);await capture('settings');
-  await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');
+  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});await capture('settings');
+  if(!process.argv.includes('--skip-migration')){await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');}
   await page.close();continue;
  }
  await nav.getByRole('button',{name:'工具'}).click();const profiles=page.getByRole('region',{name:'工具'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
@@ -881,3 +883,5 @@ if(workflowsOnly||fullCapture){
  if(selectedScenarios.some(name=>qoderHistoryScenarioNames.includes(name)))await captureQoderHistoryFeatures();
 }
 await browser.close();writeGallery();console.log(JSON.stringify({imageCount:captures.length,failures,acceptance},null,2));if(failures.length)process.exitCode=1;
+
+if(!failures.length)prunePrevious(captures.map(item=>item.file));

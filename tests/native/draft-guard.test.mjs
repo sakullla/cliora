@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
-
-const source = readFileSync(new URL('../../src/lib/draftGuard.ts', import.meta.url), 'utf8');
-const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { sameDraftRequest } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+import { sameDraftRequest } from '../../src/lib/draftGuard.ts';
 
 test('late native IPC result cannot replace an edited or switched draft', () => {
   const draft = { id: 'profile-1', files: { settings: 'original' } };

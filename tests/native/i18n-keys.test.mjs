@@ -1,23 +1,17 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
+import { statusTable } from '../../src/lib/statusTone.ts';
 
 const root = new URL('../../', import.meta.url);
 const modules = ['common', 'home', 'tools', 'library', 'records', 'settings', 'sessions'];
 const languages = ['zh', 'en'];
 
-function moduleFrom(source) {
-  const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
-}
-
 const bundles = {};
 for (const language of languages) {
   bundles[language] = {};
   for (const name of modules) {
-    const source = readFileSync(new URL(`src/i18n/locales/${language}/${name}.ts`, root), 'utf8');
-    bundles[language][name] = (await moduleFrom(source)).default;
+    bundles[language][name] = (await import(new URL(`src/i18n/locales/${language}/${name}.ts`, root))).default;
   }
 }
 
@@ -92,14 +86,7 @@ test('zh and en declare the same key paths in all seven modules', () => {
   assert.deepEqual(gaps, []);
 });
 
-test('the source scan finds the translation calls it checks', () => {
-  assert.ok(references.filter((item) => item.kind === 'literal').length > 100, 'literal t() keys were not found');
-  assert.ok(references.some((item) => item.kind === 'prefix'), 'template t() keys were not found');
-});
-
-test('every status badge label exists in both languages', async () => {
-  const source = readFileSync(new URL('src/lib/statusTone.ts', root), 'utf8');
-  const { statusTable } = await moduleFrom(source);
+test('every status badge label exists in both languages', () => {
   const missing = [];
   for (const [domain, states] of Object.entries(statusTable)) {
     for (const [state, { labelKey }] of Object.entries(states)) {
@@ -110,6 +97,9 @@ test('every status badge label exists in both languages', async () => {
 });
 
 test('every literal key used in src exists in both languages', () => {
+  assert.ok(references.filter((item) => item.kind === 'literal').length > 100, 'literal t() keys were not found');
+  assert.ok(references.some((item) => item.kind === 'prefix'), 'template t() keys were not found');
+
   const missing = [];
   for (const { kind, key, at } of references) {
     for (const language of languages) {

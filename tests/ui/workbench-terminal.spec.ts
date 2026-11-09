@@ -138,7 +138,7 @@ test.describe('product WebGL input integration', () => {
     await input.focus();
     await page.evaluate(async () => {
       (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
+        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
       await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
       await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
     });
@@ -178,7 +178,7 @@ test.describe('product WebGL input integration', () => {
     await input.focus();
     await page.evaluate(async () => {
       (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
+        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
       await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
       await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
     });

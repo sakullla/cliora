@@ -1,7 +1,8 @@
 /** Synthetic workbench fixtures for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
+import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
@@ -12,6 +13,7 @@ const english = locale.toLowerCase().startsWith('en');
 const copy = (zh, en) => english ? en : zh;
 const out = process.env.CLIORA_CAPTURE_OUT ?? root + '/docs/verification/ui-workbench' + (english ? '-en' : '');
 fs.mkdirSync(out, { recursive: true });
+const prunePrevious = previousCaptureCleanup(out, 'capture-workbench-manifest.json');
 
 let previewReady = false;
 for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -309,13 +311,22 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
     await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
-    await page.waitForTimeout(900);
-    if (remoteState) await page.locator('[role="tab"][data-session-id="r1"]').click();
+    if (remoteState) {
+      const tab = page.locator('[role="tab"][data-session-id="r1"]');
+      await tab.click();
+      await expect(tab).toHaveAttribute('aria-selected', 'true');
+      if (remoteState === 'connected') await page.locator('.xterm-rows').filter({ hasText: 'synthetic SSH terminal' }).first().waitFor();
+    } else if (empty) await page.locator('[data-empty="true"]').first().waitFor();
+    else {
+      // Textarea creation precedes replay. Wait for the end of the fixture's
+      // initial transcript before driving a scene or measuring its layout.
+      await page.locator('.xterm-rows').filter({ hasText: '构建与检查已完成，等待下一条输入' }).first().waitFor();
+    }
     if (run) resourceObservation = await run(page) ?? null;
-    await page.waitForTimeout(500);
+    await settleCapture(page);
     const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     overflow = size.scroll > size.client ? size : null;
-    await page.screenshot({ path: out + '/' + name + '.png', fullPage: false });
+    await page.screenshot({ path: out + '/' + name + '.png', fullPage: false, animations: 'disabled' });
   } catch (error) {
     actionError = String(error?.message ?? error).split('\n')[0];
     console.error(name + ': ' + actionError);
@@ -474,7 +485,8 @@ for (const width of widths) {
     await toolbar.getByRole('button', { name: copy('写入恢复', 'Write recovery'), exact: true }).waitFor();
     await toolbar.getByRole('button', { name: copy('重新附着远程会话', 'Reattach remote session'), exact: true }).waitFor();
   }, false, 'disconnected', null, null, true);
-  await shot(`workbench-remote-stream-${theme}-${width}`, theme, width, async page => {
+  // Stress measurements are independent of theme/viewport; opt in once.
+  if (process.argv.includes('--performance') && theme === themes[0] && width === widths[0]) await shot(`workbench-remote-stream-${theme}-${width}`, theme, width, async page => {
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
     const snapshot = async () => {
@@ -694,7 +706,7 @@ for (const width of widths) {
     await page.locator('[data-session-id="back-codex"]').waitFor();
     return measureRestoreRows(page);
   }, true);
-  await shot('workbench-metrics-' + theme + '-' + width, theme, width, async page => {
+  await shot('workbench-ended-' + theme + '-' + width, theme, width, async page => {
     // Objective layout evidence: clipped text, toolbar overflow, muted-copy contrast and the
     // ended state's affordances.
     const stageLabel = copy('当前会话', 'Current session');
@@ -775,7 +787,7 @@ for (const width of widths) {
     const running = await measure();
     // A confirmed-ended session keeps a recovery action and offers no input surface.
     await page.locator('[role="tab"][data-session-id="s3"]').click();
-    await page.waitForTimeout(250);
+    await page.getByRole('button', { name: copy('重新启动', 'Restart'), exact: true }).waitFor();
     const ended = await page.evaluate(({ label, stageLabel }) => {
       const visible = (element) => element.getBoundingClientRect().height > 0;
       const stage = document.querySelector('section[aria-label="' + stageLabel + '"]');
@@ -848,9 +860,6 @@ for (const width of widths) {
     await page.evaluate(() => window.__bell());
     await page.getByRole('tab', { name: /Claude Code/ }).click();
   });
-  await shot('workbench-ended-' + theme + '-' + width, theme, width, async (page) => {
-    await page.getByRole('tab', { name: /Grok/ }).click();
-  });
   await shot('workbench-focus-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('专注模式（隐藏侧栏）', 'Focus mode (hide sidebar)') }).click();
   });
@@ -913,7 +922,7 @@ fs.writeFileSync(out + '/README.md', [
   '',
   '[浏览图片画廊](index.html) · [机器可读清单](capture-workbench-manifest.json)',
   '',
-  '捕获工作台的长标题会话栏、Git 分支与工作树切换菜单、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与远程文件夹选择器（长路径、权限失败、读取中、未决创建回执）和空状态。workbench-metrics 场景另记录标题截断宽度、工具条裁切、对比度与已结束会话的恢复入口。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
+  '捕获工作台的长标题会话栏、Git 分支与工作树切换菜单、live/idle 活动图标对照、分屏与精简栏、终端画布与滚动条、显示偏好、快捷输入与查找、已结束提示、新建会话对话框、远程主机与远程文件夹选择器（长路径、权限失败、读取中、未决创建回执）和空状态。workbench-ended 场景同时记录标题截断宽度、工具条裁切、对比度与已结束会话的恢复入口。覆盖浅色与深色主题、1360 / 900 / 640 三档宽度，并以减少动效检查静态形状差异。',
   '',
   '执行：',
   '',
@@ -921,7 +930,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；stream 场景在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
+  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',
@@ -932,3 +941,5 @@ fs.writeFileSync(out + '/README.md', [
 ].join('\n'));
 console.log(JSON.stringify({ shots: manifest.length, failed, runErrors, acceptance }, null, 2));
 if (failed.length || runErrors.length) process.exitCode = 1;
+
+if (!failed.length && !runErrors.length) prunePrevious(manifest.map(item => item.name + '.png'));

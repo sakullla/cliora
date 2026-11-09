@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import xterm from '@xterm/xterm';
 import { createTerminalIme, imePlacement, inspectImeBridge } from '../../src/features/sessions/terminalIme.ts';
 
 // Frames run only when a test flushes them; no timer decides an outcome here.
@@ -60,6 +61,7 @@ function fixture({ breakHelper = false } = {}) {
     coreService: { isCursorHidden: false },
   };
   const cursor = { cursorX: 4, cursorY: 2 };
+  const parsed = new Set();
   const term = {
     _core: core,
     textarea,
@@ -70,6 +72,8 @@ function fixture({ breakHelper = false } = {}) {
     buffer: { active: { get cursorX() { return cursor.cursorX; }, get cursorY() { return cursor.cursorY; }, baseY: 0, viewportY: 0 } },
     input: (data) => sent.push(data),
     scrollToBottom() {},
+    onWriteParsed(callback) { parsed.add(callback); return { dispose: () => parsed.delete(callback) }; },
+    onScroll() { return { dispose() {} }; },
   };
   textarea.addEventListener('keyup', () => { keyDownSeen = false; }, true);
   textarea.addEventListener('keydown', (event) => {
@@ -105,8 +109,70 @@ function fixture({ breakHelper = false } = {}) {
     insert: (data, composed = true) => dispatch('input', { data, inputType: 'insertText', composed, isComposing: false }),
     blur: () => { focused = false; dispatch('blur'); textarea.value = ''; },
   };
-  return { ime, ev, sent, textarea, host, helper, core, cursor, screen, term, view, setActive: (value) => { active = value; }, setFocused: (value) => { focused = value; } };
+  return { ime, ev, sent, textarea, host, helper, core, cursor, screen, term, view, parsed: () => parsed.forEach(callback => callback()), setActive: (value) => { active = value; }, setFocused: (value) => { focused = value; } };
 }
+
+async function drawnFixture(output) {
+  const real = new xterm.Terminal({ cols: 100, rows: 20, allowProposedApi: true });
+  const f = fixture();
+  f.term.buffer = real.buffer;
+  f.core.coreService.isCursorHidden = true;
+  const write = async text => {
+    await new Promise(resolve => real.write(text, resolve));
+    f.parsed();
+  };
+  await write('\x1b[?1049h\x1b[?25l' + output + '\x1b[H');
+  return { ...f, write, dispose: () => { f.ime.dispose(); real.dispose(); } };
+}
+
+test('background decorations do not override the drawn blank caret or select the origin', async () => {
+  for (const [output, expected] of [
+    ['\x1b[41m!\x1b[49m\x1b[18;1H> input', ['0px', '342px']],
+    ['\x1b[41m!\x1b[49m\x1b[8;10H\x1b[44m \x1b[49m', ['72px', '126px']],
+    ['\x1b[41m \x1b[49m', ['0px', '342px']],
+    ['\x1b[8;10H\x1b[44m字\x1b[49m', ['0px', '342px']],
+  ]) {
+    const f = await drawnFixture(output);
+    try {
+      f.ime.refresh();
+      assert.deepEqual([f.textarea.style.left, f.textarea.style.top], expected);
+    } finally { f.dispose(); }
+  }
+});
+
+test('hidden-cursor scans reuse unchanged output and read solid backgrounds only once per cell', async () => {
+  const f = await drawnFixture('\x1b[44m' + ' '.repeat(1999) + '\x1b[49m');
+  try {
+    const buffer = f.term.buffer.active;
+    const getLine = buffer.getLine.bind(buffer);
+    let reads = 0;
+    buffer.getLine = row => {
+      const line = getLine(row);
+      if (!line) return line;
+      return { getCell: (...args) => { reads++; return line.getCell(...args); } };
+    };
+    f.ime.refresh();
+    assert.ok(reads <= 2040, `solid background cell reads: ${reads}`);
+    const first = reads;
+    for (let i = 0; i < 5; i++) { f.ime.schedule(); flushFrames(); }
+    f.ev.start();
+    assert.equal(reads, first, 'renders and composition start reuse the current parsed output');
+    f.ev.end('');
+    await f.write('\x1b[0m\x1b[2J\x1b[8;10H\x1b[44m \x1b[49m\x1b[H');
+    f.ime.refresh();
+    assert.ok(reads > first);
+    assert.deepEqual([f.textarea.style.left, f.textarea.style.top], ['72px', '126px']);
+    const updated = reads;
+    f.term.rows = 19;
+    f.ime.refresh();
+    assert.ok(reads > updated, 'resizing invalidates the viewport scan');
+    f.setFocused(false);
+    await f.write('\x1b[2J');
+    const unfocused = reads;
+    f.ime.refresh();
+    assert.equal(reads, unfocused, 'an unfocused terminal does not scan for IME placement');
+  } finally { f.dispose(); }
+});
 
 test('same-turn and both reproduced cross-turn commit orders send the word once', () => {
   for (const order of ['same-turn', 'delayed-end', 'delayed-trailing-input']) {

@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import ts from 'typescript';
-
-const source = readFileSync(new URL('../../src/lib/nativeDraft.ts', import.meta.url), 'utf8');
-const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { importedConnection } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+import { importedConnection } from '../../src/lib/nativeDraft.ts';
 
 const current = { providerId: 'anthropic', interfaceFormat: 'anthropic_messages', baseUrl: 'https://api.anthropic.com', model: 'old-model', secretRef: 'old-key', authEnvVar: null };
 const inspection = (connection) => ({ providerId: 'anthropic', model: null, connection, reasoningEffort: null });

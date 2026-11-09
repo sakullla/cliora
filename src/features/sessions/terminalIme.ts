@@ -72,7 +72,9 @@ export function imePlacement(at: ImeCell, grid: { cols: number; rows: number }, 
 
 /** Background identity of a cell, comparable across the public xterm color modes. */
 type BgCell = { getBgColorMode(): number; getBgColor(): number };
-const bgKey = (item: BgCell) => `${item.getBgColorMode()}:${item.getBgColor()}`;
+// The mode occupies bits above the 24-bit color value. Keep this numeric: a
+// colored viewport used to allocate up to three strings for every scanned cell.
+const bgKey = (item: BgCell) => item.getBgColorMode() + item.getBgColor();
 
 /** The input cell the TUI drew itself: one isolated blinking cell, else one isolated inverse cell, else one isolated background block. */
 function drawnCursor(term: Terminal): ImeCell | null {
@@ -89,28 +91,39 @@ function drawnCursor(term: Terminal): ImeCell | null {
   for (let row = term.rows - 1; row >= 0 && (inverseCount < 2 || blinkCount < 2 || blockCount < 2); row -= 1) {
     const line = buffer.getLine(buffer.viewportY + row);
     if (!line) continue;
+    let leftBlink = false;
+    let leftInverse = false;
+    let leftBg: number | null = null;
     for (let col = 0; col < term.cols; col += 1) {
       const current = line.getCell(col, cell);
       if (!current) continue;
       const blinking = current.isBlink() !== 0;
       const marked = current.isInverse() !== 0;
       const bg = bgKey(current);
-      const blocked = bg !== defaultBgKey;
-      if (!blinking && !marked && !blocked) continue;
-      const left = col > 0 ? line.getCell(col - 1, side) : null;
-      const leftBlink = !!left?.isBlink();
-      const leftInverse = !!left?.isInverse();
-      const leftBg = left ? bgKey(left) : null;
+      const blinkCandidate = blinkCount < 2 && blinking && !leftBlink;
+      const inverseCandidate = inverseCount < 2 && marked && !leftInverse;
+      // Background alone is weak evidence: badges and syntax-colored glyphs
+      // are not carets. Only an isolated, single-width blank is a candidate;
+      // the parked origin is never inferred from background color alone.
+      const blockCandidate = blockCount < 2 && bg !== defaultBgKey && bg !== leftBg
+        && (row !== 0 || col !== 0) && current.getWidth() === 1
+        && (current.getChars() === '' || current.getChars() === ' ');
+      leftBlink = blinking;
+      leftInverse = marked;
+      leftBg = bg;
+      if (!blinkCandidate && !inverseCandidate && !blockCandidate) continue;
+      // The previous iteration already read the left neighbor. Read the right
+      // one only at a possible marker, not throughout every colored panel.
       const right = col + 1 < term.cols ? line.getCell(col + 1, side) : null;
-      if (blinking && !leftBlink && !right?.isBlink()) {
+      if (blinkCandidate && !right?.isBlink()) {
         blinkCount += 1;
         if (blinkCount === 1) blink = { col, row };
       }
-      if (marked && !leftInverse && !right?.isInverse()) {
+      if (inverseCandidate && !right?.isInverse()) {
         inverseCount += 1;
         if (inverseCount === 1) inverse = { col, row };
       }
-      if (blocked && leftBg !== bg && (!right || bgKey(right) !== bg)) {
+      if (blockCandidate && (!right || bgKey(right) !== bg)) {
         blockCount += 1;
         if (blockCount === 1) block = { col, row };
       }
@@ -192,6 +205,12 @@ export function createTerminalIme(term: Terminal, options: {
   let anchor: ImeCell | null = null;
   let lastConfirmed: ImeCell | null = null;
   let lastAlt: boolean | null = null;
+  let drawnCache: { buffer: Terminal['buffer']['active']; cols: number; rows: number; viewport: number; cell: ImeCell | null } | null = null;
+  // Renders, focus and composition events can revisit the same buffer. Output
+  // invalidates even a cached miss; scrolling/resizing are checked at lookup.
+  const parsedSub = term.onWriteParsed(() => { drawnCache = null; });
+  // clear() emits scroll even when viewportY stays zero.
+  const scrollSub = term.onScroll(() => { drawnCache = null; });
   let applied = '';
   let frame = 0;
   const composingNow = () => txn?.state === 'composing';
@@ -222,7 +241,14 @@ export function createTerminalIme(term: Terminal, options: {
       return hardware;
     }
     // A full-screen CLI hid the hardware cursor and parks it anywhere, often 0,0.
-    const drawn = scan ? drawnCursor(term) : null;
+    let drawn: ImeCell | null = null;
+    if (scan && options.ownsInput()) {
+      if (!drawnCache || drawnCache.buffer !== buffer || drawnCache.cols !== term.cols
+        || drawnCache.rows !== term.rows || drawnCache.viewport !== buffer.viewportY) {
+        drawnCache = { buffer, cols: term.cols, rows: term.rows, viewport: buffer.viewportY, cell: drawnCursor(term) };
+      }
+      drawn = drawnCache.cell;
+    }
     if (drawn) {
       lastConfirmed = drawn;
       return drawn;
@@ -451,6 +477,8 @@ export function createTerminalIme(term: Terminal, options: {
       if (disposed) return;
       cancel();
       disposed = true;
+      parsedSub.dispose();
+      scrollSub.dispose();
       cancelAnimationFrame(frame);
       options.host.removeEventListener('compositionend', onCompositionEndData, true);
       options.host.removeEventListener('keydown', onKeydown, true);

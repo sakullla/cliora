@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import ts from 'typescript';
 
+const source = readFileSync(new URL('../../src/features/remote/directoryReceipts.ts', import.meta.url), 'utf8');
+const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
+  .replace("import { useSyncExternalStore } from 'react';", 'const useSyncExternalStore = (_subscribe, snapshot) => snapshot();')
+  .replace("import { native } from '../../lib/native';", 'const native = globalThis.__directoryReceiptNative;');
+
 let serial = 0;
 async function loadStore(native) {
   globalThis.__directoryReceiptNative = native;
-  const source = readFileSync(new URL('../../src/features/remote/directoryReceipts.ts', import.meta.url), 'utf8');
-  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
-    .replace("import { useSyncExternalStore } from 'react';", 'const useSyncExternalStore = (_subscribe, snapshot) => snapshot();')
-    .replace("import { native } from '../../lib/native';", 'const native = globalThis.__directoryReceiptNative;');
   return import(`data:text/javascript;base64,${Buffer.from(`${code}\n// store ${++serial}`).toString('base64')}`);
 }
 const target = { id: 'fixture', name: 'fixture', host: 'fixture.invalid', port: 22, user: 'fixture', updatedAt: 7 };

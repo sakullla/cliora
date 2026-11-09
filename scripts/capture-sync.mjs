@@ -1,3 +1,4 @@
+import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic WebDAV sync and backup screens for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,7 @@ const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-sync`;
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
 fs.mkdirSync(out, { recursive: true });
+const prunePrevious = previousCaptureCleanup(out, 'capture-sync-manifest.json');
 
 const now = Math.floor(Date.now() / 1000);
 const transfers = [
@@ -127,6 +129,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...seed, theme, language, sampleTransfers: transfers });
       const shot = async (label) => {
+        await settleCapture(page);
         const file = `${language}-${theme}-${width}-${label}.png`;
         await page.screenshot({ path: `${out}/${file}`, fullPage: true });
         shots.push({ name: label, scenario: name, theme, width, language, file });
@@ -136,36 +139,38 @@ for (const theme of themes) for (const width of widths) for (const language of l
       };
       await page.goto(previewUrl);
       await openSync(page, language);
-      await page.waitForTimeout(1000);
+      await page.getByRole('button', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包', exact: true }).waitFor();
+      if (seed.configured) await page.getByText('dav.jianguoyun.com', { exact: true }).first().waitFor();
+      else await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV', exact: true }).first().waitFor();
       await shot(name);
       if (width === 1360 || width === 640) {
         if (name === 'unconnected') {
           await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV' }).first().click();
-          await page.waitForTimeout(700); await shot('connect-dialog');
+          await page.getByRole('dialog').last().waitFor(); await shot('connect-dialog');
           await page.keyboard.press('Escape');
           await page.getByRole('button', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包' }).first().click();
-          await page.waitForTimeout(700); await shot('export-dialog');
+          await page.getByRole('dialog').last().waitFor(); await shot('export-dialog');
           await page.keyboard.press('Escape');
           await page.getByRole('button', { name: language === 'en' ? 'Restore from a bundle' : '从配置包恢复' }).first().click();
-          await page.waitForTimeout(700); await shot('import-dialog');
+          await page.getByRole('dialog').last().waitFor(); await shot('import-dialog');
           await page.keyboard.press('Escape');
         }
         if (name === 'attention') {
           const choose = page.getByRole('button', { name: language === 'en' ? 'Choose version' : '选择版本' });
           if (await choose.count()) {
-            await choose.first().click(); await page.waitForTimeout(700); await shot('conflict-center');
-            await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+            await choose.first().click(); await page.getByRole('dialog').last().waitFor(); await shot('conflict-center');
+            await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' });
           }
         }
         if (name === 'healthy') {
           await page.evaluate(() => { window.__sync.hang = true; });
           await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
-          await page.waitForTimeout(400); await shot('sync-running');
+          await page.getByRole('dialog', { name: language === 'en' ? 'Syncing' : '正在同步', exact: true }).waitFor(); await shot('sync-running');
           await page.evaluate(() => { window.__sync.hang = false; });
           await page.reload();
           await openSync(page, language);
           await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
-          await page.waitForTimeout(900); await shot('sync-result');
+          await page.getByRole('dialog', { name: language === 'en' ? 'Sync result' : '同步结果', exact: true }).waitFor(); await shot('sync-result');
         }
       }
     } catch (error) {
@@ -182,6 +187,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...scenarios.attention, theme, language, remoteSsh: true, sampleTransfers: transfers });
       const shot = async (label) => {
+        await settleCapture(page);
         const file = `${language}-${theme}-${width}-${label}.png`;
         await page.screenshot({ path: `${out}/${file}`, fullPage: true });
         shots.push({ name: label, scenario: 'general', theme, width, language, file });
@@ -191,12 +197,12 @@ for (const theme of themes) for (const width of widths) for (const language of l
       };
       await page.goto(previewUrl);
       await page.getByRole('navigation', { name: language === 'en' ? 'Pages' : '页面' }).getByRole('button', { name: language === 'en' ? 'Settings' : '设置', exact: true }).click();
-      await page.waitForTimeout(900);
+      await page.locator('#settings-managed').waitFor();
       await shot('settings-general');
       const hostsTab = page.getByRole('tab', { name: language === 'en' ? 'Host management' : '主机管理' });
       if (await hostsTab.count()) {
         await hostsTab.click();
-        await page.waitForTimeout(500);
+        await settleCapture(page);
         await shot('settings-hosts-empty');
       }
     } catch (error) {
@@ -221,3 +227,5 @@ const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${la
 fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,640\` 与 \`--language all|zh|en\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));
 if (failures.length) process.exitCode = 1;
+
+if (!failures.length) prunePrevious(shots.map(item => item.file));
