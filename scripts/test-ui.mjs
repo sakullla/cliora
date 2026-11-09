@@ -36,7 +36,13 @@ if (!existsSync(artifact) || statSync(artifact).mtimeMs < sourceTime) {
 // re-run, never get their assertion messages rewritten, and nothing is skipped:
 // only tests whose recorded failure text matches the environment signature below
 // are re-invoked at most once, and the retry count and category stay on stdout.
+// The Playwright JSON report records hard timeouts as 'timedOut' and tests aborted
+// by a fatal error as 'interrupted'; those are product failures too unless their
+// error text carries the environment signature, so they count toward the failure
+// set as well. The rerun result may replace the run exit code only when the whole
+// failure set is environment-class; any product failure keeps the run red.
 const ENV_CLASS = /net::ERR_NO_BUFFER_SPACE/;
+const FAILURE_STATUSES = new Set(['failed', 'timedOut', 'interrupted']);
 function reportFile(name) {
   return path.join(mkdtempSync(path.join(tmpdir(), 'cliora-test-ui-')), `${name}.json`);
 }
@@ -49,7 +55,7 @@ function failedTests(report) {
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
         const last = (test.results ?? []).at(-1);
-        if (!last || last.status !== 'failed') continue;
+        if (!last || !FAILURE_STATUSES.has(last.status)) continue;
         const text = (last.errors ?? []).map(error => typeof error === 'string' ? error : `${error?.message ?? ''}\n${error?.stack ?? ''}`).join('\n');
         const line = test.location?.line ?? spec.line ?? 1;
         out.push({ selector: `${rootDir}/${spec.file}:${line}`, env: ENV_CLASS.test(text) });
@@ -66,6 +72,20 @@ function readReport(file) {
   } catch {
     return null;
   }
+}
+// Playwright ORs positional file/line filters, so re-passing the caller's selectors on the
+// rerun would also re-run product failures. Keep flags, drop positional args, and select
+// exactly the environment-class failures instead.
+function flagArgs(args) {
+  const valueFlags = new Set(['--grep', '--grep-invert', '--project', '--config', '--timeout', '--workers']);
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg.startsWith('-')) continue;
+    out.push(arg);
+    if (valueFlags.has(arg) && i + 1 < args.length && !args[i + 1].startsWith('-')) out.push(args[++i]);
+  }
+  return out;
 }
 
 const userArgs = process.argv.slice(2);
@@ -85,7 +105,7 @@ if (!useReporter) {
   if (envFailures.length) {
     console.log(`[env-retry] category=net::ERR_NO_BUFFER_SPACE count=${envFailures.length} product_failures=${productFailures} bounded_reruns=1 tests=${envFailures.map(item => item.selector).join(', ')}`);
     const second = reportFile('pass2');
-    const rerun = await spawnRun(['node_modules/@playwright/test/cli.js', 'test', ...userArgs, '--reporter=list,json', ...envFailures.map(item => item.selector)], { PLAYWRIGHT_JSON_OUTPUT_NAME: second });
+    const rerun = await spawnRun(['node_modules/@playwright/test/cli.js', 'test', ...flagArgs(userArgs), '--reporter=list,json', ...envFailures.map(item => item.selector)], { PLAYWRIGHT_JSON_OUTPUT_NAME: second });
     const rerunReport = readReport(second);
     const rerunRan = (rerunReport?.stats?.expected ?? 0) + (rerunReport?.stats?.unexpected ?? 0) + (rerunReport?.stats?.flaky ?? 0);
     if (rerunRan < envFailures.length) {
