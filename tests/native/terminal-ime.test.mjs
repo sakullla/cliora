@@ -312,8 +312,8 @@ test('a hidden TUI cursor without a drawn marker keeps the last confirmed input 
   core.coreService.isCursorHidden = true;
   cursor.cursorX = 0;
   cursor.cursorY = 0;
-  term.buffer.active.getNullCell = () => ({});
-  term.buffer.active.getLine = () => ({ getCell: () => ({ isBlink: () => 0, isInverse: () => 0 }) });
+  term.buffer.active.getNullCell = () => ({ getBgColorMode: () => 0, getBgColor: () => 0 });
+  term.buffer.active.getLine = () => ({ getCell: () => ({ isBlink: () => 0, isInverse: () => 0, getBgColorMode: () => 0, getBgColor: () => 0 }) });
   ime.refresh();
   assert.deepEqual([textarea.style.left, textarea.style.top], ['32px', '36px']);
 });

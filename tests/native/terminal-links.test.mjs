@@ -53,3 +53,28 @@ test('prose with slashes, slash commands and tech names stays plain text', () =>
   assert.deepEqual(findTerminalLinks(cjk).map(({ value }) => value), ['/C:/Users/me/project/README.md:204', 'src/audio/CoreAudioOutput.kt:83']);
   assert.deepEqual(findTerminalLinks('see packages/player/android').map(({ value }) => value), ['packages/player/android']);
 });
+
+test('wrapped rows in full-width brackets and Chinese prose hand the native layer the exact path', () => {
+  // Reproduction of the 2026-11-09 user screenshot: a POSIX absolute path wrapped after
+  // `docs/` inside full-width brackets with Chinese context. Wrapped display rows rejoin
+  // at the wrap point with no extra character, matching the logical-line assembly that
+  // SessionTerminal feeds to findTerminalLinks; the value below is what openWorkbenchPath
+  // would pass to the native command.
+  const expected = '/Users/yanggeng/project/e6yun3.0/e6-ms-tms-prealarm/docs/inoutarea-kafka.md';
+  const rows = [
+    '预报警 Kafka 收发区域分析完成（/Users/yanggeng/project/e6yun3.0/e6-ms-tms-prealarm/docs/',
+    'inoutarea-kafka.md），详见上述文档。',
+  ];
+  const joined = rows.join('');
+  assert.ok(!joined.includes('\n') && !joined.includes('\r'));
+  const matches = findTerminalLinks(joined);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].kind, 'path');
+  assert.equal(matches[0].value, expected);
+  assert.equal(matches[0].value.length, expected.length);
+  assert.equal(joined.slice(matches[0].start, matches[0].end), expected);
+  // The same path unwrapped on one row must yield the identical value.
+  const single = findTerminalLinks('分析完成（' + expected + '），详见上述文档。');
+  assert.equal(single.length, 1);
+  assert.equal(single[0].value, expected);
+});
