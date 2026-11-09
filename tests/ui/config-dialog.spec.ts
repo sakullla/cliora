@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { installConfigurationProtocol, setupConfigurationWorkspace } from './configuration-workspace-fixture';
+import { installConfigurationProtocol, installConfigurationWorkspace, setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 test('new configuration dialog has one save action', async ({ page }) => {
   await page.addInitScript(() => {
@@ -380,6 +380,79 @@ test('a long configuration list scrolls with the page and can be searched', asyn
   await group.getByRole('button', { name: '使用' }).click();
   await expect(group.getByText('正在使用')).toBeVisible();
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`configuration search stays reachable after deletion reduces the list below its threshold (${theme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 640, height: 900 });
+    await page.emulateMedia({ colorScheme: theme });
+    await installConfigurationWorkspace(page);
+    await page.addInitScript(() => {
+      const fixture = (window as any).workspaceFixture;
+      const original = fixture.profiles[0];
+      fixture.profiles = Array.from({ length: 7 }, (_, index) => ({
+        ...original, id: `filter-${index}`, name: index < 2 ? `工作配置 ${index}` : `其他配置 ${index}`,
+      }));
+      fixture.binding = null;
+      const previous = (window as any).__TAURI_INTERNALS__.invoke;
+      (window as any).__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+        if (command === 'delete_native_profile') {
+          fixture.profiles = fixture.profiles.filter((profile: any) => profile.id !== args.id);
+          return null;
+        }
+        if (command === 'list_projects') return [{ id: 'demo', name: '示例项目', path: 'C:/Projects/demo', available: true, preferredTool: 'kimi_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+        return previous(command, args);
+      };
+    });
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+    const group = page.getByRole('list', { name: '配置项' });
+    const search = page.getByLabel('搜索配置', { exact: true });
+    await search.fill('工作');
+    await expect(group.getByRole('listitem')).toHaveCount(2);
+    await page.getByRole('button', { name: '配置范围', exact: true }).click();
+    await page.getByRole('option', { name: /示例项目/ }).click();
+    await expect(search).toHaveValue('');
+    await expect(group.getByRole('listitem')).toHaveCount(7);
+    await search.fill('工作');
+    await group.getByRole('button', { name: '工作配置 0 更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除配置', exact: true }).click();
+    await page.getByRole('dialog', { name: '删除配置', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
+    await expect(group.getByRole('listitem')).toHaveCount(2);
+    await expect(search).toHaveValue('工作');
+
+    await group.getByRole('button', { name: '工作配置 0 更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除配置', exact: true }).click();
+    await page.getByRole('dialog', { name: '删除配置', exact: true }).getByRole('button', { name: '删除', exact: true }).click();
+    await expect(group.getByRole('listitem')).toHaveCount(1);
+    await expect(search).toBeVisible();
+    await expect(search).toHaveValue('工作');
+    await expect(page.getByText('1 / 6', { exact: true })).toBeVisible();
+    const clear = page.getByRole('button', { name: '清空搜索', exact: true });
+    await expect(clear).toBeVisible();
+    const usable = await clear.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.right <= innerWidth && element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+    });
+    expect(usable).toBe(true);
+    await clear.click();
+    await expect(group.getByRole('listitem')).toHaveCount(6);
+    await expect(search).toBeVisible();
+    await expect(search).toHaveValue('');
+
+    await search.fill('不存在的配置');
+    await expect(group.getByRole('listitem')).toHaveCount(0);
+    await expect(page.getByText('0 / 6', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '清除搜索', exact: true }).click();
+    await expect(group.getByRole('listitem')).toHaveCount(6);
+    await expect(search).toHaveValue('');
+
+    await page.getByRole('button', { name: '配置范围', exact: true }).click();
+    await page.getByRole('option', { name: '全局配置', exact: true }).click();
+    await expect(group.getByRole('listitem')).toHaveCount(6);
+    await expect(search).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  });
+}
 
 const connectionTools = [
   { id: 'pi', name: 'Pi' },

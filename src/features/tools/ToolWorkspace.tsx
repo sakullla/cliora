@@ -111,6 +111,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   // A failed "use this content" must be visible in the dialog; page toasts sit behind it.
   const [compareError, setCompareError] = useState('');
   const [filter, setFilter] = useState('');
+  // Once a query outlives the long-list threshold (e.g. after a deletion), keep the field until the context changes.
+  const [filterPinned, setFilterPinned] = useState(false);
   const [customPath, setCustomPath] = useState('');
   const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
   const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
@@ -237,7 +239,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
   }, [remoteTargetId, descriptor, toolId, native]);
-  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
+  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setFilterPinned(false); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
   useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -486,6 +488,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const liveText = liveCopy[live.state];
   const modelOf = (profile: RegisteredProfile) => workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
   const query = filter.trim().toLocaleLowerCase();
+  const longProfileList = (workspace?.profiles.length ?? 0) > 6;
+  if (workspace && filter && !longProfileList && !filterPinned) setFilterPinned(true);
+  const showProfileFilter = longProfileList || filter !== '' || filterPinned;
   const matches = (profile: RegisteredProfile) => !query || [profile.name, modelOf(profile), host(profile.connection?.baseUrl)].some(value => value?.toLocaleLowerCase().includes(query));
   const profileGroups = (workspace ? [{ id: 'subscription', label: t('tools.workspace.groupSubscription'), profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: t('tools.workspace.groupOther'), profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }] : [])
     .map(group => ({ ...group, visible: group.profiles.filter(matches) })).filter(group => group.visible.length);
@@ -557,7 +562,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         </div>
         {workspace.probe.nativeWrites.state !== 'supported' && <p className={styles.boardNote}><Icon name="lock" size={14} />{t('tools.workspace.applyBlocked')}{workspace.probe.nativeWrites.reason ? ` · ${workspace.probe.nativeWrites.reason}` : ''}</p>}
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><Button variant="ghost" size="sm" onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</Button></div>}
-        {workspace.profiles.length > 6 && <label className={styles.profileFilter}><SearchField type="search" label={t('home.tools.searchProfile')} pageSearch title={searchShortcutHint()} placeholder={t('tools.workspace.searchPlaceholder')} value={filter} onChange={setFilter} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
+        {showProfileFilter && <label className={styles.profileFilter}><SearchField type="search" label={t('home.tools.searchProfile')} pageSearch title={searchShortcutHint()} placeholder={t('tools.workspace.searchPlaceholder')} value={filter} onChange={setFilter} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
         {!workspace.profiles.length && <div className={styles.profileEmpty}><strong>{t('tools.workspace.emptyTitle')}</strong><span>{t('tools.workspace.emptyDetail')}{currentFile ? t('tools.workspace.emptyCurrent') : ''}</span><Button size="sm" icon={<Icon name="plus" size={14} />} onClick={() => void createProfile()}>{t('tools.workspace.emptyCreate')}</Button></div>}
         {query && !profileGroups.length && <div className={styles.profileEmpty}><span>{t('tools.workspace.noMatch', { query: filter.trim() })}</span><Button variant="ghost" size="sm" onClick={() => setFilter('')}>{t('tools.workspace.clearSearch')}</Button></div>}
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
