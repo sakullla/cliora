@@ -70,16 +70,23 @@ export function imePlacement(at: ImeCell, grid: { cols: number; rows: number }, 
   return { left, top, width: boxWidth, height: cell.height };
 }
 
-/** The input cell the TUI drew itself: one isolated blinking cell, else one isolated inverse cell. */
+/** Background identity of a cell, comparable across the public xterm color modes. */
+type BgCell = { getBgColorMode(): number; getBgColor(): number };
+const bgKey = (item: BgCell) => `${item.getBgColorMode()}:${item.getBgColor()}`;
+
+/** The input cell the TUI drew itself: one isolated blinking cell, else one isolated inverse cell, else one isolated background block. */
 function drawnCursor(term: Terminal): ImeCell | null {
   const buffer = term.buffer.active;
   const cell = buffer.getNullCell();
   const side = buffer.getNullCell();
+  const defaultBgKey = bgKey(cell);
   let inverse: ImeCell | null = null;
   let blink: ImeCell | null = null;
+  let block: ImeCell | null = null;
   let inverseCount = 0;
   let blinkCount = 0;
-  for (let row = term.rows - 1; row >= 0 && (inverseCount < 2 || blinkCount < 2); row -= 1) {
+  let blockCount = 0;
+  for (let row = term.rows - 1; row >= 0 && (inverseCount < 2 || blinkCount < 2 || blockCount < 2); row -= 1) {
     const line = buffer.getLine(buffer.viewportY + row);
     if (!line) continue;
     for (let col = 0; col < term.cols; col += 1) {
@@ -87,10 +94,13 @@ function drawnCursor(term: Terminal): ImeCell | null {
       if (!current) continue;
       const blinking = current.isBlink() !== 0;
       const marked = current.isInverse() !== 0;
-      if (!blinking && !marked) continue;
+      const bg = bgKey(current);
+      const blocked = bg !== defaultBgKey;
+      if (!blinking && !marked && !blocked) continue;
       const left = col > 0 ? line.getCell(col - 1, side) : null;
       const leftBlink = !!left?.isBlink();
       const leftInverse = !!left?.isInverse();
+      const leftBg = left ? bgKey(left) : null;
       const right = col + 1 < term.cols ? line.getCell(col + 1, side) : null;
       if (blinking && !leftBlink && !right?.isBlink()) {
         blinkCount += 1;
@@ -100,10 +110,15 @@ function drawnCursor(term: Terminal): ImeCell | null {
         inverseCount += 1;
         if (inverseCount === 1) inverse = { col, row };
       }
+      if (blocked && leftBg !== bg && (!right || bgKey(right) !== bg)) {
+        blockCount += 1;
+        if (blockCount === 1) block = { col, row };
+      }
     }
   }
   if (blinkCount === 1) return blink;
   if (inverseCount === 1) return inverse;
+  if (blockCount === 1) return block;
   return null;
 }
 
@@ -176,6 +191,7 @@ export function createTerminalIme(term: Terminal, options: {
   // ---------- placement ----------
   let anchor: ImeCell | null = null;
   let lastConfirmed: ImeCell | null = null;
+  let lastAlt: boolean | null = null;
   let applied = '';
   let frame = 0;
   const composingNow = () => txn?.state === 'composing';
@@ -194,6 +210,13 @@ export function createTerminalIme(term: Terminal, options: {
       col: clampInt(buffer.cursorX, 0, Math.max(0, term.cols - 1)),
       row: clampInt(buffer.baseY + buffer.cursorY - buffer.viewportY, 0, Math.max(0, term.rows - 1)),
     };
+    // Cells confirmed in one buffer say nothing about the other: a TUI entering or
+    // leaving the alternate screen invalidates the remembered input point.
+    const alt = buffer.type === 'alternate';
+    if (alt !== lastAlt) {
+      lastConfirmed = null;
+      lastAlt = alt;
+    }
     if (!core.coreService?.isCursorHidden) {
       lastConfirmed = hardware;
       return hardware;
@@ -204,8 +227,10 @@ export function createTerminalIme(term: Terminal, options: {
       lastConfirmed = drawn;
       return drawn;
     }
-    // No unique drawn cursor: keep the last input point this session confirmed.
-    return lastConfirmed ?? hardware;
+    if (lastConfirmed) return lastConfirmed;
+    // Nothing identifiable: the prompt lives at the bottom-left of the viewport.
+    // The parked hidden cursor must never decide the anchor.
+    return { col: 0, row: Math.max(0, term.rows - 1) };
   };
 
   const apply = (scan: boolean) => {

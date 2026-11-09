@@ -127,6 +127,81 @@ test.describe('product WebGL input integration', () => {
     expect(anchor.left).toBeGreaterThan(30);
   });
 
+  // Reproduces evidence/user-reports/2026-11-09-ime-anchor-top-left.png: a full-screen TUI
+  // hides the hardware cursor, parks it at 0,0, and draws its caret as a background block.
+  test('hidden hardware cursor with a drawn background-block caret keeps the candidate on the caret cell', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    await page.evaluate(async () => {
+      (window as unknown as { __output: (text: string) => void }).__output(
+        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    });
+    const measure = async () => input.evaluate(node => {
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      const screen = textarea.closest('.xterm')?.querySelector('.xterm-screen');
+      const screenRect = screen?.getBoundingClientRect();
+      const placement = {
+        top: Number.parseFloat(textarea.style.top),
+        left: Number.parseFloat(textarea.style.left),
+        screenHeight: screenRect?.height ?? 0,
+      };
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { data: '', bubbles: true }));
+      return placement;
+    });
+    const anchor = await measure();
+    // The drawn block at row 8, column 10 — not the parked hardware cursor at 0,0.
+    expect(anchor.top).toBeGreaterThan(40);
+    expect(anchor.top).toBeLessThan(anchor.screenHeight);
+    expect(anchor.left).toBeGreaterThan(30);
+    // Once the block is gone, the last confirmed input point is kept, not the window origin.
+    await page.evaluate(async () => {
+      (window as unknown as { __output: (text: string) => void }).__output('\x1b[2J\x1b[H\x1b[3;1Hplain output only');
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    });
+    expect(await measure()).toEqual(anchor);
+  });
+
+  test('hidden cursor with no drawn caret anchors the candidate in the bottom-left prompt area, never the window origin', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const input = page.locator('.xterm-helper-textarea:visible');
+    await input.focus();
+    await page.evaluate(async () => {
+      (window as unknown as { __output: (text: string) => void }).__output(
+        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    });
+    const anchor = await input.evaluate(node => {
+      const textarea = node as HTMLTextAreaElement;
+      textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      const screen = textarea.closest('.xterm')?.querySelector('.xterm-screen');
+      const screenRect = screen?.getBoundingClientRect();
+      const placement = {
+        top: Number.parseFloat(textarea.style.top),
+        left: Number.parseFloat(textarea.style.left),
+        screenHeight: screenRect?.height ?? 0,
+      };
+      textarea.dispatchEvent(new CompositionEvent('compositionend', { data: '', bubbles: true }));
+      return placement;
+    });
+    expect(anchor.screenHeight).toBeGreaterThan(80);
+    // The prompt lives at the bottom-left of the viewport; the parked hardware cursor does not.
+    expect(anchor.top).toBeGreaterThan(anchor.screenHeight / 2);
+    expect(anchor.top).toBeLessThan(anchor.screenHeight);
+    expect(anchor.left).toBeLessThan(20);
+  });
+
   // The two orders below sent 升级升级 before the transaction rewrite (evidence/ime-before.json).
   // 30 ms only moves an event to a later task; it is a test interval, not a product threshold.
   test('candidate commits that span event turns send each confirmed word exactly once', async ({ page }) => {
