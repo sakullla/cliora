@@ -40,7 +40,9 @@
 .contextLine > .badges { display: inline-flex; flex: none; gap: var(--space-1); overflow: visible; }
 .contextTool { flex: 0 1 auto; }
 .contextHost { flex: 0 100 auto; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
-.contextProfile { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
+.contextProfile { color: var(--text-2); font-size: var(--fs-caption); }
+.contextProfile[data-profile-name="unavailable"] { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
+.noMatch > p { margin: 0 0 var(--space-2); }
 .cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .remoteProject { border-color: var(--accent-line); }

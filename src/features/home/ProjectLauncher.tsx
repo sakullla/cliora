@@ -54,7 +54,7 @@ function distinctPaths(paths: string[]): Map<string, string> {
   return labels;
 }
 
-export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   // Recent work is identified with real project data: the backend returns projects by last_opened.
@@ -74,7 +74,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   const listFailedRef = useRef(false);
   // Counts reload attempts that failed again, so a repeated native message still reads as new.
   const [reloadFailures, setReloadFailures] = useState(0);
-  const [projectQuery, setProjectQuery] = useState('');
+  const [profileNames, setProfileNames] = useState<Record<string, Record<string, string> | null>>({});
   const [names, setNames] = useState<Record<string, string>>({});
   const [globalTool, setGlobalTool] = useState('');
   const [sessionId, setSessionId] = useState('');
@@ -242,6 +242,24 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
   }, []);
 
   const managed = tools.filter((tool) => !!tool.id);
+  // Profile names are tool-wide DB metadata; project IDs determine the actual binding.
+  // The summary read is shared with the managed-tool list, rather than probing every card.
+  const profileTools = remoteTargetId === 'local' ? [...new Set(projects.flatMap(project => {
+    const id = project.preferredTool;
+    return id && tools.some(tool => tool.id === id) && (project.selectedProfiles[id] || project.appliedProfiles[id]) ? [id] : [];
+  }))].sort().join('\n') : '';
+  useEffect(() => {
+    let active = true;
+    const ids = profileTools.split('\n').filter(Boolean);
+    setProfileNames(old => Object.fromEntries(Object.entries(old).filter(([id]) => ids.includes(id))));
+    for (const id of ids) {
+      void native.getRegisteredToolWorkspace(id, 'global', undefined, true).then(workspace => {
+        if (!Array.isArray(workspace?.profiles)) throw new Error('Profile metadata unavailable');
+        if (active) setProfileNames(old => ({ ...old, [id]: Object.fromEntries(workspace.profiles.map(profile => [profile.id, profile.name])) }));
+      }).catch(() => { if (active) setProfileNames(old => ({ ...old, [id]: null })); });
+    }
+    return () => { active = false; };
+  }, [profileTools, projects]);
   const defaultTool = managed.some((tool) => tool.id === globalTool) ? globalTool : managed[0]?.id ?? '';
   const resumable = managed.filter((tool) => tool.resume?.state === 'available' && tool.history?.state !== 'unsupported');
   const unindexedResume = managed.filter((tool) => tool.resume?.state === 'available' && tool.history?.state === 'unsupported');
@@ -471,7 +489,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
     {remoteFailed && <div className={styles.error} role="alert" aria-busy={remoteLoading || undefined} data-remote-read={remoteRead.loaded ? 'stale' : 'failed'}><span className={styles.errorText}><strong className={styles.errorTitle}>{remoteRead.loaded ? t('home.remote.refreshFailed', { host: remoteHostLabel }) : t('home.remote.readFailed', { host: remoteHostLabel })}</strong> {remoteRead.error}</span>{remoteRead.failures > 0 && !remoteLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}<Button size="sm" variant="ghost" className={styles.errorAction} loading={remoteLoading} disabled={remoteLoading} onClick={() => void loadRemote(true)}>{t('home.remote.retry')}</Button></div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
     {totalProjects > 0 && <p className={styles.sectionHint}>{t('home.continue.hint')}</p>}
-    {totalProjects > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
+    {(totalProjects > 4 || projectQuery) && <SearchField className={styles.projectSearch} pageSearch label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {scopeLoading ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
     {visibleProjects.map((project) => {
@@ -484,10 +502,13 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       const pasteExpanded = project.id in pasteOpen ? !!pasteOpen[project.id] : repair?.projectId === project.id;
       const used = lastUsed(project.lastOpened);
       const profileId = project.selectedProfiles[toolId] ?? project.appliedProfiles[toolId];
+      const profileName = profileId ? profileNames[toolId]?.[profileId] : undefined;
+      const profileHint = profileName ? t('home.launcher.profileIdentity', { name: profileName, id: profileId })
+        : t(profileNames[toolId] === undefined ? 'home.launcher.profileNameLoading' : 'home.launcher.profileNameUnavailable', { id: profileId });
       return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
         <div className={styles.identity}>
           <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div>
-          <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileId}>{t('home.launcher.currentProfile', { id: profileId })}</span>}</div>
+          <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileHint} aria-label={profileHint} data-profile-name={profileName ? 'resolved' : 'unavailable'}>{profileName ? t('home.launcher.currentProfile', { id: profileName }) : t('home.launcher.profileNameFallback', { id: profileId })}</span>}</div>
           <div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? pathLabels.get(project.path) ?? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div>
         </div>
         <div className={styles.controls}>
@@ -563,7 +584,7 @@ export function ProjectLauncher({ tools, repair, spotlight, remoteSshEnabled = f
       })}
     </div>}
     {/* A failed read keeps its own error band above; only a successful empty read offers the empty state. */}
-    </> : projectQuery.trim() ? <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p>
+    </> : projectQuery.trim() ? <div className={styles.noMatch}><p>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setProjectQuery('')}>{t('common.search.clear')}</Button></div>
     : scopeReadFailed ? null
     : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t('home.continue.emptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>

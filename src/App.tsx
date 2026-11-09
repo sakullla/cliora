@@ -43,6 +43,7 @@ import { native, nativeAvailable } from './lib/native';
 import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
+import { usePageScroll } from './lib/uiNavigation';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
@@ -190,6 +191,13 @@ export default function App() {
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteTargetId, setRemoteTargetId] = useState(() => { try { return localStorage.getItem('cliora:remote-target') ?? 'local'; } catch { return 'local'; } });
   const remoteIdentity = useRemoteIdentity(remoteTargetId);
+  const [projectQueries, setProjectQueries] = useState<Record<string, string>>({});
+  const activeHost = useRef(remoteTargetId);
+  activeHost.current = remoteTargetId;
+  const activeIdentity = useRef(remoteIdentity);
+  activeIdentity.current = remoteIdentity;
+  const availableHosts = useRef(remoteTargets);
+  availableHosts.current = remoteTargets;
   const writeRecoveryNeeded = useWriteRecoveryNeeded(remoteTargetId);
   const writeRecoveryFallback = nativeAvailable && bootstrap.preferences.remote_ssh_enabled && page !== 'sessions' && writeRecoveryNeeded;
   const activePage = useRef<Page>(page);
@@ -204,13 +212,20 @@ export default function App() {
     if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
   }, []);
   const [workspaceDiscard, setWorkspaceDiscard] = useState(0);
-  const canLeave = useCallback(async (_next: Page) => {
+  const canLeave = useCallback(async (next: Page, valid: () => boolean = () => true, changingContext = false) => {
+    if (!changingContext && next === activePage.current) return valid();
     if (!workspaceDirty.current) return true;
-    const accepted = await confirmAction(t('common.app.leaveDirtyMessage'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
-    if (accepted) setWorkspaceDiscard((value) => value + 1);
-    return accepted;
+    const accepted = await confirmAction(t('common.app.leaveDirtyMessage'), valid, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
+    if (!accepted || !valid()) return false;
+    workspaceDirty.current = false;
+    setWorkspaceDiscard((value) => value + 1);
+    return true;
   }, [t]);
   const section = page === 'settings' ? `${page}:${settingsTab}` : page;
+  const [scrollIntent, setScrollIntent] = useState(0);
+  const pageScroll = usePageScroll(`${section}:${remoteIdentity}`, scrollIntent);
+  const transitionPending = useRef(false);
+  const transitionRef = useRef<(next: Page, host?: string) => Promise<boolean>>(async () => false);
   useEffect(() => { setVisited((old) => old.has(section) ? old : new Set([...old, section])); }, [section]);
   const hasVisited = (key: string) => section === key || visited.has(key);
 
@@ -246,26 +261,23 @@ export default function App() {
     if (!bootstrap.preferences.remote_ssh_enabled && settingsTab === 'hosts') setSettingsTab('general');
   }, [bootstrap.preferences.remote_ssh_enabled, settingsTab]);
 
-  function openHostManagement() {
-    setSettingsTab('hosts');
-    void go('settings');
+  async function openHostManagement() {
+    if (await go('settings')) setSettingsTab('hosts');
   }
 
-  function changeRemoteTarget(value: string) {
+  async function changeRemoteTarget(value: string) {
     if (value === '__manage') {
-      openHostManagement();
+      await openHostManagement();
       return;
     }
-    setRemoteTargetId(value);
-    try { localStorage.setItem('cliora:remote-target', value); } catch { /* optional preference */ }
-    window.dispatchEvent(new CustomEvent('cliora:remote-target-changed', { detail: value }));
+    await transitionRef.current(activePage.current, value);
   }
 
   useEffect(() => {
     const onRemoteLaunch = (event: Event) => {
       const detail = (event as CustomEvent<Omit<RemoteWorkbenchIntent, 'token'>>).detail;
-      if (detail?.targetId) changeRemoteTarget(detail.targetId);
-      void go('sessions').then(allowed => {
+      if (!detail?.targetId) return;
+      void transitionRef.current('sessions', detail.targetId).then(allowed => {
         if (allowed) setRemoteWorkbenchIntent(previous => ({ ...detail, token: (previous?.token ?? 0) + 1 }));
       });
     };
@@ -309,11 +321,12 @@ export default function App() {
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
       if (!active || !['home', 'connections', 'settings'].includes(event.payload.page)) return;
-      void canLeave(event.payload.page).then((allowed) => {
+      void transitionRef.current(event.payload.page).then((allowed) => {
         if (!active || !allowed) return;
+        pageScroll.cancel();
+        setScrollIntent(value => value + 1);
         setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
         if (event.payload.page === 'settings') setSettingsTab('general');
-        setPage(event.payload.page);
       });
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
@@ -558,13 +571,39 @@ export default function App() {
   }, [title[0], brandLatin]);
 
   async function go(next: Page) {
-    if (!await canLeave(next)) return false;
-    setPage(next);
-    if (loaded) setError(null);
-    document.querySelector('main')?.scrollTo({ top: 0 });
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }));
-    return true;
+    return transition(next);
   }
+  async function transition(next: Page, host = activeHost.current) {
+    if (transitionPending.current) return false;
+    const previousPage = activePage.current;
+    const previousHost = activeHost.current;
+    if (next === previousPage && host === previousHost) return true;
+    const sourceIdentity = activeIdentity.current;
+    const destination = host === 'local' ? null : availableHosts.current.find(target => target.id === host && target.enabled);
+    if (host !== 'local' && !destination) return false;
+    const destinationIdentity = destination ? JSON.stringify(destination) : '';
+    const valid = () => activePage.current === previousPage && activeHost.current === previousHost
+      && activeIdentity.current === sourceIdentity
+      && (host === 'local' || availableHosts.current.some(target => target.id === host && target.enabled && JSON.stringify(target) === destinationIdentity));
+    transitionPending.current = true;
+    try {
+      if (!await canLeave(next, valid, host !== previousHost) || !valid()) return false;
+      pageScroll.save();
+      activePage.current = next;
+      setPage(next);
+      if (next !== previousPage || host !== previousHost) setSpotlight(null);
+      if (host !== previousHost) {
+        activeHost.current = host;
+        setRemoteTargetId(host);
+        try { localStorage.setItem('cliora:remote-target', host); } catch { /* optional preference */ }
+        window.dispatchEvent(new CustomEvent('cliora:remote-target-changed', { detail: host }));
+      }
+      if (loaded) setError(null);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }));
+      return true;
+    } finally { transitionPending.current = false; }
+  }
+  transitionRef.current = transition;
   goRef.current = go;
   const canStartSession = nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop');
   function startNewSession() {
@@ -582,11 +621,11 @@ export default function App() {
   }
 
   async function revealProject(id: string) {
-    if (await go('home')) setSpotlight({ target: 'project', id, token: Date.now() });
+    if (await go('home')) { pageScroll.cancel(); setScrollIntent(value => value + 1); setSpotlight({ target: 'project', id, token: Date.now() }); }
   }
 
   async function revealLibraryItem(kind: LibraryKind, id: string) {
-    if (await go('library')) setSpotlight({ target: 'library', kind, id, token: Date.now() });
+    if (await go('library')) { pageScroll.cancel(); setScrollIntent(value => value + 1); setSpotlight({ target: 'library', kind, id, token: Date.now() }); }
   }
 
   async function openMcpLibrary(definitionId: string) {
@@ -892,7 +931,7 @@ export default function App() {
           onClose={closeOnboarding}
         />}
         {page === 'home' && <div className="home-band">
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
             <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>
