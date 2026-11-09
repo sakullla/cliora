@@ -54,6 +54,12 @@ function distinctPaths(paths: string[]): Map<string, string> {
   return labels;
 }
 
+/** The home search's rule for local projects; an empty query keeps every project. */
+function projectMatches(project: Project, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  return !needle || `${project.name} ${project.path ?? ''}`.toLowerCase().includes(needle);
+}
+
 export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
@@ -105,6 +111,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const editToolSelect = useRef<HTMLButtonElement>(null);
   const repairCard = useRef<HTMLElement>(null);
   const focusedRepair = useRef(0);
+  const revealedRepair = useRef(0);
   const latestProjects = useRef(projects); latestProjects.current = projects;
   const mounted = useRef(true);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,13 +128,21 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   function begin(id: string) { setBusy(id); setError(''); setFeedback(''); setDialogError(''); setDialogFeedback(''); }
 
   useEffect(() => {
-    if (!repair?.projectId || focusedRepair.current === repair.sequence) return;
+    if (!repair?.projectId || focusedRepair.current === repair.sequence || revealedRepair.current === repair.sequence) return;
     const project = projects.find((item) => item.id === repair.projectId);
     if (!project) return;
+    // An explicit repair outranks the restored search: a query that hides the target gives way,
+    // and the effect continues once the cleared list renders the card.
+    if (!projectMatches(project, projectQuery) && remoteTargetId === 'local') {
+      setProjectQuery('');
+      return;
+    }
+    // Opened once per request; later searches and closes belong to the user again.
+    revealedRepair.current = repair.sequence;
     // Repair now lands in the project editor, where tool, directory and model share one context.
     setEditingId(project.id);
     repairCard.current?.scrollIntoView({ block: 'center' });
-  }, [repair?.sequence, projects]);
+  }, [repair?.sequence, projects, projectQuery, remoteTargetId]);
   useLayoutEffect(() => {
     if (!repair?.projectId || editingId !== repair.projectId || focusedRepair.current === repair.sequence) return;
     const project = projects.find((item) => item.id === repair.projectId);
@@ -469,7 +484,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const projectNeedle = projectQuery.trim().toLowerCase();
   const scopedProjects = remoteTargetId === 'local' ? projects : [];
   const scopedRemoteProjects = remoteTargetId === 'local' ? [] : remoteProjects.filter((project) => project.targetId === remoteTargetId);
-  const visibleProjects = projectNeedle ? scopedProjects.filter((project) => `${project.name} ${project.path ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedProjects;
+  const visibleProjects = projectNeedle ? scopedProjects.filter((project) => projectMatches(project, projectNeedle)) : scopedProjects;
   const visibleRemoteProjects = projectNeedle ? scopedRemoteProjects.filter((project) => `${project.name} ${project.path} ${remoteTargets.find((target) => target.id === project.targetId)?.host ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedRemoteProjects;
   const totalProjects = scopedProjects.length + scopedRemoteProjects.length;
   const remoteScope = remoteTargetId !== 'local';

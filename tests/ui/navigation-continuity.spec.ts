@@ -13,10 +13,17 @@ async function install(page: Page, options: InstallOptions = {}) {
       modelOverrides: {}, selectedProfiles: { codex: 'existing' }, appliedProfiles: { codex: 'existing' },
     }));
     const hosts = ['a', 'b'].map(id => ({ id: `remote-${id}`, name: `开发主机 ${id}`, host: `host-${id}.example.test`, user: 'dev', port: 22, enabled: true, authMethod: 'key', createdAt: 1, updatedAt: 1 }));
-    const state = app.navigationFixture = { projects, hosts, nameReads: 0, hostReads: 0, hostChanges: [] as string[], intents: [] as unknown[], projectDelay: false, releaseProjects: null as (() => void) | null, nameHold: false as false | 'stale' | 'current', heldNames: [] as Array<() => void> };
+    // Native events reach the app through transformCallback; tests emit them with `emit`.
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const handlers = new Map<string, number[]>();
+    let callbackId = 0;
+    app.__TAURI_INTERNALS__.transformCallback = (callback: (event: unknown) => void) => { callbacks.set(++callbackId, callback); return callbackId; };
+    app.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    const state = app.navigationFixture = { emit: (event: string, payload: unknown) => (handlers.get(event) ?? []).forEach(id => callbacks.get(id)?.({ event, id: 1, payload })), projects, hosts, nameReads: 0, hostReads: 0, hostChanges: [] as string[], intents: [] as unknown[], projectDelay: false, releaseProjects: null as (() => void) | null, nameHold: false as false | 'stale' | 'current', heldNames: [] as Array<() => void> };
     window.addEventListener('cliora:remote-target-changed', (event: any) => state.hostChanges.push(event.detail));
     window.addEventListener('cliora:open-remote-session', (event: any) => state.intents.push(event.detail));
     app.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'plugin:event|listen') { handlers.set(args.event, [...(handlers.get(args.event) ?? []), args.handler]); return args.handler; }
       if (command === 'get_bootstrap') {
         const result = await invoke(command, args);
         result.preferences.remote_ssh_enabled = true;
@@ -232,6 +239,35 @@ test('a command-palette project reveal overrides the saved home scroll', async (
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   expect(await inView()).toBe(true);
   expect(await main.evaluate(el => el.scrollTop)).toBeLessThan(saved);
+});
+
+test('a tray repair for a project hidden by the saved home search opens its editor', async ({ page }) => {
+  await install(page);
+  await search(page).fill('api');
+  await expect(page.locator('[data-project-id]')).toHaveCount(2);
+  await nav(page, '资料库').click();
+  const repair = (projectId: string) => page.evaluate(projectId => (window as any).navigationFixture.emit('cliora:tray-repair', { page: 'home', toolId: 'codex', scope: 'project', projectId, projectPath: null, profileId: null }), projectId);
+  await repair('p2');
+  await expect(nav(page, '首页')).toHaveAttribute('aria-current', 'page');
+  const editor = page.getByRole('dialog', { name: '修改website' });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'website 的工具' })).toBeFocused();
+  // The saved query that hid the target gives way to the explicit repair.
+  await expect(search(page)).toHaveValue('');
+  await expect(page.locator('[data-project-id="p2"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(editor).toHaveCount(0);
+  // Same page: a query that still shows the target is kept; one that hides it is cleared.
+  await search(page).fill('desk');
+  await repair('p3');
+  await expect(page.getByRole('dialog', { name: '修改desktop' })).toBeVisible();
+  await expect(search(page)).toHaveValue('desk');
+  await page.keyboard.press('Escape');
+  await search(page).fill('api');
+  await expect(page.locator('[data-project-id]')).toHaveCount(2);
+  await repair('p4');
+  await expect(page.getByRole('dialog', { name: '修改docs' })).toBeVisible();
+  await expect(search(page)).toHaveValue('');
 });
 
 test('a late configuration-name read from an earlier context does not overwrite current names', async ({ page }) => {
