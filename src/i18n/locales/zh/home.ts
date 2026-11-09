@@ -268,7 +268,7 @@ export default {
     currentProfile: '配置 {{id}}',
     profileIdentity: '配置 {{name}}（{{id}}）',
     profileNameLoading: '配置 {{id}}，正在读取名称',
-    profileNameUnavailable: '配置 {{id}}，名称暂不可用；启动仍使用已应用的配置',
+    profileNameUnavailable: '配置 {{id}}，名称暂不可用；不影响启动',
     profileNameFallback: '配置 ID {{id}}',
     currentTool: '当前',
     dirUnavailable: '目录不可用，请先重新关联',

@@ -1,9 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installConfigurationWorkspace } from './configuration-workspace-fixture';
 
-async function install(page: Page, options: { nameFailure?: boolean } = {}) {
+type InstallOptions = { nameFailure?: boolean; savedHost?: string; hostRead?: 'reject' | 'pending' };
+async function install(page: Page, options: InstallOptions = {}) {
   await installConfigurationWorkspace(page, 'codex');
-  await page.addInitScript(({ nameFailure }) => {
+  await page.addInitScript(({ nameFailure, savedHost, hostRead }) => {
+    if (savedHost) localStorage.setItem('cliora:remote-target', savedHost);
     const app = window as any;
     const invoke = app.__TAURI_INTERNALS__.invoke;
     const projects = ['api-one', 'api-two', 'website', 'desktop', 'docs'].map((name, index) => ({
@@ -11,7 +13,7 @@ async function install(page: Page, options: { nameFailure?: boolean } = {}) {
       modelOverrides: {}, selectedProfiles: { codex: 'existing' }, appliedProfiles: { codex: 'existing' },
     }));
     const hosts = ['a', 'b'].map(id => ({ id: `remote-${id}`, name: `开发主机 ${id}`, host: `host-${id}.example.test`, user: 'dev', port: 22, enabled: true, authMethod: 'key', createdAt: 1, updatedAt: 1 }));
-    const state = app.navigationFixture = { projects, hosts, nameReads: 0, hostReads: 0, hostChanges: [] as string[], intents: [] as unknown[], projectDelay: false, releaseProjects: null as (() => void) | null };
+    const state = app.navigationFixture = { projects, hosts, nameReads: 0, hostReads: 0, hostChanges: [] as string[], intents: [] as unknown[], projectDelay: false, releaseProjects: null as (() => void) | null, nameHold: false as false | 'stale' | 'current', heldNames: [] as Array<() => void> };
     window.addEventListener('cliora:remote-target-changed', (event: any) => state.hostChanges.push(event.detail));
     window.addEventListener('cliora:open-remote-session', (event: any) => state.intents.push(event.detail));
     app.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
@@ -30,17 +32,31 @@ async function install(page: Page, options: { nameFailure?: boolean } = {}) {
         return structuredClone(state.projects);
       }
       if (command === 'remove_project') { state.projects = state.projects.filter((project: any) => project.id !== args.projectId); return null; }
-      if (command === 'list_remote_targets') { state.hostReads++; return structuredClone(state.hosts); }
+      if (command === 'list_remote_targets') {
+        state.hostReads++;
+        if (hostRead === 'reject') throw { message: '远程主机列表读取失败' };
+        if (hostRead === 'pending') return new Promise(() => {});
+        return structuredClone(state.hosts);
+      }
       if (command === 'list_remote_projects') return state.hosts.flatMap((host: any) => [0, 1].map(index => ({ id: `${host.id}-${index}`, targetId: host.id, name: `远程项目 ${index}`, path: `/srv/project-${index}`, preferredTool: 'codex', updatedAt: 1 })));
       if (command === 'get_registered_tool_workspace' && args.summary) {
         state.nameReads++;
         if (nameFailure) throw { message: '配置名称读取失败' };
+        if (state.nameHold) {
+          // A held read answers late; a stale one carries names from a context the user left.
+          const stale = state.nameHold === 'stale';
+          await new Promise<void>(resolve => state.heldNames.push(resolve));
+          const result = await invoke(command, args);
+          if (stale) for (const profile of result?.profiles ?? []) profile.name = '过期名称';
+          return result;
+        }
       }
       return invoke(command, args);
     };
-  }, options);
+  }, { nameFailure: false, savedHost: '', hostRead: undefined, ...options });
   await page.goto('/');
-  await expect(page.locator('[data-project-id]')).toHaveCount(5);
+  if (!options.savedHost) await expect(page.locator('[data-project-id]')).toHaveCount(5);
+  else await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
 }
 
 const nav = (page: Page, name: string) => page.getByRole('navigation', { name: '页面' }).getByRole('button', { name, exact: true });
@@ -169,4 +185,92 @@ test('a disabled destination cannot consume a pending draft confirmation', async
   await expect(page.getByRole('dialog').getByLabel('配置名称')).toHaveValue('仍在编辑的配置');
   expect(await page.evaluate(() => (window as any).navigationFixture.hostChanges)).toEqual([]);
   await expect(nav(page, '工具')).toHaveAttribute('aria-current', 'page');
+});
+
+for (const hostRead of ['reject', 'pending'] as const) {
+  test(`page navigation keeps working when the saved host list ${hostRead === 'reject' ? 'fails to load' : 'is still loading'}`, async ({ page }) => {
+    await install(page, { savedHost: 'remote-a', hostRead });
+    await expect.poll(() => page.evaluate(() => (window as any).navigationFixture.hostReads)).toBeGreaterThan(0);
+    await nav(page, '资料库').click();
+    await expect(nav(page, '资料库')).toHaveAttribute('aria-current', 'page');
+    await nav(page, '工具').click();
+    await expect(nav(page, '工具')).toHaveAttribute('aria-current', 'page');
+    await page.locator('body').click({ position: { x: 1, y: 1 } });
+    await page.keyboard.press('ControlOrMeta+1');
+    await expect(nav(page, '首页')).toHaveAttribute('aria-current', 'page');
+    // Page-only moves keep the saved host; nothing was broadcast or persisted.
+    expect(await page.evaluate(() => (window as any).navigationFixture.hostChanges)).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem('cliora:remote-target'))).toBe('remote-a');
+  });
+}
+
+test('a command-palette project reveal overrides the saved home scroll', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 650 });
+  await install(page);
+  const main = page.locator('main');
+  await main.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  const saved = await main.evaluate(el => el.scrollTop);
+  expect(saved).toBeGreaterThan(0);
+  await nav(page, '资料库').click();
+  await page.keyboard.press('ControlOrMeta+K');
+  const palette = page.getByRole('dialog', { name: '快速前往' });
+  await palette.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('api-one');
+  await expect(palette.getByRole('option', { name: /api-one/ }).first()).toBeVisible();
+  // Home remounts with its list still loading, so the saved position would be restored late.
+  await page.evaluate(() => { (window as any).navigationFixture.projectDelay = true; });
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => !!(window as any).navigationFixture.releaseProjects)).toBe(true);
+  await page.evaluate(() => { const fixture = (window as any).navigationFixture; fixture.projectDelay = false; fixture.releaseProjects(); });
+  const target = page.locator('[data-project-id="p0"]');
+  const inView = () => target.evaluate(element => {
+    const box = document.querySelector('main')!.getBoundingClientRect();
+    const item = element.getBoundingClientRect();
+    return item.top >= box.top - 1 && item.bottom <= box.bottom + 1;
+  });
+  await expect.poll(inView).toBe(true);
+  await expect(target).toBeFocused();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await inView()).toBe(true);
+  expect(await main.evaluate(el => el.scrollTop)).toBeLessThan(saved);
+});
+
+test('a late configuration-name read from an earlier context does not overwrite current names', async ({ page }) => {
+  await install(page);
+  const name = page.locator('[data-project-id="p0"] [data-profile-name]');
+  await expect(name).toHaveText('配置 工作配置');
+  const release = () => page.evaluate(() => (window as any).navigationFixture.heldNames.splice(0).forEach((resolve: () => void) => resolve()));
+  const held = () => page.evaluate(() => (window as any).navigationFixture.heldNames.length);
+  await page.evaluate(() => { (window as any).navigationFixture.nameHold = 'stale'; });
+  await changeHost(page, '开发主机 a');
+  await changeHost(page, '本机');
+  await expect.poll(held).toBeGreaterThan(0);
+  // The local read answers only after the user moved to another host.
+  await changeHost(page, '开发主机 a');
+  await release();
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 200)));
+  await page.evaluate(() => { (window as any).navigationFixture.nameHold = 'current'; });
+  await changeHost(page, '本机');
+  await expect.poll(held).toBeGreaterThan(0);
+  await expect(name).not.toHaveAttribute('data-profile-name', 'resolved');
+  await expect(name).not.toContainText('过期名称');
+  await release();
+  await expect(name).toHaveText('配置 工作配置');
+});
+
+test('a late local project list after switching hosts does not replace the remote view or its search state', async ({ page }) => {
+  await install(page);
+  await search(page).fill('api');
+  await nav(page, '资料库').click();
+  await page.evaluate(() => { (window as any).navigationFixture.projectDelay = true; });
+  await nav(page, '首页').click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).navigationFixture.releaseProjects)).toBe(true);
+  await changeHost(page, '开发主机 a');
+  await page.evaluate(() => { const fixture = (window as any).navigationFixture; fixture.projectDelay = false; fixture.releaseProjects(); });
+  await expect(page.locator('[data-project-id]')).toHaveCount(2);
+  await expect(page.locator('[data-project-id]').first()).toContainText('远程项目');
+  await expect(search(page)).toHaveCount(0);
+  await changeHost(page, '本机');
+  await expect(search(page)).toHaveValue('api');
+  await expect(page.locator('[data-project-id]')).toHaveCount(2);
+  await expect(page.locator('[data-project-id="p0"]')).toBeVisible();
 });

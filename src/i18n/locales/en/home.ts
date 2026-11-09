@@ -268,7 +268,7 @@ export default {
     currentProfile: 'Profile {{id}}',
     profileIdentity: 'Profile {{name}} ({{id}})',
     profileNameLoading: 'Profile {{id}}; loading its name',
-    profileNameUnavailable: 'Profile {{id}}; name unavailable. Launch still uses the applied configuration',
+    profileNameUnavailable: 'Profile {{id}}; name unavailable. Launching is not affected',
     profileNameFallback: 'Profile ID {{id}}',
     currentTool: 'Current',
     dirUnavailable: 'Directory unavailable. Re-link it first.',

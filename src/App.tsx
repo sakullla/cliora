@@ -578,21 +578,24 @@ export default function App() {
     const previousPage = activePage.current;
     const previousHost = activeHost.current;
     if (next === previousPage && host === previousHost) return true;
+    const changingHost = host !== previousHost;
     const sourceIdentity = activeIdentity.current;
-    const destination = host === 'local' ? null : availableHosts.current.find(target => target.id === host && target.enabled);
-    if (host !== 'local' && !destination) return false;
+    // Only a host change needs an enabled, loaded destination. A page-only move stays on the
+    // current host even while its list is loading or failed to load.
+    const destination = changingHost && host !== 'local' ? availableHosts.current.find(target => target.id === host && target.enabled) : null;
+    if (changingHost && host !== 'local' && !destination) return false;
     const destinationIdentity = destination ? JSON.stringify(destination) : '';
     const valid = () => activePage.current === previousPage && activeHost.current === previousHost
       && activeIdentity.current === sourceIdentity
-      && (host === 'local' || availableHosts.current.some(target => target.id === host && target.enabled && JSON.stringify(target) === destinationIdentity));
+      && (!changingHost || host === 'local' || availableHosts.current.some(target => target.id === host && target.enabled && JSON.stringify(target) === destinationIdentity));
     transitionPending.current = true;
     try {
-      if (!await canLeave(next, valid, host !== previousHost) || !valid()) return false;
+      if (!await canLeave(next, valid, changingHost) || !valid()) return false;
       pageScroll.save();
       activePage.current = next;
       setPage(next);
-      if (next !== previousPage || host !== previousHost) setSpotlight(null);
-      if (host !== previousHost) {
+      if (next !== previousPage || changingHost) setSpotlight(null);
+      if (changingHost) {
         activeHost.current = host;
         setRemoteTargetId(host);
         try { localStorage.setItem('cliora:remote-target', host); } catch { /* optional preference */ }
@@ -629,7 +632,7 @@ export default function App() {
   }
 
   async function openMcpLibrary(definitionId: string) {
-    if (await go('library')) setSpotlight({ target: 'mcp', id: definitionId, token: ++mcpIntentToken.current, source: 'connections' });
+    if (await go('library')) { pageScroll.cancel(); setScrollIntent(value => value + 1); setSpotlight({ target: 'mcp', id: definitionId, token: ++mcpIntentToken.current, source: 'connections' }); }
   }
 
   // Same command and confirmation flow as the Records list, with Records' default mode.
@@ -729,7 +732,13 @@ export default function App() {
   // Checklist step entries: the managed-CLI checkboxes, profile creation, and the launch area.
   function openAppUpdate() {
     setSettingsTab('general');
-    void go('settings').then(() => requestAnimationFrame(() => document.getElementById('app-update')?.scrollIntoView({ block: 'center', behavior: 'smooth' })));
+    void go('settings').then((allowed) => {
+      if (!allowed) return;
+      // The explicit locate wins over any pending scroll restore for the settings page.
+      pageScroll.cancel();
+      setScrollIntent(value => value + 1);
+      requestAnimationFrame(() => document.getElementById('app-update')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    });
   }
 
   function openOnboardingToolSetup() {
