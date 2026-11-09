@@ -2,8 +2,11 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function install(page: Page, seed: Record<string, boolean> = {}) {
   await page.addInitScript((initial: Record<string, boolean>) => {
-    const control = { copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, libraryListFails: false, lastLibraryVersion: null as number | null, ...initial };
+    const control = { copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, libraryListFails: false, ruleBound: false, lastLibraryVersion: null as number | null, ...initial };
     const library = [{ id: 'prompt-1', kind: 'prompt', title: '发布检查', body: '请核对发布说明', category: '写作', projectId: null, version: 1, updatedAt: 1 }];
+    // A rule already written to Codex: saving it must also update that target.
+    if (control.ruleBound) library.push({ id: 'rule-1', kind: 'rule', title: '提交约定', body: '先跑测试', category: '', projectId: null, version: 1, updatedAt: 1 });
+    let ruleSyncs = 0;
     let theme = 'light';
     let rule = '原规则';
     const facet = { state: 'available', reason: '' };
@@ -43,8 +46,8 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
         }
         if (command === 'read_native_rule') return { text: rule, path: 'C:/rules/AGENTS.md', fingerprint: 'fp' };
         if (command === 'save_native_rule') { if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); rule = args.edited; return { status: 'applied' }; }
-        if (command === 'list_rule_placements') return [];
-        if (command === 'sync_rule_clients') { if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); return [{ toolId: 'codex', path: 'C:/rules/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
+        if (command === 'list_rule_placements') return control.ruleBound ? [{ ruleId: 'rule-1', toolId: 'codex', scope: 'global', projectPath: null, state: 'current' }] : [];
+        if (command === 'sync_rule_clients') { ruleSyncs += 1; (window as unknown as { __ruleSyncs: number }).__ruleSyncs = ruleSyncs; if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); return [{ toolId: 'codex', path: 'C:/rules/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
         if (command === 'save_library_item') {
           if (control.librarySaveFails) throw { message: '资料没有写入', action: '可修改后再次点击保存。' };
           const draft = args.draft ?? {};
@@ -381,6 +384,32 @@ test('saved library item stays visible when the following list read fails', asyn
   await library.getByRole('button', { name: '修改' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __statusCopy: { lastLibraryVersion: number | null } }).__statusCopy.lastLibraryVersion)).toBe(2);
+});
+
+test('a bound rule still updates its targets when the list read after saving fails', async ({ page }) => {
+  await install(page, { ruleBound: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  await library.getByRole('tab', { name: /长期规则/ }).click();
+  await library.getByRole('button', { name: '提交约定', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await dialog.getByRole('textbox', { name: '资料正文', exact: true }).fill('先跑测试再提交');
+  await page.evaluate(() => { (window as unknown as { __statusCopy: { libraryListFails: boolean } }).__statusCopy.libraryListFails = true; });
+  await dialog.locator('[data-dialog-save]').click();
+  // The saved body, the stale list and the target update are three separate answers.
+  await expect(dialog.getByRole('status').filter({ hasText: '已保存在本机资料库' })).toBeVisible();
+  await expect(dialog.getByRole('alert')).toContainText('资料列表读取失败');
+  const panel = dialog.getByRole('status', { name: '规则分发结果' });
+  await expect(panel).toContainText('1 个已更新');
+  await expect(panel.getByRole('listitem')).toHaveAttribute('data-state', 'written');
+  await expect(panel.getByRole('listitem')).toContainText('Codex');
+  expect(await page.evaluate(() => (window as unknown as { __ruleSyncs?: number }).__ruleSyncs ?? 0)).toBe(1);
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(library.getByRole('alert')).toContainText('资料列表读取失败');
+  await expect(library.getByRole('button', { name: '提交约定', exact: true })).toBeVisible();
 });
 
 test('page search answers Ctrl+F and slash, and Escape clears it', async ({ page }) => {

@@ -37,7 +37,7 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
       management: { accounts: false, mcp: true, skills: true, agents: false, plugins: false, projectPlugins: false, rules: { global: true, project: false, catalog: false, globalReason: '', projectReason: '' } },
     }));
     const calls: Array<Record<string, unknown>> = [];
-    const state = { bound: options.bound ?? false, delay: options.delay ?? false, delaySave: false, delaySync: false, fail: options.fail ?? false, failAfterSync: false, saves: 0, fileVersion: 'old', attempts: [] as string[], reads: 0, delayReceipts: false, receiptLoads: 0, inspections: 0 };
+    const state = { bound: options.bound ?? false, delay: options.delay ?? false, delaySave: false, delaySync: false, fail: options.fail ?? false, failAfterSync: false, listFails: false, listFailsAfterSave: false, saves: 0, fileVersion: 'old', attempts: [] as string[], reads: 0, delayReceipts: false, receiptLoads: 0, inspections: 0 };
     let receipt = { id: '7ae443eb-0ac1-4d44-b720-2e519f8f9665', targetId: host.id, targetRevision: host.updatedAt, identity: 'fixture', outcome: 'committing', items: [{ path: '$HOME/.cliora/library.json', state: 'applying', before: 'a'.repeat(64), after: 'b'.repeat(64), observed: null as string | null }] };
     if (options.recoveryRace) localStorage.setItem('cliora:remote-writes:v1', JSON.stringify([receipt]));
     const receiptReleases: Array<() => void> = [];
@@ -81,14 +81,14 @@ async function installRemoteRules(page: Page, options: { bound?: boolean; delay?
             return structuredClone(receipt);
           }
           if (command === 'get_remote_write_snapshot') return snapshots.get(args.requestId) ?? {};
-          if (command === 'list_remote_library_items') { state.reads++; if (options.versions) snapshots.set(args.operation.requestId, { '/root/.cliora/library.json': state.fileVersion }); return args.kind === 'rule' ? [{ ...savedRule }] : []; }
+          if (command === 'list_remote_library_items') { state.reads++; if (state.listFails) throw { message: 'fixture remote list denied' }; if (options.versions) snapshots.set(args.operation.requestId, { '/root/.cliora/library.json': state.fileVersion }); return args.kind === 'rule' ? [{ ...savedRule }] : []; }
           if (command === 'list_remote_rule_placements') {
             const rows = placements();
             if (state.delay) await new Promise<void>(resolve => releases.push(resolve));
             if (state.fail) throw { message: 'fixture placement denied' };
             return rows;
           }
-          if (command === 'save_remote_library_item') { if (options.journalBlocked) throw { message: 'fixture unresolved durable journal', remote: { stage: 'remote_command', outcome: 'failed' } }; if (options.versions) { const expected = args.operation.expectedFiles['/root/.cliora/library.json']; state.attempts.push(expected); if (expected !== state.fileVersion) throw { message: 'fixture version conflict; preserve draft' }; } state.saves++; savedDrafts.push({ ...args.draft }); if (state.delaySave) await new Promise<void>(resolve => saveReleases.push(resolve)); Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
+          if (command === 'save_remote_library_item') { if (options.journalBlocked) throw { message: 'fixture unresolved durable journal', remote: { stage: 'remote_command', outcome: 'failed' } }; if (options.versions) { const expected = args.operation.expectedFiles['/root/.cliora/library.json']; state.attempts.push(expected); if (expected !== state.fileVersion) throw { message: 'fixture version conflict; preserve draft' }; } state.saves++; savedDrafts.push({ ...args.draft }); if (state.listFailsAfterSave) state.listFails = true; if (state.delaySave) await new Promise<void>(resolve => saveReleases.push(resolve)); Object.assign(savedRule, args.draft, { version: savedRule.version + 1 }); return { ...savedRule }; }
           if (command === 'sync_remote_rule_clients') { if (state.delaySync) await new Promise<void>(resolve => syncReleases.push(resolve)); if (state.failAfterSync) state.fail = true; return [{ toolId: 'codex', path: '/root/.codex/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
           if (command === 'list_library_items' || command === 'list_projects' || command === 'list_accounts' || command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages' || command === 'list_remote_resource_stores') return [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
@@ -269,6 +269,29 @@ test('a successful write followed by failed placement readback stays open with a
   await expect(dialog.getByText(/规则写入状态刷新失败/)).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(1);
   expect(await page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'sync_remote_rule_clients'))).toHaveLength(1);
+});
+
+test('a remote bound rule still updates that host when the list read after saving fails', async ({ page }) => {
+  await installRemoteRules(page, { bound: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: /长期规则/ }).click();
+  await expect(page.getByRole('button', { name: 'Codex · 已生效', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '远端规则', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '资料正文', exact: true }).fill('remote body with stale list');
+  await page.evaluate(() => { (window as any).__ruleState.listFailsAfterSave = true; });
+  await dialog.locator('[data-dialog-save]').click();
+  const panel = dialog.getByRole('status', { name: '规则分发结果' });
+  await expect(panel).toContainText('正文已保存');
+  await expect(panel.getByRole('listitem')).toHaveAttribute('data-state', 'written');
+  await expect(dialog.getByRole('alert')).toContainText('fixture remote list denied');
+  const synced = await page.evaluate(() => (window as any).__ruleCalls.filter((call: any) => call.command === 'sync_remote_rule_clients'));
+  expect(synced).toHaveLength(1);
+  expect(synced[0].targetId).toBe(host.id);
+  expect(synced[0].selection.toolIds).toEqual(['codex']);
+  expect(await page.evaluate(() => (window as any).__ruleState.saves)).toBe(1);
+  await expect(dialog.getByRole('textbox', { name: '资料正文', exact: true })).toHaveText('remote body with stale list');
 });
 
 for (const failedReadback of [false, true]) test(`rule draft controls and closing stay locked throughout saving (${failedReadback ? 'failed readback' : 'success'})`, async ({ page }) => {

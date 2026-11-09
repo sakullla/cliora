@@ -10,7 +10,7 @@ import type { Project } from '../../types/launch';
 import { worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { RulePlacement } from '../../types/resources';
+import type { RulePlacement, RuleSyncResult } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
 import { LibraryMcp } from './LibraryMcp';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -82,6 +82,26 @@ function edit(item: LibraryItem): LibraryDraft {
 
 type LibrarySection = LibraryKind | 'mcp' | 'skill';
 
+/** One save-and-distribute run of a saved rule version on one host. The body
+ * save is already settled; this records what happened to its targets. */
+type RuleReport = {
+  context: string;
+  ruleId: string;
+  version: number;
+  /** done: native rows returned; kept: a replacement was declined, nothing written; error: the call failed. */
+  outcome: 'done' | 'kept' | 'error';
+  rows: RuleSyncResult[];
+  detail: string;
+  /** Whether the placement readback after the write succeeded. */
+  readback: 'ok' | 'failed' | 'skipped';
+  /** outdated: the rule changed elsewhere; checkFailed: the pre-retry read failed. */
+  note?: 'outdated' | 'checkFailed';
+};
+
+function ruleReportSettled(report: RuleReport) {
+  return report.outcome === 'done' && report.rows.every((row) => row.status === 'written' || row.status === 'unchanged');
+}
+
 /** Locate request emitted by the command palette; consumed once per token. */
 export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
 export type LibraryMcpSpotlight = { id: string; token: number; source: 'connections' };
@@ -125,6 +145,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [listLoading, setListLoading] = useState(nativeAvailable);
   const [dialogError, setDialogError] = useState('');
   const [dialogNotice, setDialogNotice] = useState('');
+  const [ruleReport, setRuleReport] = useState<RuleReport | null>(null);
   const [tagText, setTagText] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [ruleBinding, setRuleBinding] = useState<{ context: string; rows: RulePlacement[] | null; loading: boolean; error: string }>({ context: '', rows: null, loading: false, error: '' });
@@ -161,7 +182,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   function showNotice(text: string) { toasts.showNotice(text); }
   function showDialogError(text: string) { setDialogNotice(''); setDialogError(text); }
   function showDialogNotice(text: string) { setDialogError(''); setDialogNotice(text); }
-  function clearDialogResult() { setDialogError(''); setDialogNotice(''); }
+  function clearDialogResult() { setDialogError(''); setDialogNotice(''); setRuleReport(null); }
 
   const reloadRulePlacements = useCallback(async (fresh = false) => {
     const context = bindingContext;
@@ -321,32 +342,40 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       setCountStamp((value) => value + 1);
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));
+      // The list read only refreshes what is shown. It never decides whether the
+      // verified targets of a saved rule are updated.
+      let listFailure = '';
       try { await refresh(); }
-      catch (value) {
-        keepSaved(saved);
-        const failure = listFailureAfterSave(value);
-        toasts.showMixed(t('library.page.saved'), failure);
-        setDialogNotice(t('library.page.saved'));
-        setDialogError(failure);
+      catch (value) { keepSaved(saved); listFailure = listFailureAfterSave(value); }
+      const bound = saved.kind === 'rule' && placements.some((item) => item.ruleId === saved.id);
+      const report = bound ? await distributeRule(saved.id, saved.version, globalTargets(placements, saved.id)) : null;
+      if (report) setRuleReport(report);
+      const savedMessage = t(remoteTargetId === 'local' ? 'library.page.saved' : 'library.page.remoteSaved');
+      if (listFailure) {
+        toasts.showMixed(savedMessage, listFailure);
+        setDialogNotice(savedMessage);
+        setDialogError(listFailure);
         return;
       }
-      if (saved.kind === 'rule' && placements.some((item) => item.ruleId === saved.id)) {
-        const ids = placements.filter((item) => item.ruleId === saved.id && item.scope === 'global').map((item) => item.toolId);
-        const distributed = await distributeRule(saved.id, saved.version, ids, false);
-        if (!distributed) { setDraft(next); setSavedText(JSON.stringify(next)); return; }
-        setDraft(null); setSavedText(''); clearDialogResult();
-        showNotice(t('library.page.ruleSaved'));
-        return;
-      }
+      // Partial, declined, failed or unconfirmed target updates keep the dialog and its result open.
+      if (report && !(ruleReportSettled(report) && report.readback === 'ok')) return;
       setDraft(null); setSavedText(''); clearDialogResult();
-      showNotice(t(remoteTargetId === 'local' ? 'library.page.saved' : 'library.page.remoteSaved'));
+      showNotice(report ? report.rows.length ? t('library.page.ruleSavedTargets', { count: report.rows.length }) : t('library.page.ruleSaved') : savedMessage);
     } catch (value) { showDialogError(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
     finally { setBusy(false); }
+  }
+  function globalTargets(placements: RulePlacement[], ruleId: string) {
+    return placements.filter((item) => item.ruleId === ruleId && item.scope === 'global').map((item) => item.toolId);
   }
   function ruleFailure(value: unknown, hint = t('library.page.ruleFailedHint')) {
     const raw = value && typeof value === 'object' && 'message' in value ? String(value.message) : t('library.page.writeIncomplete');
     const detail = raw.trim().replace(/[。！？\s]+$/, '') || t('library.page.writeIncomplete');
     return t('library.page.ruleFailed', { detail, hint });
+  }
+  function ruleTargetsFailure(value: unknown) {
+    const raw = value && typeof value === 'object' && 'message' in value ? String(value.message) : '';
+    const detail = raw.trim().replace(/[。！？\s]+$/, '') || t('library.page.writeIncomplete');
+    return t('library.page.ruleTargetsError', { detail });
   }
   function syncRuleSelection(id: string, version: number, toolIds: string[], scope: Scope, projectPath: string | null, allowReplace: boolean) {
     const selection = { toolIds, scope, projectPath, allowReplace };
@@ -354,24 +383,57 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       ? native.syncRuleClients(id, version, selection)
       : native.syncRemoteRuleClients(remoteTargetId, id, version, selection);
   }
-  async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
+  /** Distributes one saved rule version to its complete expected global target set.
+   * The selection is the whole set: submitting only failed targets would unbind the rest. */
+  async function distributeRule(id: string, version: number, toolIds: string[]): Promise<RuleReport> {
+    const context = bindingContext;
+    let outcome: RuleReport['outcome'] = 'done';
+    let rows: RuleSyncResult[] = [];
+    let detail = '';
     try {
-      const synced = await syncRuleSelection(id, version, toolIds, 'global', null, allowReplace);
-      const rows = Array.isArray(synced) ? synced : [];
-      if (!allowReplace && rows.some((item) => item.status === 'conflict')) {
+      const first = await syncRuleSelection(id, version, toolIds, 'global', null, false);
+      rows = Array.isArray(first) ? first : [];
+      if (rows.some((item) => item.status === 'conflict')) {
         const started = latest.current;
+        // A declined replacement writes nothing: the native call returns conflicts before any write.
         if (!await confirmAction(t('library.page.confirmReplace'), () => mounted.current && latest.current === started, { title: t('library.page.replaceTitle'), confirmLabel: t('library.page.replaceAction') })) {
-          showDialogNotice(t('library.page.replaceKept'));
-          return false;
+          return { context, ruleId: id, version, outcome: 'kept', rows, detail: '', readback: 'skipped' };
         }
-        return distributeRule(id, version, toolIds, true);
+        const replaced = await syncRuleSelection(id, version, toolIds, 'global', null, true);
+        rows = Array.isArray(replaced) ? replaced : [];
       }
-      const failed = rows.find((item) => item.status === 'failed');
-      if (failed) { showDialogError(ruleFailure({ message: failed.detail })); return false; }
-      try { await reloadRulePlacements(true); }
-      catch { showDialogError(t('library.page.bindingsAfterWrite')); return false; }
-      return true;
-    } catch (value) { showDialogError(ruleFailure(value)); return false; }
+    } catch (value) { outcome = 'error'; detail = ruleTargetsFailure(value); }
+    // Any attempt may have written: the marks follow a fresh read, never the request.
+    let readback: RuleReport['readback'] = 'ok';
+    try { await reloadRulePlacements(true); }
+    catch { readback = 'failed'; }
+    return { context, ruleId: id, version, outcome, rows, detail, readback };
+  }
+  /** Retries the saved version without saving the body again. A changed rule or
+   * unreadable targets stop before any write; the current full target set is re-read. */
+  async function retryRuleTargets() {
+    const report = ruleReport;
+    if (!report || !draft || busyRef.current || dirty || draft.id !== report.ruleId || report.context !== bindingContext) return;
+    setBusy(true); setDialogError(''); setDialogNotice('');
+    try {
+      let current: LibraryItem | undefined;
+      let placements: RulePlacement[];
+      try {
+        remoteReads.rebaseWriteAction();
+        const rows = await (remoteTargetId === 'local' ? native.listLibraryItems('rule', null, '') : native.listRemoteLibraryItems(remoteTargetId, 'rule', '', { fresh: true }));
+        current = rows.find((item) => item.id === report.ruleId);
+        if (!current || current.version !== report.version) {
+          setRuleReport({ ...report, note: 'outdated' });
+          void refresh().catch(() => {});
+          return;
+        }
+        placements = await reloadRulePlacements(true);
+      } catch {
+        setRuleReport({ ...report, note: 'checkFailed' });
+        return;
+      }
+      setRuleReport(await distributeRule(report.ruleId, report.version, globalTargets(placements, report.ruleId)));
+    } finally { setBusy(false); }
   }
   async function toggleRule(item: LibraryItem, toolId: string, scope: Scope, projectPath: string | null) {
     remoteReads.beginWriteAction();
@@ -455,7 +517,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     finally { setBusy(false); }
   }
   async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
-    if (surface === 'dialog') clearDialogResult();
+    if (surface === 'dialog') { setDialogError(''); setDialogNotice(''); }
     else { toasts.setNotice(null); toasts.setError(null); setCopiedId(null); }
     try {
       if (!await writeClipboard(text)) throw new Error('clipboard');
@@ -484,6 +546,40 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     return <StatusBanner tone={binding.error && binding.rows === null ? 'error' : 'warning'} action={!binding.loading && <Button size="sm" onClick={() => { void reloadRulePlacements(true).catch(() => {}); }}>{t('library.page.retryBindings')}</Button>}>
       {binding.loading ? t('library.page.bindingsLoading') : t(binding.rows === null ? 'library.page.bindingsFailed' : 'library.page.bindingsStale')}
     </StatusBanner>;
+  }
+  /** Save-and-distribute result for the open rule: the saved body, each target and what is still open. */
+  function ruleResult() {
+    const report = ruleReport && ruleReport.context === bindingContext && draft?.id === ruleReport.ruleId ? ruleReport : null;
+    if (!report) return null;
+    const count = (status: RuleSyncResult['status']) => report.rows.filter((row) => row.status === status).length;
+    // A later successful placement read settles a failed readback; until then the state is pending.
+    const unconfirmed = report.readback === 'failed' && !bindingsKnown;
+    const rowsSettled = ruleReportSettled(report);
+    const settled = rowsSettled && !unconfirmed && !report.note;
+    const retryable = report.note ? report.note === 'checkFailed' : !rowsSettled;
+    const parts = (['written', 'unchanged', 'failed', 'conflict'] as const).filter((status) => count(status) > 0)
+      .map((status) => t(`library.page.ruleTargetCount.${status}`, { count: count(status) }));
+    const notes: string[] = [];
+    if (report.note === 'outdated') notes.push(t('library.page.ruleTargetsOutdated'));
+    if (report.note === 'checkFailed') notes.push(t('library.page.ruleTargetsCheckFailed'));
+    if (report.outcome === 'kept') notes.push(t('library.page.ruleTargetsKept'));
+    if (report.outcome === 'error') notes.push(report.detail);
+    if (report.outcome === 'done' && !rowsSettled) notes.push(t('library.page.ruleTargetsPartial'));
+    if (unconfirmed) notes.push(t(rowsSettled ? 'library.page.bindingsAfterWrite' : 'library.page.ruleTargetsPending'));
+    const toolName = (toolId: string) => scopedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
+    return <section className={styles.result} data-tone={settled ? undefined : 'warning'} role="status" aria-label={t('library.page.ruleResultAria')} data-rule-result>
+      <div className={styles.resultHead}><Icon name={settled ? 'check' : 'alert'} size={16} /><span>{t('library.page.ruleBodySaved')}{report.rows.length ? ` ${t('library.page.ruleTargetsSummary', { total: report.rows.length, parts: parts.join(t('library.page.ruleTargetJoin')) })}` : ''}</span>
+        {retryable && <Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={busy || dirty} title={dirty ? t('library.page.ruleRetryDirty') : undefined} onClick={() => void retryRuleTargets()}>{t('library.page.ruleRetry')}</Button>}
+      </div>
+      {notes.map((note) => <p className={styles.resultText} key={note}>{note}</p>)}
+      {report.rows.length > 0 && <ul className={styles.resultList}>{report.rows.map((row, index) => <li key={`${row.toolId}:${row.path ?? ''}:${index}`} data-state={row.status}>
+        <Icon name={row.status === 'written' || row.status === 'unchanged' ? 'check' : 'alert'} size={14} />
+        <strong title={toolName(row.toolId)}>{toolName(row.toolId)}</strong>
+        <span className={styles.resultState}>{t(`library.page.ruleTargetState.${row.status}`)}</span>
+        {row.path && <small className={styles.resultPath}>{displayPath(row.path)}</small>}
+        {(row.status === 'failed' || row.status === 'conflict') && row.detail && <small className={styles.resultDetail}>{row.detail}</small>}
+      </li>)}</ul>}
+    </section>;
   }
   const sectionTabs: Array<[LibrarySection, IconName, string]> = [
     ['prompt', 'sparkle', t('library.page.prompt')],
@@ -587,6 +683,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         {draft.kind === 'rule' && bindingFeedback()}
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
+        {draft.kind === 'rule' && ruleResult()}
         <section className={styles.fields}>
           <h3 className={styles.groupTitle}>{t('library.page.editorDetails')}</h3>
           <label>{t('library.page.title')}<input disabled={busy} autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
