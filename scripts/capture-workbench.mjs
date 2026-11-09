@@ -97,6 +97,33 @@ const openCodeTranscript = [
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
 
+const chromeAgents = {
+  windows: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0',
+  linux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+  macos: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+};
+
+/** Window metadata makes the app detect a desktop window; macOS gets painted stand-ins for its lights. */
+async function installWindowChrome(page, chrome) {
+  await page.addInitScript((platform) => {
+    const internals = window.__TAURI_INTERNALS__;
+    if (internals) internals.metadata = { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } };
+    if (platform !== 'macos') return;
+    // trafficLightPosition { x: 18, y: 25 }: three 12px buttons, 20px apart, centred near 25px.
+    addEventListener('DOMContentLoaded', () => {
+      const lights = document.createElement('div');
+      lights.setAttribute('aria-hidden', 'true');
+      lights.style.cssText = 'position:fixed;z-index:2147483646;top:19px;left:18px;display:flex;gap:8px;pointer-events:none';
+      for (const color of ['#ff5f57', '#febc2e', '#28c840']) {
+        const dot = document.createElement('span');
+        dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:${color};box-shadow:inset 0 0 0 .5px rgb(0 0 0 / 18%)`;
+        lights.append(dot);
+      }
+      document.body.append(lights);
+    });
+  }, chrome);
+}
+
 async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
   await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode, writeRecovery }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
@@ -298,7 +325,7 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
+async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null) {
   if (!onlyPatterns.some((pattern) => pattern.test(name))) return;
   const errors = [];
   let actionError = null;
@@ -306,9 +333,10 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
   let page = null;
   let resourceObservation = null;
   try {
-    page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce' });
+    page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce', ...(chrome ? { userAgent: chromeAgents[chrome] } : {}) });
     page.on('pageerror', (error) => errors.push(String(error)));
     await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery);
+    if (chrome) await installWindowChrome(page, chrome);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     if (remoteState) {
@@ -878,6 +906,21 @@ for (const width of widths) {
     await page.locator('[data-activity-slot="rail"][data-activity-icon="live"]').waitFor();
     await page.evaluate(() => window.__bell());
   });
+  // Desktop window frames. A per-shot platform makes the app draw its native title bar: the caption
+  // buttons on Windows and Linux, the band and brand row beside the traffic lights on macOS (the
+  // lights are native, so the capture paints stand-ins at the configured trafficLightPosition).
+  if (width >= 900) for (const chrome of ['windows', 'linux', 'macos']) {
+    await shot(`workbench-chrome-${chrome}-` + theme + '-' + width, theme, width, async (page) => {
+      await page.locator('[data-window-titlebar]').waitFor();
+    }, false, null, null, null, false, chrome);
+    await shot(`workbench-chrome-${chrome}-slim-` + theme + '-' + width, theme, width, async (page) => {
+      await page.getByRole('button', { name: copy('折叠侧栏', 'Collapse sidebar'), exact: true }).click();
+    }, false, null, null, null, false, chrome);
+    await shot(`workbench-chrome-${chrome}-home-` + theme + '-' + width, theme, width, async (page) => {
+      await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('首页', 'Home'), exact: true }).click();
+    }, false, null, null, null, false, chrome);
+    await shot(`workbench-chrome-${chrome}-empty-` + theme + '-' + width, theme, width, async () => {}, true, null, null, null, false, chrome);
+  }
   // macOS overlay title bar: the folded sidebar sits under the traffic lights (drawn natively, so
   // only the band and the column width show here) and stays as narrow as on other platforms.
   if (width >= 1360) await shot('workbench-slim-macos-' + theme + '-' + width, theme, width, async (page) => {

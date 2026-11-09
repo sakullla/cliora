@@ -1487,7 +1487,7 @@ test('the terminal has a slim inset scrollbar and a working return-to-latest act
   });
   await expect.poll(async () => {
     const metrics = await measure();
-    return metrics.hasOverflow && metrics.contentClear && metrics.nativeHidden && metrics.background === 'rgb(251, 252, 250)';
+    return metrics.hasOverflow && metrics.contentClear && metrics.nativeHidden && metrics.background === 'rgb(253, 253, 252)';
   }).toBe(true);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });

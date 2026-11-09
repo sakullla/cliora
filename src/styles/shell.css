@@ -11,6 +11,42 @@
   background: var(--bg);
 }
 .titlebar-drag { display: none; }
+/* Window chrome --------------------------------------------------------
+   The desktop window has no separate title bar: the sidebar's top row, the session title bar and,
+   on other views, a quiet band at the top of the content are the title bar. --chrome-h is the
+   session title bar height; the macOS traffic lights and the brand row are centred on it. */
+:root { --chrome-h: 50px; --chrome-inset: 5px; --window-bar-h: 0px; --caption-w: 0px; --mac-lights-w: 72px; --rail-folded-w: 60px; }
+html[data-native] { --window-bar-h: 40px; }
+html[data-native="macos"] { --window-bar-h: 28px; --rail-folded-w: 80px; }
+html[data-native="windows"] { --caption-w: 138px; }
+html[data-native="linux"] { --caption-w: 112px; }
+html[data-native] .titlebar-drag { display: block; position: absolute; z-index: -1; top: 0; right: 0; left: 0; height: var(--chrome-h); }
+html[data-native] .sidebar { padding-top: var(--chrome-inset); }
+html[data-native] .brand { position: relative; }
+/* macOS: the brand row shares the traffic lights' line; folded, the lights take the row alone. */
+html[data-native="macos"] .shell:not([data-sidebar-collapsed="true"]) .brand { padding-left: var(--mac-lights-w); }
+html[data-native="macos"] .shell:not([data-sidebar-collapsed="true"]) .brand-name { overflow: hidden; }
+html[data-native="macos"] .shell[data-sidebar-collapsed="true"] .sidebar { padding-top: var(--chrome-h); }
+.window-bar { display: none; }
+html[data-native] .window-bar { position: sticky; z-index: var(--z-nav); top: 0; display: flex; flex: none; justify-content: flex-end; height: var(--window-bar-h); background: var(--bg); }
+html[data-native] .content:not(.content-workbench) > .content-inner { padding-top: var(--space-4); }
+/* An undecorated Linux window has no system edge or shadow; a hairline keeps it apart from the desktop. */
+html[data-native="linux"]:not([data-maximized]) body::after { content: ''; position: fixed; z-index: 2147483647; inset: 0; border: 1px solid var(--line-strong); pointer-events: none; }
+
+/* Caption buttons. Windows: full-height 46px cells, red close. Linux: round Adwaita-style buttons. */
+.window-controls { display: flex; flex: none; align-items: stretch; height: 100%; }
+.window-control,
+.window-control:hover:not(:disabled) { display: grid; place-items: center; width: 46px; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-2); box-shadow: none; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.window-control:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.window-control:active:not(:disabled) { background: color-mix(in srgb, var(--text) 13%, transparent); }
+.window-control[data-action="close"]:hover:not(:disabled) { background: var(--caption-close); color: var(--on-caption-close); }
+.window-control[data-action="close"]:active:not(:disabled) { background: color-mix(in srgb, var(--caption-close) 86%, var(--text)); color: var(--on-caption-close); }
+.window-controls[data-chrome="linux"] { align-items: center; gap: var(--space-2_5); padding: 0 var(--space-3); }
+.window-controls[data-chrome="linux"] .window-control,
+.window-controls[data-chrome="linux"] .window-control:hover:not(:disabled) { width: 24px; height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 7%, transparent); }
+.window-controls[data-chrome="linux"] .window-control:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 13%, transparent); }
+.window-controls[data-chrome="linux"] .window-control:active:not(:disabled) { background: color-mix(in srgb, var(--text) 18%, transparent); }
+.window-controls[data-chrome="linux"] .window-control[data-action="close"]:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 13%, transparent); color: var(--text); }
 .skip-link {
   position: absolute;
   z-index: 40;
@@ -27,14 +63,7 @@
   pointer-events: none;
 }
 .skip-link:focus-visible { opacity: 1; pointer-events: auto; outline: var(--focus-ring); outline-offset: 2px; }
-html[data-native="macos"] .skip-link { top: calc(var(--titlebar-h) + 10px); }
 main.content:focus, main.content:focus-visible { outline: none; }
-/* The folded rail must hold the three traffic lights (about 70px from the window edge). */
-html[data-native="macos"] { --titlebar-h: 28px; --rail-folded-w: 80px; }
-html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-index: 5; top: 0; left: 0; right: 0; height: var(--titlebar-h); }
-html[data-native="macos"] .sidebar { padding-top: calc(var(--titlebar-h) + var(--space-4)); }
-html[data-native="macos"] .content { margin-top: var(--titlebar-h); }
-html[data-native="macos"] .content-inner { padding-top: var(--space-4); }
 
 .sidebar {
   position: relative;
@@ -293,6 +322,12 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-foot { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-foot > .sidebar-update { grid-column: 1 / -1; }
   .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .theme-switch { grid-column: 2; width: 96px; }
+  /* The column is narrow: the footer keeps the short status word; the full sentence stays in its tooltip. */
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .status-text { font-size: 0; line-height: 0; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .status-text::after { content: attr(data-short); font-size: var(--fs-caption); line-height: normal; }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .sidebar-host { margin-bottom: var(--space-2_5); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .host-switcher-trigger { min-height: 40px; padding-block: var(--space-1); }
+  .shell[data-context="workbench"]:not([data-sidebar-collapsed="true"]) .host-switcher-glyph { width: 26px; height: 26px; }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav { gap: var(--space-1); }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav-group { gap: 1px; }
   .shell[data-context="workbench"][data-sidebar-collapsed="true"] .nav button { min-height: 36px; }
@@ -334,6 +369,12 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
   .theme-switch { flex: none; grid-template-columns: repeat(3, 28px); margin-left: auto; }
   .content-inner { padding: var(--space-5) var(--space-4) var(--space-8); }
   .content-workbench > .content-inner { padding: 0; }
+  /* The sidebar is the top row here: the caption buttons sit at its right end. */
+  html[data-native] .sidebar { padding-top: var(--space-2); padding-right: calc(var(--caption-w) + var(--space-3)); }
+  html[data-native] .window-bar { position: fixed; top: 0; right: 0; height: 48px; background: transparent; }
+  html[data-native="macos"] .window-bar { display: none; }
+  html[data-native="macos"] .sidebar { padding-top: var(--window-bar-h); padding-right: var(--space-3); }
+  html[data-native] .content:not(.content-workbench) > .content-inner { padding-top: var(--space-5); }
   .page-head { margin-bottom: var(--space-5); }
   .page-head h1 { font-size: 23px; }
 }

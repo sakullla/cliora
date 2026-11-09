@@ -20,6 +20,8 @@ import { RowMenu } from './components/RowMenu';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { HostSwitcher } from './components/HostSwitcher';
+import { detectWindowChrome, useWindowMaximized, WindowControls } from './components/WindowControls';
+import { createPortal } from 'react-dom';
 const GeneralSettings = lazy(() => import('./features/settings/GeneralSettings').then(module => ({ default: module.GeneralSettings })));
 const RemoteSshSettings = lazy(() => import('./features/settings/GeneralSettings').then(module => ({ default: module.RemoteSshSettings })));
 const SessionWorkbench = lazy(() => import('./features/sessions/SessionWorkbench').then(module => ({ default: module.SessionWorkbench })));
@@ -123,6 +125,11 @@ export default function App() {
     return () => media.removeEventListener('change', update);
   }, []);
   const [railHost, setRailHost] = useState<HTMLDivElement | null>(null);
+  // The window frame belongs to the app: macOS overlays its traffic lights, Windows and Linux are
+  // undecorated and the app draws the caption buttons, in the session title bar when there is one.
+  const [windowChrome] = useState(() => (nativeAvailable ? detectWindowChrome() : null));
+  const windowMaximized = useWindowMaximized(windowChrome === 'windows' || windowChrome === 'linux');
+  const [captionSlot, setCaptionSlot] = useState<HTMLElement | null>(null);
   const [workbenchRail, setWorkbenchRail] = useState<WorkbenchRailLayout>({ docked: false, focus: false });
   const onRailLayout = useCallback((next: WorkbenchRailLayout) => setWorkbenchRail((old) => old.docked === next.docked && old.focus === next.focus ? old : next), []);
   const workbenchRailToggle = useRef<(() => void) | null>(null);
@@ -446,7 +453,7 @@ export default function App() {
   useLayoutEffect(() => {
     const internals = (window as Window & { __TAURI_INTERNALS__?: { metadata?: unknown } }).__TAURI_INTERNALS__;
     if (!nativeAvailable || !internals?.metadata) return;
-    if (/Mac/i.test(navigator.userAgent)) document.documentElement.dataset.native = 'macos';
+    if (windowChrome) document.documentElement.dataset.native = windowChrome;
     // Release builds load from tauri://localhost or http://tauri.localhost; the dev server has a port and keeps Inspect.
     if (location.port !== '') return;
     // The WebView menu (Back / Reload / Print) is not part of a desktop app. Keep it where it helps:
@@ -458,6 +465,10 @@ export default function App() {
     window.addEventListener('contextmenu', onContextMenu);
     return () => window.removeEventListener('contextmenu', onContextMenu);
   }, []);
+  useLayoutEffect(() => {
+    if (windowMaximized) document.documentElement.dataset.maximized = '';
+    else delete document.documentElement.dataset.maximized;
+  }, [windowMaximized]);
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
     const apply = () => {
@@ -902,10 +913,12 @@ export default function App() {
     finally { ++preferenceEdits.current.tool_icons; setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
-      <div className="brand">
+      {/* The sidebar's top band is window title bar: it drags the window and, on macOS, holds the traffic lights. */}
+      {windowChrome && <div className="titlebar-drag" data-tauri-drag-region />}
+      <div className="brand" data-tauri-drag-region={windowChrome ? 'deep' : undefined}>
         <img className="brandmark" src={brandIcon} alt="" />
         <span className="brand-name"><strong>{t('common.shell.brand')}</strong>{t('common.shell.brand') !== brandLatin && <small>{brandLatin}</small>}</span>
         <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={`${sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} (${modLabel}+\\)`} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><img className="sidebar-toggle-brand" src={brandIcon} alt="" /><span className="sidebar-toggle-icon"><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={18} /></span></button>
@@ -927,7 +940,11 @@ export default function App() {
         <div className="theme-switch" role="group" aria-label={t('common.theme.switch')}>{themes.map((item) => { const label = t(`common.theme.${item.id}`); return <button key={item.id} type="button" aria-label={label} title={label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>; })}</div>
       </div>
     </aside>
-    <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}${page === 'sessions' ? ' content-workbench' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
+    <main className={`content${page === 'records' || page === 'sessions' ? ' content-locked' : ''}${page === 'sessions' ? ' content-workbench' : ''}`} id="main" tabIndex={-1}>
+      {/* The session title bar doubles as the window title bar; every other view gets a quiet drag band. */}
+      {windowChrome && !(page === 'sessions' && wideShell && captionSlot) && <div className="window-bar" data-tauri-drag-region="deep"><WindowControls chrome={windowChrome} maximized={windowMaximized} /></div>}
+      {windowChrome && page === 'sessions' && wideShell && captionSlot && createPortal(<WindowControls chrome={windowChrome} maximized={windowMaximized} />, captionSlot)}
+      <div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       {page === 'home' && <PageHeader title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
@@ -956,7 +973,7 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ...(bootstrap.preferences.remote_ssh_enabled ? [['hosts', t('settings.tabs.hosts')] as [SettingsTab, string]] : []), ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <Suspense fallback={<PageSkeleton />}><GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}

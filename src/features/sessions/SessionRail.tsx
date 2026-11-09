@@ -288,17 +288,21 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <span className={styles.railCompactLabel} aria-hidden="true"><Icon name="terminal" size={16} /></span>
         {canLaunch && (compact || narrow) && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
       </div>
-      {canLaunch && !compact && !narrow && <Button variant="primary" className={styles.railNewBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={15} />}><span>{t('sessions.newSession')}</span><kbd className={styles.railNewKbd} aria-hidden="true">Alt N</kbd></Button>}
+      {canLaunch && !compact && !narrow && !showSearch && <Button variant="primary" className={styles.railNewBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={15} />}><span>{t('sessions.newSession')}</span><kbd className={styles.railNewKbd} aria-hidden="true">Alt N</kbd></Button>}
+      {/* With enough sessions to search, search and new session share one row so the list starts higher. */}
+      {showSearch && <div className={styles.railTools}>
+        <div className={styles.railSearchField} data-field-frame="">
+          <Icon name="search" size={14} />
+          <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); onSearch(''); } }} />
+          {search && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => onSearch('')}><Icon name="close" size={12} /></button>}
+        </div>
+        {canLaunch && <IconButton variant="primary" className={styles.railNewSquare} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} aria-keyshortcuts="Alt+N" onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
+      </div>}
       {!compact && !narrow && waiting.length > 0 && <button type="button" className={styles.railAttention} title={waiting.map((item) => item.title || item.name).join('\n')} onClick={() => onSelect(waiting[0].session.id)}>
         <SessionActivityIcon tone="bell" slot="rail" className={styles.railAttentionIcon} />
         <span>{t('sessions.attentionJump', { count: waiting.length })}</span>
         <Icon name="arrowRight" size={13} />
       </button>}
-      {showSearch && <div className={styles.railSearchField} data-field-frame="">
-        <Icon name="search" size={14} />
-        <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); onSearch(''); } }} />
-        {search && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => onSearch('')}><Icon name="close" size={12} /></button>}
-      </div>}
     </div>
 
     <div ref={listRef} className={styles.list} role="tablist" aria-label={t('sessions.listLabel')} aria-orientation={narrow ? 'horizontal' : 'vertical'} data-dragging={drag ? '' : undefined} onKeyDown={onListKeyDown}>

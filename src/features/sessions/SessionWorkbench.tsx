@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
+import type { WindowChrome } from '../../components/WindowControls';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
@@ -357,8 +358,12 @@ function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, r
   </div>;
 }
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef, windowChrome = null, captionSlotRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
+  /** The native window frame; set, the session title bar is also the window's title bar. */
+  windowChrome?: WindowChrome | null;
+  /** Receives the title-bar slot where the app places the window's caption buttons. */
+  captionSlotRef?: (node: HTMLElement | null) => void;
   /** The app sidebar slot that shows the session list. Null keeps the list as a strip above the terminal. */
   railHost?: HTMLElement | null;
   /** The shared sidebar collapse state: a collapsed sidebar shows session icons only. */
@@ -3158,13 +3163,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const reviewRetryable = !!review && !reviewWaiting && (review.status === 'rejected' || review.status === 'opening');
           const gitChipTitle = [gitTitle, t('sessions.gitScopeHint')].filter(Boolean).join('\n');
           return <div className={styles.window} hidden={!current} data-split={split ? 'true' : undefined} data-tone={tone}>
-            {current && <header className={styles.stageBar} onDoubleClick={(event) => {
-              // Double-clicking the bare title bar toggles focus mode, like maximizing a window.
+            {current && <header className={styles.stageBar} data-window-titlebar={windowChrome ?? undefined} data-tauri-drag-region={windowChrome ? 'deep' : undefined} onDoubleClick={(event) => {
+              // In a browser, double-clicking the bare title bar toggles focus mode. In the desktop
+              // window this bar is the window's title bar, where a double-click maximizes instead.
+              if (windowChrome) return;
               if (!(event.target instanceof Element) || event.target.closest('button, a, input, [role="toolbar"], [data-stage-icon]')) return;
               setFocusMode((value) => !value);
             }}>
               <div className={styles.stageLead}>
-                <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
+                <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" data-tauri-drag-region="false" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
                   <div className={styles.identityTitleRow}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   <div className={styles.identitySub}>
@@ -3192,6 +3199,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 </div>
                 <Button size="sm" className={styles.endBtn} data-running={current.running || undefined} onClick={() => void endSession(current)} disabled={!!busy} aria-label={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} title={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={current.running || remoteSessionMayExist(current) ? 'square' : 'close'} size={current.running || remoteSessionMayExist(current) ? 11 : 13} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
               </div>
+              {captionSlotRef && <span ref={captionSlotRef} className={styles.captionSlot} data-chrome={windowChrome ?? undefined} />}
             </header>}
 
             <div className={styles.screen}>

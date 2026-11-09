@@ -130,6 +130,16 @@ pub fn run() {
             app.manage(commands::AppState::default());
             session_host::install(app.handle().clone());
             register_deep_link(app.handle());
+            // Windows and Linux draw their own title bar (src/components/WindowControls.tsx), so the
+            // native frame goes before the first paint. macOS keeps its Overlay title bar and traffic
+            // lights from tauri.conf.json. On Windows the undecorated window keeps the system shadow
+            // and Windows 11 rounded corners; resizing from the edges is handled by Tauri.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_decorations(false);
+                #[cfg(target_os = "windows")]
+                let _ = window.set_shadow(true);
+            }
             tray::setup(app);
             let usage_handle = app.handle().clone();
             std::thread::spawn(move || loop {

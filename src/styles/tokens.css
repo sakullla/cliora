@@ -15,11 +15,11 @@
 
   /* Warm mineral canvas, paper surfaces and deep ink. Layers differ in value,
      not in glass, glow or elevation. */
-  --bg: #f5f5f1;
-  --sidebar: #eeeee9;
-  --surface: #fcfcf9;
-  --surface-2: #f0f0eb;
-  --surface-3: #e5e6df;
+  --bg: #f5f6f3;
+  --sidebar: #eff1ed;
+  --surface: #fdfdfc;
+  --surface-2: #f1f3ef;
+  --surface-3: #e6e9e4;
   --overlay: rgb(25 30 26 / 36%);
   --wash-a: rgb(8 122 85 / 5%);
   --wash-b: rgb(8 122 85 / 3%);
@@ -31,14 +31,14 @@
   --frame: var(--sidebar);
   --canvas-glow: none;
 
-  --text: #202521;
-  --text-2: #454c46;
-  --text-3: #5f665f;
+  --text: #1d221f;
+  --text-2: #434a45;
+  --text-3: #5c645e;
 
-  --line: #dedfd8;
-  --line-strong: #c5c9c0;
-  --control-line: #ced2c9;
-  --control-line-hover: #a7afa4;
+  --line: #e0e3de;
+  --line-strong: #c6cbc4;
+  --control-line: #d0d4cd;
+  --control-line-hover: #a6aea5;
 
   --surface-hover: color-mix(in srgb, var(--text) 4%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 7%, var(--surface));
@@ -73,6 +73,9 @@
   --info-line: #c1d2df;
 
   --switch-thumb: #ffffff;
+  /* The Windows caption close button keeps the system red in both themes. */
+  --caption-close: #c42b1c;
+  --on-caption-close: #ffffff;
   --on-brand: #ffffff;
   --tool-logo-pale: #f4f5f0;
 
@@ -154,17 +157,17 @@
   --medium: 180ms;
   --slow: 220ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23454c46' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f665f' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23434a45' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235c645e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #181b18;
-  --sidebar: #121512;
-  --surface: #20241f;
-  --surface-2: #272c26;
-  --surface-3: #31372f;
+  --bg: #171a18;
+  --sidebar: #111412;
+  --surface: #1e221f;
+  --surface-2: #262b27;
+  --surface-3: #303631;
   --overlay: rgb(0 0 0 / 58%);
   --wash-a: rgb(98 201 154 / 5%);
   --wash-b: rgb(98 201 154 / 3%);
@@ -177,10 +180,10 @@
   --text-2: #c4cac1;
   --text-3: #acb4ab;
 
-  --line: #343a32;
-  --line-strong: #4b5449;
-  --control-line: #41493f;
-  --control-line-hover: #647061;
+  --line: #313733;
+  --line-strong: #4a524c;
+  --control-line: #3f4741;
+  --control-line-hover: #636e65;
 
   --surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 10%, var(--surface));
