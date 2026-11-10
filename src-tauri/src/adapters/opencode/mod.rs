@@ -498,7 +498,7 @@ impl CliAdapter for OpenCode {
                 map.insert("type".into(), json!("local"));
                 map
             }
-            McpTransport::Http => {
+            McpTransport::Http | McpTransport::Sse => {
                 let mut map = mcp::http_doc(definition, existing, "headers");
                 map.insert("type".into(), json!("remote"));
                 map

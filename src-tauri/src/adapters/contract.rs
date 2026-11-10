@@ -1296,6 +1296,16 @@ pub trait CliAdapter: Sync {
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None
     }
+    /// Whether the native format has a verified stdio working-directory mapping.
+    /// Undeclared targets report unsupported instead of dropping a non-empty `cwd`.
+    fn mcp_supports_cwd(&self) -> bool {
+        false
+    }
+    /// Whether the native format has a verified legacy HTTP+SSE remote mapping.
+    /// Legacy SSE is never rewritten as Streamable HTTP on a target without one.
+    fn mcp_supports_sse(&self) -> bool {
+        false
+    }
     fn skill_root(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
     }

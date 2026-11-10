@@ -199,13 +199,19 @@ impl CliAdapter for MiniMaxCode {
                 map.insert("type".into(), json!("stdio"));
                 map
             }
-            McpTransport::Http => {
+            McpTransport::Http | McpTransport::Sse => {
                 let mut map = mcp::http_doc(definition, existing, "headers");
-                let remote = existing
-                    .and_then(|value| value.get("type"))
-                    .and_then(Value::as_str)
-                    .filter(|kind| matches!(*kind, "http" | "sse" | "streamable-http"))
-                    .unwrap_or("streamable-http");
+                // Streamable HTTP keeps a native http spelling already on disk;
+                // legacy SSE is written as sse and never as Streamable HTTP.
+                let remote = if definition.transport == McpTransport::Sse {
+                    "sse"
+                } else {
+                    existing
+                        .and_then(|value| value.get("type"))
+                        .and_then(Value::as_str)
+                        .filter(|kind| matches!(*kind, "http" | "streamable-http"))
+                        .unwrap_or("streamable-http")
+                };
                 map.insert("type".into(), json!(remote));
                 map
             }
@@ -215,6 +221,9 @@ impl CliAdapter for MiniMaxCode {
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会写入 enabled: false，原生条目保留")
+    }
+    fn mcp_supports_sse(&self) -> bool {
+        true
     }
     fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
         vec![
@@ -1206,7 +1215,7 @@ mod tests {
         let definition = McpDefinition {
             id: "mcp-1".into(),
             name: "local".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "echo".into(),
             args: vec!["hi".into()],
             url: String::new(),
@@ -1221,7 +1230,7 @@ mod tests {
         assert_eq!(document["enabled"], json!(true));
         assert_eq!(document["command"], json!("echo"));
         let remote = McpDefinition {
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: vec![],
             url: "https://example.com/mcp".into(),
@@ -1231,7 +1240,11 @@ mod tests {
         };
         let existing = json!({"type": "sse", "timeout": 30, "headers": {"Authorization": "kept"}});
         let http = MiniMaxCode.mcp_document(&remote, false, Some(&existing)).unwrap().unwrap();
-        assert_eq!(http["type"], json!("sse"));
+        assert_eq!(http["type"], json!("streamable-http"), "Streamable HTTP 不沿用旧 sse 拼写");
+        let legacy = McpDefinition { transport: McpTransport::Sse, ..remote.clone() };
+        assert!(MiniMaxCode.mcp_supports_sse());
+        let sse = MiniMaxCode.mcp_document(&legacy, true, None).unwrap().unwrap();
+        assert_eq!(sse["type"], json!("sse"));
         assert_eq!(http["enabled"], json!(false));
         assert_eq!(http["url"], json!("https://example.com/mcp"));
         assert_eq!(http["timeout"], json!(30));

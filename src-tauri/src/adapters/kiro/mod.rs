@@ -340,7 +340,7 @@ impl CliAdapter for Kiro {
         // redirectUri, clientMetadataUrl, oauthScopes}`/`oauthScopes` group.
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert("disabled".into(), json!(!enabled));
         Ok(Some(Value::Object(map)))
@@ -701,7 +701,7 @@ mod tests {
         let definition = McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
@@ -748,7 +748,7 @@ mod tests {
             "原生 autoApprove 标志保留"
         );
         let remote_definition = McpDefinition {
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             url: "https://mcp.example.com/mcp".into(),
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition

@@ -239,7 +239,7 @@ impl CliAdapter for ZCode {
         // stdio, url/headers for HTTP, with a real `enabled` flag.
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert(
             "type".into(),
@@ -531,7 +531,7 @@ mod tests {
             McpDraft {
                 id: None,
                 name: "example".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "npx".into(),
                 args: vec!["-y".into(), "example-mcp".into()],
                 url: String::new(),

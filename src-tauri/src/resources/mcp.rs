@@ -18,7 +18,10 @@ use crate::projects;
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
     Stdio,
+    /// Streamable HTTP, the current remote transport.
     Http,
+    /// Legacy standalone HTTP+SSE; only identified and preserved where a target maps it.
+    Sse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -29,6 +32,9 @@ pub struct McpDefinition {
     pub transport: McpTransport,
     pub command: String,
     pub args: Vec<String>,
+    /// stdio working directory; empty means unspecified (native default).
+    #[serde(default)]
+    pub cwd: String,
     pub url: String,
     pub env: IndexMap<String, String>,
     pub headers: IndexMap<String, String>,
@@ -49,6 +55,8 @@ pub struct McpDraft {
     pub transport: McpTransport,
     pub command: String,
     pub args: Vec<String>,
+    #[serde(default)]
+    pub cwd: String,
     pub url: String,
     pub env: IndexMap<String, String>,
     pub headers: IndexMap<String, String>,
@@ -134,6 +142,7 @@ pub struct NativeMcpEntry {
     pub transport: McpTransport,
     pub command: String,
     pub args: Vec<String>,
+    pub cwd: String,
     pub url: String,
     pub env: IndexMap<String, String>,
     pub headers: IndexMap<String, String>,
@@ -147,6 +156,18 @@ fn valid_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Why this adapter cannot faithfully write the definition, if it cannot.
+/// A non-empty cwd or legacy SSE is never dropped or rewritten silently.
+fn capability_gap(adapter: &dyn crate::adapters::CliAdapter, definition: &McpDefinition) -> Option<String> {
+    if !definition.cwd.is_empty() && !adapter.mcp_supports_cwd() {
+        return Some("此 CLI 没有已确认的 MCP 工作目录（cwd）映射，未写入".into());
+    }
+    if definition.transport == McpTransport::Sse && !adapter.mcp_supports_sse() {
+        return Some("此 CLI 没有已确认的旧版 HTTP+SSE 映射，未改写为 Streamable HTTP，未写入".into());
+    }
+    None
 }
 
 fn timestamp() -> u64 {
@@ -184,13 +205,19 @@ fn validate(draft: &McpDraft) -> Result<(), String> {
         McpTransport::Stdio if draft.command.trim().is_empty() => {
             return Err("stdio MCP 需要命令".into())
         }
-        McpTransport::Http => {
+        McpTransport::Http | McpTransport::Sse => {
             let url = url::Url::parse(&draft.url).map_err(|_| "MCP 地址无效")?;
             if !["http", "https"].contains(&url.scheme()) {
                 return Err("MCP 地址只支持 HTTP 或 HTTPS".into());
             }
         }
         _ => {}
+    }
+    if draft.transport != McpTransport::Stdio && !draft.cwd.trim().is_empty() {
+        return Err("工作目录只适用于 stdio MCP".into());
+    }
+    if draft.cwd.chars().any(char::is_control) {
+        return Err("MCP 工作目录包含无效字符".into());
     }
     for (name, value) in draft.env.iter().chain(draft.headers.iter()) {
         if name.trim().is_empty()
@@ -255,11 +282,16 @@ pub fn export_definition(db: &Database, id: &str) -> Result<String, String> {
         McpTransport::Stdio => {
             server.insert("command".into(), Value::String(definition.command.clone()));
             server.insert("args".into(), serde_json::json!(definition.args));
+            if !definition.cwd.is_empty() {
+                server.insert("cwd".into(), Value::String(definition.cwd.clone()));
+            }
             if !definition.env.is_empty() {
                 server.insert("env".into(), Value::Object(masked_export_map(&definition.env)));
             }
         }
-        McpTransport::Http => {
+        McpTransport::Http | McpTransport::Sse => {
+            let kind = if definition.transport == McpTransport::Sse { "sse" } else { "http" };
+            server.insert("type".into(), Value::String(kind.into()));
             server.insert("url".into(), Value::String(definition.url.clone()));
             if !definition.headers.is_empty() {
                 server.insert(
@@ -296,7 +328,7 @@ fn candidate_definition(draft: &McpDraft) -> Result<McpDefinition, String> {
     let version = draft.expected_version.map_or(1, |old| old + 1);
     let (command, args) = match draft.transport {
         McpTransport::Stdio => stdio_command(&draft.command, &draft.args),
-        McpTransport::Http => (draft.command.trim().into(), draft.args.clone()),
+        McpTransport::Http | McpTransport::Sse => (draft.command.trim().into(), draft.args.clone()),
     };
     Ok(McpDefinition {
         id,
@@ -304,6 +336,7 @@ fn candidate_definition(draft: &McpDraft) -> Result<McpDefinition, String> {
         transport: draft.transport,
         command,
         args,
+        cwd: draft.cwd.trim().into(),
         url: draft.url.trim().into(),
         env: draft.env.clone(),
         headers: draft.headers.clone(),
@@ -650,11 +683,14 @@ pub fn list_native(
                 name: name.clone(),
                 transport: if url.is_empty() {
                     McpTransport::Stdio
-                } else {
+                } else if !["type", "transport"].iter().any(|key| raw.get(*key).and_then(Value::as_str) == Some("sse")) {
                     McpTransport::Http
+                } else {
+                    McpTransport::Sse
                 },
                 command,
                 args,
+                cwd: raw.get("cwd").and_then(Value::as_str).unwrap_or("").to_owned(),
                 url,
                 env,
                 headers,
@@ -702,6 +738,14 @@ fn preview_definition(
         match target_location(db, registry, &target, home) {
             Ok((location, scope_key)) => {
                 result.path = Some(location.path.display().to_string());
+                if operation == McpTargetOperation::Write {
+                    if let (Ok(definition), Some(adapter)) = (definition.as_ref(), registry.get(&target.tool_id)) {
+                        if let Some(gap) = capability_gap(adapter, definition) {
+                            result.detail = gap;
+                            return result;
+                        }
+                    }
+                }
                 let inspected = (|| {
                     let definition = definition.as_ref().map_err(Clone::clone)?;
                     let (_, parsed) = parse_native(&location)?;
@@ -840,6 +884,13 @@ fn commit_targets(
             let definition = definition.as_ref().map_err(Clone::clone)?;
             let (location, scope_key) = target_location(db, registry, &target, home)?;
             result.path = Some(location.path.display().to_string());
+            if operation == McpTargetOperation::Write {
+                if let Some(adapter) = registry.get(&target.tool_id) {
+                    if let Some(gap) = capability_gap(adapter, definition) {
+                        return Ok(("unsupported", gap));
+                    }
+                }
+            }
             let (baseline, parsed) = parse_native(&location)?;
             let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
             let entries = adapter.mcp_entries(&parsed, &location)?;
@@ -1322,6 +1373,15 @@ pub fn stdio_doc_with_env(
         map.insert(field.into(), Value::Object(env));
     }
     map
+}
+
+/// Writes or clears the stdio working directory for adapters that declare mcp_supports_cwd.
+pub fn apply_cwd(map: &mut serde_json::Map<String, Value>, definition: &McpDefinition) {
+    if definition.cwd.is_empty() {
+        map.remove("cwd");
+    } else {
+        map.insert("cwd".into(), Value::String(definition.cwd.clone()));
+    }
 }
 
 pub fn http_doc(

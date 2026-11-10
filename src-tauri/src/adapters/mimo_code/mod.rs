@@ -322,7 +322,7 @@ impl CliAdapter for MiMoCode {
                 map.insert("type".into(), json!("local"));
                 map
             }
-            McpTransport::Http => {
+            McpTransport::Http | McpTransport::Sse => {
                 let mut map = mcp::http_doc(definition, existing, "headers");
                 map.insert("type".into(), json!("remote"));
                 map
@@ -795,7 +795,7 @@ mod tests {
         let definition = McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(local["enabled"], true);
         assert!(local["environment"].is_object());
         let remote_definition = McpDefinition {
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             url: "https://mcp.example.com/sse".into(),
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition

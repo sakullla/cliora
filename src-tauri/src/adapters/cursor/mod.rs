@@ -103,7 +103,7 @@ impl CliAdapter for Cursor {
         }
         let document = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         Ok(Some(Value::Object(document)))
     }
@@ -697,7 +697,7 @@ mod tests {
             McpDraft {
                 id: None,
                 name: "local".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "echo".into(),
                 args: vec!["ok".into()],
                 url: String::new(),
@@ -791,7 +791,7 @@ mod tests {
             McpDraft {
                 id: None,
                 name: "local".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "echo".into(),
                 args: vec!["ok".into()],
                 url: String::new(),
@@ -883,7 +883,7 @@ mod tests {
             McpDraft {
                 id: Some(definition.id.clone()),
                 name: "local".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "echo".into(),
                 args: vec!["ok".into()],
                 url: String::new(),

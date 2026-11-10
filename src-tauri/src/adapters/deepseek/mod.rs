@@ -289,14 +289,14 @@ impl CliAdapter for DeepSeek {
         let previous = existing.and_then(|entry| entry.get("config"));
         let mut config = match definition.transport {
             McpTransport::Stdio => shared_mcp::stdio_doc_with_env(definition, previous, "env"),
-            McpTransport::Http => shared_mcp::http_doc(definition, previous, "headers"),
+            McpTransport::Http | McpTransport::Sse => shared_mcp::http_doc(definition, previous, "headers"),
         };
         config.insert("serverName".into(), json!(name));
         config.insert(
             "transport".into(),
             json!(match definition.transport {
                 McpTransport::Stdio => "stdio",
-                McpTransport::Http => "streamable-http",
+                McpTransport::Http | McpTransport::Sse => "streamable-http",
             }),
         );
         let mut entry = existing.and_then(Value::as_object).cloned().unwrap_or_default();
@@ -395,6 +395,7 @@ mod tests {
         McpDefinition {
             id: "def-1".into(),
             name: name.into(),
+            cwd: String::new(),
             transport,
             command: "npx".into(),
             args: vec!["-y".into(), "@modelcontextprotocol/server-memory".into()],
