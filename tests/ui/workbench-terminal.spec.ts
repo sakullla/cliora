@@ -1466,13 +1466,17 @@ test('long task titles, metadata, and toolbar actions keep their own space at ev
       const pathBox = await path.boundingBox();
       const stageBox = await stage.boundingBox();
       if (!titleBox || !endBox || !pathBox || !stageBox) return false;
-      // One title line: the place follows the title on the same line and never overlaps it.
+      // One title line: the place follows the title on the same line and never overlaps it. When
+      // the bar has no room for it, the place leaves whole (it wraps below the clipped row)
+      // instead of staying as a sliver beside the title.
       const titleMiddle = titleBox.y + titleBox.height / 2;
+      const placeDropped = pathBox.y > titleMiddle;
       return titleBox.x + titleBox.width <= endBox.x
-        && pathBox.x >= titleBox.x + titleBox.width - 1
-        && pathBox.y <= titleMiddle && pathBox.y + pathBox.height >= titleMiddle
-        && pathBox.x + pathBox.width <= endBox.x
-        && endBox.x + endBox.width <= stageBox.x + stageBox.width;
+        && endBox.x + endBox.width <= stageBox.x + stageBox.width
+        && (placeDropped || (pathBox.x >= titleBox.x + titleBox.width - 1
+          && pathBox.y + pathBox.height >= titleMiddle
+          && pathBox.width >= 48
+          && pathBox.x + pathBox.width <= endBox.x));
     }).toBe(true);
     await expect.poll(() => toolbar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     for (const name of ['查找输出', '快捷输入', '发送中断 (Ctrl+C)', '更多终端操作']) {

@@ -368,7 +368,7 @@ function annotateCaptureHistoryTools(){
 }
 async function captureHistoryFeatures(){
  for(const width of widths)for(const theme of themes){
-  const page=await browser.newPage({viewport:{width,height:1100}});
+  const page=await browser.newPage({viewport:{width,height:1100},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});
   page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
   await page.addInitScript(mock,theme);
   await page.addInitScript(workflowFixtures);
@@ -420,7 +420,7 @@ async function captureHistoryFeatures(){
 async function captureQoderHistoryFeatures(){
  const variants=[false,true].filter(unknown=>selectedScenarios.some(name=>qoderHistoryScenarioNames.includes(name)&&(name==='qoder-history-unknown')===unknown));
  for(const width of widths)for(const theme of themes)for(const unknownAmounts of variants){
-  const page=await browser.newPage({viewport:{width,height:1100}});
+  const page=await browser.newPage({viewport:{width,height:1100},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});
   page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
   await page.addInitScript(mock,theme);
   await page.addInitScript(qoderHistoryFixtures,{unknownAmounts});
@@ -689,7 +689,7 @@ async function captureHomeScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}

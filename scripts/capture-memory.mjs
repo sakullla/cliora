@@ -149,7 +149,7 @@ try {
     let page = null;
     let stage = 'page';
     try {
-      page = await browser.newPage({ viewport: { width, height: 940 }, colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 940 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
       page.on('pageerror', error => problems.push(`${label}: ${error.message}`));
       await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });
       stage = 'navigation';

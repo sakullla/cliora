@@ -148,6 +148,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .6; cursor: poi
 
 /* Disclosure */
 summary { cursor: pointer; list-style: none; user-select: none; }
+/* A disclosure trigger is a control: it reads at control size beside buttons unless a module
+   styles it as a heading. Zero specificity, so module rules still win. */
+:where(summary) { font-size: var(--fs-control); border-radius: var(--radius-sm); }
 summary::-webkit-details-marker { display: none; }
 summary::before {
   content: '';
