@@ -994,20 +994,27 @@ static OUTPUT_CHANNEL: LazyLock<SyncSender<(String, Vec<u8>)>> = LazyLock::new(|
     sender
 });
 
-fn forward_output(id: &str, bytes: &[u8]) {
-    let _ = OUTPUT_CHANNEL.send((id.to_owned(), bytes.to_vec()));
+fn forward_output(id: &str, bytes: Vec<u8>) {
+    let _ = OUTPUT_CHANNEL.send((id.to_owned(), bytes));
 }
 
 fn coalesce_output(receiver: Receiver<(String, Vec<u8>)>) {
     let mut pending: HashMap<String, Vec<u8>> = HashMap::new();
     while let Ok((id, bytes)) = receiver.recv() {
-        pending.entry(id).or_default().extend_from_slice(&bytes);
+        let mut pending_bytes = bytes.len();
+        pending.insert(id, bytes);
         let deadline = std::time::Instant::now() + OUTPUT_FLUSH_WINDOW;
-        while pending.values().map(Vec::len).sum::<usize>() < OUTPUT_FLUSH_BYTES {
+        while pending_bytes < OUTPUT_FLUSH_BYTES {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() { break; }
             match receiver.recv_timeout(remaining) {
-                Ok((id, bytes)) => { pending.entry(id).or_default().extend_from_slice(&bytes); }
+                Ok((id, bytes)) => {
+                    pending_bytes += bytes.len();
+                    match pending.entry(id) {
+                        std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(bytes); }
+                        std::collections::hash_map::Entry::Occupied(mut entry) => entry.get_mut().extend_from_slice(&bytes),
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -1046,6 +1053,9 @@ impl RemoteControlParser {
     }
 
     fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        if self.pending.is_empty() && (self.signals.is_empty() || !bytes.contains(&0x1b)) {
+            return (bytes.to_vec(), Vec::new());
+        }
         self.pending.extend_from_slice(bytes);
         let mut output = Vec::with_capacity(self.pending.len());
         let mut states = Vec::new();
@@ -1058,8 +1068,11 @@ impl RemoteControlParser {
             } else if self.signals.iter().any(|(signal, _)| signal.starts_with(rest)) {
                 break;
             } else {
-                output.push(self.pending[cursor]);
-                cursor += 1;
+                // Only ESC can begin a control signal. Copy ordinary output in
+                // spans instead of comparing every byte with every signal.
+                let length = 1 + memchr::memchr(0x1b, &rest[1..]).unwrap_or(rest.len() - 1);
+                output.extend_from_slice(&rest[..length]);
+                cursor += length;
             }
         }
         self.pending.drain(..cursor);
@@ -1110,6 +1123,10 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generati
             Err(_) => break,
             Ok(size) => {
                 if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
+                if !session.remote {
+                    forward_output(&session.id, buffer[..size].to_vec());
+                    continue;
+                }
                 let (output, states) = control.push(&buffer[..size]);
                 for state in states {
                     session.connection.store(state, Ordering::SeqCst);
@@ -1119,13 +1136,13 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generati
                     }
                     session.notify_state();
                 }
-                if !output.is_empty() { forward_output(&session.id, &output); }
+                if !output.is_empty() { forward_output(&session.id, output); }
             }
         }
     }
     if session.transport_generation.load(Ordering::SeqCst) != generation { return; }
     let code = session.child.lock().ok().and_then(|mut child| child.wait().ok()).map(|status| status.exit_code() as i32);
-    if !control.pending.is_empty() { forward_output(&session.id, &control.pending); }
+    if !control.pending.is_empty() { forward_output(&session.id, std::mem::take(&mut control.pending)); }
     if session.remote && session.connection.load(Ordering::SeqCst) != REMOTE_ENDED {
         let state = if code == Some(REMOTE_ATTACH_ABSENT_EXIT) {
             REMOTE_ENDED
@@ -1500,6 +1517,26 @@ mod remote_state_tests {
         let other = b"\x1b]777;cliora;cliora-other;ready\x07\x1b[6n";
         assert_eq!(parser.push(other), (other.to_vec(), vec![]));
         assert_eq!(parser.push(b"\x1b]777;cliora;cliora-test;ended\x07").1, [REMOTE_ENDED]);
+    }
+
+    #[test]
+    fn control_parser_preserves_bulk_utf8_and_unrelated_escape_sequences() {
+        let text = "长输出 abc\r\n\x1b[32mgreen\x1b[0m\x1b]777;other\x07".repeat(2048).into_bytes();
+        let signal = b"\x1b]777;cliora;cliora-test;ready\x07";
+        let stream = [text.as_slice(), signal, text.as_slice()].concat();
+        for size in [1, 7, 32 * 1024] {
+            let mut parser = RemoteControlParser::new(Some("cliora-test"));
+            let mut output = Vec::new();
+            let mut states = Vec::new();
+            for chunk in stream.chunks(size) {
+                let (bytes, changes) = parser.push(chunk);
+                output.extend(bytes);
+                states.extend(changes);
+            }
+            assert_eq!(output, [text.as_slice(), text.as_slice()].concat());
+            assert_eq!(states, [CONNECTED]);
+            assert!(parser.pending.is_empty());
+        }
     }
 
     #[test]

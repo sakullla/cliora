@@ -291,10 +291,14 @@ pub fn setup(app: &mut tauri::App) {
             if let Ok(mut current) = app.state::<TrayState>().icon.lock() {
                 *current = Some(icon);
             }
-            if let Err(error) = refresh(&handle) {
-                app.state::<TrayState>()
-                    .set_error(format!("托盘列表暂不可用：{error}"));
-            }
+            // The basic menu is ready. Database migrations, project checks and
+            // profile reads must not hold the event loop before its first paint.
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = refresh(&handle) {
+                    handle.state::<TrayState>()
+                        .set_error(format!("托盘列表暂不可用：{error}"));
+                }
+            });
         }
         Err(error) => app
             .state::<TrayState>()

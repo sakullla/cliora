@@ -7,6 +7,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::collections::HashMap;
+use std::sync::{Arc, Condvar, LazyLock, Mutex, OnceLock};
 
 use serde::Serialize;
 
@@ -26,6 +28,52 @@ pub(crate) struct WorktreeSnapshot {
     pub head_oid: Option<String>,
     pub files: u64,
 }
+
+type SnapshotResult = Result<WorktreeSnapshot, &'static str>;
+
+/// Share concurrent reads of one checkout, without retaining a stale status.
+/// The limit also covers scans left running by a closed/reopened menu.
+#[derive(Default)]
+struct SnapshotReads {
+    pending: Mutex<HashMap<PathBuf, Arc<OnceLock<SnapshotResult>>>>,
+    running: Mutex<usize>,
+    available: Condvar,
+}
+
+impl SnapshotReads {
+    fn read(&self, key: PathBuf, scan: impl FnOnce() -> SnapshotResult) -> SnapshotResult {
+        let entry = self.pending.lock().map_err(|_| "read_failed")?
+            .entry(key.clone()).or_default().clone();
+        let result = entry.get_or_init(|| {
+            let mut running = self.running.lock().map_err(|_| "read_failed")?;
+            while *running >= 3 {
+                running = self.available.wait(running).map_err(|_| "read_failed")?;
+            }
+            *running += 1;
+            drop(running);
+            let _permit = ScanPermit(self);
+            scan()
+        }).clone();
+        if let Ok(mut pending) = self.pending.lock() {
+            if pending.get(&key).is_some_and(|current| Arc::ptr_eq(current, &entry)) {
+                pending.remove(&key);
+            }
+        }
+        result
+    }
+}
+
+struct ScanPermit<'a>(&'a SnapshotReads);
+impl Drop for ScanPermit<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.0.running.lock() {
+            *running -= 1;
+            self.0.available.notify_one();
+        }
+    }
+}
+
+static SNAPSHOT_READS: LazyLock<SnapshotReads> = LazyLock::new(SnapshotReads::default);
 
 /// One worktree as the bottom menu shows it: ledger environment plus real Git
 /// status. `state` is `unknown` (and every count `None`) when nothing could be read.
@@ -132,6 +180,11 @@ pub(crate) fn is_oid(value: &str) -> bool {
 /// Read branch, HEAD and the full uncommitted file count of one checkout.
 /// Runs from any directory inside the worktree; the count is repository-wide.
 pub(crate) fn read(directory: &Path) -> Result<WorktreeSnapshot, &'static str> {
+    let key = directory.canonicalize().unwrap_or_else(|_| directory.to_path_buf());
+    SNAPSHOT_READS.read(key, || read_uncached(directory))
+}
+
+fn read_uncached(directory: &Path) -> SnapshotResult {
     let mut summary = StatusSummary::default();
     let ok = stream_git(
         directory,
@@ -250,6 +303,64 @@ impl StatusSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wait_until(mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready() {
+            assert!(std::time::Instant::now() < deadline, "scan did not reach the expected state");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn concurrent_status_reads_share_one_scan_but_next_read_is_fresh() {
+        let reads = SnapshotReads::default();
+        let release = std::sync::Barrier::new(2);
+        let key = PathBuf::from("checkout");
+        std::thread::scope(|scope| {
+            let leader = scope.spawn(|| reads.read(key.clone(), || {
+                release.wait();
+                Ok(WorktreeSnapshot { files: 7, ..Default::default() })
+            }));
+            wait_until(|| *reads.running.lock().unwrap() == 1);
+            let followers: Vec<_> = (0..8).map(|_| scope.spawn(|| {
+                reads.read(key.clone(), || panic!("duplicate checkout scan"))
+            })).collect();
+            wait_until(|| reads.pending.lock().unwrap().get(&key).is_some_and(|entry| Arc::strong_count(entry) == 10));
+            release.wait();
+            assert_eq!(leader.join().unwrap().unwrap().files, 7);
+            for follower in followers { assert_eq!(follower.join().unwrap().unwrap().files, 7); }
+        });
+        assert!(reads.pending.lock().unwrap().is_empty());
+        assert_eq!(reads.read(key.clone(), || Err("read_failed")), Err("read_failed"));
+        assert_eq!(reads.read(key, || Ok(WorktreeSnapshot::default())).unwrap().files, 0);
+    }
+
+    #[test]
+    fn status_scan_concurrency_is_bounded_across_repositories() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reads = SnapshotReads::default();
+        let entered = AtomicUsize::new(0);
+        let release = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..9).map(|id| {
+                let reads = &reads;
+                let entered = &entered;
+                let release = &release;
+                scope.spawn(move || reads.read(PathBuf::from(format!("checkout-{id}")), || {
+                    if entered.fetch_add(1, Ordering::SeqCst) < 3 { release.wait(); }
+                    Ok(WorktreeSnapshot::default())
+                }))
+            }).collect();
+            wait_until(|| reads.pending.lock().unwrap().len() == 9 && entered.load(Ordering::SeqCst) == 3);
+            assert_eq!(*reads.running.lock().unwrap(), 3);
+            release.wait();
+            for worker in workers { worker.join().unwrap().unwrap(); }
+        });
+        assert_eq!(entered.load(Ordering::SeqCst), 9);
+        assert_eq!(*reads.running.lock().unwrap(), 0);
+        assert!(reads.pending.lock().unwrap().is_empty());
+    }
 
     const OID: &str = "4f3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0";
 

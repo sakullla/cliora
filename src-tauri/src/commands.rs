@@ -5116,21 +5116,18 @@ pub fn merge_registered_native_edits(
 }
 
 #[tauri::command]
-pub fn get_bootstrap(app: AppHandle, state: State<'_, AppState>) -> Result<Bootstrap, ApiError> {
-    state.with_database(&app, |database| {
+pub async fn get_bootstrap(app: AppHandle) -> Result<Bootstrap, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |database| {
         database
             .preferences()
             .map(Bootstrap::new)
             .map_err(storage_error)
-    })
+    })).await
 }
 
 #[tauri::command]
-pub fn list_cli_adapters(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<AdapterCatalog, ApiError> {
-    state.with_database(&app, adapter_catalog)
+pub async fn list_cli_adapters(app: AppHandle) -> Result<AdapterCatalog, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, adapter_catalog)).await
 }
 
 #[tauri::command]

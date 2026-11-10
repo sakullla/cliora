@@ -54,6 +54,8 @@ export type TerminalHandle = {
 
 export function encodeBase64(bytes: Uint8Array): string {
   if (!bytes.length) return '';
+  const nativeEncode = (bytes as Uint8Array & { toBase64?: () => string }).toBase64;
+  if (nativeEncode) return nativeEncode.call(bytes);
   // One character at a time copies the whole string on each step. Chunks stay
   // under the argument limit and keep a large paste on the UI thread.
   const chunk = 0x4000;
@@ -127,6 +129,8 @@ export function terminalYieldsToIme(event: { isComposing?: boolean; keyCode?: nu
 
 function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
   if (!value) return new Uint8Array();
+  const nativeDecode = (Uint8Array as typeof Uint8Array & { fromBase64?: (value: string) => Uint8Array<ArrayBuffer> }).fromBase64;
+  if (nativeDecode) return nativeDecode(value);
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -134,6 +138,7 @@ function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
 }
 
 function concatBytes(parts: Uint8Array[]): Uint8Array {
+  if (parts.length === 1) return parts[0];
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const merged = new Uint8Array(total);
   let offset = 0;
@@ -454,15 +459,17 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     linksRef.current = links;
     void resolveWindowsPty().then((info) => { if (!disposed && info) term.options.windowsPty = info; });
 
-    // xterm schedules its own render frame. Batch parsing on a timer so each
-    // incoming TUI update does not create an additional animation sequence.
+    // Keep sustained output batched, but do not delay the response to input by
+    // another frame. xterm still owns parsing and rendering its write queue.
     const frameChunks: Uint8Array[] = [];
     let flushScheduled = false;
     let flushTimer = 0;
+    let awaitingInputResponse = false;
     const flushWrites = () => {
       flushScheduled = false;
       window.clearTimeout(flushTimer);
-      if (disposed || !frameChunks.length) return;
+      if (disposed) { frameChunks.length = 0; return; }
+      if (!frameChunks.length) return;
       const merged = frameChunks.length === 1 ? frameChunks[0] : concatBytes(frameChunks);
       frameChunks.length = 0;
       try { term.write(merged); }
@@ -474,7 +481,10 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       if (flushScheduled) return;
       flushScheduled = true;
       // Parsing must continue while hidden, including terminal protocol replies.
-      flushTimer = window.setTimeout(flushWrites, 16);
+      if (awaitingInputResponse) {
+        awaitingInputResponse = false;
+        queueMicrotask(flushWrites);
+      } else flushTimer = window.setTimeout(flushWrites, 16);
     };
     const markLiveOutput = () => {
       if (disposed || !runningRef.current) return;
@@ -518,6 +528,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       // A microtask merges a paste or a burst of reports into one PTY write
       // without holding a single key or a cursor reply for a frame.
       if (!runningRef.current || !data) return;
+      awaitingInputResponse = true;
       if (!binary && (data.includes('\r') || data.includes('\n'))) markLiveOutput();
       pendingInput.push(ptyBytes(data, binary));
       if (inputScheduled) return;
