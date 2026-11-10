@@ -8,6 +8,8 @@ pub(crate) fn render_toml_mcp_table(config_text: &str, value: &serde_json::Value
     } else {
         config_text.parse().map_err(|error| format_error(format!("远程配置不是 TOML 表：{error}")))?
     };
+    let on_disk: Option<serde_json::Value> = toml::from_str::<toml::Value>(config_text).ok()
+        .and_then(|parsed| parsed.get(table).cloned()).and_then(|parsed| serde_json::to_value(parsed).ok());
     let mut servers = toml_edit::Table::new();
     let mut count = 0usize;
     for item in value.get("entries").and_then(serde_json::Value::as_array).into_iter().flatten() {
@@ -15,7 +17,11 @@ pub(crate) fn render_toml_mcp_table(config_text: &str, value: &serde_json::Value
         let mut server = toml_edit::Table::new();
         let transport = item.get("transport").and_then(serde_json::Value::as_str).unwrap_or("stdio");
         if transport == "sse" {
-            return Err(format!("MCP「{name}」是旧版 HTTP+SSE，此远程文档没有已确认的映射，未写入"));
+            let kept = on_disk.as_ref().and_then(|disk| disk.get(name)).filter(|disk| sse_unchanged(item, Some(disk)));
+            match kept {
+                Some(_) => { if let Some(original) = document.get(table).and_then(|t| t.get(name)) { servers.insert(name, original.clone()); count += 1; } continue; }
+                None => return Err(sse_unsupported(name)),
+            }
         }
         if transport == "http" {
             if let Some(url) = item.get("url").and_then(serde_json::Value::as_str).filter(|url| !url.trim().is_empty()) {
@@ -104,22 +110,22 @@ pub(crate) fn toml_string_map(value: Option<&toml::Value>) -> serde_json::Value 
 /// A remote `type`/`transport` spelling that names legacy HTTP+SSE.
 fn declares_sse(kind: Option<&str>) -> bool { kind.is_some_and(|kind| kind.eq_ignore_ascii_case("sse")) }
 
-/// Refuse to rebuild a remote document that would silently lose a field the
-/// adapter has not verified: a non-empty `cwd`, or legacy SSE rewritten as
-/// Streamable HTTP. Callers pass the adapter's declared capabilities.
-pub(crate) fn reject_unsupported_fields(value: &serde_json::Value, supports_cwd: bool, supports_sse: bool) -> Result<(), String> {
-    for item in value.get("entries").and_then(serde_json::Value::as_array).into_iter().flatten() {
-        let name = item.get("name").and_then(serde_json::Value::as_str).unwrap_or_default();
-        if !supports_cwd && item.get("cwd").and_then(serde_json::Value::as_str).is_some_and(|cwd| !cwd.is_empty()) {
-            return Err(format!("MCP「{name}」含工作目录（cwd），此 CLI 没有已确认的映射，未写入"));
-        }
-        if !supports_sse && item.get("transport").and_then(serde_json::Value::as_str) == Some("sse") {
-            return Err(format!("MCP「{name}」是旧版 HTTP+SSE，此 CLI 没有已确认的映射，未改写为 Streamable HTTP，未写入"));
-        }
-    }
-    Ok(())
+/// Legacy SSE has no spelling in untyped documents, so it is only ever
+/// written back byte-for-byte: an entry already on disk as SSE with the same
+/// url, headers, and enabled flag is kept as is. Anything else is an error
+/// rather than an HTTP rewrite. This (with `typed`) is the single place that
+/// decides whether a remote document can carry SSE.
+fn sse_unchanged(item: &serde_json::Value, on_disk: Option<&serde_json::Value>) -> bool {
+    let Some(disk) = on_disk else { return false; };
+    let declared = disk.get("type").or_else(|| disk.get("transport")).and_then(serde_json::Value::as_str);
+    let empty = serde_json::json!({});
+    declares_sse(declared)
+        && disk.get("url").and_then(serde_json::Value::as_str) == item.get("url").and_then(serde_json::Value::as_str)
+        && disk.get("headers").unwrap_or(&empty) == item.get("headers").unwrap_or(&empty)
+        && disk.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true) == item.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true)
 }
 
+fn sse_unsupported(name: &str) -> String { format!("MCP「{name}」是旧版 HTTP+SSE，此远程文档没有已确认的映射，未写入") }
 pub(crate) fn render_json_mcp(config_text: &str, value: &serde_json::Value, root: &str, nested: bool) -> Result<Vec<u8>, String> {
     render_json_mcp_styled(config_text, value, root, nested, false)
 }
@@ -141,7 +147,10 @@ pub(crate) fn render_json_mcp_styled(config_text: &str, value: &serde_json::Valu
         let mut server = serde_json::Map::new();
         let transport = item.get("transport").and_then(serde_json::Value::as_str);
         if transport == Some("sse") && !typed {
-            return Err(format!("MCP「{name}」是旧版 HTTP+SSE，此远程文档没有已确认的映射，未写入"));
+            match on_disk.as_ref().and_then(|servers| servers.get(name)).filter(|disk| sse_unchanged(&item, Some(disk))) {
+                Some(disk) => { servers.insert(name.into(), disk.clone()); continue; }
+                None => return Err(sse_unsupported(name)),
+            }
         }
         if matches!(transport, Some("http" | "sse")) {
             if typed {
@@ -251,19 +260,43 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_cwd_or_sse_is_rejected_by_name_and_clearing_cwd_passes() {
-        let cwd = json!({"entries":[{"name":"a","transport":"stdio","command":"node","cwd":"/w"}]});
-        assert!(reject_unsupported_fields(&cwd, false, false).unwrap_err().contains("「a」"));
-        assert!(reject_unsupported_fields(&cwd, true, false).is_ok());
-        let sse = json!({"entries":[{"name":"b","transport":"sse","url":"https://e.test"}]});
-        assert!(reject_unsupported_fields(&sse, true, false).unwrap_err().contains("「b」"));
-        assert!(reject_unsupported_fields(&sse, false, true).is_ok());
-        let cleared = json!({"entries":[{"name":"a","transport":"stdio","command":"node","cwd":""}]});
-        assert!(reject_unsupported_fields(&cleared, false, false).is_ok());
+    fn saving_a_store_keeps_unrelated_cwd_and_sse_entries_and_edits_still_work() {
+        let json_text = r#"{"mcpServers":{
+            "w":{"command":"node","cwd":"/srv/app"},
+            "s":{"type":"sse","url":"https://example.test/sse","headers":{"X":"1"}},
+            "o":{"command":"old"}}}"#;
+        let toml_text = "[mcp_servers.w]\ncommand=\"node\"\ncwd=\"/srv/app\"\n[mcp_servers.s]\nurl=\"https://example.test/sse\"\ntype=\"sse\"\n[mcp_servers.o]\ncommand=\"old\"\n";
+        for (layout, text) in [(layout("json", "mcpServers"), json_text), (layout("toml", "mcp_servers"), toml_text)] {
+            let mut store = parse(layout, text).unwrap();
+            store["entries"][2]["command"] = json!("new");
+            let out = String::from_utf8(render(layout, text, &store).unwrap()).unwrap();
+            let again = parse(layout, &out).unwrap();
+            let entries = again["entries"].as_array().unwrap();
+            assert_eq!(entries[0]["cwd"], "/srv/app", "{out}");
+            assert_eq!(entries[1]["transport"], "sse", "{out}");
+            assert_eq!(entries[1]["url"], "https://example.test/sse");
+            assert_eq!(entries[2]["command"], "new");
+        }
     }
 
     #[test]
-    fn minimax_remote_adapter_uses_the_typed_mapping_and_others_refuse_sse() {
+    fn sse_that_a_document_cannot_carry_fails_by_name_and_clearing_cwd_passes() {
+        let json_text = r#"{"mcpServers":{"s":{"type":"sse","url":"https://example.test/sse"}}}"#;
+        let toml_text = "[mcp_servers.s]\nurl=\"https://example.test/sse\"\ntype=\"sse\"\n";
+        for (layout, text) in [(layout("json", "mcpServers"), json_text), (layout("toml", "mcp_servers"), toml_text)] {
+            let mut store = parse(layout, text).unwrap();
+            store["entries"][0]["url"] = json!("https://example.test/other");
+            assert!(render(layout, text, &store).unwrap_err().contains("「s」"));
+            let brand_new = json!({"entries":[{"name":"n","transport":"sse","url":"https://e.test/sse"}]});
+            assert!(render(layout, "", &brand_new).unwrap_err().contains("「n」"));
+        }
+        let cleared = json!({"entries":[{"name":"a","transport":"stdio","command":"node","cwd":""}]});
+        let out = String::from_utf8(render(layout("json", "mcpServers"), "{}", &cleared).unwrap()).unwrap();
+        assert!(!out.contains("cwd"));
+    }
+
+    #[test]
+    fn minimax_remote_adapter_uses_the_typed_mapping_and_others_refuse_new_sse() {
         let registry = crate::adapters::Registry::builtins();
         let sse = json!({"entries":[{"name":"s","transport":"sse","url":"https://example.test/sse"}]});
         let out = registry.get("minimax_code").unwrap().render_remote_mcp("{}", &sse).unwrap();

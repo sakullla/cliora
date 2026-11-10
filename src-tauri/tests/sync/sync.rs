@@ -566,6 +566,46 @@ fn merged_mcp_remains_managed_in_the_existing_native_file() {
 }
 
 #[test]
+fn receiver_without_cwd_support_gets_a_blocker_while_other_mcp_items_continue() {
+    use crate::resources::mcp;
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { super::super::set_restore_roots_for_test(None); } }
+    let _guard = Guard;
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let source = database(&root.path().join("source"));
+    let target = database(&root.path().join("target"));
+    let (old_store, new_store) = (MemoryCredentials::default(), MemoryCredentials::default());
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    assert!(!registry.get("codex").unwrap().mcp_supports_cwd());
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let make = |id: &str, cwd: &str| mcp::McpDefinition { id: id.into(), name: id.into(), cwd: cwd.into(), transport: mcp::McpTransport::Stdio,
+        command: "npx".into(), args: vec!["-y".into(), "pkg".into()], url: String::new(), env: Default::default(), headers: Default::default(),
+        in_library: true, version: 1, updated_at: None };
+    source.with_connection(|conn| {
+        for definition in [make("a-plain", ""), make("b-with-cwd", "workdir"), make("c-plain", "")] {
+            conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES (?1,?1,'stdio',?2,1)", rusqlite::params![definition.id, serde_json::to_string(&definition).unwrap()]).unwrap();
+            conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES (?1,'codex','global',1,'synthetic')", [&definition.id]).unwrap();
+        }
+        Ok(())
+    }).unwrap();
+    let roots = |name: &str| super::super::set_restore_roots_for_test(Some((home.clone(), root.path().join(name))));
+    roots("source");
+    configure(&source, &old_store, setup(&server)).unwrap();
+    run(&source, &old_store, &registry, false).unwrap();
+    roots("target");
+    configure(&target, &new_store, setup(&server)).unwrap();
+    let received = run(&target, &new_store, &registry, false).unwrap();
+    let blocker = received.blockers.iter().find(|item| item.detail.contains("cwd")).unwrap_or_else(|| panic!("{:?}", received.blockers));
+    assert_eq!(received.blockers.len(), 1, "{:?}", received.blockers);
+    assert!(blocker.key.starts_with("deployment:"), "{blocker:?}");
+    let native = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+    assert!(native.contains("mcp_servers.a-plain") && native.contains("mcp_servers.c-plain"), "{native}");
+    assert!(!native.contains("b-with-cwd") && !native.contains("workdir"), "{native}");
+    assert!(!mcp::get_definition(&target, "b-with-cwd").unwrap().cwd.is_empty(), "the definition itself still syncs");
+}
+#[test]
 fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver() {
     use crate::native::profile::{RegisteredProfile, Connection, ProfileAuthentication};
     use crate::resources::{mcp, skills};

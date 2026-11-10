@@ -417,7 +417,6 @@ pub fn import_skill_directory(target: &RemoteTarget, tool_id: &str, source: &str
 fn materialize_remote_mcp(target: &RemoteTarget, tool_id: &str, value: &serde_json::Value) -> Result<PreparedUpload, RemoteError> {
     let registry = crate::adapters::Registry::builtins();
     let adapter = registry.get(tool_id).ok_or_else(|| RemoteError::Storage("适配器未注册".into()))?;
-    crate::adapters::remote_resources::reject_unsupported_fields(value, adapter.mcp_supports_cwd(), adapter.mcp_supports_sse()).map_err(RemoteError::Storage)?;
     let path = mcp_seed_path(tool_id).ok_or_else(|| RemoteError::Storage("适配器未声明远程 MCP 能力".into()))?;
     let expr = remote_path_expr(&path);
     let raw = run_command(target, &format!("if [ -f {expr} ]; then cat {expr}; fi"))?;

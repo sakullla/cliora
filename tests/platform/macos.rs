@@ -58,6 +58,7 @@ fn five_cli_mcp_and_skills_work_in_macos_global_and_project_directories() {
         mcp::McpDraft {
             id: None,
             name: "macos-example".into(),
+            cwd: String::new(),
             transport: mcp::McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["-y".into(), "example-mcp".into()],
