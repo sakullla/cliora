@@ -146,7 +146,10 @@ export type RemoteSessionIndexEntry = { remoteSessionId: string; projectId: stri
 
 /** One review cliora asked Twiglane to open; only the native registry owns this state. */
 export type TwiglaneReviewStatus = 'opening' | 'accepted' | 'rejected' | 'returned';
+/** Git work actually done in Twiglane; `reviewed` means no commit or merge, not "only looked". */
 export type TwiglaneReviewOutcome = 'reviewed' | 'committed' | 'merged';
+/** Twiglane's claim about the worktree when it returned; always re-checked against real Git. */
+export type TwiglaneWorktreeState = 'clean' | 'dirty' | 'unknown';
 export type TwiglaneReviewState = {
   reviewId: string;
   sessionId: string;
@@ -157,6 +160,10 @@ export type TwiglaneReviewState = {
   reason: string | null;
   outcome: TwiglaneReviewOutcome | null;
   headOid: string | null;
+  /** The returned worktree claim (protocol v2); null before a return. */
+  worktreeState: TwiglaneWorktreeState | null;
+  /** Bounded descriptive metadata from the return, keyed `namespace.name`; never drives a verdict. */
+  meta: Record<string, string>;
   /** Unix milliseconds of the attempt, used for the 10 second unknown deadline. */
   createdAt: number;
 };
@@ -167,6 +174,7 @@ export type TwiglaneLinkOutcome = {
   reviewId: string | null;
   outcome: TwiglaneReviewOutcome | null;
   headOid: string | null;
+  worktreeState: TwiglaneWorktreeState | null;
   reason: string | null;
 };
 /** Real branch, HEAD and full uncommitted count of a session's own worktree. */

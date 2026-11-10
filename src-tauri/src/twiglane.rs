@@ -1,11 +1,15 @@
-//! cliora ↔ Twiglane 审查协议 v1 的 cliora 侧实现。
+//! cliora ↔ Twiglane 审查协议 v2 的 cliora 侧实现。
 //!
-//! 协议唯一来源是 `docs/integrations/twiglane-review-v1.md`。这个模块只做四件事：
+//! 协议唯一来源是 `docs/integrations/twiglane-review-v2.md`。这个模块只做四件事：
 //! 生成 `twiglane://review` 链接、校验并处理回送的 `cliora://review` 事件、维护内存态
 //! 审查关联，以及在目标 worktree 上用参数数组读取真实 Git 状态。
 //! 它不写 Git、不改会话、不联网：所有失败都在任何仓库写入之前结束。
+//!
+//! v2 与 v1 不兼容：两端同步升级，其他版本一律 `unsupported_version`，没有回退。
+//! returned 的 Git outcome 与工作区声明正交，两者都只是待复核声明；有界的 `meta.*`
+//! 只被保存，不执行、不影响核心解析与复核。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,8 +27,19 @@ const HOST: &str = "review";
 pub(crate) const MAX_URL_BYTES: usize = 2048;
 /// 协议规定的路径长度上限（字符）。
 const MAX_PATH_CHARS: usize = 1000;
-/// 入站事件允许的查询参数名。任何其它名字都是无效输入。
-const PARAMS: [&str; 7] = ["v", "event", "reviewId", "sessionId", "reason", "outcome", "headOid"];
+/// 协议主版本。
+const VERSION: &str = "2";
+/// 入站事件允许的核心查询参数名。除合法的 `meta.*` 外，任何其它名字都是无效输入。
+const PARAMS: [&str; 8] =
+    ["v", "event", "reviewId", "sessionId", "reason", "outcome", "headOid", "worktreeState"];
+/// 扩展元数据参数名的固定前缀。
+const META_PREFIX: &str = "meta.";
+/// 一条 returned 最多携带的 meta 个数。
+const MAX_META_ENTRIES: usize = 8;
+/// meta 值解码后的字符上限。
+const MAX_META_VALUE_CHARS: usize = 128;
+/// returned 的工作区声明只接受这三种取值。
+const WORKTREE_STATES: [&str; 3] = ["clean", "dirty", "unknown"];
 
 /// `rejected` 只接受协议第 4 节列出的稳定错误码。
 const REJECT_REASONS: [&str; 5] = [
@@ -57,6 +72,10 @@ pub struct ReviewState {
     pub reason: Option<String>,
     pub outcome: Option<String>,
     pub head_oid: Option<String>,
+    /// Twiglane 返回时声明的工作区状态（clean/dirty/unknown）；只是声明，以真实读取为准。
+    pub worktree_state: Option<String>,
+    /// 返回时携带的说明性元数据（键不含 `meta.` 前缀）。只保存用于诊断，不影响任何结论。
+    pub meta: BTreeMap<String, String>,
     /// 发起时刻（Unix 毫秒），前端用它判断是否已经超过 10 秒未确认。
     pub created_at: u64,
 }
@@ -70,6 +89,7 @@ pub struct LinkOutcome {
     pub review_id: Option<String>,
     pub outcome: Option<String>,
     pub head_oid: Option<String>,
+    pub worktree_state: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -81,6 +101,7 @@ impl LinkOutcome {
             review_id: None,
             outcome: None,
             head_oid: None,
+            worktree_state: None,
             reason: Some(reason.into()),
         }
     }
@@ -91,7 +112,14 @@ impl LinkOutcome {
 pub(crate) enum LinkEvent {
     Accepted { review_id: String, session_id: String },
     Rejected { review_id: String, session_id: String, reason: String },
-    Returned { review_id: String, session_id: String, outcome: String, head_oid: Option<String> },
+    Returned {
+        review_id: String,
+        session_id: String,
+        outcome: String,
+        head_oid: Option<String>,
+        worktree_state: String,
+        meta: BTreeMap<String, String>,
+    },
 }
 
 /// 目标 worktree 的真实代码状态。state 为 unknown 时各项读取结果不可用，不能显示成 0。
@@ -185,12 +213,35 @@ fn is_host(authority: &str) -> bool {
     authority.strip_suffix('/').unwrap_or(authority) == HOST
 }
 
+/// `meta.<namespace>.<name>`：namespace `[a-z][a-z0-9-]{0,31}`，name `[A-Za-z][A-Za-z0-9_-]{0,31}`。
+/// 参数名必须原样出现：百分号编码的名字不匹配。
+fn is_meta_key(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(META_PREFIX) else { return false };
+    let mut parts = rest.split('.');
+    let (Some(namespace), Some(key), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let namespace_ok = (1..=32).contains(&namespace.len())
+        && namespace.as_bytes()[0].is_ascii_lowercase()
+        && namespace.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    let key_ok = (1..=32).contains(&key.len())
+        && key.as_bytes()[0].is_ascii_alphabetic()
+        && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    namespace_ok && key_ok
+}
+
+/// meta 值：解码后 1–128 字符的单行短文本，不含任何控制字符。
+fn is_meta_value(value: &str) -> bool {
+    let count = value.chars().count();
+    (1..=MAX_META_VALUE_CHARS).contains(&count) && !value.chars().any(char::is_control)
+}
+
 /// 一条 URL 出现控制字符或裸空白即无效（协议第 2 节）。
 fn has_raw_whitespace_or_control(url: &str) -> bool {
     url.chars().any(|character| character.is_control() || character.is_whitespace())
 }
 
-/// 生成 twiglane://review?v=1&...。参数顺序固定，baseline 为空时不出现。
+/// 生成 twiglane://review?v=2&...。参数顺序固定，baseline 为空时不出现。
 pub(crate) fn review_url(
     review_id: &str,
     session_id: &str,
@@ -198,7 +249,7 @@ pub(crate) fn review_url(
     baseline: Option<&str>,
 ) -> String {
     let mut url = format!(
-        "{SCHEME_OUT}://{HOST}?v=1&reviewId={}&sessionId={}&worktreePath={}",
+        "{SCHEME_OUT}://{HOST}?v={VERSION}&reviewId={}&sessionId={}&worktreePath={}",
         percent_encode(review_id),
         percent_encode(session_id),
         percent_encode(worktree_path)
@@ -252,7 +303,11 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
             return Err("malformed_request");
         }
     }
-    if params.keys().any(|name| !PARAMS.contains(name)) {
+    // 核心参数是固定白名单；只有形状合法的 meta.* 可以作为扩展出现，且个数有界。
+    if params.keys().any(|name| !PARAMS.contains(name) && !is_meta_key(name)) {
+        return Err("malformed_request");
+    }
+    if params.keys().filter(|name| name.starts_with(META_PREFIX)).count() > MAX_META_ENTRIES {
         return Err("malformed_request");
     }
     let text = |name: &str| -> Result<Option<String>, &'static str> {
@@ -262,8 +317,8 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
         }
     };
     match params.get("v").copied() {
-        Some("1") => {}
-        // 未知主版本不得按 v1 猜测处理。
+        Some(VERSION) => {}
+        // v1 与其他主版本都不得按 v2 猜测处理，也没有回退。
         Some(_) | None => return Err("unsupported_version"),
     }
     let event = text("event")?.ok_or("malformed_request")?;
@@ -275,16 +330,32 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
     let reason = text("reason")?;
     let outcome = text("outcome")?;
     let head_oid = text("headOid")?;
+    let worktree_state = text("worktreeState")?;
+    let mut meta = BTreeMap::new();
+    for (name, value) in &params {
+        if let Some(key) = name.strip_prefix(META_PREFIX) {
+            let value = percent_decode(value).ok_or("malformed_request")?;
+            if !is_meta_value(&value) {
+                return Err("malformed_request");
+            }
+            meta.insert(key.to_owned(), value);
+        }
+    }
     match event.as_str() {
         "accepted" => {
-            if reason.is_some() || outcome.is_some() || head_oid.is_some() {
+            if reason.is_some() || outcome.is_some() || head_oid.is_some() || worktree_state.is_some() || !meta.is_empty() {
                 return Err("malformed_request");
             }
             Ok(LinkEvent::Accepted { review_id, session_id })
         }
         "rejected" => {
             let reason = reason.ok_or("malformed_request")?;
-            if !REJECT_REASONS.contains(&reason.as_str()) || outcome.is_some() || head_oid.is_some() {
+            if !REJECT_REASONS.contains(&reason.as_str())
+                || outcome.is_some()
+                || head_oid.is_some()
+                || worktree_state.is_some()
+                || !meta.is_empty()
+            {
                 return Err("malformed_request");
             }
             Ok(LinkEvent::Rejected { review_id, session_id, reason })
@@ -297,14 +368,19 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
             if reason.is_some() {
                 return Err("malformed_request");
             }
-            // 提交与合入必须带完整 OID；只看不改的 reviewed 不得携带结果声明。
+            // 提交与合入必须带完整 OID；没有提交或合入的 reviewed 不得携带提交声明。
             let head_oid = match (outcome.as_str(), head_oid) {
                 ("reviewed", None) => None,
                 ("reviewed", Some(_)) => return Err("malformed_request"),
                 (_, Some(oid)) if is_oid(&oid) => Some(oid),
                 _ => return Err("malformed_request"),
             };
-            Ok(LinkEvent::Returned { review_id, session_id, outcome, head_oid })
+            // 工作区声明必填且与 outcome 正交；缺失不能默认成 clean。
+            let worktree_state = worktree_state.ok_or("malformed_request")?;
+            if !WORKTREE_STATES.contains(&worktree_state.as_str()) {
+                return Err("malformed_request");
+            }
+            Ok(LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, meta })
         }
         _ => Err("malformed_request"),
     }
@@ -389,6 +465,7 @@ impl ReviewRegistry {
                         review_id: Some(review_id),
                         outcome: None,
                         head_oid: None,
+                        worktree_state: None,
                         reason: None,
                     },
                     other => LinkOutcome::ignored(other.code()),
@@ -405,16 +482,20 @@ impl ReviewRegistry {
                         review_id: Some(review_id),
                         outcome: None,
                         head_oid: None,
+                        worktree_state: None,
                         reason: Some(reason),
                     },
                     other => LinkOutcome::ignored(other.code()),
                 }
             }
-            LinkEvent::Returned { review_id, session_id, outcome, head_oid } => {
+            LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, meta } => {
                 match self.update(&review_id, &session_id, |entry| {
                     entry.status = STATUS_RETURNED.into();
                     entry.outcome = Some(outcome.clone());
                     entry.head_oid = head_oid.clone();
+                    entry.worktree_state = Some(worktree_state.clone());
+                    // 新结果整体替代旧结果：上一次返回的 meta 不会残留到这一次。
+                    entry.meta = meta;
                     entry.reason = None;
                 }) {
                     UpdateOutcome::Applied => LinkOutcome {
@@ -423,6 +504,7 @@ impl ReviewRegistry {
                         review_id: Some(review_id),
                         outcome: Some(outcome),
                         head_oid,
+                        worktree_state: Some(worktree_state),
                         reason: None,
                     },
                     other => LinkOutcome::ignored(other.code()),
@@ -457,6 +539,8 @@ pub(crate) fn new_review(session_id: &str, worktree_path: &str, baseline: Option
         reason: None,
         outcome: None,
         head_oid: None,
+        worktree_state: None,
+        meta: BTreeMap::new(),
         created_at: now_millis(),
     }
 }
@@ -557,7 +641,7 @@ mod tests {
     const NEXT_OID: &str = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
 
     fn accepted_url() -> String {
-        format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}")
+        format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}")
     }
 
     fn review(review_id: &str, session_id: &str) -> ReviewState {
@@ -572,7 +656,7 @@ mod tests {
         assert_eq!(
             url,
             format!(
-                "twiglane://review?v=1&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreePath=C%3A%2Fw%2Fa%20b%2F%E4%BB%A3%E7%A0%81&baseline={OID}"
+                "twiglane://review?v=2&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreePath=C%3A%2Fw%2Fa%20b%2F%E4%BB%A3%E7%A0%81&baseline={OID}"
             )
         );
         // 空仓库读不到 HEAD 时不发 baseline，也不发空值。
@@ -586,7 +670,7 @@ mod tests {
             Ok(LinkEvent::Accepted { review_id: REVIEW_ID.into(), session_id: SESSION_ID.into() })
         );
         let rejected = format!(
-            "cliora://review?v=1&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=not_a_worktree"
+            "cliora://review?v=2&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=not_a_worktree"
         );
         assert_eq!(
             parse_event_url(&rejected),
@@ -597,7 +681,7 @@ mod tests {
             })
         );
         let returned = format!(
-            "cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=committed&headOid={OID}"
+            "cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=committed&headOid={OID}&worktreeState=dirty"
         );
         assert_eq!(
             parse_event_url(&returned),
@@ -606,11 +690,13 @@ mod tests {
                 session_id: SESSION_ID.into(),
                 outcome: "committed".into(),
                 head_oid: Some(OID.into()),
+                worktree_state: "dirty".into(),
+                meta: BTreeMap::new(),
             })
         );
         // 参数顺序不参与语义。
         let reordered =
-            format!("cliora://review?sessionId={SESSION_ID}&reviewId={REVIEW_ID}&event=accepted&v=1");
+            format!("cliora://review?sessionId={SESSION_ID}&reviewId={REVIEW_ID}&event=accepted&v=2");
         assert!(parse_event_url(&reordered).is_ok());
     }
 
@@ -641,8 +727,8 @@ mod tests {
 
         // 带尾斜杠的 returned 与 rejected 也照常解析。
         for event in [
-            format!("cliora://review/?v=1&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed"),
-            format!("cliora://review/?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=merged&headOid={OID}"),
+            format!("cliora://review/?v=2&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed"),
+            format!("cliora://review/?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=merged&headOid={OID}&worktreeState=dirty"),
         ] {
             assert!(parse_event_url(&event).is_ok(), "{event}");
         }
@@ -651,35 +737,164 @@ mod tests {
     #[test]
     fn inbound_links_reject_version_scheme_and_parameter_violations() {
         let cases = [
-            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=3&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed"),
             format!("cliora://review?event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("cliora://other?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("twiglane://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("cliora://review/path?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}#x"),
-            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&foo=1"),
-            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("cliora://review?v=1&event=accepted&reviewId=not-a-uuid&sessionId={SESSION_ID}"),
-            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed"),
-            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=committed"),
-            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed&headOid={OID}"),
-            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=committed&headOid={OID}&reason=open_failed"),
-            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=merged&headOid={}", &OID[..7]),
-            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=merged&headOid={}", OID.to_uppercase()),
-            format!("cliora://review?v=1&event=unknown&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("cliora://review?v=1&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=whatever"),
-            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID} "),
+            format!("cliora://other?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("twiglane://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review/path?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}#x"),
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&foo=1"),
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=2&event=accepted&reviewId=not-a-uuid&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed"),
+            format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean&outcome=committed"),
+            format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean&outcome=reviewed&headOid={OID}"),
+            format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean&outcome=committed&headOid={OID}&reason=open_failed"),
+            format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean&outcome=merged&headOid={}", &OID[..7]),
+            format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean&outcome=merged&headOid={}", OID.to_uppercase()),
+            format!("cliora://review?v=2&event=unknown&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=2&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=whatever"),
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID} "),
         ];
         for case in cases {
             assert!(parse_event_url(&case).is_err(), "should reject: {case}");
         }
     }
 
+    fn returned_url(tail: &str) -> String {
+        format!("cliora://review?v=2&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}{tail}")
+    }
+
+    fn returned_event(outcome: &str, head_oid: Option<&str>, worktree_state: &str) -> LinkEvent {
+        LinkEvent::Returned {
+            review_id: REVIEW_ID.into(),
+            session_id: SESSION_ID.into(),
+            outcome: outcome.into(),
+            head_oid: head_oid.map(Into::into),
+            worktree_state: worktree_state.into(),
+            meta: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn worktree_state_is_required_and_orthogonal_to_the_git_outcome() {
+        for (tail, outcome, head, state) in [
+            ("&outcome=reviewed&worktreeState=dirty".to_string(), "reviewed", None, "dirty"),
+            ("&outcome=reviewed&worktreeState=clean".to_string(), "reviewed", None, "clean"),
+            ("&outcome=reviewed&worktreeState=unknown".to_string(), "reviewed", None, "unknown"),
+            (format!("&outcome=committed&headOid={OID}&worktreeState=dirty"), "committed", Some(OID), "dirty"),
+            (format!("&outcome=merged&headOid={OID}&worktreeState=clean"), "merged", Some(OID), "clean"),
+        ] {
+            assert_eq!(parse_event_url(&returned_url(&tail)), Ok(returned_event(outcome, head, state)), "{tail}");
+        }
+        for tail in [
+            "&outcome=reviewed",
+            "&outcome=reviewed&worktreeState=",
+            "&outcome=reviewed&worktreeState=approved",
+            "&outcome=reviewed&worktreeState=Dirty",
+            "&outcome=edited&worktreeState=dirty",
+            "&outcome=reviewed&worktreeState=dirty&worktreeState=clean",
+        ] {
+            assert_eq!(parse_event_url(&returned_url(tail)), Err("malformed_request"), "{tail}");
+        }
+        for url in [
+            format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreeState=clean"),
+            format!("cliora://review?v=2&event=rejected&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&reason=open_failed&worktreeState=dirty"),
+        ] {
+            assert_eq!(parse_event_url(&url), Err("malformed_request"), "{url}");
+        }
+    }
+
+    #[test]
+    fn v1_and_other_versions_are_rejected_without_fallback() {
+        for url in [
+            format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed"),
+            format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed&worktreeState=dirty"),
+            format!("cliora://review?v=3&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+        ] {
+            assert_eq!(parse_event_url(&url), Err("unsupported_version"), "{url}");
+        }
+        // 发起端只生成 v2 链接。
+        assert!(review_url(REVIEW_ID, SESSION_ID, "C:/w", None).starts_with("twiglane://review?v=2&"));
+    }
+
+    #[test]
+    fn bounded_meta_is_kept_without_changing_the_core_event() {
+        let plain = parse_event_url(&returned_url(&format!("&outcome=committed&headOid={OID}&worktreeState=dirty"))).unwrap();
+        let extended = parse_event_url(&returned_url(&format!(
+            "&outcome=committed&headOid={OID}&worktreeState=dirty&meta.twiglane.version=0.3.3&meta.acme-tools.build_id=b%201"
+        )))
+        .unwrap();
+        let LinkEvent::Returned { meta, .. } = &extended else { panic!("returned") };
+        assert_eq!(meta.get("twiglane.version").map(String::as_str), Some("0.3.3"));
+        assert_eq!(meta.get("acme-tools.build_id").map(String::as_str), Some("b 1"));
+        // 去掉 meta 后核心事件完全相同。
+        let LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, .. } = extended else { unreachable!() };
+        assert_eq!(plain, LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, meta: BTreeMap::new() });
+
+        let long = "x".repeat(MAX_META_VALUE_CHARS + 1);
+        let too_many: String = (0..=MAX_META_ENTRIES).map(|index| format!("&meta.ns.k{index}=v")).collect();
+        for extra in [
+            "&meta.x=1".to_string(),
+            "&meta.x.y.z=1".to_string(),
+            "&meta..y=1".to_string(),
+            "&meta.x.=1".to_string(),
+            "&meta.X.y=1".to_string(),
+            "&meta.x.1y=1".to_string(),
+            "&meta.x.y=".to_string(),
+            "&meta.x.y=a%0Ab".to_string(),
+            "&meta.x.y=a%09b".to_string(),
+            format!("&meta.x.y={long}"),
+            "&meta%2Ex.y=1".to_string(),
+            "&meta.x.y=1&meta.x.y=2".to_string(),
+            "&meta.x.y=%ZZ".to_string(),
+            too_many,
+            "&metadata=1".to_string(),
+        ] {
+            let url = returned_url(&format!("&outcome=reviewed&worktreeState=clean{extra}"));
+            assert_eq!(parse_event_url(&url), Err("malformed_request"), "{url}");
+        }
+        // meta 只属于 returned。
+        let accepted = format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&meta.twiglane.version=1");
+        assert_eq!(parse_event_url(&accepted), Err("malformed_request"));
+    }
+
+    #[test]
+    fn the_registry_keeps_the_worktree_claim_and_meta_and_replaces_them_on_the_next_return() {
+        let registry = ReviewRegistry::default();
+        registry.begin(review(REVIEW_ID, SESSION_ID));
+        let first = parse_event_url(&returned_url("&outcome=reviewed&worktreeState=dirty&meta.twiglane.version=0.3.3")).unwrap();
+        let outcome = registry.apply(first);
+        assert_eq!(outcome.kind, "returned");
+        assert_eq!(outcome.worktree_state.as_deref(), Some("dirty"));
+        let state = registry.latest_for_session(SESSION_ID).unwrap();
+        assert_eq!(state.outcome.as_deref(), Some("reviewed"));
+        assert_eq!(state.worktree_state.as_deref(), Some("dirty"));
+        assert_eq!(state.meta.get("twiglane.version").map(String::as_str), Some("0.3.3"));
+        assert!(state.head_oid.is_none());
+
+        // 同一审查再次返回：新结果整体替代旧结果，不残留旧 meta。
+        registry.apply(returned_event("committed", Some(NEXT_OID), "clean"));
+        let state = registry.latest_for_session(SESSION_ID).unwrap();
+        assert_eq!(state.outcome.as_deref(), Some("committed"));
+        assert_eq!(state.worktree_state.as_deref(), Some("clean"));
+        assert!(state.meta.is_empty());
+
+        // 序列化给前端的字段名保持 camelCase。
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["worktreeState"], "clean");
+        assert!(json["meta"].is_object());
+    }
+
     #[test]
     fn an_over_long_link_is_rejected_before_parsing() {
         let padding = "a".repeat(MAX_URL_BYTES);
         let url = format!(
-            "cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&pad={padding}"
+            "cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&pad={padding}"
         );
         assert_eq!(parse_event_url(&url), Err("malformed_request"));
     }
@@ -708,6 +923,8 @@ mod tests {
             session_id: SESSION_ID.into(),
             outcome: "committed".into(),
             head_oid: Some(NEXT_OID.into()),
+            worktree_state: "dirty".into(),
+            meta: BTreeMap::new(),
         });
         assert_eq!(returned.kind, "returned");
         let state = registry.latest_for_session(SESSION_ID).unwrap();
@@ -721,12 +938,7 @@ mod tests {
     #[test]
     fn an_unknown_review_is_ignored_and_creates_nothing() {
         let registry = ReviewRegistry::default();
-        let outcome = registry.apply(LinkEvent::Returned {
-            review_id: REVIEW_ID.into(),
-            session_id: SESSION_ID.into(),
-            outcome: "merged".into(),
-            head_oid: Some(OID.into()),
-        });
+        let outcome = registry.apply(returned_event("merged", Some(OID), "clean"));
         assert_eq!(outcome.kind, "ignored");
         // 完全没有过的 reviewId 是"来源失效"，不能报成迟到事件。
         assert_eq!(outcome.reason.as_deref(), Some("unknown_review"));
@@ -746,12 +958,7 @@ mod tests {
         registry.begin(review(REVIEW_ID, SESSION_ID));
         let newer = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
         registry.begin(review(newer, SESSION_ID));
-        let late = registry.apply(LinkEvent::Returned {
-            review_id: REVIEW_ID.into(),
-            session_id: SESSION_ID.into(),
-            outcome: "reviewed".into(),
-            head_oid: None,
-        });
+        let late = registry.apply(returned_event("reviewed", None, "dirty"));
         assert_eq!(late.kind, "ignored");
         assert_eq!(late.reason.as_deref(), Some("superseded_review"));
         // 迟到事件不改写最新状态。

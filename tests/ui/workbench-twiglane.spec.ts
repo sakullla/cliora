@@ -20,6 +20,8 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       reason: string | null;
       outcome: string | null;
       headOid: string | null;
+      worktreeState?: string | null;
+      meta?: Record<string, string>;
       createdAt: number;
     };
     const pairingRemote = pairing === 'remote';
@@ -110,6 +112,8 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
               reason: null,
               outcome: null,
               headOid: null,
+              worktreeState: null,
+              meta: {},
               createdAt: Date.now(),
             };
             harness.reviews[reviewId] = review;
@@ -125,6 +129,17 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             const url = String(args.url);
             harness.links.push(url);
             const query = new URLSearchParams(url.split('?')[1] ?? '');
+            const ignored = (reason: string) => ({ kind: 'ignored', sessionId: null, reviewId: null, outcome: null, headOid: null, worktreeState: null, reason });
+            // 同原生解析：只接受 v2，v1 与其他版本在查注册表之前就被丢弃。
+            if (query.get('v') !== '2') return ignored('unsupported_version');
+            const meta: Record<string, string> = {};
+            for (const [key, value] of query) {
+              if (!key.startsWith('meta.')) continue;
+              if (!/^meta\.[a-z][a-z0-9-]{0,31}\.[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(key) || !value || value.length > 128) return ignored('malformed_request');
+              meta[key.slice(5)] = value;
+            }
+            const worktreeState = query.get('worktreeState');
+            if (query.get('event') === 'returned' && !['clean', 'dirty', 'unknown'].includes(worktreeState ?? '')) return ignored('malformed_request');
             const reviewId = query.get('reviewId') ?? '';
             const review = harness.reviews[reviewId];
             // 同原生注册表：从未见过的 reviewId 是来源失效，被更新 review 取代才是迟到事件。
@@ -147,7 +162,9 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             review.status = 'returned';
             review.outcome = query.get('outcome');
             review.headOid = query.get('headOid');
-            return { kind: 'returned', sessionId: review.sessionId, reviewId, outcome: review.outcome, headOid: review.headOid, reason: null };
+            review.worktreeState = worktreeState;
+            review.meta = meta;
+            return { kind: 'returned', sessionId: review.sessionId, reviewId, outcome: review.outcome, headOid: review.headOid, worktreeState, reason: null };
           }
           if (command === 'plugin:deep-link|get_current') return null;
           if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
@@ -244,7 +261,7 @@ test('a local session can start a review and sees the receipt', async ({ page })
   expect(started[0].sessionId).toBe('s1');
 
   await page.evaluate((reviewId) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=accepted&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000',
+    'cliora://review?v=2&event=accepted&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000',
   ), started[0].reviewId);
 
   await expect(group.getByRole('status')).toHaveText('Twiglane 已打开这个工作区，可以开始审查。');
@@ -283,7 +300,7 @@ test('a rejected review shows the stable reason instead of a raw Git error', asy
   const started = await page.evaluate(() => (window as unknown as { __harness: { starts: Array<{ reviewId: string }> } }).__harness.starts);
 
   await page.evaluate((reviewId) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=rejected&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&reason=not_a_worktree',
+    'cliora://review?v=2&event=rejected&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&reason=not_a_worktree',
   ), started[0].reviewId);
 
   await expect(group.getByRole('status')).toHaveText('Twiglane 没有打开这个工作区 · 目标不是 Git 工作树根目录。');
@@ -298,10 +315,14 @@ test('a returned commit is verified even with the Git menu closed', async ({ pag
   const started = await page.evaluate(() => (window as unknown as { __harness: { starts: Array<{ reviewId: string }> } }).__harness.starts);
   await page.keyboard.press('Escape');
 
-  // Twiglane really committed: the worktree HEAD is now the returned OID.
-  await page.evaluate((oid) => { (window as unknown as { __harness: { headOid: string } }).__harness.headOid = oid; }, NEXT);
+  // Twiglane really committed: the worktree HEAD is now the returned OID and nothing is left over.
+  await page.evaluate((oid) => {
+    const harness = (window as unknown as { __harness: { headOid: string; files: number } }).__harness;
+    harness.headOid = oid;
+    harness.files = 0;
+  }, NEXT);
   await page.evaluate((reviewId) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=' + '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
+    'cliora://review?v=2&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=' + '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d' + '&worktreeState=clean',
   ), started[0].reviewId);
 
   // A closed menu must still verify HEAD before announcing the returned result.
@@ -321,7 +342,7 @@ test('a returned result that no longer matches HEAD stays unconfirmed and keeps 
   // 外部 AI 又提交了一次：返回的 OID 已经不是当前 HEAD。
   await page.evaluate(() => { (window as unknown as { __harness: { headOid: string } }).__harness.headOid = '9999999999999999999999999999999999999999'; });
   await page.evaluate((reviewId) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=merged&headOid=' + '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
+    'cliora://review?v=2&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=merged&headOid=' + '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d' + '&worktreeState=dirty',
   ), started[0].reviewId);
 
   await expect(group.getByRole('status')).toHaveText('结果未确认：返回的提交与当前 HEAD 不一致。');
@@ -372,13 +393,142 @@ test('a returned link selects the original session instead of inventing one', as
   }));
 
   await page.evaluate(() => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=cccccccc-dddd-4eee-8fff-000000000001&sessionId=s2-0000-0000-0000-000000000000&outcome=reviewed',
+    'cliora://review?v=2&event=returned&reviewId=cccccccc-dddd-4eee-8fff-000000000001&sessionId=s2-0000-0000-0000-000000000000&outcome=reviewed&worktreeState=dirty',
   ));
 
   await expect(rail.getByRole('tab', { name: /Codex/ })).toHaveAttribute('aria-selected', 'true');
   await expect(rail.getByRole('tab')).toHaveCount(2);
   const menu = await openGitMenu(page, /^Git 分支 feature\/beta/);
-  await expect(menu.getByRole('group', { name: '在 Twiglane 中审查' }).getByRole('status')).toHaveText('这次只做了浏览，没有提交或合入。');
+  // v2：reviewed 只表示没有提交或合入，真实未提交文件如实显示，不再说“只做了浏览”。
+  const status = menu.getByRole('group', { name: '在 Twiglane 中审查' }).getByRole('status');
+  await expect(status).toHaveText('这次没有提交或合入；工作区有 46 个未提交文件。');
+  await expect(status).not.toHaveText(/只做了浏览|批准/);
+});
+
+/** Start a review on s1 and return its reviewId; the menu stays open. */
+async function startOnS1(page: Page) {
+  const menu = await openGitMenu(page, /^Git 分支 feature\/twiglane/);
+  const group = menu.getByRole('group', { name: '在 Twiglane 中审查' });
+  await group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
+  const starts = await page.evaluate(() => (window as unknown as { __harness: { starts: Array<{ reviewId: string }> } }).__harness.starts);
+  return { group, reviewId: starts[starts.length - 1].reviewId };
+}
+
+async function emit(page: Page, url: string) {
+  await page.evaluate((link) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(link), url);
+}
+
+const S1 = '&sessionId=s1-0000-0000-0000-000000000000';
+
+test('an edit left uncommitted returns to the original session with the real uncommitted count', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const { group, reviewId } = await startOnS1(page);
+  await page.evaluate(() => { (window as unknown as { __harness: { files: number } }).__harness.files = 3; });
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=dirty');
+
+  await expect(group.getByRole('status')).toHaveText('这次没有提交或合入；工作区有 3 个未提交文件。');
+  await expect(group).toContainText('3 个未提交文件');
+  // 已经复核真实状态，但没有任何会话或 Git 写入。
+  const calls = await page.evaluate(() => (window as unknown as { __harness: { calls: string[] } }).__harness.calls);
+  expect(calls).toContain('workbench_code_status');
+  expect(calls.filter((name) => /^(launch_|commit|stage|push|discard|reset)/.test(name))).toEqual([]);
+});
+
+test('a commit with changes left over is confirmed and still shows the remaining files', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const { group, reviewId } = await startOnS1(page);
+  await page.evaluate((oid) => {
+    const harness = (window as unknown as { __harness: { headOid: string; files: number } }).__harness;
+    harness.headOid = oid;
+    harness.files = 2;
+  }, NEXT);
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=committed&headOid=' + NEXT + '&worktreeState=dirty');
+  await expect(group.getByRole('status')).toHaveText('Twiglane 已提交 1a2b3c4；工作区仍有 2 个未提交文件。');
+});
+
+test('a worktree claim that disagrees with the real state stays unconfirmed', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const { group, reviewId } = await startOnS1(page);
+  // Twiglane 说干净，但真实工作区仍有 46 个未提交文件。
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=clean');
+  await expect(group.getByRole('status')).toHaveText('结果未确认：Twiglane 声明的工作区状态与当前真实状态不一致。');
+  await expect(group).toContainText('以重新读取的真实 Git 状态为准');
+  await expect(group).toContainText('46 个未提交文件');
+});
+
+test('a returned review whose real status cannot be read is unconfirmed, never clean', async ({ page }) => {
+  await installDesktop(page);
+  await page.addInitScript(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, any>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    internals.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'workbench_code_status' && (window as unknown as { __failStatus?: boolean }).__failStatus) throw { code: 'read_failed', message: 'x' };
+      return original(command, args);
+    };
+  });
+  await openWorkbench(page);
+  const { group, reviewId } = await startOnS1(page);
+  await page.evaluate(() => { (window as unknown as { __failStatus?: boolean }).__failStatus = true; });
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=clean');
+  await expect(group.getByRole('status')).toHaveText('已返回，但这次没有读到真实 Git 状态，结果未确认。');
+  await expect(group).not.toContainText('没有未提交文件');
+});
+
+test('bounded meta is kept without changing the verdict, and v1 or malformed extensions write nothing', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const { group, reviewId } = await startOnS1(page);
+  await emit(page, 'cliora://review?v=2&event=accepted&reviewId=' + reviewId + S1);
+  await expect(group.getByRole('status')).toHaveText('Twiglane 已打开这个工作区，可以开始审查。');
+
+  // 版本不匹配与畸形扩展：都被忽略，状态不变，也不弹“已失效”。
+  for (const url of [
+    'cliora://review?v=1&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed',
+    'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=dirty&meta.X.y=1',
+    'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed',
+  ]) {
+    await emit(page, url);
+  }
+  await expect(group.getByRole('status')).toHaveText('Twiglane 已打开这个工作区，可以开始审查。');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  const state = await page.evaluate((id) => (window as unknown as { __harness: { reviews: Record<string, { status: string }> } }).__harness.reviews[id], reviewId);
+  expect(state.status).toBe('accepted');
+
+  // 合法的说明性 meta 被保留，结论仍由真实 Git 状态决定。
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=dirty&meta.twiglane.version=0.3.3');
+  await expect(group.getByRole('status')).toHaveText('这次没有提交或合入；工作区有 46 个未提交文件。');
+  await expect(group).not.toContainText('0.3.3');
+  const kept = await page.evaluate((id) => (window as unknown as { __harness: { reviews: Record<string, { meta?: Record<string, string> }> } }).__harness.reviews[id].meta, reviewId);
+  expect(kept).toEqual({ 'twiglane.version': '0.3.3' });
+});
+
+test('reviewing again after a return uses a new reviewId and the current HEAD, and the late old return is ignored', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const first = await startOnS1(page);
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + first.reviewId + S1 + '&outcome=reviewed&worktreeState=dirty');
+  await expect(first.group.getByRole('status')).toHaveText('这次没有提交或合入；工作区有 46 个未提交文件。');
+
+  // 用户在原会话里继续修复并提交了：HEAD 前进。再次审查是一次新的发起。
+  await page.evaluate((oid) => { (window as unknown as { __harness: { headOid: string } }).__harness.headOid = oid; }, NEXT);
+  await first.group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
+  const second = await page.evaluate(() => {
+    const harness = (window as unknown as { __harness: { starts: Array<{ reviewId: string }>; reviews: Record<string, { baseline: string | null }> } }).__harness;
+    const last = harness.starts[harness.starts.length - 1];
+    return { reviewId: last.reviewId, count: harness.starts.length, baseline: harness.reviews[last.reviewId].baseline };
+  });
+  expect(second.count).toBe(2);
+  expect(second.reviewId).not.toBe(first.reviewId);
+  expect(second.baseline).toBe(NEXT);
+  await expect(first.group.getByRole('status')).toHaveText('正在等待 Twiglane 确认…');
+
+  // 旧审查迟到的 returned 不覆盖新审查。
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + first.reviewId + S1 + '&outcome=committed&headOid=' + NEXT + '&worktreeState=clean');
+  await expect(page.getByRole('alert').first()).toContainText('原 cliora 审查会话已失效');
+  await expect(first.group.getByRole('status')).toHaveText('正在等待 Twiglane 确认…');
 });
 
 test('a remote session has no local review entry', async ({ page }) => {
@@ -409,7 +559,7 @@ test('an unknown reviewId is reported instead of silently ignored', async ({ pag
   await expect(rail.getByRole('tab')).toHaveCount(1);
 
   await page.evaluate(() => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=99999999-8888-4777-8666-555555555555&sessionId=s1-0000-0000-0000-000000000000&outcome=reviewed',
+    'cliora://review?v=2&event=returned&reviewId=99999999-8888-4777-8666-555555555555&sessionId=s1-0000-0000-0000-000000000000&outcome=reviewed&worktreeState=dirty',
   ));
 
   // 注册表里没有这个 review：明确说明无法返回，而不是停在原来的会话上假装无事。
@@ -438,7 +588,7 @@ test('a returned link for a closed session is reported without starting a replac
   await page.evaluate(() => { (window as unknown as { __harness: { sessionClosed: boolean } }).__harness.sessionClosed = true; });
 
   await page.evaluate(() => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=eeeeeeee-ffff-4aaa-8bbb-cccccccccccc&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
+    'cliora://review?v=2&event=returned&reviewId=eeeeeeee-ffff-4aaa-8bbb-cccccccccccc&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d&worktreeState=clean',
   ));
 
   const alert = page.getByRole('alert').first();
@@ -462,7 +612,7 @@ test('a superseded reviewId is reported and never overwrites the newer review', 
 
   // 迟到的 returned 指向被新链接取代的旧 reviewId。
   await page.evaluate(() => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
-    'cliora://review?v=1&event=returned&reviewId=aaaaaaaa-1111-4222-8333-444444444444&sessionId=s1-0000-0000-0000-000000000000&outcome=merged&headOid=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
+    'cliora://review?v=2&event=returned&reviewId=aaaaaaaa-1111-4222-8333-444444444444&sessionId=s1-0000-0000-0000-000000000000&outcome=merged&headOid=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d&worktreeState=clean',
   ));
 
   await expect(page.getByRole('alert').first()).toContainText('原 cliora 审查会话已失效，无法返回。');

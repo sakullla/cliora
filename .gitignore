@@ -59,4 +59,4 @@ docs/verification/configuration-redesign-ui/*
 # Track the cross-app review protocol contract.
 !docs/integrations/
 docs/integrations/*
-!docs/integrations/twiglane-review-v1.md
+!docs/integrations/twiglane-review-v2.md

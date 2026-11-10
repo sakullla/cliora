@@ -2325,22 +2325,38 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (review.status === 'rejected') {
       return { tone: 'rejected', text: [t('sessions.reviewRejected'), reviewReasonText(t, review.reason)].join(' · ') };
     }
-    // 返回的 committed/merged 只是待复核声明：OID 必须与基线不同且等于当前 HEAD。
-    if (!review.outcome || review.outcome === 'reviewed') {
-      return { tone: 'returned', text: t('sessions.reviewReturnedReviewed') };
+    // 每一个 returned（包括 reviewed）都用真实 Git 状态复核：outcome、headOid 与 worktreeState
+    // 都只是待复核声明。读不到真实状态就是未确认，绝不显示成 0 个文件或成功。
+    const files = !unknownStatus && status?.state === 'ready' && typeof status.uncommittedFiles === 'number'
+      ? status.uncommittedFiles
+      : null;
+    if (files === null || !status) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
+    const merged = review.outcome === 'merged';
+    if (review.outcome === 'committed' || merged) {
+      // 提交/合入声明：OID 必须与基线不同且等于当前 HEAD。
+      const confirmed = !!review.headOid
+        && /^[0-9a-f]{40}$/.test(review.headOid)
+        && review.headOid !== review.baseline
+        && status.headOid === review.headOid;
+      if (!confirmed) return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmed') };
+    } else if (review.outcome !== 'reviewed') {
+      return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
     }
-    const confirmed = !!review.headOid
-      && /^[0-9a-f]{40}$/.test(review.headOid)
-      && review.headOid !== review.baseline
-      && !unknownStatus
-      && status?.state === 'ready'
-      && status.headOid === review.headOid;
-    if (!confirmed) return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmed') };
+    // 工作区声明与真实读取不一致也是未确认；unknown 只表示声明未知，以真实读取为准。
+    const claim = review.worktreeState;
+    if ((claim === 'clean' && files > 0) || (claim === 'dirty' && files === 0)) {
+      return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmedWorktree') };
+    }
+    if (review.outcome === 'reviewed') {
+      return files > 0
+        ? { tone: 'returned', text: t('sessions.reviewReturnedDirty', { count: files }) }
+        : { tone: 'returned', text: t('sessions.reviewReturnedClean') };
+    }
     const oid = review.headOid!.slice(0, 7);
-    return {
-      tone: 'confirmed',
-      text: t(review.outcome === 'merged' ? 'sessions.reviewReturnedMerged' : 'sessions.reviewReturnedCommitted', { oid }),
-    };
+    const key = files > 0
+      ? (merged ? 'sessions.reviewReturnedMergedDirty' : 'sessions.reviewReturnedCommittedDirty')
+      : (merged ? 'sessions.reviewReturnedMerged' : 'sessions.reviewReturnedCommitted');
+    return { tone: 'confirmed', text: t(key, { oid, count: files }) };
   }
 
   /** 真实状态读不到时显示"未知"，绝不显示成 0 个文件。 */
