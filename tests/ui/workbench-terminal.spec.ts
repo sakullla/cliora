@@ -638,6 +638,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
               __savedRestores?: Array<Record<string, any>>;
               __restoreOneFailure?: { detail: string; candidates: unknown[] };
               __restoreOne?: Array<{ sessionId: string; nativeId: string | null }>;
+              __reconnectEvents?: boolean;
+              __reconnectRelease?: () => void;
             };
             oneHarness.__restoreOne = [...(oneHarness.__restoreOne ?? []), { sessionId: args.sessionId, nativeId: args.nativeId ?? null }];
             const saved = (oneHarness.__savedRestores ?? []).find(item => item.id === args.sessionId);
@@ -657,11 +659,24 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
               if (failure && !args.nativeId) return { restored: {}, failures: [{ session: sessions[index], ...failure }] };
               const id = `resumed-${args.sessionId}`;
               sessions.splice(index, 1, { ...sessions[index], id, running: true, exitCode: null });
+              if (oneHarness.__reconnectEvents) {
+                bridge.handlers[bridge.listens['cliora:workbench-restore']]?.({ payload: {
+                  restoreId: `reconnect-${id}`, savedSessionId: args.sessionId, stage: 'restored',
+                  session: { ...sessions[index] }, detail: null, candidates: [],
+                } });
+                await new Promise<void>(resolve => { oneHarness.__reconnectRelease = resolve; });
+              }
               return { restored: { [args.sessionId]: id }, failures: [] };
             }
             return { restored: { [args.sessionId]: 's1' }, failures: [] };
           }
           if (command === 'forget_workbench_restore') { Object.assign(window, { __forgottenRestore: args.sessionId }); return null; }
+          if (command === 'close_workbench_session') {
+            const index = sessions.findIndex(item => item.id === args.sessionId);
+            if (index < 0) throw new Error('会话不存在');
+            sessions.splice(index, 1);
+            return null;
+          }
           if (command === 'open_external_url') {
             if ((window as unknown as { __failOpen?: boolean }).__failOpen) throw new Error('浏览器不可用');
             opened.push(args.url);
@@ -2956,6 +2971,36 @@ test('a disconnected local CLI stops showing output activity and resumes its ori
   await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => (window as unknown as { __launches?: unknown[] }).__launches ?? [])).toEqual([]);
 });
+
+for (const removal of ['single', 'clear'] as const) {
+  test(`recovery events replace a crashed tab before the report and allow ${removal} removal`, async ({ page }) => {
+    await page.addInitScript(() => Object.assign(window, { __reconnectEvents: true, __twoSessions: true }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-ready');
+    const stage = page.getByRole('region', { name: '当前会话' });
+    // Repeat recovery to include a tab that was itself delivered by a restore event.
+    for (const id of ['s1', 'resumed-s1']) {
+      await page.evaluate(id => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(-1073740940, id), id);
+      await stage.getByRole('button', { name: '恢复会话', exact: true }).click();
+      await expect(page.locator(`[data-pane-session="${id}"]`)).toHaveCount(0);
+      await expect(page.locator(`[data-pane-session="resumed-${id}"]`)).toBeVisible();
+      await page.evaluate(() => (window as unknown as { __reconnectRelease: () => void }).__reconnectRelease());
+      await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toBeEnabled();
+      await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
+    }
+    await page.evaluate(() => (window as unknown as { __exit: (code: number, id: string) => void }).__exit(0, 'resumed-resumed-s1'));
+    await page.getByRole('button', { name: removal === 'single' ? /^移除会话：/ : '清理已结束', exact: removal === 'clear' }).click();
+    await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(0);
+    // A fresh list must not resurrect an event-delivered session from the pending cache.
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(1);
+    await expect(page.getByText('会话不存在', { exact: false })).toHaveCount(0);
+  });
+}
 
 test('local reconnect keeps the ended terminal when recovery fails and offers candidate selection', async ({ page }) => {
   await installWorkbenchMock(page);

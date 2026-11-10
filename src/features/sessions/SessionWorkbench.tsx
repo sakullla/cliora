@@ -399,7 +399,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** Ids the workbench has listed or restored. Kept in step with every list, so a restore can tell
    *  whether a real session is already on screen without waiting for a render. */
   const liveSessionIds = useRef(new Set<string>());
+  // A list read started before a close/restore may still contain a retired id.
+  const retiredSessionIds = useRef(new Set<string>());
   function applyListedSessions(listed: WorkbenchSession[]) {
+    listed = listed.filter((item) => !retiredSessionIds.current.has(item.id));
     const known = new Set(listed.map((item) => item.id));
     for (const id of [...pendingRestored.current.keys()]) if (known.has(id)) pendingRestored.current.delete(id);
     const extra = [...pendingRestored.current.values()].filter((item) => !known.has(item.id));
@@ -683,18 +686,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
   /** Replace one pending row with the real session, without waiting for a second list IPC. */
   function applyRestoredSession(savedId: string, snapshot: WorkbenchSession) {
+    if (retiredSessionIds.current.has(snapshot.id)) return;
+    if (savedId !== snapshot.id) forgetSession(savedId);
     if (!firstSeenAt.current.has(snapshot.id)) firstSeenAt.current.set(snapshot.id, snapshot.startedAt ?? Date.now());
     pendingRestored.current.set(snapshot.id, snapshot);
     setSessions((current) => {
-      const index = current.findIndex((item) => item.id === snapshot.id);
-      if (index < 0) return [...current, snapshot];
-      const copy = [...current];
+      const copy = current.filter((item) => item.id !== savedId || savedId === snapshot.id);
+      const index = copy.findIndex((item) => item.id === snapshot.id);
+      if (index < 0) return [...copy, snapshot];
       copy[index] = { ...copy[index], ...snapshot };
       return copy;
     });
     dropRestoreRow(savedId);
     setArrangement((current) => remapArrangement(current, { [savedId]: snapshot.id }));
     liveSessionIds.current.add(snapshot.id);
+    setSelectedId((current) => current === savedId ? snapshot.id : current);
     // The workbench already shows a real session: a restore fills a gap, it never takes the
     // selection from what the user is working in.
     if (liveSessionIds.current.size > 1) return;
@@ -711,6 +717,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       markRestoreRowFailed(failure.session, failure.detail, Array.isArray(failure.candidates) ? failure.candidates : []);
     }
     if (!Object.keys(report.restored).length) return;
+    // Reports also replace old tabs when the progress event was not delivered.
+    const replaced = new Set(Object.keys(report.restored).filter((id) => id !== report.restored[id]));
+    for (const id of replaced) forgetSession(id);
+    setSessions((current) => current.filter((item) => !replaced.has(item.id)));
     writeRestoreRows(restoreRowsRef.current.filter((row) => !report.restored[row.saved.id]));
     setArrangement((current) => remapArrangement(current, report.restored));
     // The per-record events already delivered their snapshots. Only a record whose event never
@@ -1712,6 +1722,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function forgetSession(id: string) {
+    retiredSessionIds.current.add(id);
+    pendingRestored.current.delete(id);
+    liveSessionIds.current.delete(id);
     sessionStateUpdates.current.delete(id);
     firstSeenAt.current.delete(id);
     setTitles((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
