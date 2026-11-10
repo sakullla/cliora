@@ -167,11 +167,14 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   const nav = page.getByRole('navigation', { name: '页面' });
 
   await expectBodyText(page.locator('.nav button.active .nav-text'));
-  // The current page uses emerald ink and a flat wash rather than a luminous icon tile.
+  // The current page uses emerald ink on a raised paper chip (a hairline ring, no stripe) rather than a luminous icon tile.
   const glyph = await paint(page.locator('.nav button.active .nav-glyph'));
   expect(channels(glyph.color), JSON.stringify(glyph)).toBe(channels(glyph.accent));
   expect(await page.locator('.nav button.active .nav-glyph').evaluate((el) => getComputedStyle(el).backgroundImage)).toBe('none');
-  expect(await page.locator('.nav button.active').evaluate((el) => getComputedStyle(el).boxShadow)).toContain('inset');
+  const activeChip = await page.locator('.nav button.active').evaluate((el) => ({ shadow: getComputedStyle(el).boxShadow, background: getComputedStyle(el).backgroundColor, sidebar: getComputedStyle(el.closest('.sidebar')!).backgroundColor }));
+  expect(activeChip.shadow).not.toContain('inset');
+  expect(activeChip.shadow).toContain('0px 0px 0px 1px');
+  expect(activeChip.background).not.toBe(activeChip.sidebar);
   await nav.getByRole('button', { name: '设置' }).hover();
   await expectBodyText(nav.getByRole('button', { name: '设置' }).locator('.nav-text'));
 

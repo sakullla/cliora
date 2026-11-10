@@ -236,6 +236,9 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'workbench_git_context') return args.sessionId === 's1' ? { branch: 'feature/workbench-polish', commit: null, worktree: 'cliora-polish', repository: 'cliora' } : { branch: 'main', commit: null, worktree: null, repository: 'cliora' };
           if (command === 'git_worktrees') {
             if (window.__captureWorktreeReadFails) throw { message: '无法读取工作树列表：git status 失败', action: '检查仓库后重试。' };
+            if (window.__captureManyWorktrees) return Array.from({ length: window.__captureManyWorktrees }, (_, index) => index === 1
+              ? { name: 'cliora-polish', branch: 'feature/workbench-polish', path: '/repo/cliora-polish', current: true }
+              : { name: 'cliora-wt-' + String(index).padStart(3, '0'), branch: (index % 3 ? 'feat/task-' : 'fix/issue-') + index, path: '/repo/worktrees/cliora-wt-' + String(index).padStart(3, '0'), current: false });
             return [
               { name: 'cliora', branch: 'main', path: '/repo/cliora', current: false },
               { name: 'cliora-polish', branch: 'feature/workbench-polish', path: '/repo/cliora-polish', current: true },
@@ -626,6 +629,32 @@ for (const width of widths) {
       ];
     });
     await openWorktreeSetup(page);
+  });
+  // Hundreds of worktrees: the menu filters and shows a bounded slice; the dialog opens on this
+  // project, pages its list and groups every project by repository.
+  await shot('workbench-worktrees-many-' + theme + '-' + width, theme, width, async (page) => {
+    await page.evaluate(() => { window.__captureManyWorktrees = 240; });
+    await page.getByRole('button', { name: new RegExp(copy('在工作树中新开会话', 'Open a session in a worktree')) }).click();
+    const menu = page.getByRole('menu', { name: copy('在工作树中新开会话', 'Open a session in a worktree') });
+    await menu.getByRole('searchbox').fill('fix 12');
+    await menu.getByRole('menuitemradio').nth(1).waitFor();
+  });
+  const manyLedger = () => {
+    const rows = [];
+    for (let index = 0; index < 140; index++) rows.push({ mainCheckout: 'C:\\Projects\\cliora', worktreePath: 'C:\\Projects\\.worktrees\\cliora-' + index, branch: (index % 4 ? 'feat/task-' : 'fix/issue-') + index, environment: index % 2 ? 'prepared' : 'unprepared' });
+    for (let index = 0; index < 90; index++) rows.push({ mainCheckout: index % 2 ? 'C:\\Projects\\personal-site' : 'D:\\work\\acme-svc-order', worktreePath: 'C:\\Projects\\.worktrees\\other-' + index, branch: 'feat/other-' + index, environment: 'prepared' });
+    return rows;
+  };
+  await shot('workbench-worktree-setup-many-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate((rows) => { window.__captureLedger = rows; }, manyLedger());
+    const setup = await openWorktreeSetup(page);
+    await setup.getByRole('radio', { name: new RegExp(copy('栖点', 'Cliora')) }).waitFor();
+  });
+  await shot('workbench-worktree-setup-all-' + theme + '-' + width, theme, width, async page => {
+    await page.evaluate((rows) => { window.__captureLedger = rows; }, manyLedger());
+    const setup = await openWorktreeSetup(page);
+    await setup.getByRole('radio', { name: new RegExp(copy('全部项目', 'All projects')) }).click();
+    await setup.getByRole('searchbox').fill('other-1');
   });
   // Cleanup refused because a running session still uses that checkout.
   await shot('workbench-worktree-cleanup-running-' + theme + '-' + width, theme, width, async page => {

@@ -540,13 +540,26 @@
 .railFoot { display: flex; flex: none; align-items: center; gap: var(--space-1_5); min-height: 40px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2); border-top: 1px solid var(--wb-divider); color: var(--text-3); font-size: var(--fs-micro); }
 .railSummary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-/* Docked in the app sidebar: the sidebar draws the column; the list keeps its rhythm. */
+/* Docked in the app sidebar: the sidebar draws the column and its title row sits right above,
+   so the rail starts with search and new session, and rows use the sidebar's paper chip. */
 .rail[data-docked] { flex: 1 1 auto; }
-.rail[data-docked] .railHead { padding: var(--space-3) var(--space-2_5) var(--space-1_5) var(--space-3); }
+.rail[data-docked] .railHead { padding: var(--space-1) var(--space-2_5) var(--space-1_5); }
 .rail[data-docked]:not([data-slim]) .railTitleRow { display: contents; }
 .rail[data-docked] .list { padding-right: var(--space-2); padding-left: var(--space-2_5); }
-.rail[data-docked][data-slim] .railHead { padding: var(--space-2_5) var(--space-2) var(--space-1_5); }
+.rail[data-docked][data-slim] .railHead { padding: var(--space-1) var(--space-2) var(--space-1_5); }
 .rail[data-docked][data-slim] .list { padding-inline: var(--space-2); }
+.rail[data-docked] .railSearchField { border-color: transparent; background: var(--sidebar-well); }
+.rail[data-docked] .railSearchField:hover { border-color: var(--line); background: var(--sidebar-well-hover); }
+.rail[data-docked] .railSearchField:focus-within { border-color: var(--accent); background: var(--surface); }
+.rail[data-docked] .session[aria-selected='true'],
+.rail[data-docked] .session[aria-selected='true']:hover:not(:disabled) { background: var(--sidebar-active); box-shadow: var(--sidebar-active-ring); }
+.rail[data-docked]:not([data-slim]) .session[aria-selected='true']::before { display: none; }
+.rail[data-docked] .session[aria-selected='true'] .sessionStateDot { border-color: var(--sidebar-active); background: var(--sidebar-active); }
+.rail[data-docked] .session { min-height: 48px; border-radius: var(--radius); }
+.rail[data-docked] .sessionIconWrap { width: 30px; height: 30px; background: transparent; box-shadow: none; }
+.rail[data-docked] .session[aria-selected='true'] .sessionIconWrap { background: transparent; box-shadow: none; }
+.rail[data-docked] .sessionIconWrap[data-tone='bell'] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
+.rail[data-docked] .groupLabel { padding-left: var(--space-2); letter-spacing: .04em; }
 
 /* Slim rail: icons, status and attention only. */
 .rail[data-slim] .railHead { justify-items: center; padding: var(--space-3) var(--space-2) var(--space-1_5); }
@@ -675,8 +688,8 @@
   flex: none;
   align-items: center;
   gap: var(--space-3);
-  min-height: 50px;
-  padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-4);
+  min-height: 46px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--term-line);
   background: var(--term-bar);
   /* Double-click toggles focus mode / the rail; it must not select words on the way. */
@@ -721,6 +734,8 @@
 .captionSlot :global(.window-controls[data-chrome='linux'] .window-control:hover:not(:disabled)) { background: var(--term-press); color: var(--term-fg); }
 .window[data-tone='bell'] .stageBar::after { width: 100%; opacity: .9; background: var(--term-warning); transform: none; }
 .stageLead { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-2_5); min-width: 0; }
+/* One line: title and state first, then the quiet facts (tool, place, mode, run time) that give
+   way first when the bar runs short. */
 .stageTail { display: flex; flex: none; align-items: center; gap: var(--space-2); min-width: 0; }
 /* The rail already shows the tool mark in a frame; here it is a quiet badge beside the title. */
 .stageIcon {
@@ -728,12 +743,12 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border: 0;
-  border-radius: var(--radius);
-  background: var(--term-well);
-  box-shadow: inset 0 0 0 1px var(--term-line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
   cursor: default;
   transition: box-shadow var(--fast) var(--ease);
 }
@@ -745,10 +760,10 @@
 .stageIconDot[data-tone='idle'] { color: var(--term-success); }
 .stageIconDot[data-tone='bell'] { color: var(--term-warning); }
 .stageIconDot[data-tone='error'] { color: var(--term-danger); }
-.identityText { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
+.identityText { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-3); min-width: 0; overflow: hidden; }
 /* CLI spinner frames differ in width; a fixed slot keeps the task text from jittering. */
 .titleGlyph { display: inline-block; min-width: 1.15em; text-align: center; font-variant-emoji: text; }
-.identityTitleRow { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.identityTitleRow { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-2); min-width: min(140px, 100%); }
 .identityTitleRow > h2 {
   flex: 0 1 auto;
   min-width: 0;
@@ -756,17 +771,20 @@
   overflow: hidden;
   color: var(--term-fg);
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: var(--fw-semibold);
-  letter-spacing: -.15px;
+  letter-spacing: -.1px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.identitySub { display: flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--term-text-3); font-size: var(--fs-caption); line-height: 18px; }
+.identitySub { position: relative; display: flex; flex: 0 1000 auto; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; padding-left: var(--space-3); color: var(--term-text-3); font-size: var(--fs-caption); line-height: 18px; white-space: nowrap; }
+.identitySub::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 14px; background: var(--term-frame); transform: translateY(-50%); }
+.identitySub > * { flex: none; }
+.identitySub > .pathChip { flex: 0 1 auto; }
 .identityTool { flex: none; max-width: 18ch; overflow: hidden; color: var(--term-text-2); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
 /* The state is a quiet label beside the title: tone in the dot and text, no ring around it. */
-.identityTitleRow .statusChip { flex: none; height: 20px; padding: 0 var(--space-2) 0 var(--space-1_5); border-radius: var(--radius-pill); font-size: var(--fs-micro); font-weight: var(--fw-semibold); box-shadow: none; }
+.identityTitleRow .statusChip { flex: none; height: 20px; padding: 0 var(--space-2) 0 var(--space-1_5); border: 0; border-radius: var(--radius-pill); font-size: var(--fs-micro); font-weight: var(--fw-medium); box-shadow: none; }
 .statusChip > span,
 .statusState > span { display: inline-flex; align-items: center; gap: var(--space-1); }
 .identityTitleRow .statusChip[data-state='live'],
@@ -1291,6 +1309,13 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; width: min(380px, calc(100vw - 24px)); max-height: min(460px, calc(100vh - 120px)); overflow: auto; overscroll-behavior: contain; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-lg); background: var(--term-float); box-shadow: 0 20px 48px -18px var(--term-shadow), 0 2px 8px -2px var(--term-shadow); animation: wbDrop 140ms var(--ease); }
 .worktreeMenuHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-1_5) var(--space-1_5); color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 .worktreeMenuHead em { padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-well); font-style: normal; font-variant-numeric: tabular-nums; line-height: 16px; }
+.worktreeFilter { position: sticky; z-index: 1; top: calc(var(--space-1) * -1); display: flex; align-items: center; gap: var(--space-1_5); height: 30px; margin: 0 0 var(--space-1); padding: 0 var(--space-2); border: 1px solid var(--term-frame); border-radius: var(--radius-sm); background: var(--term-float); color: var(--term-text-3); }
+.worktreeFilter:focus-within { border-color: color-mix(in srgb, var(--term-accent) 60%, transparent); }
+.worktreeFilter > :global(svg) { flex: none; }
+.worktreeFilter input[type='search'],
+.worktreeFilter input[type='search']:focus,
+.worktreeFilter input[type='search']:focus-visible { flex: 1 1 auto; min-width: 0; min-height: 0; height: 100%; padding: 0 !important; border: 0 !important; background: transparent !important; box-shadow: none !important; outline: none !important; color: var(--term-fg); font-size: var(--fs-caption) !important; }
+.worktreeFilter input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 /* Two lines per checkout: name and change state, then branch, environment and path. */
 .worktreeItem { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-areas: 'glyph name state' 'glyph sub action'; align-items: center; gap: var(--space-0_5) var(--space-2); width: 100%; min-width: 0; min-height: 44px; height: auto; padding: var(--space-1_5) var(--space-2); border: 0; box-shadow: none; border-radius: var(--radius-sm); background: transparent; color: var(--term-text-2); font-size: var(--fs-caption); text-align: left; white-space: nowrap; cursor: pointer; transition: background-color var(--fast) var(--ease); }
 .worktreeItem:hover:not(:disabled),
@@ -1556,7 +1581,32 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .setupStatus:empty { display: none; }
 .setupEmpty > :global(svg) { flex: none; }
 .setupEmpty { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
-.setupList { display: grid; max-height: min(300px, 40vh); margin: 0; padding: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); list-style: none; }
+.setupList { display: grid; align-content: start; max-height: min(360px, 44vh); margin: 0; padding: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: var(--radius); list-style: none; }
+/* Scope: this project or every repository Cliora created worktrees for. */
+.setupScope { display: inline-flex; gap: var(--space-0_5); min-width: 0; padding: var(--space-0_5); border-radius: var(--radius); background: var(--surface-2); }
+.setupScope > button,
+.setupScope > button:hover:not(:disabled) { display: inline-flex; align-items: center; gap: var(--space-1_5); min-width: 0; max-width: 200px; min-height: 24px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); box-shadow: none; }
+.setupScope > button:hover:not(:disabled) { color: var(--text); }
+.setupScope > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setupScope > button > em { flex: none; color: var(--text-3); font-size: var(--fs-micro); font-style: normal; font-variant-numeric: tabular-nums; }
+.setupScope > button[aria-checked='true'],
+.setupScope > button[aria-checked='true']:hover:not(:disabled) { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent); }
+.setupFilter { display: flex; align-items: center; gap: var(--space-2); height: 34px; padding: 0 var(--space-2_5); border: 1px solid var(--control-line); border-radius: var(--radius); background: var(--surface); color: var(--text-3); }
+.setupFilter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.setupFilter > :global(svg) { flex: none; }
+.setupFilter input[type='search'],
+.setupFilter input[type='search']:focus,
+.setupFilter input[type='search']:focus-visible { flex: 1 1 auto; min-width: 0; min-height: 0; height: 100%; padding: 0 !important; border: 0 !important; background: transparent !important; box-shadow: none !important; outline: none !important; font-size: var(--fs-control) !important; }
+.setupFilter input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.setupFilterCount { flex: none; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; line-height: 18px; }
+.setupGroup { position: sticky; z-index: 1; top: 0; display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-1_5) var(--space-3); border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); }
+.setupGroup + .setupRow { border-top: 0; }
+.setupRow + .setupGroup { border-top: 1px solid var(--line); }
+.setupGroup > :global(svg) { flex: none; }
+.setupGroup strong { flex: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.setupGroup code { min-width: 0; overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; background: transparent; }
+.setupGroup em { margin-left: auto; font-style: normal; font-variant-numeric: tabular-nums; }
+.setupMore { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-3); border-top: 1px solid var(--line); color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 .setupRow { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); transition: background-color var(--fast) var(--ease); }
 .setupRow + .setupRow { border-top: 1px solid var(--line); }
 .setupRow:hover { background: var(--surface-2); }
@@ -1746,9 +1796,10 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-narrow] .recentsGrid { grid-template-columns: minmax(0, 1fr); }
 .root[data-narrow] .modeCards { grid-template-columns: 1fr; }
 
-.root[data-tight] .stageBar { gap: var(--space-2); padding: var(--space-2) var(--space-2_5); }
+.root[data-tight] .stageBar { gap: var(--space-2); padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2_5); }
 .root[data-tight] .stageLead { gap: var(--space-2); }
-.root[data-tight] .stageIcon { width: 32px; height: 32px; border-radius: var(--radius); }
+.root[data-tight] .identityText { gap: var(--space-2); }
+.root[data-tight] .identitySub { padding-left: var(--space-2); }
 .root[data-tight] .stageTail { gap: var(--space-1_5); }
 .root[data-tight] .actionGroup + .actionGroup { margin-left: var(--space-1_5); padding-left: var(--space-1_5); }
 .root[data-tight] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
@@ -1764,7 +1815,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-tight] .identityTool,
 .root[data-tight] .sessionElapsed { display: none; }
 
-.root[data-compact] .stageBar { min-height: 52px; gap: var(--space-1_5); padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-2); }
+.root[data-compact] .stageBar { min-height: 44px; gap: var(--space-1_5); padding: var(--space-1) var(--space-2); }
 .root[data-compact] .stageLead { gap: var(--space-1_5); }
 .root[data-compact] .stageIcon { display: none; }
 .root[data-compact] .identityTitleRow > h2 { font-size: var(--fs-control); }

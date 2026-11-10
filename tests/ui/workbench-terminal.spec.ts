@@ -1466,8 +1466,12 @@ test('long task titles, metadata, and toolbar actions keep their own space at ev
       const pathBox = await path.boundingBox();
       const stageBox = await stage.boundingBox();
       if (!titleBox || !endBox || !pathBox || !stageBox) return false;
+      // One title line: the place follows the title on the same line and never overlaps it.
+      const titleMiddle = titleBox.y + titleBox.height / 2;
       return titleBox.x + titleBox.width <= endBox.x
-        && pathBox.y >= titleBox.y + titleBox.height - 1
+        && pathBox.x >= titleBox.x + titleBox.width - 1
+        && pathBox.y <= titleMiddle && pathBox.y + pathBox.height >= titleMiddle
+        && pathBox.x + pathBox.width <= endBox.x
         && endBox.x + endBox.width <= stageBox.x + stageBox.width;
     }).toBe(true);
     await expect.poll(() => toolbar.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
@@ -2777,7 +2781,7 @@ test('double-clicks and Mod+Shift+B toggle the rail and focus mode; middle-click
   await expect(codex).toBeVisible();
 });
 
-test('the workbench shares one sidebar: page icons on top, sessions below, and no card around the terminal', async ({ page }) => {
+test('the workbench shares one sidebar: sessions on top, page icons in one row below, and no card around the terminal', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 1360, height: 860 });
   await openWorkbench(page);
@@ -2786,13 +2790,15 @@ test('the workbench shares one sidebar: page icons on top, sessions below, and n
   const rail = page.getByRole('complementary', { name: '会话列表' });
   const stage = page.getByRole('region', { name: '当前会话' });
 
-  // One column: the session list is docked inside the app sidebar, under the page icons.
+  // One column: the session list is docked inside the app sidebar, right under its title row;
+  // the page icons are one row at the foot of the sidebar.
   await expect(sidebar.getByRole('tablist', { name: '会话列表' })).toBeVisible();
   await expect(page.locator('[data-term-theme]').getByRole('tablist', { name: '会话列表' })).toHaveCount(0);
   const navBox = (await nav.boundingBox())!;
   const railBox = (await rail.boundingBox())!;
   expect(navBox.height).toBeLessThan(48);
-  expect(railBox.y).toBeGreaterThan(navBox.y + navBox.height - 1);
+  expect(navBox.y).toBeGreaterThan(railBox.y + railBox.height - 1);
+  expect(railBox.y).toBeLessThan(80);
   // The expanded sidebar has room for every page icon, so nothing is folded into the more menu.
   for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) await expect(nav.getByRole('button', { name, exact: true })).toBeVisible();
   await expect(nav.getByRole('button', { name: '工作台', exact: true }).locator('.nav-text')).toBeHidden();
@@ -3090,7 +3096,7 @@ async function openWorktreeSetup(page: Page) {
 test('removing a dirty worktree waits for confirmation and can be cancelled', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, {
-      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
+      __ledger: [{ mainCheckout: 'C:/work', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
       __cleanupNeedsConfirm: true,
       __cleanupDetail: '将丢弃未提交的改动：\n?? note.txt',
     });
@@ -3119,7 +3125,7 @@ test('removing a dirty worktree waits for confirmation and can be cancelled', as
 test('a git failure while removing a worktree keeps the reason on screen', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, {
-      __ledger: [{ mainCheckout: 'C:/repo', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
+      __ledger: [{ mainCheckout: 'C:/work', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' }],
       __cleanupError: 'Git 无法删除工作树：locked',
     });
   });
@@ -3130,6 +3136,63 @@ test('a git failure while removing a worktree keeps the reason on screen', async
   await setup.getByRole('button', { name: /清理 feat-hello/ }).click();
   await expect(setup.getByRole('alert')).toContainText('locked');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([{ path: 'C:/work-task', confirm: false }]);
+});
+
+test('worktree management opens on the current project and scales to hundreds of worktrees', async ({ page }) => {
+  await page.addInitScript(() => {
+    const ledger = [];
+    for (let index = 0; index < 150; index++) ledger.push({ mainCheckout: 'C:/work', worktreePath: `C:/trees/work-${index}`, branch: `feat/task-${index}`, environment: 'prepared' });
+    for (let index = 0; index < 80; index++) ledger.push({ mainCheckout: 'D:/other', worktreePath: `D:/trees/other-${index}`, branch: `feat/other-${index}`, environment: 'prepared' });
+    Object.assign(window, { __ledger: ledger });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const setup = await openWorktreeSetup(page);
+  const scope = setup.getByRole('radiogroup', { name: '显示范围' });
+  // Only this project's worktrees, and only one page of them, are rendered at first.
+  await expect(scope.getByRole('radio', { name: /work 150/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(setup.getByRole('button', { name: /^清理 feat\/task-/ })).toHaveCount(60);
+  await expect(setup.getByRole('button', { name: /^清理 feat\/other-/ })).toHaveCount(0);
+  await setup.getByRole('button', { name: '再显示 60 个' }).click();
+  await expect(setup.getByRole('button', { name: /^清理 feat\/task-/ })).toHaveCount(120);
+  // The filter narrows by branch or path.
+  const filter = setup.getByRole('searchbox', { name: '筛选工作树' });
+  await filter.fill('task-14');
+  await expect(setup.getByRole('button', { name: /^清理 feat\/task-/ })).toHaveCount(11);
+  await filter.fill('no-such-branch');
+  await expect(setup).toContainText('没有匹配“no-such-branch”的工作树。');
+  await filter.press('Escape');
+  await expect(filter).toHaveValue('');
+  await expect(setup).toBeVisible();
+  // Every project stays one click away, grouped by repository.
+  await scope.getByRole('radio', { name: /全部项目 230/ }).click();
+  await filter.fill('other-7');
+  await expect(setup.getByRole('button', { name: /^清理 feat\/other-7/ })).toHaveCount(11);
+  await expect(setup.locator('li[title="D:/other"]')).toContainText('other');
+});
+
+test('the worktree menu filters a long list and reads status only for the rows it shows', async ({ page }) => {
+  await page.addInitScript(() => {
+    const trees = [{ name: 'repo', branch: 'main', path: 'C:/repo', current: false }, { name: 'work', branch: 'feat-hello', path: 'C:/work', current: true }];
+    for (let index = 0; index < 200; index++) trees.push({ name: `wt-${index}`, branch: `feat/wt-${index}`, path: `C:/trees/wt-${index}`, current: false });
+    Object.assign(window, { __worktrees: trees });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const chip = page.getByRole('button', { name: /在工作树中新开会话/ });
+  await chip.click();
+  const menu = page.getByRole('menu', { name: '在工作树中新开会话' });
+  await expect(menu.getByRole('menuitemradio')).toHaveCount(30);
+  await expect(menu).toContainText('还有 172 个未显示');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __statusReads?: string[] }).__statusReads?.length ?? 0)).toBe(30);
+  await menu.getByRole('searchbox', { name: '筛选工作树' }).fill('wt-19');
+  // The current checkout stays on top; the filter keeps the rest to matches.
+  await expect(menu.getByRole('menuitemradio')).toHaveCount(12);
+  await expect(menu.getByRole('menuitemradio').first()).toHaveAttribute('aria-checked', 'true');
+  await expect(menu.getByRole('menuitemradio').nth(11)).toContainText('没有未提交改动');
+  expect(await page.evaluate(() => new Set((window as unknown as { __statusReads?: string[] }).__statusReads).size)).toBeLessThanOrEqual(41);
 });
 
 test('settings can save one prepare command for a project repository', async ({ page }) => {

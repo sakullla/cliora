@@ -30,6 +30,14 @@
   --aurora-3: transparent;
   --frame: var(--sidebar);
   --canvas-glow: none;
+  /* Sidebar inks: a soft well for search, a raised paper chip for the current item. */
+  --sidebar-edge: color-mix(in srgb, #1d221f 8%, transparent);
+  --sidebar-divider: color-mix(in srgb, #1d221f 7%, transparent);
+  --sidebar-well: color-mix(in srgb, #1d221f 5%, transparent);
+  --sidebar-well-hover: color-mix(in srgb, #1d221f 3%, #ffffff);
+  --sidebar-kbd: color-mix(in srgb, #1d221f 6%, transparent);
+  --sidebar-active: #ffffff;
+  --sidebar-active-ring: 0 0 0 1px rgb(29 34 31 / 7%), 0 1px 2px rgb(29 34 31 / 6%);
 
   --text: #1d221f;
   --text-2: #434a45;
@@ -175,6 +183,13 @@
   --surface-raised: var(--surface);
   --frame: var(--sidebar);
   --canvas-glow: none;
+  --sidebar-edge: rgb(255 255 255 / 6%);
+  --sidebar-divider: rgb(255 255 255 / 6%);
+  --sidebar-well: rgb(255 255 255 / 5%);
+  --sidebar-well-hover: rgb(255 255 255 / 7%);
+  --sidebar-kbd: rgb(255 255 255 / 7%);
+  --sidebar-active: #232725;
+  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 6%);
 
   --text: #eceee9;
   --text-2: #c4cac1;

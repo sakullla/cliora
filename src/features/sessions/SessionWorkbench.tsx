@@ -1,5 +1,5 @@
 import { useRemoteIdentity } from '../../lib/remoteReads';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
@@ -306,6 +306,33 @@ type MenuState =
   | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
 
 const MENU_ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
+/** A repository can carry hundreds of worktrees. The menu filters once the list is long, renders a
+ *  bounded slice and reads Git status only for the rows it shows; the dialog pages its list. */
+const WORKTREE_FILTER_MIN = 8;
+const WORKTREE_MENU_LIMIT = 30;
+const LEDGER_FILTER_MIN = 6;
+const LEDGER_PAGE = 60;
+
+/** Every whitespace-separated term must appear in one of the fields (case-insensitive). */
+function matchesQuery(query: string, ...fields: Array<string | null | undefined>): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const haystack = fields.filter(Boolean).join('\n').toLowerCase().replace(/\\/g, '/');
+  return terms.every((term) => haystack.includes(term.replace(/\\/g, '/')));
+}
+
+/** The current checkout first, then the rest in Git's order; filtered, then bounded. */
+function menuWorktrees(trees: WorkbenchWorktree[], query: string): { shown: WorkbenchWorktree[]; matched: number } {
+  const ordered = [...trees.filter((tree) => tree.current), ...trees.filter((tree) => !tree.current)];
+  const matched = ordered.filter((tree) => tree.current || matchesQuery(query, tree.name, tree.branch, tree.path));
+  return { shown: matched.slice(0, WORKTREE_MENU_LIMIT), matched: matched.length };
+}
+
+/** Last path segment, used to name a repository in the worktree dialog. */
+function folderName(path: string): string {
+  const parts = displayPath(path).split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
 /** 等不到 accepted/rejected 的期限：超过它只能显示"打开结果未知"。 */
 const REVIEW_UNKNOWN_MS = 10_000;
 /** 协议里的稳定错误码到界面文案。未知码回退到通用说明，不显示后端原始文本。 */
@@ -468,6 +495,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const gitReadPending = useRef<Promise<unknown> | null>(null);
   const codeReadPending = useRef<Promise<unknown> | null>(null);
   const [worktreeMenuOpen, setWorktreeMenuOpen] = useState(false);
+  const [worktreeQuery, setWorktreeQuery] = useState('');
+  const statusRequested = useRef(new Set<string>());
   const [gitReadSeq, setGitReadSeq] = useState(0);
   // 审查状态只在 native 注册表里判定；这里是它的展示副本，按 sessionId 索引。
   const [reviewStates, setReviewStates] = useState<Map<string, TwiglaneReviewState>>(() => new Map());
@@ -504,6 +533,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [prepareError, setPrepareError] = useState('');
   const [prepareSaving, setPrepareSaving] = useState(false);
   const [ledger, setLedger] = useState<WorktreeLedgerEntry[]>([]);
+  const [ledgerQuery, setLedgerQuery] = useState('');
+  const [ledgerScope, setLedgerScope] = useState<'repo' | 'all'>('repo');
+  const [ledgerLimit, setLedgerLimit] = useState(LEDGER_PAGE);
   const [cleanupError, setCleanupError] = useState('');
   const [cleanupBusy, setCleanupBusy] = useState('');
   const prepareRequest = useRef(0);
@@ -1123,19 +1155,30 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     void read();
     return () => { alive = false; };
   }, [gitTarget, worktreeAnchor, codeStatusNeeded, returnedReviewId, codeReadSeq, nativeAvailable, focusToken, reviewSignal?.token]);
-  // Status is read only for the checkouts the open menu shows, in small batches.
-  // Closing the menu or switching repository drops every late answer.
+  // A fresh menu (or repository, list or retry) starts from nothing known: an unread status
+  // must never render as "0 changes". The filter alone keeps what was already read.
   useEffect(() => {
-    if (!nativeAvailable || !worktreeMenuOpen || !worktreeAnchor) return;
-    const trees = worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees.trees : [];
-    let alive = true;
-    // Nothing is known yet: an unread status must never render as "0 changes".
     setWorktreeStatuses(new Map());
-    if (!trees.length) return;
+    statusRequested.current = new Set();
+    if (!worktreeMenuOpen) setWorktreeQuery('');
+  }, [worktreeMenuOpen, worktreeAnchor, gitWorktrees, worktreeStatusSeq]);
+  const shownWorktreeKey = worktreeMenuOpen && worktreeAnchor && worktreeAnchor === gitWorktrees?.anchor
+    ? menuWorktrees(gitWorktrees.trees, worktreeQuery).shown.map((tree) => tree.path).join('\n') : '';
+  // Status is read only for the checkouts the open menu shows, in small batches, so a repository
+  // with hundreds of worktrees costs a screenful of reads. Closing the menu or switching
+  // repository drops every late answer.
+  useEffect(() => {
+    if (!nativeAvailable || !shownWorktreeKey) return;
+    let alive = true;
+    const paths = shownWorktreeKey.split('\n').filter((path) => !statusRequested.current.has(path));
+    if (!paths.length) return;
+    const done = new Set<string>();
+    for (const path of paths) statusRequested.current.add(path);
     const readOne = async (path: string) => {
       try {
         const value = await native.worktreeStatus(path);
         if (!alive) return;
+        done.add(path);
         const usable = !!value && typeof value === 'object' && (value.state === 'ready' || value.state === 'unknown');
         setWorktreeStatuses((current) => {
           const map = new Map(current);
@@ -1144,6 +1187,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         });
       } catch (error) {
         if (!alive) return;
+        done.add(path);
         setWorktreeStatuses((current) => {
           const map = new Map(current);
           map.set(path, { status: null, error: formatFailure(error, t('sessions.worktreeStatusFailed'), '') });
@@ -1152,12 +1196,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       }
     };
     void (async () => {
-      for (let index = 0; index < trees.length && alive; index += 3) {
-        await Promise.all(trees.slice(index, index + 3).map((tree) => readOne(tree.path)));
+      for (let index = 0; index < paths.length && alive; index += 3) {
+        await Promise.all(paths.slice(index, index + 3).map(readOne));
       }
     })();
-    return () => { alive = false; };
-  }, [worktreeMenuOpen, worktreeAnchor, gitWorktrees, nativeAvailable, worktreeStatusSeq, t]);
+    // Reads cut short by a new filter are asked again if their rows are still shown.
+    const requested = statusRequested.current;
+    return () => { alive = false; for (const path of paths) if (!done.has(path)) requested.delete(path); };
+  }, [shownWorktreeKey, worktreeMenuOpen, worktreeAnchor, gitWorktrees, nativeAvailable, worktreeStatusSeq, t]);
   // Real stages of an explicit creation. An event only updates an operation this page
   // started; unknown or late ids are dropped and the command result stays final.
   useEffect(() => {
@@ -2614,6 +2660,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function openWorktreeSetup(directory: string | null) {
     setMenu(null);
     setWorktreeMenuOpen(false);
+    setLedgerQuery('');
+    setLedgerScope(directory ? 'repo' : 'all');
+    setLedgerLimit(LEDGER_PAGE);
     openLocalPrepare(directory);
     setWorktreeSetup({ directory });
   }
@@ -2728,13 +2777,47 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const prepareDirty = prepareSavedCommand === null ? !!prepareError && !!command.trim() : command.trim() !== prepareSavedCommand.trim();
     const repository = directory ? availableProjects.find((item) => item.path && sameDirectory(item.path, directory))?.name ?? null : null;
     const prepareStatus = prepareSaving ? t('sessions.worktreePrepareSaving') : prepareJustSaved && !prepareDirty ? t('sessions.worktreePrepareSaved') : '';
+    // The dialog opens on the current project's worktrees: the repository is the main checkout of
+    // the worktree the session runs in, else the session's own folder. "All projects" stays one
+    // click away, grouped by repository.
+    const repositoryRoot = directory ? ledger.find((row) => withinDirectory(row.worktreePath, directory))?.mainCheckout ?? directory : null;
+    const inRepository = (row: WorktreeLedgerEntry) => !!repositoryRoot && (sameDirectory(row.mainCheckout, repositoryRoot) || withinDirectory(row.mainCheckout, repositoryRoot) || withinDirectory(repositoryRoot, row.mainCheckout));
+    const repositoryRows = repositoryRoot ? ledger.filter(inRepository) : ledger;
+    const scope = repositoryRoot ? ledgerScope : 'all';
+    const scopedRows = scope === 'repo' ? repositoryRows : ledger;
+    const query = ledgerQuery.trim();
+    const matchedRows = query ? scopedRows.filter((row) => matchesQuery(query, row.branch, row.worktreePath, folderName(row.mainCheckout))) : scopedRows;
+    const shownRows = matchedRows.slice(0, ledgerLimit);
+    // "All projects" groups rows by repository, in first-seen order.
+    const groups = new Map<string, WorktreeLedgerEntry[]>();
+    for (const row of shownRows) {
+      const key = scope === 'all' ? displayPath(row.mainCheckout) : '';
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+    const showFilter = scopedRows.length >= LEDGER_FILTER_MIN || !!ledgerQuery;
+    const projectName = repositoryRoot ? availableProjects.find((item) => item.path && sameDirectory(item.path, repositoryRoot))?.name ?? folderName(repositoryRoot) : '';
     return <GuideDialog open={!!worktreeSetup} title={t('sessions.worktreeSetupTitle')} hint={t('sessions.worktreeSetupHint')} onClose={() => setWorktreeSetup(null)}>
       <div className={styles.setupForm}>
         <section className={styles.setupSection} aria-labelledby="worktree-setup-cleanup">
-          <header className={styles.setupHead}><h3 id="worktree-setup-cleanup">{t('sessions.worktreeCleanup')}{ledger.length > 0 && <em>{ledger.length}</em>}</h3><p>{t('sessions.worktreeCleanupDesc')}</p></header>
+          <header className={styles.setupHead}>
+            <h3 id="worktree-setup-cleanup">{t('sessions.worktreeCleanup')}{scopedRows.length > 0 && <em>{scopedRows.length}</em>}</h3>
+            {repositoryRoot && ledger.length > repositoryRows.length && <div className={styles.setupScope} role="radiogroup" aria-label={t('sessions.worktreeScopeLabel')}>
+              {(['repo', 'all'] as const).map((value) => <button key={value} type="button" role="radio" aria-checked={scope === value} title={value === 'repo' ? displayPath(repositoryRoot) : undefined} onClick={() => { setLedgerScope(value); setLedgerLimit(LEDGER_PAGE); }}>
+                <span>{value === 'repo' ? projectName || t('sessions.worktreeScopeRepo') : t('sessions.worktreeScopeAll')}</span><em>{value === 'repo' ? repositoryRows.length : ledger.length}</em>
+              </button>)}
+            </div>}
+            <p>{t('sessions.worktreeCleanupDesc')}</p>
+          </header>
           {cleanupError && <p className={styles.setupError} role="alert"><Icon name="alert" size={14} /><span>{cleanupError}</span></p>}
-          {ledger.length ? <ul className={styles.setupList}>
-            {ledger.map((row) => {
+          {showFilter && <div className={styles.setupFilter} data-field-frame="">
+            <Icon name="search" size={14} />
+            <input type="search" value={ledgerQuery} placeholder={t('sessions.worktreeFilterPlaceholder')} aria-label={t('sessions.worktreeFilterLabel')} spellCheck={false} autoComplete="off" onChange={(event) => { setLedgerQuery(event.target.value); setLedgerLimit(LEDGER_PAGE); }} onKeyDown={(event) => { if (event.key === 'Escape' && ledgerQuery) { event.preventDefault(); event.stopPropagation(); setLedgerQuery(''); } }} />
+            {query && <span className={styles.setupFilterCount}>{matchedRows.length}</span>}
+          </div>}
+          {shownRows.length ? <ul className={styles.setupList}>
+            {[...groups.entries()].map(([repository, rows]) => <Fragment key={repository || 'repo'}>
+              {repository && <li className={styles.setupGroup} role="presentation" title={repository}><Icon name="folder" size={12} /><strong>{folderName(repository)}</strong><code>{shortPath(repository)}</code><em>{rows.length}</em></li>}
+              {rows.map((row) => {
               const removing = cleanupBusy === row.worktreePath;
               const user = worktreeUser(row);
               return <li key={row.worktreePath} className={styles.setupRow} data-busy={removing || undefined} data-in-use={user ? '' : undefined}>
@@ -2746,7 +2829,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <Button size="sm" variant="ghost" className={styles.setupRemove} aria-label={t('sessions.worktreeCleanupAction', { branch: row.branch })} title={user ? t('sessions.worktreeCleanupRunning', { tool: toolName(user) }) : undefined} disabled={!!cleanupBusy} icon={<Icon name={removing ? 'refresh' : 'trash'} size={13} />} onClick={() => void cleanWorktree(row)}>{removing ? t('sessions.worktreeCleaning') : t('sessions.worktreeCleanupButton')}</Button>
               </li>;
             })}
-          </ul> : <p className={styles.setupEmpty}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreeCleanupEmpty')}</span></p>}
+            </Fragment>)}
+            {matchedRows.length > shownRows.length && <li className={styles.setupMore} role="presentation"><Button size="sm" variant="ghost" onClick={() => setLedgerLimit((value) => value + LEDGER_PAGE)}>{t('sessions.worktreeShowMore', { count: Math.min(LEDGER_PAGE, matchedRows.length - shownRows.length) })}</Button><span>{shownRows.length} / {matchedRows.length}</span></li>}
+          </ul> : <p className={styles.setupEmpty}><Icon name={query ? 'search' : 'gitWorktree'} size={14} /><span>{query ? t('sessions.worktreeFilterEmpty', { query }) : scope === 'repo' && ledger.length ? t('sessions.worktreeCleanupEmptyRepo') : t('sessions.worktreeCleanupEmpty')}</span></p>}
         </section>
         <section className={styles.setupSection} aria-labelledby="worktree-setup-prepare">
           <header className={styles.setupHead}>
@@ -3164,6 +3249,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           // Offer the worktree menu only when the repository actually has more than one checkout.
           const worktrees = current?.id === gitTarget && worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees?.trees ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
+          const { shown: shownTrees, matched: matchedTrees } = menuWorktrees(worktrees, worktreeQuery);
           // 只有一个 checkout 时菜单没有别的选择，但仍然要提供审查入口和真实状态。
           const canOpenGitMenu = !!current && !remote && (canSwitchWorktree || !!gitLabel);
           const review = current ? reviewStates.get(current.id) ?? null : null;
@@ -3296,7 +3382,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     {worktreeListState === 'loading' && !gitWorktrees && <p className={styles.menuHint} role="status">{t('sessions.worktreeListLoading')}</p>}
                     {worktreeListState === 'error' && <p className={styles.menuError} role="alert">{worktreeListError}</p>}
                     {worktreeListState === 'ready' && !worktrees.length && <p className={styles.menuHint}>{t('sessions.worktreeListEmpty')}</p>}
-                    {worktrees.map((tree) => {
+                    {(worktrees.length >= WORKTREE_FILTER_MIN || !!worktreeQuery) && <div className={styles.worktreeFilter} role="presentation">
+                      <Icon name="search" size={13} />
+                      <input type="search" value={worktreeQuery} placeholder={t('sessions.worktreeFilterPlaceholder')} aria-label={t('sessions.worktreeFilterLabel')} spellCheck={false} autoComplete="off" onChange={(event) => setWorktreeQuery(event.target.value)} onKeyDown={(event) => {
+                        // Escape clears a typed filter first; Home/End stay in the field.
+                        if (event.key === 'Escape' && worktreeQuery) { event.preventDefault(); event.stopPropagation(); setWorktreeQuery(''); }
+                        if (event.key === 'Home' || event.key === 'End') event.stopPropagation();
+                        if (event.key === 'Enter') { event.preventDefault(); focusWorktreeItem(0); }
+                      }} />
+                    </div>}
+                    {worktreeQuery.trim() && !shownTrees.some((tree) => !tree.current) && <p className={styles.menuHint}>{t('sessions.worktreeFilterEmpty', { query: worktreeQuery.trim() })}</p>}
+                    {shownTrees.map((tree) => {
                       // An unread status stays unknown: it is never shown as "no changes".
                       const read = worktreeStatuses.get(tree.path);
                       const status = read?.status ?? null;
@@ -3317,6 +3413,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                         <span className={styles.worktreeOpen}>{tree.current ? t('sessions.worktreeCurrent') : <><Icon name="plus" size={11} />{t('sessions.worktreeOpenAction')}</>}</span>
                       </button>;
                     })}
+                    {matchedTrees > shownTrees.length && <p className={styles.menuHint} role="status">{t('sessions.worktreeMoreHidden', { count: matchedTrees - shownTrees.length })}</p>}
                     {(worktreeListState === 'error' || [...worktreeStatuses.values()].some((entry) => !entry.status)) && <button type="button" role="menuitem" className={styles.floatItem} onClick={() => { setGitReadSeq((seq) => seq + 1); setWorktreeStatusSeq((seq) => seq + 1); }}>
                       <Icon name="refresh" size={13} />
                       <span>{worktreeListState === 'error' ? t('sessions.worktreeListRetry') : t('sessions.worktreeStatusRetry')}</span>
