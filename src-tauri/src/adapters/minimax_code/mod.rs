@@ -96,6 +96,12 @@ impl CliAdapter for MiniMaxCode {
         super::RemoteResourceLayout { mcp: Some(super::RemoteMcpLayout { relative: ".minimax-code/mcp.json", format: "json", table: "mcpServers", nested: false }), skill_root: Some(".minimax/skills"), agent_root: Some(".minimax/agents"), agent_extension: Some("md") }
     }
 
+    /// MiniMax spells the transport in `type` (`stdio`, `sse`, `streamable-http`),
+    /// the same mapping as the local document.
+    fn render_remote_mcp(&self, text: &str, value: &Value) -> Result<Vec<u8>, String> {
+        super::remote_resources::render_json_mcp_styled(text, value, "mcpServers", false, true)
+    }
+
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }

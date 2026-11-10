@@ -2228,9 +2228,9 @@ fn summary(entity: Option<&PortableEntity>) -> String {
         PortablePayload::Mcp(value) => {
             let location = match value.definition.transport {
                 crate::resources::mcp::McpTransport::Stdio => value.definition.command.split_whitespace().next().unwrap_or("").chars().take(120).collect::<String>(),
-                crate::resources::mcp::McpTransport::Http => Url::parse(&value.definition.url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default(),
+                crate::resources::mcp::McpTransport::Http | crate::resources::mcp::McpTransport::Sse => Url::parse(&value.definition.url).ok().and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default(),
             };
-            format!("{} · {:?} · {} · {} 个参数，{} 个环境变量，{} 个请求头", value.definition.name, value.definition.transport, location,
+            format!("{} · {} · {} · {} 个参数，{} 个环境变量，{} 个请求头", value.definition.name, transport_label(value.definition.transport), location,
                 value.definition.args.len(), value.definition.env.len(), value.definition.headers.len())
         }
         PortablePayload::Skill(value) => format!(
@@ -2243,6 +2243,23 @@ fn summary(entity: Option<&PortableEntity>) -> String {
         PortablePayload::Binding(value) => format!("{} · {}", value.tool, value.scope_key),
         PortablePayload::Deployment(value) => format!("{} · {} · {}", value.tool, value.resource_kind, if value.enabled { "启用" } else { "停用" }),
     }
+}
+
+/// Stable label for the remote type so a Streamable HTTP and a legacy SSE
+/// definition never read the same in the conflict list.
+fn transport_label(transport: crate::resources::mcp::McpTransport) -> &'static str {
+    match transport {
+        crate::resources::mcp::McpTransport::Stdio => "stdio",
+        crate::resources::mcp::McpTransport::Http => "Streamable HTTP",
+        crate::resources::mcp::McpTransport::Sse => "HTTP+SSE（旧版）",
+    }
+}
+
+/// An environment reference such as `${TOKEN}` carries no secret and stays
+/// readable; any literal value is hidden from public conflict details.
+fn env_reference(value: &str) -> bool {
+    let reference = value.strip_prefix("${").or_else(|| value.strip_prefix("{env:"));
+    reference.is_some_and(|tail| tail.len() > 1 && tail.ends_with('}') && tail[..tail.len() - 1].bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
 }
 
 /// Mask a secret value for display: show only that it exists, never its content,
@@ -2315,15 +2332,18 @@ fn detail(entity: Option<&PortableEntity>) -> String {
         }
         PortablePayload::Mcp(value) => {
             lines.push(format!("名称: {}", value.definition.name));
-            lines.push(format!("传输: {:?}", value.definition.transport));
+            lines.push(format!("传输: {}", transport_label(value.definition.transport)));
             match value.definition.transport {
                 crate::resources::mcp::McpTransport::Stdio => {
                     lines.push(format!("命令: {}", value.definition.command));
+                    if !value.definition.cwd.is_empty() {
+                        lines.push(format!("工作目录: {}", value.definition.cwd));
+                    }
                     for arg in &value.definition.args {
                         lines.push(format!("  参数: {arg}"));
                     }
                 }
-                crate::resources::mcp::McpTransport::Http => {
+                crate::resources::mcp::McpTransport::Http | crate::resources::mcp::McpTransport::Sse => {
                     lines.push(format!("地址: {}", value.definition.url));
                     for key in value.definition.headers.keys() {
                         lines.push(format!("  请求头: {key} = {}", redact(true)));
@@ -2331,7 +2351,7 @@ fn detail(entity: Option<&PortableEntity>) -> String {
                 }
             }
             for (key, val) in &value.definition.env {
-                lines.push(format!("环境变量: {key} = {val}"));
+                lines.push(format!("环境变量: {key} = {}", if env_reference(val) { val.as_str() } else { redact(!val.is_empty()) }));
             }
         }
         PortablePayload::Skill(value) => {

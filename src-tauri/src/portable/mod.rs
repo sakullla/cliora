@@ -440,6 +440,7 @@ fn localize_entity(registry: &Registry, entity: &mut PortableEntity) -> Result<(
         PortablePayload::Binding(value) => value.scope_key = paths::decode_scope(&value.scope_key)?,
         PortablePayload::Mcp(value) => {
             value.definition.command = paths::decode(&paths::command(&value.definition.command))?;
+            if !value.definition.cwd.is_empty() && value.definition.cwd != "<待关联路径>" { value.definition.cwd = paths::decode(&value.definition.cwd)?; }
             for arg in &mut value.definition.args { *arg = paths::decode(arg)?; }
             for value in value.definition.env.values_mut() { *value = paths::decode(value)?; }
         }
@@ -768,6 +769,15 @@ fn collect_snapshot_on(
         if looks_absolute(&definition.command) {
             definition.command.clear();
             pending_fields.push("MCP 命令本机路径".into());
+        }
+        if !definition.cwd.is_empty() {
+            // A working directory is a local path: encode a home-relative one,
+            // and leave an absolute path outside home for the receiver to link.
+            definition.cwd = paths::encode(&definition.cwd);
+            if looks_absolute(&definition.cwd) {
+                definition.cwd = "<待关联路径>".into();
+                pending_fields.push("MCP 工作目录".into());
+            }
         }
         for (index, arg) in definition.args.iter_mut().enumerate() {
             *arg = paths::encode(arg);
@@ -1275,7 +1285,7 @@ fn apply_import_selecting(
                         .map_or(0, |time| time.as_secs());
                     tx.execute("INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES (?1,?2,?3,?4,?5,?6)
                         ON CONFLICT(id) DO UPDATE SET name=excluded.name,transport=excluded.transport,data_json=excluded.data_json,version=excluded.version,updated_at=excluded.updated_at",
-                        params![definition.id,definition.name,if definition.transport==crate::resources::mcp::McpTransport::Stdio {"stdio"} else {"http"},
+                        params![definition.id,definition.name,match definition.transport { crate::resources::mcp::McpTransport::Stdio => "stdio", crate::resources::mcp::McpTransport::Http => "http", crate::resources::mcp::McpTransport::Sse => "sse" },
                             serde_json::to_string(definition).map_err(|error| error.to_string())?,definition.version as i64,updated_at as i64]).map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Skill(value) => {
