@@ -114,3 +114,20 @@ test('every literal key used in src exists in both languages', () => {
   }
   assert.deepEqual(missing, []);
 });
+
+test('MCP parse diagnostics and transport names are defined for every dynamic key in both languages', () => {
+  // These are built as `tools.mcp.parseIssue.<issue>` / `tools.mcp.transportName.<transport>` at run time,
+  // so the literal-key scan above cannot see them.
+  const issues = ['serverInvalid', 'argsInvalid', 'envInvalid', 'headersInvalid', 'cwdInvalid', 'transportUnknown', 'fieldUnknown'];
+  const transports = ['stdio', 'http', 'sse'];
+  const missing = [];
+  for (const language of languages) {
+    const bundle = bundles[language];
+    for (const issue of issues) if (!hasLeaf(bundle, `tools.mcp.parseIssue.${issue}`)) missing.push(`${language}: parseIssue.${issue}`);
+    for (const transport of transports) {
+      if (!hasLeaf(bundle, `tools.mcp.transportName.${transport}`)) missing.push(`${language}: transportName.${transport}`);
+    }
+    if (resolve(bundle, 'tools.mcp.parseIssue.cwdUnsupported') !== undefined) missing.push(`${language}: stale cwdUnsupported`);
+  }
+  assert.deepEqual(missing, []);
+});

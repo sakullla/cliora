@@ -11,6 +11,17 @@
 .choose strong { color: var(--text); overflow-wrap: anywhere; }
 .choose small { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .state { flex: none; }
+.nameField { display: grid; gap: var(--space-1); margin-top: var(--space-2_5); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.nameField input { width: 100%; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.nameField input[aria-invalid='true'] { border-color: var(--danger); }
+.nameField small { color: var(--text-3); font-weight: var(--fw-regular); }
+/* The exact command, every argument and the working directory that will be written, never truncated. */
+.review { display: grid; gap: var(--space-1_5); margin: var(--space-2_5) 0 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.review > div { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: var(--space-2); }
+.review dt { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.review dd { min-width: 0; margin: 0; color: var(--text); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.review code { padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.review ol { display: grid; gap: var(--space-0_5); margin: 0; padding-left: var(--space-5); }
 .error { margin: var(--space-2_5) 0 0; color: var(--danger); font-size: var(--fs-caption); line-height: 1.5; white-space: pre-wrap; }
 .conflicts { display: grid; gap: var(--space-2_5); margin-top: var(--space-3); }
 .diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }

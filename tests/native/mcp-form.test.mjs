@@ -29,7 +29,7 @@ test('paste import accepts mcpServers, servers, name maps, snippets and bare ser
 
   const bare = mcp.parseMcpServerJson(JSON.stringify({ url: 'https://x.test/sse', type: 'sse' }));
   assert.equal(bare.name, '');
-  assert.equal(bare.transport, 'http');
+  assert.equal(bare.transport, 'sse');
 
   assert.equal(mcp.parseMcpServerJson('not json'), null);
   assert.equal(mcp.parseMcpServerJson(JSON.stringify({ mcpServers: { broken: { args: [] } } })), null);
@@ -171,8 +171,8 @@ test('cc-switch copies, records, config.json and ccswitch:// links import every 
     local: { type: 'stdio', command: 'node', args: ['server.js'], cwd: 'C:/work/mcp' },
     blankCwd: { type: 'stdio', command: 'npx', cwd: '' },
   } }));
-  assert.deepEqual(copied.map(item => [item.name, item.transport, item.invalid]), [
-    ['fetch', 'stdio', []], ['docs', 'http', []], ['local', 'stdio', ['cwdUnsupported']], ['blankCwd', 'stdio', []],
+  assert.deepEqual(copied.map(item => [item.name, item.transport, item.cwd, item.invalid]), [
+    ['fetch', 'stdio', '', []], ['docs', 'sse', '', []], ['local', 'stdio', 'C:/work/mcp', []], ['blankCwd', 'stdio', '', []],
   ]);
 
   // Its stored records: the spec sits under `server`, the record key is the server name.
@@ -197,4 +197,106 @@ test('cc-switch copies, records, config.json and ccswitch:// links import every 
   assert.equal(mcp.parseMcpServerCollection(`ccswitch://v1/import?resource=mcp&config=${base64}`)[0].name, 'mcp-fetch');
   assert.deepEqual(mcp.parseMcpServerCollection(`ccswitch://v1/import?resource=provider&app=claude&name=x&config=${base64}`), []);
   assert.deepEqual(mcp.parseMcpServerCollection('ccswitch://v1/import?resource=mcp&config=%%%'), []);
+});
+
+test('stdio cwd is kept as a real field and clears when blank', () => {
+  const [local] = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: { local: { command: 'node', args: ['server.js'], cwd: '  C:/work/mcp  ' } } }));
+  assert.equal(local.cwd, 'C:/work/mcp');
+  assert.deepEqual(local.invalid, []);
+  const [blank] = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: { blank: { command: 'node', cwd: '   ' } } }));
+  assert.equal(blank.cwd, '');
+  assert.deepEqual(blank.invalid, []);
+
+  const draft = mcp.applyParsedServer(mcp.blankMcpDraft(), local).draft;
+  assert.equal(draft.cwd, 'C:/work/mcp');
+  assert.equal(mcp.mcpDraftOf({ ...draft, id: 'x', version: 3 }).cwd, 'C:/work/mcp');
+  assert.equal(mcp.blankMcpDraft().cwd, '');
+  // Older definitions saved before cwd existed read back as unspecified.
+  assert.equal(mcp.mcpDraftOf({ id: 'old', name: 'old', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 }).cwd, '');
+  // A remote draft has no working directory; the saved value drops it.
+  assert.equal(mcp.mcpCwdOf({ transport: 'http', cwd: '/tmp' }), '');
+  assert.equal(mcp.mcpCwdOf({ transport: 'stdio', cwd: ' /tmp ' }), '/tmp');
+});
+
+test('cwd that cannot be stored stays a diagnostic instead of being dropped', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    number: { command: 'node', cwd: 7 },
+    remote: { url: 'https://x.test/mcp', cwd: '/tmp' },
+  } }));
+  assert.deepEqual(parsed.map(item => item.invalid), [['cwdInvalid'], ['cwdInvalid']]);
+  assert.equal(parsed[0].command, 'node');
+  assert.equal(parsed[1].url, 'https://x.test/mcp');
+});
+
+test('Streamable HTTP and legacy SSE stay distinct through parsing, drafts and summaries', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    typeHttp: { type: 'http', url: 'https://x.test/mcp' },
+    streamable: { type: 'streamable-http', url: 'https://x.test/mcp' },
+    camel: { transport: 'streamableHttp', url: 'https://x.test/mcp' },
+    sseType: { type: 'sse', url: 'https://x.test/sse' },
+    sseTransport: { transport: 'SSE', serverUrl: 'https://x.test/sse' },
+    urlOnly: { url: 'https://x.test/mcp' },
+  } }));
+  assert.deepEqual(parsed.map(item => item.transport), ['http', 'http', 'http', 'sse', 'sse', 'http']);
+  assert.ok(parsed.every(item => item.invalid.length === 0));
+  assert.equal(parsed[4].url, 'https://x.test/sse');
+  assert.equal(mcp.isRemoteMcp('sse'), true);
+  assert.equal(mcp.isRemoteMcp('http'), true);
+  assert.equal(mcp.isRemoteMcp('stdio'), false);
+  assert.deepEqual(['stdio', 'http', 'sse'].map(mcp.mcpTransportBadge), ['stdio', 'HTTP', 'SSE']);
+  assert.equal(mcp.mcpSummary({ transport: 'sse', command: 'ignored', args: [], url: ' https://x.test/sse ' }), 'https://x.test/sse');
+  const base = { name: 'docs', command: '', url: '' };
+  assert.equal(mcp.mcpDraftIssues({ ...base, transport: 'sse' }).url, 'urlEmpty');
+  assert.equal(mcp.mcpDraftIssues({ ...base, transport: 'sse', url: 'ftp://x.test' }).url, 'urlInvalid');
+  assert.deepEqual(mcp.mcpDraftIssues({ ...base, transport: 'sse', url: 'https://x.test/sse' }), {});
+  assert.equal(mcp.parseMcpServerJson(JSON.stringify({ type: 'sse', url: 'https://x.test/sse' })).transport, 'sse');
+  assert.equal(mcp.parseMcpServerJson(JSON.stringify({ type: 'sse', command: 'npx' })), null);
+});
+
+test('unknown transports and unrepresentable fields are diagnosed with their names', () => {
+  const parsed = mcp.parseMcpServerCollection(JSON.stringify({ mcpServers: {
+    websocket: { type: 'websocket', url: 'wss://x.test/mcp' },
+    typed: { type: 5, command: 'npx' },
+    extra: { command: 'npx', timeout: 30, autoApprove: ['read'] },
+    constructor: { command: 'npx', type: 'constructor' },
+    fine: { command: 'npx', type: 'stdio' },
+  } }));
+  assert.deepEqual(parsed.map(item => item.invalid), [['transportUnknown'], ['transportUnknown'], ['fieldUnknown'], ['transportUnknown'], []]);
+  assert.equal(parsed[0].unknownTransport, 'websocket');
+  assert.deepEqual(parsed[2].unknownFields, ['timeout', 'autoApprove']);
+  assert.equal(parsed[2].command, 'npx');
+  // The unknown spelling is never guessed into a protocol.
+  assert.equal(parsed[0].transport, 'http');
+  const keys = [];
+  const texts = mcp.mcpParseIssueTexts((key, options) => { keys.push([key, options]); return key; }, parsed[2]);
+  assert.deepEqual(texts, ['tools.mcp.parseIssue.fieldUnknown']);
+  assert.deepEqual(keys[0][1].fields, 'timeout, autoApprove');
+});
+
+test('cc-switch records without a name keep every field and wait for a default name', () => {
+  const record = { server: { type: 'stdio', command: 'uvx', args: ['mcp-server-fetch'], cwd: '/srv/fetch', env: { REGION: 'eu' } }, apps: { claude: true } };
+  const [single] = mcp.parseMcpServerCollection(JSON.stringify(record));
+  assert.equal(single.name, '');
+  assert.deepEqual([single.command, single.args, single.cwd, single.env, single.invalid], ['uvx', ['mcp-server-fetch'], '/srv/fetch', { REGION: 'eu' }, []]);
+
+  const link = `ccswitch://v1/import?resource=mcp&config=${encodeURIComponent(Buffer.from(JSON.stringify({ mcpServers: { '': { command: 'npx', args: ['pkg'] } } })).toString('base64'))}`;
+  const [linked] = mcp.parseMcpServerCollection(link);
+  assert.equal(linked.name, '');
+  assert.equal(linked.command, 'npx');
+
+  // Invalid siblings still surface even though the name is missing.
+  const [broken] = mcp.parseMcpServerCollection(JSON.stringify({ server: { command: 'npx', args: [1], env: { N: 2 } }, apps: {} }));
+  assert.equal(broken.name, '');
+  assert.deepEqual(broken.invalid, ['argsInvalid', 'envInvalid']);
+});
+
+test('default names are valid, ascii, and avoid every taken name', () => {
+  assert.equal(mcp.mcpDefaultName([]), 'mcp-server');
+  assert.equal(mcp.mcpDefaultName(['mcp-server']), 'mcp-server-2');
+  assert.equal(mcp.mcpDefaultName(new Set(['mcp-server', 'mcp-server-2', 'mcp-server-4'])), 'mcp-server-3');
+  const taken = [];
+  for (let index = 0; index < 5; index += 1) taken.push(mcp.mcpDefaultName(taken));
+  assert.deepEqual(taken, ['mcp-server', 'mcp-server-2', 'mcp-server-3', 'mcp-server-4', 'mcp-server-5']);
+  assert.ok(taken.every(name => mcp.MCP_NAME_PATTERN.test(name)));
+  assert.deepEqual(mcp.mcpDraftIssues({ name: mcp.mcpDefaultName([]), transport: 'stdio', command: 'npx', url: '' }), {});
 });

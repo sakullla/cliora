@@ -11,7 +11,7 @@ import { modLabel, saveShortcutHint, withMod } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useFeedback } from '../../lib/toast';
-import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCwdOf, mcpDefaultName, mcpDraftIssues, mcpDraftOf, mcpParseIssueTexts, mcpSummary, mcpTransportBadge, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { McpDetails } from '../../components/mcp/McpDetails';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
@@ -144,7 +144,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   function editNative(item: NativeMcpEntry) {
     if (busy) return;
     const found = definitions.find(definition => definition.name === item.name);
-    const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
+    const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, cwd: item.cwd ?? '', url: item.url,
       env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
     setNativeOrigin(item); setMode('read'); resetForm(next, editableRowsOf(item.env), editableRowsOf(item.headers), item.enabled);
     setComposing(true); setError(''); setNotice('');
@@ -160,7 +160,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     setComposing(false); setPreview(null); setCommitResults(null); setError('');
   }
   function normalizedDraft() {
-    return { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), id: linked?.id ?? draft.id,
+    return { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), cwd: mcpCwdOf(draft), id: linked?.id ?? draft.id,
       expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary: linkedInLibrary || syncLibrary,
       env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
   }
@@ -172,9 +172,9 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
       const next = normalizedDraft();
       if (remoteTargetId) {
         const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
-        const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: false };
+        const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: false };
         const entries = [...(current.entries ?? []).filter(item => item.name !== entry.name), entry];
-        const definition: McpDefinition = { id: next.id ?? crypto.randomUUID(), name: next.name, transport: next.transport, command: next.command, args: next.args, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, version: (current.definitions ?? []).find(item => item.id === next.id)?.version ?? 1 };
+        const definition: McpDefinition = { id: next.id ?? crypto.randomUUID(), name: next.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, version: (current.definitions ?? []).find(item => item.id === next.id)?.version ?? 1 };
         await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { entries, definitions: [...(current.definitions ?? []).filter(item => item.id !== definition.id), definition] });
         await refreshNative(); setDefinitions(value => [...value.filter(item => item.id !== definition.id), definition]); setComposing(false); setMode('read'); setNotice(t('tools.mcp.written')); return;
       }
@@ -211,16 +211,23 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     } catch (value) { if (mounted.current) setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
+  // Links a reviewed draft to the library definition that carries its (possibly edited) name.
+  function linkDraft(value: McpDraft): McpDraft {
+    const found = definitions.find(item => item.name === value.name.trim());
+    return { ...value, id: found?.id ?? null, expectedVersion: found?.version ?? null, inLibrary: found?.inLibrary === true || syncLibrary };
+  }
   function importJson(parsed: McpParsedServer[], source: string) {
-    const seen = new Set<string>();
+    // Explicit names are claimed first, so a generated default never takes a name a later entry carries.
+    const explicit = parsed.map(server => server.name.trim() || (parsed.length === 1 ? draft.name.trim() : ''));
+    const taken = new Set([...definitions.map(item => item.name), ...nativeEntries.map(item => item.name), ...explicit.filter(Boolean)]);
     const items = parsed.map((server, index): McpBatchItem => {
-      const name = server.name.trim() || (parsed.length === 1 ? draft.name.trim() : '');
-      const found = definitions.find(item => item.name === name);
-      const duplicate = !!name && seen.has(name); seen.add(name);
-      const blocked = [duplicate ? t('tools.mcp.batchDuplicate', { name }) : '', ...server.invalid.map(issue => t('tools.mcp.parseIssue.' + issue))].filter(Boolean).join(' ');
-      return { key: index + ':' + name, blocked: blocked || undefined,
-        draft: { id: found?.id ?? null, name, transport: server.transport, command: server.command, args: server.args, url: server.url,
-          env: server.env, headers: server.headers, inLibrary: found?.inLibrary === true || syncLibrary, expectedVersion: found?.version ?? null } };
+      let name = explicit[index];
+      const generatedName = !name;
+      if (generatedName) { name = mcpDefaultName(taken); taken.add(name); }
+      const blocked = mcpParseIssueTexts(t, server).join(' ');
+      return { key: index + ':' + name, blocked: blocked || undefined, generatedName,
+        draft: linkDraft({ ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, cwd: server.cwd, url: server.url,
+          env: server.env, headers: server.headers }) };
     });
     setBatchItems(items); setImportSource(source); setError('');
     return true;
@@ -267,10 +274,10 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
       const summary = mcpSummary(item);
       return <li key={item.name}><button type="button" className={doc.row} aria-current={composing && nativeOrigin?.name === item.name ? 'true' : undefined} data-disabled={!item.enabled || undefined} disabled={busy} onClick={() => void openEntry(item)}>
         <span className={doc.rowTitle}><strong>{item.name}</strong></span>
-        <span className={doc.rowSummary}>{summary || (item.transport === 'http' ? 'HTTP' : 'stdio')}</span>
+        <span className={doc.rowSummary}>{summary || mcpTransportBadge(item.transport)}</span>
         <span className={doc.rowMeta}>
           <Badge tone={item.enabled ? 'success' : 'neutral'}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
-          <Badge>{item.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
+          <Badge>{mcpTransportBadge(item.transport)}</Badge>
           {libraryFor(item.name) && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
         </span>
       </button></li>;
@@ -293,7 +300,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
         <DocumentHeader
           title={nativeOrigin?.name || t('tools.mcp.newTitle')}
           badges={nativeOrigin ? <>
-            <Badge>{nativeOrigin.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
+            <Badge>{mcpTransportBadge(nativeOrigin.transport)}</Badge>
             <Badge tone={enabled ? 'success' : 'neutral'}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
             {openedLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
           </> : undefined}
@@ -336,7 +343,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
       </article> : null}
     />
     <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeCompose()}>
-      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(value, [{ ...target, enabled }])}
+      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(linkDraft(value), [{ ...target, enabled }])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
         onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); void refreshNative(); }}
         onComplete={() => setImportSource('')} />}

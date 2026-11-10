@@ -12,13 +12,16 @@ export type PluginItem = { kind: string; name: string; description: string | nul
 export type PluginContents = { pluginId: string; root: string | null; manifest: PluginManifest; items: PluginItem[]; truncated: boolean };
 export type PluginFile = { path: string; content: string; format: string; truncated: boolean };
 
-export type McpTransport = 'stdio' | 'http';
+/** http is Streamable HTTP. sse is the legacy standalone HTTP+SSE transport, kept for configuration compatibility only. */
+export type McpTransport = 'stdio' | 'http' | 'sse';
 export type McpDefinition = {
   id: string;
   name: string;
   transport: McpTransport;
   command: string;
   args: string[];
+  /** Working directory of a stdio server; empty means unspecified. */
+  cwd: string;
   url: string;
   env: Record<string, string>;
   headers: Record<string, string>;

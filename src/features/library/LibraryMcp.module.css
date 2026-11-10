@@ -31,7 +31,7 @@
 .row[data-spotlight='true'] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .glyph { grid-area: glyph; display: grid; place-items: center; align-self: start; width: 34px; height: 34px; border-radius: var(--radius); background: var(--surface-2); color: var(--text-3); }
 .row[data-placed] .glyph { background: var(--accent-soft); color: var(--accent); }
-.glyph[data-transport='http'] { background: var(--info-soft); color: var(--info); }
+.glyph[data-transport='http'], .glyph[data-transport='sse'] { background: var(--info-soft); color: var(--info); }
 .main { grid-area: main; display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .main > strong { flex: 0 1 auto; max-width: min(100%, 24rem); min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .transport { flex: none; font-family: var(--font-mono); font-size: var(--fs-micro); }

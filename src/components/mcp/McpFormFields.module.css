@@ -62,6 +62,14 @@
 .previewLabel { grid-area: label; display: inline-flex; align-items: center; gap: var(--space-1_5); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); white-space: nowrap; }
 .preview > code { grid-area: code; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 
+.previewCwd { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1_5); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
+.previewCwd code { min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.remoteKind { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-0_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); justify-self: start; }
+.remoteKind button, .remoteKind button:hover:not(:disabled) { min-height: 28px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-pill); background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.remoteKind button:hover:not(:disabled):not([aria-checked='true']) { background: var(--surface-3); color: var(--text); }
+.remoteKind button[aria-checked='true'], .remoteKind button[aria-checked='true']:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.legacyNote { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
+
 .previewCopy, .previewCopy:hover:not(:disabled) { grid-area: copy; display: grid; place-items: center; width: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-3); }
 .previewCopy:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .previewCopy[data-copied], .previewCopy[data-copied]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
