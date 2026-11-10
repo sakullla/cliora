@@ -987,7 +987,8 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workbench-rail-arrange') ?? '{}'))).toMatchObject({ pinned: ['s2'] });
   await codex.click();
   await expect(codex).toHaveAttribute('aria-selected', 'true');
-  await expect(stage).toContainText('Codex');
+  // The title bar names the CLI through its icon, not as text beside the title.
+  await expect(stage.getByRole('img', { name: 'Codex' })).toBeVisible();
   await expect(stage).toContainText('Alpha');
   // Normal mode is the default and stays quiet; only YOLO is called out.
   await expect(stage.getByText('普通', { exact: true })).toHaveCount(0);
