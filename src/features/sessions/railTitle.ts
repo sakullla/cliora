@@ -36,12 +36,22 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? '';
 }
 
-/** Drop a trailing "| cliora", "- cliora" or "· cliora" when it repeats the session's folder. */
+// What may stand between a task and a trailing folder name. A bare hyphen also joins words
+// inside folder names (`acme-svc-orders`), so it only counts as a separator after a space.
+const SUFFIX_SEPARATOR = /^(.*\S)(?:\s*[|·•—–]\s*|\s+-\s*)$/;
+
+/** Drop a trailing "| cliora", " - cliora" or "· cliora" when it repeats the session's folder. */
 export function stripPlaceSuffix(title: string, places: string[]): string {
-  const names = places.map((place) => baseName(place.trim()).toLowerCase()).filter(Boolean);
-  const match = /^(.*\S)\s*[|·•—–-]\s*([^|·•—–-]+)$/.exec(title.trim());
-  if (!match) return title.trim();
-  return names.includes(match[2].trim().toLowerCase()) ? match[1].trim() : title.trim();
+  const value = title.trim();
+  const lower = value.toLowerCase();
+  // Longest first, so a repository name that ends with a shorter worktree name wins.
+  const names = [...new Set(places.map((place) => baseName(place.trim()).toLowerCase()).filter(Boolean))].sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    if (lower.length <= name.length || !lower.endsWith(name)) continue;
+    const match = SUFFIX_SEPARATOR.exec(value.slice(0, value.length - name.length));
+    if (match) return match[1].trim();
+  }
+  return value;
 }
 
 /** The task title the rail shows, or '' when the terminal title adds nothing. */

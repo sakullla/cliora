@@ -30,9 +30,9 @@ import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, ty
 import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
-import { SessionRail, type RailSession, type SessionTone } from './SessionRail';
+import { PlaceLabel, SessionRail, type RailSession, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
-import { railPlace, railTaskTitle } from './railTitle';
+import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
 import { WorkbenchComposer } from './WorkbenchComposer';
@@ -131,6 +131,8 @@ export function libraryHostId(projectId: string | null | undefined, remoteProjec
 
 /** CLIs offered as one-click picks under the tool list in the new-session dialog. */
 const DIALOG_QUICK_TOOLS = 8;
+/** A title this short always fits, so the title bar need not reserve room for it to shrink into. */
+const SHORT_STAGE_TITLE = 10;
 const DEFAULT_RAIL_WIDTH = 272;
 const MIN_RAIL_WIDTH = 232;
 const MAX_RAIL_WIDTH = 392;
@@ -329,6 +331,17 @@ function menuWorktrees(trees: WorkbenchWorktree[], query: string): { shown: Work
 }
 
 /** Last path segment, used to name a repository in the worktree dialog. */
+/**
+ * A directory label that gives way from the left: the parent folders fold first, then the shared
+ * head of the folder name, so the end that tells sibling checkouts apart stays readable.
+ */
+function PathLabel({ text }: { text: string }) {
+  const cut = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\')) + 1;
+  const name = text.slice(cut);
+  if (!cut || !name) return <PlaceLabel text={text} parts={placeParts([text]).get(text)} />;
+  return <><span className={styles.pathParent}>{text.slice(0, cut)}</span><span className={styles.pathName}><PlaceLabel text={name} parts={placeParts([name]).get(name)} /></span></>;
+}
+
 function folderName(path: string): string {
   const parts = displayPath(path).split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -1747,7 +1760,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function cliTitle(session: WorkbenchSession): string {
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
-    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    // A CLI in a linked worktree may append the repository's name instead of the checkout folder.
+    const git = gitContexts.get(session.id);
+    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '', git?.repository ?? '', git?.worktree ?? '']);
   }
 
   /** What a remote session reads as without its id: the CLI title, else its project or directory. */
@@ -3326,6 +3341,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const remoteProject = remote ? remoteProjects.find((project) => `remote:${project.id}` === current?.projectId) : undefined;
           const remoteHost = remoteProject ? remoteTargets.find((target) => target.id === remoteProject.targetId) : undefined;
           const hostLabel = remote ? remoteHost?.name ?? 'SSH' : t('common.host.local');
+          const stagePlace = current ? placeOf(current) : '';
           // Offer the worktree menu only when the repository actually has more than one checkout.
           const worktrees = current?.id === gitTarget && worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees?.trees ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
@@ -3352,14 +3368,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               <div className={styles.stageLead}>
                 <span className={styles.stageIcon} role="img" aria-label={toolName(current)} data-tone={tone} data-stage-icon="" data-tauri-drag-region="false" title={toolName(current) + ' · ' + t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
+                  <div className={styles.identityTitleRow} data-short={(title ? stableTitle(title) : toolName(current)).length <= SHORT_STAGE_TITLE || undefined}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   {/* The stage icon already names the CLI; the running time leads the context instead and
                       stays visible while the directory chip gives way. */}
                   {elapsed && <span className={styles.sessionElapsed} title={t('sessions.elapsedTitle', { time: elapsed })}><Icon name="clock" size={12} />{elapsed}</span>}
                   <div className={styles.identitySub}>
                     {/* A first flex item never wraps; this empty one takes that place so every real chip can. */}
                     <span className={styles.identitySubAnchor} aria-hidden="true" />
-                    <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(current)}</span></button>
+                    <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : <PathLabel text={stagePlace} />}</span></button>
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
                     {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>

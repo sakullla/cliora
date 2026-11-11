@@ -18,6 +18,18 @@ test('a trailing folder name is dropped only when it repeats the session folder'
   assert.equal(stripPlaceSuffix('a-b-c', ['c:\\x\\y']), 'a-b-c');
 });
 
+test('a hyphenated folder name is dropped whole, and a hyphen inside a word is not a separator', () => {
+  const place = '/Users/me/project/qsyn/e6-ms-tms-base-new-mes-fetch';
+  assert.equal(stripPlaceSuffix('创建 support worktree 并编写接口 | e6-ms-tms-base-new-mes-fetch', [place]), '创建 support worktree 并编写接口');
+  assert.equal(stripPlaceSuffix('Fix login · acme-svc-orders', ['C:\\Projects\\acme-svc-orders']), 'Fix login');
+  assert.equal(stripPlaceSuffix('Fix login — acme-svc-orders', ['acme-svc-orders']), 'Fix login');
+  // The repository name of a linked worktree counts as well as its own folder.
+  assert.equal(stripPlaceSuffix('Ship it | acme-svc', ['/w/acme-svc-fetch', 'acme-svc']), 'Ship it');
+  assert.equal(stripPlaceSuffix('Ship my-acme-svc', ['acme-svc']), 'Ship my-acme-svc');
+  assert.equal(stripPlaceSuffix('Ship it | my-acme-svc', ['acme-svc']), 'Ship it | my-acme-svc');
+  assert.equal(stripPlaceSuffix('acme-svc', ['acme-svc']), 'acme-svc');
+});
+
 test('the rail falls back to the tool name when the title adds nothing', () => {
   assert.equal(railTaskTitle('Windows PowerShell', 'Kiro', ['C:\\Users\\me\\project\\cliora']), '');
   assert.equal(railTaskTitle('Codex', 'Codex', []), '');

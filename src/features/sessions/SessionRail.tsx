@@ -33,7 +33,7 @@ export type RailSession = {
 export const RAIL_SEARCH_MIN = 4;
 
 /** A folder label that folds its shared head first, so sibling checkouts stay distinguishable. */
-function PlaceLabel({ text, parts }: { text: string; parts?: PlaceParts }) {
+export function PlaceLabel({ text, parts }: { text: string; parts?: PlaceParts }) {
   if (!parts?.head) return <span className={styles.placeTail}>{text}</span>;
   return <><span className={styles.placeHead}>{parts.head}</span><span className={styles.placeTail}>{parts.tail}</span></>;
 }

@@ -7,22 +7,26 @@ const host = {
 const project = { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
 const longRemoteId = 'cliora-c1c75996-0e46-4936-9e6e-a5ae39726ed8-07921480e2c64e0cacc7951009d847eb';
 
-type Layout = 'local' | 'remote' | 'remote-twins';
+type Layout = 'local' | 'remote' | 'remote-twins' | 'long-folder';
+const longFolder = '/Users/me/project/qsyn/e6-ms-tms-base-new-mes-fetch';
 
 /**
  * Minimal workbench desktop mock for the title bar. Browser mocks verify what the bar shows;
  * native platform acceptance is recorded separately.
  */
 async function installDesktop(page: Page, layout: Layout) {
-  await page.addInitScript(({ host, project, layout, longRemoteId }) => {
-    if (layout !== 'local') localStorage.setItem('cliora:remote-target', host.id);
+  await page.addInitScript(({ host, project, layout, longRemoteId, longFolder }) => {
+    const remoteLayout = layout === 'remote' || layout === 'remote-twins';
+    if (remoteLayout) localStorage.setItem('cliora:remote-target', host.id);
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
     const startedAt = Date.now() - 14 * 60_000;
     const remote = (id: string, remoteSessionId: string) => ({
       id, toolId: 'claude_code', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true,
       exitCode: null, startedAt, remoteSessionId, connectionState: 'connected', reattachable: false, stateRevision: 0, remoteEndResult: null,
     });
-    const sessions = layout === 'local'
+    const sessions = layout === 'long-folder'
+      ? [{ id: 'long-1', toolId: 'codex', projectId: null, directory: longFolder, mode: 'normal', running: true, exitCode: null, startedAt, stateRevision: 0 }]
+      : layout === 'local'
       ? [
         { id: 'local-1', toolId: 'codex', projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: true, exitCode: null, startedAt, stateRevision: 0 },
         { id: 'local-old', toolId: 'claude_code', projectId: null, directory: 'C:/work/beta', mode: 'normal', running: false, exitCode: 0, startedAt, stateRevision: 0 },
@@ -42,7 +46,7 @@ async function installDesktop(page: Page, layout: Layout) {
         metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: layout !== 'local' }, tools };
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: remoteLayout }, tools };
           if (command === 'list_cli_adapters') return { registered, managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_remote_targets') return [host];
           if (command === 'list_remote_projects') return [project];
@@ -51,7 +55,10 @@ async function installDesktop(page: Page, layout: Layout) {
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map(item => ({ ...item }));
           if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
-          if (command === 'replay_workbench_session') return btoa('titlebar-fixture-ready\r\n> ');
+          // The CLI titles its window "task | folder", as Codex does; the folder name has hyphens.
+          if (command === 'replay_workbench_session') return layout === 'long-folder'
+            ? btoa(String.fromCharCode(...new TextEncoder().encode('\u001b]0;Write the API | e6-ms-tms-base-new-mes-fetch\u0007titlebar-fixture-ready\r\n> ')))
+            : btoa('titlebar-fixture-ready\r\n> ');
           if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
           if (command === 'plugin:event|listen') { bridge.listens[String(args.event ?? '')] = Number(args.handler ?? 0); return args.handler ?? 0; }
           if (command === 'plugin:event|unlisten') return null;
@@ -59,7 +66,7 @@ async function installDesktop(page: Page, layout: Layout) {
         },
       },
     });
-  }, { host, project, layout, longRemoteId });
+  }, { host, project, layout, longRemoteId, longFolder });
 }
 
 async function openWorkbench(page: Page) {
@@ -125,6 +132,23 @@ test('a lone remote session shows no id suffix and the status bar keeps the remo
   await expect(stage).not.toContainText(longRemoteId);
   await expect(stage.getByTitle(new RegExp(`远端会话 ID：${longRemoteId}`))).toHaveText('SSH · 已连接');
   await expect(page.getByRole('tab', { name: /09d847eb/ })).toHaveCount(0);
+});
+
+test('a hyphenated folder suffix leaves the task title, and the folder chip keeps the distinguishing end', async ({ page }) => {
+  await installDesktop(page, 'long-folder');
+  const stage = await openWorkbench(page);
+  const bar = stage.locator('header').first();
+  await expect(bar.getByRole('heading', { level: 2 })).toHaveText('Write the API');
+  await expect(page.getByRole('tab', { name: /Write the API/ })).not.toContainText('| e6-');
+  const chip = bar.getByRole('button', { name: /mes-fetch/ });
+  await expect(chip).toHaveText(/qsyn\/e6-ms-tms-base-new-mes-fetch$/);
+  await expect(chip).toHaveAttribute('title', /qsyn\/e6-ms-tms-base-new-mes-fetch/);
+  // A short chip folds from the left: parent folders, then the folder's head; its end stays whole.
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await expect(chip.getByText('…/qsyn/')).toHaveJSProperty('clientWidth', 0);
+  const tail = chip.getByText('mes-fetch', { exact: true });
+  await expect.poll(() => tail.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await expect.poll(() => tail.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(20);
 });
 
 test('remote sessions that would read the same keep their id suffix', async ({ page }) => {

@@ -596,6 +596,9 @@
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line), var(--shadow-sm); }
 .rail[data-slim] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 55%, transparent); }
 .rail[data-slim] .session[aria-selected='true'] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--success) 70%, transparent), var(--shadow-sm); }
+/* A framed tile reads as the current session. Other streaming sessions keep the wave dot and the
+   soft pulse, so several busy sessions never outweigh the one on screen. */
+.rail[data-slim] .session:not([aria-selected='true']) .sessionIconWrap[data-tone='live'] { box-shadow: none; }
 .rail[data-slim] .sessionIconWrap[data-tone='live']::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--success); border-radius: inherit; opacity: .2; pointer-events: none; animation: wbTileRing 2.4s var(--ease) infinite; }
 .rail[data-slim] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1.5px var(--warning); }
 .rail[data-slim] .row[data-attention] .session:not([aria-selected='true']) { background: transparent; box-shadow: none; }
@@ -767,6 +770,9 @@
 /* CLI spinner frames differ in width; a fixed slot keeps the task text from jittering. */
 .titleGlyph { display: inline-block; min-width: 1.15em; text-align: center; font-variant-emoji: text; }
 .identityTitleRow { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-2); min-width: min(140px, 100%); }
+/* A short title (often just the CLI name) keeps its own width instead of the reserve, so the
+   context after it does not sit behind an empty gap. */
+.identityTitleRow[data-short] { flex: none; min-width: 0; }
 .identityTitleRow > h2 {
   flex: 0 1 auto;
   min-width: 0;
@@ -822,7 +828,11 @@
   color: var(--term-text-3);
   font-size: var(--fs-caption);
 }
-.pathChip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pathChip > span { display: flex; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Parent folders give way first and may leave entirely. The folder name does not shrink until it
+   has the whole chip to itself; then its head folds and its end stays (PathLabel). */
+.pathParent { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pathName { display: flex; flex: none; min-width: 0; max-width: 100%; overflow: hidden; }
 .pathChip > :global(svg) { flex: none; }
 .pathChip:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 .modeChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); color: var(--term-text-3); white-space: nowrap; }
