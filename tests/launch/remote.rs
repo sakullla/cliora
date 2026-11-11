@@ -139,9 +139,18 @@ tmux() {{
             if [ "$1" = -g ]; then [ "$2" = status ] || return 91; return 0; fi
             # Server-wide escape-time may only be raised to Cliora's minimum.
             if [ "$1" = -s ]; then [ "$#" = 3 ] && [ "$2" = escape-time ] && [ "$3" = 150 ] || return 97; printf 'ESCAPE:150\n'; return 0; fi
-            [ "$#" = 4 ] && [ "$1" = -t ] && [ "$2" = =cliora-fixture: ] && [ "$3" = mouse ] && [ "$4" = on ] || return 92
-            printf 'MOUSE:=cliora-fixture:on\n'
-            [ "$scenario" != setup_failed ] && [ "$scenario" != new_setup_failed ] ;;
+            [ "$#" = 4 ] && [ "$1" = -t ] && [ "$2" = =cliora-fixture: ] || return 92
+            case "$3" in
+                mouse)
+                    [ "$4" = on ] || return 92
+                    printf 'MOUSE:=cliora-fixture:on\n'
+                    [ "$scenario" != setup_failed ] && [ "$scenario" != new_setup_failed ] ;;
+                # Chrome options are session-scoped and best effort: a refusal never blocks attach.
+                status) [ "$4" = off ] || return 92; printf 'STATUS:off\n'; [ "$scenario" != chrome_refused ] ;;
+                set-titles) [ "$4" = on ] || return 92; printf 'TITLES:on\n'; [ "$scenario" != chrome_refused ] ;;
+                set-titles-string) printf 'TITLE_FORMAT:%s\n' "$4"; [ "$scenario" != chrome_refused ] ;;
+                *) return 92 ;;
+            esac ;;
         attach-session)
             [ "$#" = 3 ] && [ "$2" = -t ] && [ "$3" = =cliora-fixture ] || return 93
             printf 'ATTACH:=cliora-fixture\n' ;;
@@ -324,6 +333,27 @@ fn remote_tmux_mouse_setup_is_exact_and_precedes_ready_on_new_and_reattach() {
         assert!(setup < escape && escape < ready, "{stdout}");
         assert_eq!(stdout.contains("NEW"), new, "{stdout}");
         assert!(stdout.contains(";cliora-fixture;disconnected"), "{stdout}");
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_tmux_hides_its_status_line_and_forwards_the_cli_title_on_every_attach() {
+    for (new, scenario) in [(true, "new"), (false, "reattach"), (false, "chrome_refused")] {
+        let command = if new {
+            remote_persistent_command("/srv/fixture", "fixture-cli", &[], "cliora-fixture", Default::default())
+        } else {
+            remote_reattach_command("cliora-fixture")
+        };
+        let output = run_remote_mux_shell(&command, scenario);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{scenario}: {stdout}: {}", String::from_utf8_lossy(&output.stderr));
+        let ready = stdout.find(";cliora-fixture;ready").unwrap();
+        for marker in ["STATUS:off", "TITLES:on", &format!("TITLE_FORMAT:{}", crate::launch::REMOTE_TMUX_TITLE_FORMAT)] {
+            let at = stdout.find(marker).unwrap_or_else(|| panic!("{scenario}: missing {marker}: {stdout}"));
+            assert!(at < ready, "{scenario}: {marker} must precede ready: {stdout}");
+        }
+        assert!(stdout.contains("ATTACH:=cliora-fixture"), "{scenario}: a refused chrome option never blocks attach: {stdout}");
     }
 }
 
