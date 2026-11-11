@@ -647,6 +647,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const linkErrorTimer = useRef<number>(0);
 
   const firstSeenAt = useRef(new Map<string, number>());
+  // Running time stops when the process does. A session that was already over when it was first
+  // listed has no known end, so it shows no duration instead of the time since it started.
+  const seenRunning = useRef(new Set<string>());
+  const endedSeenAt = useRef(new Map<string, number>());
   const autoRemoteReattachAttempted = useRef(false);
   const autoLocalRestoreAttempted = useRef(false);
   const [restoring, setRestoring] = useState(false);
@@ -1741,13 +1745,37 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return tools.find((item) => item.id === session.toolId)?.name ?? session.toolId;
   }
 
-  function taskTitle(session: WorkbenchSession): string {
+  function cliTitle(session: WorkbenchSession): string {
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
-    const title = railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '']);
+  }
+
+  /** What a remote session reads as without its id: the CLI title, else its project or directory. */
+  function remoteBaseTitle(session: WorkbenchSession): string {
     const remoteProject = remoteProjects.find((item) => `remote:${item.id}` === session.projectId);
-    return session.projectId?.startsWith('remote:')
-      ? `${title || remoteProject?.name || shortPath(displayPath(session.directory)) || toolName(session)} · ${(session.remoteSessionId || session.id).slice(-8)}`
-      : title;
+    return cliTitle(session) || remoteProject?.name || shortPath(displayPath(session.directory)) || toolName(session);
+  }
+
+  function elapsedOf(session: WorkbenchSession): string {
+    const startedAt = session.startedAt ?? firstSeenAt.current.get(session.id);
+    if (session.running) {
+      seenRunning.current.add(session.id);
+      endedSeenAt.current.delete(session.id);
+      return formatDuration(startedAt, clock);
+    }
+    if (!seenRunning.current.has(session.id)) return '';
+    if (!endedSeenAt.current.has(session.id)) endedSeenAt.current.set(session.id, Date.now());
+    return formatDuration(startedAt, endedSeenAt.current.get(session.id) ?? clock);
+  }
+
+  function taskTitle(session: WorkbenchSession): string {
+    const title = cliTitle(session);
+    if (!session.projectId?.startsWith('remote:')) return title;
+    // The id suffix only tells apart remote sessions that would otherwise read the same. A lone
+    // session without a CLI title reads like a local one: the tool as its name, the project below.
+    const base = remoteBaseTitle(session);
+    const twin = sessions.some((other) => other.id !== session.id && !!other.projectId?.startsWith('remote:') && other.toolId === session.toolId && remoteBaseTitle(other) === base);
+    return twin ? `${base} · ${(session.remoteSessionId || session.id).slice(-8)}` : title;
   }
 
   function railPlaceOf(session: WorkbenchSession): string {
@@ -1773,6 +1801,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     liveSessionIds.current.delete(id);
     sessionStateUpdates.current.delete(id);
     firstSeenAt.current.delete(id);
+    seenRunning.current.delete(id);
+    endedSeenAt.current.delete(id);
     setTitles((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setActiveOutputIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setScrolledIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
@@ -3108,7 +3138,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     title: taskTitle(session),
     place: railPlaceOf(session),
     directory: session.directory ? displayPath(session.directory) : '',
-    elapsed: formatDuration(session.startedAt ?? firstSeenAt.current.get(session.id), clock),
+    elapsed: elapsedOf(session),
     tone: sessionTone(session),
     pinned: pinnedIds.has(session.id),
     attention: attentionIds.has(session.id),
@@ -3241,7 +3271,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const current = stageSession;
           const tone = current ? sessionTone(current) : 'ended';
           const title = current ? taskTitle(current) : '';
-          const elapsed = current ? formatDuration(current.startedAt ?? firstSeenAt.current.get(current.id), clock) : '';
+          const elapsed = current ? elapsedOf(current) : '';
           const currentStateLabel = current ? stateLabel(current, tone) : '';
           const stateReserves = [
             t('sessions.stateIdle'),
@@ -3286,14 +3316,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               setFocusMode((value) => !value);
             }}>
               <div className={styles.stageLead}>
-                <span className={styles.stageIcon} data-tone={tone} data-stage-icon="" data-tauri-drag-region="false" title={t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
+                <span className={styles.stageIcon} role="img" aria-label={toolName(current)} data-tone={tone} data-stage-icon="" data-tauri-drag-region="false" title={toolName(current) + ' · ' + t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
                   <div className={styles.identityTitleRow}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
+                  {/* The stage icon already names the CLI; the running time leads the context instead and
+                      stays visible while the directory chip gives way. */}
+                  {elapsed && <span className={styles.sessionElapsed} title={t('sessions.elapsedTitle', { time: elapsed })}><Icon name="clock" size={12} />{elapsed}</span>}
                   <div className={styles.identitySub}>
-                    {title && <span className={styles.identityTool}>{toolName(current)}</span>}
+                    {/* A first flex item never wraps; this empty one takes that place so every real chip can. */}
+                    <span className={styles.identitySubAnchor} aria-hidden="true" />
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : placeOf(current)}</span></button>
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
-                    {elapsed && <span className={styles.sessionElapsed}><Icon name="clock" size={12} />{elapsed}</span>}
                     {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>
                 </div>
@@ -3358,7 +3391,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
                       <strong>{paneTitle ? <SessionTitle title={paneTitle} /> : toolName(session)}</strong>
-                      <span className={styles.panePlace}>{paneTitle ? toolName(session) + ' · ' + placeOf(session) : placeOf(session)}</span>
+                      <span className={styles.panePlace}>{placeOf(session)}</span>
                       {focused && <span className={styles.paneFocus}>{t('sessions.paneFocused')}</span>}
                       <button type="button" className={styles.paneClose} aria-label={t('sessions.closePane', { name: toolName(session) })} title={t('sessions.closePane', { name: toolName(session) })} onClick={(event) => { event.stopPropagation(); closePane(session.id); }}><Icon name="close" size={12} /></button>
                     </div> : null}
@@ -3461,7 +3494,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     </div>
                   </div>}
                 </span> : <span className={styles.gitChip} title={gitChipTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
-                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteSessionId ? ` · ${current.remoteSessionId}` : ''}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
+                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={[current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession'), current.remoteSessionId ? t('sessions.sshRemoteSessionId', { id: current.remoteSessionId }) : ''].filter(Boolean).join('\n')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
                 <span ref={linkHintHostRef} className={`${styles.statusSpacer} ${styles.statusLinkHost}`} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}

@@ -780,9 +780,16 @@
 }
 .identitySub { position: relative; display: flex; flex: 0 1000 auto; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; padding-left: var(--space-3); color: var(--term-text-3); font-size: var(--fs-caption); line-height: 18px; white-space: nowrap; }
 .identitySub::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 14px; background: var(--term-frame); transform: translateY(-50%); }
-.identitySub > * { flex: none; }
-.identitySub > .pathChip { flex: 0 1 auto; }
-.identityTool { flex: none; max-width: 18ch; overflow: hidden; color: var(--term-text-2); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+/* Context that does not fit drops out whole: it wraps to a second line this fixed-height row
+   never shows, so the bar never ends in half an icon or a cut-off chip. */
+.identitySub { flex-wrap: wrap; align-content: flex-start; height: 24px; }
+.identitySub > * { flex: none; height: 24px; }
+.identitySub > .modeChip[data-mode='yolo'] { height: 16px; margin-block: var(--space-1); }
+/* Lines break on the flex basis, so the directory asks for 72px and then grows back to its text:
+   it shortens with an ellipsis first and leaves only when even 72px is not there. */
+.identitySub > .pathChip { flex: 1 1 72px; min-width: 0; max-width: max-content; }
+.identitySub > .pathChip > span { max-width: 288px; }
+.identitySub > .identitySubAnchor { width: 0; margin-right: calc(var(--space-2) * -1); }
 /* The state is a quiet label beside the title: tone in the dot and text, no ring around it. */
 .identityTitleRow .statusChip { flex: none; height: 20px; padding: 0 var(--space-2) 0 var(--space-1_5); border: 0; border-radius: var(--radius-pill); font-size: var(--fs-micro); font-weight: var(--fw-medium); box-shadow: none; }
 .statusChip > span,
@@ -819,8 +826,13 @@
 /* YOLO skips the CLI's approvals: a small amber tag so the elevated mode is noticed at a glance,
    still smaller than the session state. */
 .modeChip[data-mode='yolo'] { height: 16px; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--term-warning) 14%, transparent); color: var(--term-warning); font-size: 10px; font-weight: var(--fw-semibold); letter-spacing: .05em; line-height: 16px; }
-.sessionElapsed { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); color: var(--term-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.exitCode { flex: none; color: var(--term-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Running time sits between the title and the directory: it never shrinks, the path chip does. */
+.sessionElapsed { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding-left: var(--space-3); color: var(--term-text-2); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; line-height: 18px; white-space: nowrap; }
+.sessionElapsed::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 14px; background: var(--term-frame); transform: translateY(-50%); }
+.sessionElapsed > :global(svg) { color: var(--term-text-3); }
+.sessionElapsed + .identitySub { margin-left: calc(var(--space-1) * -1); padding-left: 0; }
+.sessionElapsed + .identitySub::before { display: none; }
+.exitCode { flex: none; line-height: 24px; color: var(--term-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .exitCode[data-failed] { color: var(--term-danger); }
 
 /* Toolbar: one quiet row — talk to the CLI | look at the output | end. Hairlines, not boxes,
@@ -1812,15 +1824,13 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-tight] .statusChip { padding: 0 var(--space-1_5); }
 .root[data-tight] .statusChip .statusLabel { display: none; }
 .root[data-tight] .terminalActions .toolButton[data-size] { width: 28px; }
-.root[data-tight] .identityTool,
-.root[data-tight] .sessionElapsed { display: none; }
+.root[data-tight] .sessionElapsed { padding-left: var(--space-2); }
 
 .root[data-compact] .stageBar { min-height: 44px; gap: var(--space-1_5); padding: var(--space-1) var(--space-2); }
 .root[data-compact] .stageLead { gap: var(--space-1_5); }
 .root[data-compact] .stageIcon { display: none; }
 .root[data-compact] .identityTitleRow > h2 { font-size: var(--fs-control); }
 .root[data-compact] .identitySub { gap: var(--space-2); }
-.root[data-compact] .identityTool,
 .root[data-compact] .sessionElapsed,
 .root[data-compact] .statusChip .statusLabel,
 .root[data-compact] .endedDetail,

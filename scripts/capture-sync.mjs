@@ -125,7 +125,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
   for (const [name, seed] of Object.entries(scenarios)) {
     let page = null;
     try {
-      page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...seed, theme, language, sampleTransfers: transfers });
       const shot = async (label) => {
@@ -183,7 +183,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
     // The General tab: task clusters, the folded update card, and the host list tab.
     let page = null;
     try {
-      page = await browser.newPage({ viewport: { width, height: 1100 }, colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...scenarios.attention, theme, language, remoteSsh: true, sampleTransfers: transfers });
       const shot = async (label) => {
