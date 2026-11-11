@@ -353,7 +353,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
   const fitNowRef = useRef<(() => void) | null>(null);
   // The last grid sent to the PTY. A one-row proposal with no real height change is glyph
   // measurement noise; applying it makes a live TUI redraw and the view jumps.
-  const fitLockRef = useRef({ cols: 0, rows: 0, height: 0 });
+  const fitLockRef = useRef({ cols: 0, rows: 0, width: 0, height: 0 });
   // The grid the PTY last received. Switching back to a session must not re-send an
   // unchanged grid: the CLI treats every resize as a reason to redraw.
   const ptyGridRef = useRef({ cols: 0, rows: 0 });
@@ -873,6 +873,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       if (navigator.webdriver !== true) webglRef.current?.activate();
       const dims = fit.proposeDimensions();
       if (!dims) return;
+      const width = node.clientWidth;
       const height = node.clientHeight;
       const locked = fitLockRef.current;
       // Glyph measurement can move the proposed grid by one row while the host
@@ -883,14 +884,23 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
         && Math.abs(dims.rows - locked.rows) === 1
         && Math.abs(height - locked.height) < 8;
       if (rowFlicker) return;
+      // The renderer derives its cell width from the current grid, so at some host widths the
+      // proposal alternates between two column counts on every reveal (n, then n-1, then n...)
+      // although the host never changed. Each resize makes the CLI redraw; keep the grid.
+      const colFlicker = locked.cols > 0
+        && dims.rows === locked.rows
+        && Math.abs(dims.cols - locked.cols) === 1
+        && Math.abs(width - locked.width) < 2
+        && Math.abs(height - locked.height) < 8;
+      if (colFlicker) return;
       const changed = term.cols !== dims.cols || term.rows !== dims.rows;
       if (changed) {
         const core = (term as unknown as { _core?: { _renderService?: { clear?: () => void } } })._core;
         try { core?._renderService?.clear?.(); } catch { /* The renderer can already be gone. */ }
         try { term.resize(dims.cols, dims.rows); } catch { return; }
-        fitLockRef.current = { cols: term.cols, rows: term.rows, height };
+        fitLockRef.current = { cols: term.cols, rows: term.rows, width, height };
       } else if (locked.rows === 0) {
-        fitLockRef.current = { cols: term.cols, rows: term.rows, height };
+        fitLockRef.current = { cols: term.cols, rows: term.rows, width, height };
       }
       if (term.cols < 2 || term.rows < 1) return;
       if (changed) ime.schedule();
@@ -1056,7 +1066,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     const term = termRef.current;
     if (!term) return;
     if (term.options.fontSize !== fontSize || term.options.lineHeight !== lineHeight) {
-      fitLockRef.current = { cols: 0, rows: 0, height: 0 };
+      fitLockRef.current = { cols: 0, rows: 0, width: 0, height: 0 };
     }
     term.options.fontSize = fontSize;
     term.options.lineHeight = lineHeight;
