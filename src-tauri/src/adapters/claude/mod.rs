@@ -308,6 +308,15 @@ impl CliAdapter for Claude {
         }
         sanitize_model_picker(document);
     }
+    fn invalid_native_paths(&self, role: &str, document: &Value) -> Vec<Vec<String>> {
+        if !matches!(role, "settings" | "local_settings") {
+            return Vec::new();
+        }
+        match document.get("modelPicker") {
+            Some(picker) if !model_picker_has_options(picker) => vec![vec!["modelPicker".into()]],
+            _ => Vec::new(),
+        }
+    }
     fn preserve_native_fields(
         &self,
         role: &str,
@@ -781,6 +790,12 @@ fn sanitize_model_picker(document: &mut Value) {
         clean.insert("replaceBuiltInOptions".into(), json!(flag));
     }
     root.insert("modelPicker".into(), Value::Object(clean));
+}
+
+/// Claude Code requires `modelPicker.options` to be an array; anything else makes it warn
+/// at startup and ignore the whole field.
+fn model_picker_has_options(picker: &Value) -> bool {
+    picker.get("options").is_some_and(Value::is_array)
 }
 
 fn canonical_picker_row(row: &Value) -> Option<Value> {

@@ -936,6 +936,13 @@ pub trait CliAdapter: Sync {
     fn empty_entry_collections(&self, _role: &str) -> &'static [&'static str] {
         &[]
     }
+    /// Paths in the native document about to be written whose value the CLI rejects as a
+    /// whole, such as an object left without a required member after an owned field was
+    /// removed. The shared apply service removes them with the same write; adapters only
+    /// declare the schema rule.
+    fn invalid_native_paths(&self, _role: &str, _document: &Value) -> Vec<Vec<String>> {
+        Vec::new()
+    }
     fn preserve_native_fields(
         &self,
         _role: &str,

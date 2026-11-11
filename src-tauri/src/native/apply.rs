@@ -775,6 +775,20 @@ fn apply_registered_validated_inner(
                 changes.push(FieldChange { path, value: None });
             }
         }
+        // Schema repair on the final candidate: removing an owned member can leave its parent
+        // in a shape the CLI rejects at startup, and older writes may have left such residue.
+        if !changes.is_empty() || !baseline.trim().is_empty() {
+            let candidate = changes.iter().try_fold(baseline.clone(), |text, change| {
+                format::set_path(kind, &text, &change.path, change.value.as_ref())
+            })?;
+            let candidate = format::parse(kind, &candidate)?;
+            for path in adapter.invalid_native_paths(&role, &candidate) {
+                if path.is_empty() { return Err("原生文档修复不能删除整个文档".into()); }
+                if !changes.iter().any(|change| change.path == path && change.value.is_none()) {
+                    changes.push(FieldChange { path, value: None });
+                }
+            }
+        }
         if profile.editing.is_some() {
             let empty_entities = adapter.configuration().ok_or("配置编辑能力暂不可用")?.empty_deleted_entities(&role, profile)?;
             if !empty_entities.is_empty() {
@@ -1673,6 +1687,43 @@ mod tests {
         assert!(!native.contains("old-native"));
         assert!(!native.contains("old-token"));
         assert!(native.contains("defaultMode"));
+    }
+
+    #[test]
+    fn claude_switch_never_leaves_a_model_picker_without_options() {
+        // Claude Code warns at startup and ignores `modelPicker` when `options` is missing.
+        // Removing an owned option list must not leave that residue, and an apply repairs
+        // residue an earlier version left behind.
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("settings.json");
+        fs::write(&file, r#"{"modelPicker":{"replaceBuiltInOptions":true},"permissions":{"defaultMode":"default"}}"#).unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let plain = |name: &str, settings: &str| {
+            let mut profile = secret_profile(CliId::ClaudeCode, name, "anthropic", "");
+            profile.connection = None;
+            profile.files.insert("settings".into(), settings.into());
+            profile
+        };
+        let picker = plain("picker", r#"{"modelPicker":{"options":[{"model":"glm-5.3","label":"GLM"}]}}"#);
+        let other = plain("other", r#"{"effortLevel":"high"}"#);
+        let files = [native_role("settings", &file, "json")];
+        apply_fixture(&db, &store, &picker, None, &files, "global", Scope::Global, true).unwrap();
+        let first: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(first["modelPicker"]["options"][0]["model"], "glm-5.3");
+        assert_eq!(first["modelPicker"]["replaceBuiltInOptions"], true, "a valid native flag stays beside owned options");
+        apply_fixture(&db, &store, &other, None, &files, "global", Scope::Global, true).unwrap();
+        let second: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(second.get("modelPicker").is_none(), "an option-less modelPicker is removed: {second}");
+        assert_eq!(second["permissions"]["defaultMode"], "default");
+        assert_eq!(second["effortLevel"], "high");
+
+        // Residue written before this repair is fixed by the next apply.
+        fs::write(&file, r#"{"modelPicker":{},"effortLevel":"high","permissions":{"defaultMode":"default"}}"#).unwrap();
+        apply_fixture(&db, &store, &other, None, &files, "global", Scope::Global, true).unwrap();
+        let repaired: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(repaired.get("modelPicker").is_none(), "{repaired}");
+        assert_eq!(repaired["permissions"]["defaultMode"], "default");
     }
 
     #[test]
