@@ -196,7 +196,7 @@ test('project without explicit binding edits and queries using its inherited eff
   await page.getByRole('dialog').getByRole('button', { name: '保存到当前文件', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await expect(page.getByRole('button', { name: /project-server/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: '查看 project-server', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button').filter({ hasText: 'project-skill' }).click();
   const enabled = page.getByRole('switch', { name: '启用 Skill' });

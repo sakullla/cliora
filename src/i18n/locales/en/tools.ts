@@ -418,6 +418,13 @@ export default {
     compatSummary: 'Native format & loading notes',
   },
   mcp: {
+    rowOpen: 'View {{name}}',
+    rowEdit: 'Edit {{name}}',
+    edit: 'Edit',
+    cancelEdit: 'Cancel editing',
+    targetTitle: 'Writes to',
+    targetHint: 'Saving previews the change first; nothing is written until you confirm.',
+    targetRemoteHint: 'Saving writes straight to this CLI on the remote host.',
     parseError: 'Enter variables and headers one per line as KEY=value',
     confirmDiscard: 'The MCP draft is unsaved. Switching discards the changes.',
     importedNotice: 'Read the entry from the current tool. Saving only updates this CLI.',

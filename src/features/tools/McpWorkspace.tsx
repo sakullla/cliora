@@ -1,26 +1,29 @@
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { CodeEditor } from '../../components/CodeEditor';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { confirmAction } from '../../lib/confirm';
 import type { Scope } from '../../types/native';
 import type { McpCommitResult, McpDefinition, McpDraft, McpDraftPreview, McpTargetRequest, NativeMcpEntry } from '../../types/resources';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SearchField } from '../../components/SearchField';
-import { modLabel, saveShortcutHint, withMod } from '../../lib/shortcut';
+import { saveShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useFeedback } from '../../lib/toast';
-import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCwdOf, mcpDefaultName, mcpDraftIssues, mcpDraftOf, mcpParseIssueTexts, mcpSummary, mcpTransportBadge, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { blankMcpDraft, editableRowsOf, hasMcpIssues, isRemoteMcp, keptMcpArgs, mcpCwdOf, mcpDefaultName, mcpDraftIssues, mcpDraftOf, mcpParseIssueTexts, mcpSummary, mcpTransportBadge, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { McpDetails } from '../../components/mcp/McpDetails';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
-import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import i18n from '../../i18n';
 import styles from './McpWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
+import { RowMenu } from '../../components/RowMenu';
+import { ToolIcon } from '../../components/ToolIcon';
+
+type DocumentMode = 'read' | 'edit';
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -28,8 +31,11 @@ function errorText(error: unknown) {
 const SEARCH_THRESHOLD = 6;
 const emptyRows = () => editableRowsOf({});
 
-export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, onOpenLibrary }: {
+export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, onOpenLibrary }: {
   toolId: string;
+  /** Shown in the dialogs as the one place a save writes to. */
+  toolName?: string;
+  scopeLabel?: string;
   scope: Scope;
   projectPath: string;
   contextId?: string | null;
@@ -54,6 +60,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
   const [enabled, setEnabled] = useState(true);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const [composing, setComposing] = useState(false);
+  const [pasteFirst, setPasteFirst] = useState(false);
   const [mode, setMode] = useState<DocumentMode>('read');
   const [showIssues, setShowIssues] = useState(false);
   const [formKey, setFormKey] = useState(0);
@@ -136,23 +143,31 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     const pending = dirty || !!batchItems || !!preview;
     return !pending || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && currentFingerprint === started, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
-  async function startNew() {
+  async function startNew(paste = false) {
     if (!await canReplace()) return;
+    setPasteFirst(paste);
     setNativeOrigin(null); setMode('edit'); resetForm(blankMcpDraft(), emptyRows(), emptyRows(), true);
     setComposing(true); setError(''); setNotice('');
   }
-  function editNative(item: NativeMcpEntry) {
+  function editNative(item: NativeMcpEntry, edit = false) {
     if (busy) return;
     const found = definitions.find(definition => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, cwd: item.cwd ?? '', url: item.url,
       env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
-    setNativeOrigin(item); setMode('read'); resetForm(next, editableRowsOf(item.env), editableRowsOf(item.headers), item.enabled);
+    setPasteFirst(false);
+    setNativeOrigin(item); setMode(edit ? 'edit' : 'read'); resetForm(next, editableRowsOf(item.env), editableRowsOf(item.headers), item.enabled);
     setComposing(true); setError(''); setNotice('');
   }
-  async function openEntry(item: NativeMcpEntry) {
-    if (busy || composing && nativeOrigin?.name === item.name) return;
+  async function openEntry(item: NativeMcpEntry, edit = false) {
+    if (busy) return;
+    if (composing && nativeOrigin?.name === item.name) { if (edit) setMode('edit'); return; }
     if (!await canReplace()) return;
-    editNative(item);
+    editNative(item, edit);
+  }
+  /** Leaves editing for the details of the same entry, asking first when the form changed. */
+  async function backToDetails() {
+    if (!nativeOrigin || !await canReplace()) return;
+    editNative(nativeOrigin);
   }
   async function closeCompose() {
     if (!await canReplace()) return;
@@ -253,95 +268,130 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, remoteTarg
     finally { if (mounted.current) setBusy(false); }
   }
 
-  function onKey(event: KeyboardEvent<HTMLElement>) {
-    if (batchItems || !composing || mode !== 'edit' || !withMod(event) || event.key.toLowerCase() !== 's') return;
-    event.preventDefault();
-    if (event.repeat || busy) return;
-    if (preview) void commit();
-    else void save();
-  }
   const canAdd = !(busy || (scope === 'project' && !project));
   const editing = mode === 'edit' || !nativeOrigin;
-  const articleLabel = !nativeOrigin ? t('tools.mcp.newTitle') : editing ? t('tools.mcp.editTitle') : t('tools.mcp.detailsLabel');
+  const dialogTitle = !nativeOrigin ? t('tools.mcp.newTitle') : editing ? t('tools.mcp.editTitle') : nativeOrigin.name;
   const openedLibrary = nativeOrigin ? libraryFor(nativeOrigin.name) : undefined;
+  const conflicted = !!preview && preview.targets.some(item => item.status === 'conflict');
+  const committable = !!preview && preview.targets.some(item => item.status === 'ready' || item.status === 'conflict');
+  const where = [toolName, scopeLabel].filter(Boolean).join(' · ');
+  const remoteOrigin = !!nativeOrigin && isRemoteMcp(nativeOrigin.transport);
+
   let listBody: ReactNode;
-  if (listLoading && !nativeEntries.length) listBody = <div className={styles.listWrap} role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
-  else listBody = <div className={styles.listWrap}>
-    {loadError && !nativeEntries.length && <div className={styles.empty}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><button type="button" onClick={() => void refreshNative()}><Icon name="refresh" size={14} />{t('tools.plugins.rescan')}</button></div>}
-    {!loadError && !nativeEntries.length && <EmptyState icon="connections" title={t('tools.mcp.emptyTitle')} detail={[t('tools.mcp.emptyDetail'), scope === 'project' && !project ? t('tools.mcp.pickProjectFirst') : ''].filter(Boolean).join(' ')} action={<Button variant="primary" disabled={!canAdd} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</Button>} />}
-    {nativeEntries.length > 0 && shown.length === 0 && <div className={doc.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><button type="button" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</button></div>}
-    {shown.length > 0 && <ul className={doc.rows} aria-label={t('tools.mcp.title')}>{shown.map(item => {
-      const summary = mcpSummary(item);
-      return <li key={item.name}><button type="button" className={doc.row} aria-current={composing && nativeOrigin?.name === item.name ? 'true' : undefined} data-disabled={!item.enabled || undefined} disabled={busy} onClick={() => void openEntry(item)}>
-        <span className={doc.rowTitle}><strong>{item.name}</strong></span>
-        <span className={doc.rowSummary}>{summary || mcpTransportBadge(item.transport)}</span>
-        <span className={doc.rowMeta}>
-          <Badge tone={item.enabled ? 'success' : 'neutral'}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
-          <Badge>{mcpTransportBadge(item.transport)}</Badge>
-          {libraryFor(item.name) && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
+  if (listLoading && !nativeEntries.length) listBody = <div role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
+  else if (loadError && !nativeEntries.length) listBody = <div className={styles.empty}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><Button icon={<Icon name="refresh" size={14} />} onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div>;
+  else if (!nativeEntries.length) listBody = <EmptyState icon="connections" title={t('tools.mcp.emptyTitle')} detail={[t('tools.mcp.emptyDetail'), scope === 'project' && !project ? t('tools.mcp.pickProjectFirst') : ''].filter(Boolean).join(' ')} action={<div className={styles.emptyActions}><Button variant="primary" disabled={!canAdd} icon={<Icon name="plus" size={14} />} onClick={() => void startNew()}>{t('tools.mcp.add')}</Button><Button disabled={!canAdd} icon={<Icon name="clipboard" size={14} />} onClick={() => void startNew(true)}>{t('library.resources.pasteCreate')}</Button></div>} />;
+  else if (!shown.length) listBody = <div className={styles.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><Button size="sm" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</Button></div>;
+  else listBody = <ul className={styles.list} aria-label={t('tools.mcp.title')}>{shown.map(item => {
+    const summary = mcpSummary(item);
+    const inLibrary = libraryFor(item.name);
+    const remote = isRemoteMcp(item.transport);
+    return <li key={item.name} className={styles.row} data-mcp-name={item.name} data-disabled={!item.enabled || undefined} data-open={composing && nativeOrigin?.name === item.name || undefined}>
+      {/* The row opens the details; a double-click goes straight to editing. */}
+      <button type="button" className={styles.rowOpen} aria-label={t('tools.mcp.rowOpen', { name: item.name })} title={t('tools.mcp.doubleClickHint')} disabled={busy} onClick={() => void openEntry(item)} onDoubleClick={() => void openEntry(item, true)}>
+        <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={remote ? 'globe' : 'terminal'} size={18} /></span>
+        <span className={styles.main}>
+          <strong>{item.name}</strong>
+          <Badge className={styles.transport} tone={remote ? 'info' : 'neutral'}>{mcpTransportBadge(item.transport)}</Badge>
+          {inLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
+          {item.protectedValues && <span className={styles.lock} title={t('tools.mcp.detailProtected')}><Icon name="lock" size={12} /></span>}
         </span>
-      </button></li>;
-    })}</ul>}
-  </div>;
+        <code className={styles.command} title={summary}>{summary || t(remote ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
+      </button>
+      <span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>
+      <div className={styles.rowActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}>
+        <Button variant="ghost" size="sm" disabled={busy} aria-label={t('tools.mcp.rowEdit', { name: item.name })} icon={<Icon name="pencil" size={14} />} onClick={() => void openEntry(item, true)}>{t('tools.mcp.edit')}</Button>
+        <RowMenu label={t('library.resources.rowMenu', { name: item.name })}>
+          {inLibrary && onOpenLibrary && <button type="button" role="menuitem" onClick={() => onOpenLibrary(inLibrary.id)}><Icon name="library" size={14} /><span>{t('tools.mcp.openLibrary')}</span></button>}
+          <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removeNative(item)}><Icon name="trash" size={14} /><span>{t('tools.mcp.removeFromTool')}</span></button>
+        </RowMenu>
+      </div>
+    </li>;
+  })}</ul>;
 
   return <>
-    <DocumentWorkspace documentKey={composing ? nativeOrigin?.name ?? draft.id ?? 'new' : null} label={t('tools.mcp.title')} toolbarLabel={t('tools.mcp.toolbar')} backLabel={t('common.dialog.back')} onBack={() => { void closeCompose(); }} onKeyDown={onKey}
-      heading={t('tools.mcp.title')}
-      count={nativeEntries.length ? (needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })) : undefined}
-      actions={<>
-        <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()} icon={<Icon name="refresh" size={15} />} />
-        <IconButton variant="primary" size="sm" aria-label={t('tools.mcp.add')} title={t('tools.mcp.add')} disabled={!canAdd} onClick={() => void startNew()} icon={<Icon name="plus" size={16} />} />
-      </>}
-      search={(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) ? <SearchField type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
-      notices={<><RemoteReadStatus state={remoteReads} />{stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}{loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><button type="button" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</button></div>}</>}
-      list={listBody}
-      placeholder={!composing && nativeEntries.length > 0 ? <div className={doc.placeholder}><span className={doc.placeholderIcon} aria-hidden="true"><Icon name="connections" size={22} /></span><strong>{t('tools.mcp.selectHint')}</strong><p>{t('tools.mcp.selectDetail')}</p></div> : null}
-      document={composing ? <article className={doc.doc} aria-label={articleLabel}>
-        <DocumentHeader
-          title={nativeOrigin?.name || t('tools.mcp.newTitle')}
-          badges={nativeOrigin ? <>
-            <Badge>{mcpTransportBadge(nativeOrigin.transport)}</Badge>
-            <Badge tone={enabled ? 'success' : 'neutral'}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
-            {openedLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
-          </> : undefined}
-          tools={<>
-            {nativeOrigin && <ModeSwitch mode={mode} editable disabled={busy || !!preview} onChange={setMode} />}
-            <IconButton size="sm" className={doc.iconButton} aria-label={t('common.dialog.close')} title={t('common.dialog.close')} onClick={() => void closeCompose()} icon={<Icon name="close" size={15} />} />
-          </>}
-          metaActions={(openedLibrary && onOpenLibrary) || nativeOrigin ? <>
-            {openedLibrary && onOpenLibrary && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="accent" onClick={() => onOpenLibrary(openedLibrary.id)}><Icon name="library" size={13} />{t('tools.mcp.openLibrary')}</Button>}
-            {nativeOrigin && <Button variant="ghost" size="sm" className={doc.ghostButton} data-tone="danger" disabled={busy} onClick={() => void removeNative(nativeOrigin)}><Icon name="trash" size={13} />{t('tools.mcp.removeFromTool')}</Button>}
-          </> : undefined}
-        />
-        {editing ? <>
-          <div className={doc.scroll}>
-            <div className={styles.panel}>
+    <section className={styles.layout} aria-label={t('tools.mcp.title')}>
+      <header className={styles.head} role="group" aria-label={t('tools.mcp.toolbar')}>
+        <div className={styles.headTitle}>
+          <span className={styles.heading}>{t('tools.mcp.title')}</span>
+          {nativeEntries.length > 0 && <span className={styles.count}>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</span>}
+        </div>
+        <div className={styles.headActions}>
+          <IconButton size="sm" aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()} icon={<Icon name="refresh" size={15} />} />
+          <Button variant="primary" size="sm" disabled={!canAdd} icon={<Icon name="plus" size={14} />} onClick={() => void startNew()}>{t('tools.mcp.add')}</Button>
+        </div>
+      </header>
+      <p className={styles.hint}>{t('tools.mcp.description')}</p>
+      {(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) && <SearchField type="search" className={styles.search} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
+      <RemoteReadStatus state={remoteReads} />
+      {stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}
+      {loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div>}
+      {listBody}
+    </section>
+
+    {/* One dialog reads, adds and edits; switching from reading to editing keeps the place. */}
+    <GuideDialog wide open={composing && !batchItems} title={dialogTitle} hint={editing ? t('tools.mcp.dialogHint') : undefined} onClose={() => void closeCompose()}>
+      {composing && (editing ? <>
+        <div className={styles.editor}>
+          <div className={styles.editorForm}>
             {linkedInLibrary && <p className={styles.linkedNote}><Icon name="info" size={14} />{t('tools.mcp.linkedNote', { name: linked?.name ?? draft.name })}</p>}
             <fieldset className={styles.formFields} disabled={busy || !!preview}>
-              <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteText={importSource} />
+              <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
             </fieldset>
-            <div className={styles.options}>
-              <div className={styles.option}><label><input type="checkbox" checked={enabled} disabled={busy || !!preview} aria-describedby={id + '-enabled'} onChange={event => setEnabled(event.target.checked)} />{t('tools.mcp.enabledLabel')}</label><small id={id + '-enabled'}>{t('tools.mcp.enabledHint')}</small></div>
-              {!linkedInLibrary && <div className={styles.option}><label><input type="checkbox" checked={syncLibrary} disabled={busy || !!preview} aria-describedby={id + '-library'} onChange={event => setSyncLibrary(event.target.checked)} />{t('tools.mcp.alsoLibrary')}</label><small id={id + '-library'}>{t('tools.mcp.alsoLibraryHint')}</small></div>}
+          </div>
+          <aside className={styles.side} aria-label={t('tools.mcp.targetTitle')}>
+            <div className={styles.target}>
+              <span className={styles.sideLabel}>{t('tools.mcp.targetTitle')}</span>
+              <span className={styles.targetPlace}><ToolIcon toolId={toolId} size={22} /><span><strong>{toolName || toolId}</strong>{scopeLabel && <small title={project ?? undefined}>{scopeLabel}</small>}</span></span>
+              <small className={styles.sideNote}>{t(remoteTargetId ? 'tools.mcp.targetRemoteHint' : 'tools.mcp.targetHint')}</small>
             </div>
-            {preview && <div className={styles.preview} role="group" aria-label={t('tools.mcp.previewLabel')}>
-              <strong>{preview.targets.some(item => item.status === 'conflict') ? t('tools.mcp.conflictTitle') : t('tools.mcp.previewTitle')}</strong>
+            <label className={styles.option}>
+              <input type="checkbox" checked={enabled} disabled={busy || !!preview} aria-labelledby={id + '-enabled-label'} aria-describedby={id + '-enabled'} onChange={event => setEnabled(event.target.checked)} />
+              <span><strong id={id + '-enabled-label'}>{t('tools.mcp.enabledLabel')}</strong><small id={id + '-enabled'}>{t('tools.mcp.enabledHint')}</small></span>
+            </label>
+            {!linkedInLibrary && <label className={styles.option}>
+              <input type="checkbox" checked={syncLibrary} disabled={busy || !!preview} aria-labelledby={id + '-library-label'} aria-describedby={id + '-library'} onChange={event => setSyncLibrary(event.target.checked)} />
+              <span><strong id={id + '-library-label'}>{t('tools.mcp.alsoLibrary')}</strong><small id={id + '-library'}>{t('tools.mcp.alsoLibraryHint')}</small></span>
+            </label>}
+          </aside>
+          {(preview || commitResults) && <div className={styles.review}>
+            {preview && <div className={styles.preview} role="group" aria-label={t('tools.mcp.previewLabel')} data-conflict={conflicted || undefined}>
+              <strong><Icon name={conflicted ? 'alert' : 'check'} size={14} />{conflicted ? t('tools.mcp.conflictTitle') : t('tools.mcp.previewTitle')}</strong>
               {preview.targets.map((item, index) => <div key={index} className={styles.previewTarget} data-status={item.status}><p>{item.detail}</p>{item.status === 'conflict' && <div className={styles.diff}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>}</div>)}
-              {preview.targets.some(item => item.status === 'conflict') && <label className={styles.replace}><input type="checkbox" checked={allowReplace} disabled={busy} onChange={event => setAllowReplace(event.target.checked)} />{t('tools.mcp.batchReplace')}</label>}
+              {conflicted && <label className={styles.replace}><input type="checkbox" checked={allowReplace} disabled={busy} onChange={event => setAllowReplace(event.target.checked)} />{t('tools.mcp.batchReplace')}</label>}
             </div>}
             {commitResults && <div className={styles.results}>{commitResults.targets.map((item, index) => <p key={index} data-status={item.status}>{item.status}: {item.detail}</p>)}</div>}
-            {error && <p className={styles.error} role="alert">{error}</p>}
-            {notice && <p className={styles.notice} role="status">{notice}</p>}
-            </div>
-          </div>
-          <DocumentFoot dirty={dirty} note={t('common.document.saveHint', { mod: modLabel })}>
-            {preview && <button type="button" disabled={busy} onClick={() => { setPreview(null); setAllowReplace(false); }}>{t('library.resources.back')}</button>}
-            {preview ? <Button variant="primary" disabled={busy || preview.targets.some(item => item.status === 'conflict') && !allowReplace || preview.targets.every(item => item.status !== 'ready' && item.status !== 'conflict')} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</Button>
-              : <Button variant="primary" title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</Button>}
-          </DocumentFoot>
-        </> : nativeOrigin && <div className={doc.body}><McpDetails key={nativeOrigin.name} statusInHeader item={{ ...nativeOrigin, enabled }} /></div>}
-      </article> : null}
-    />
+          </div>}
+        </div>
+        {error && <p className={styles.error} role="alert">{error}</p>}
+        <div className="dialog-footer">
+          {nativeOrigin && <Button variant="ghost" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void removeNative(nativeOrigin)}>{t('tools.mcp.removeFromTool')}</Button>}
+          <span className="dialog-footer-gap" />
+          {dirty && !preview && <span className={styles.dirty}>{t('library.page.dirtyState')}</span>}
+          {preview ? <Button disabled={busy} onClick={() => { setPreview(null); setAllowReplace(false); }}>{t('library.resources.back')}</Button>
+            : nativeOrigin ? <Button disabled={busy} onClick={() => void backToDetails()}>{t('tools.mcp.cancelEdit')}</Button> : <Button disabled={busy} onClick={() => void closeCompose()}>{t('common.dialog.cancel')}</Button>}
+          {preview ? <Button variant="primary" data-dialog-save disabled={busy || conflicted && !allowReplace || !committable} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</Button>
+            : <Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</Button>}
+        </div>
+      </> : nativeOrigin && <>
+        <div className={styles.detailBadges}>
+          <Badge tone={remoteOrigin ? 'info' : 'neutral'}>{mcpTransportBadge(nativeOrigin.transport)}</Badge>
+          <Badge tone={enabled ? 'success' : 'neutral'} dot>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+          {openedLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
+          {where && <span className={styles.detailWhere}><ToolIcon toolId={toolId} size={16} />{where}</span>}
+        </div>
+        <section className={styles.details} aria-label={t('tools.mcp.detailsLabel')}>
+          <McpDetails key={nativeOrigin.name} statusInHeader item={{ ...nativeOrigin, enabled }} />
+        </section>
+        {error && <p className={styles.error} role="alert">{error}</p>}
+        <div className="dialog-footer">
+          <Button variant="ghost" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void removeNative(nativeOrigin)}>{t('tools.mcp.removeFromTool')}</Button>
+          <span className="dialog-footer-gap" />
+          {openedLibrary && onOpenLibrary && <Button icon={<Icon name="library" size={14} />} onClick={() => { setComposing(false); onOpenLibrary(openedLibrary.id); }}>{t('tools.mcp.openLibrary')}</Button>}
+          <Button variant="primary" disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => setMode('edit')}>{t('tools.mcp.edit')}</Button>
+        </div>
+      </>)}
+    </GuideDialog>
     <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeCompose()}>
       {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(linkDraft(value), [{ ...target, enabled }])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}

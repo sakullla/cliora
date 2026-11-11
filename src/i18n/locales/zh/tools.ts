@@ -418,6 +418,13 @@ export default {
     compatSummary: '原生格式与加载说明',
   },
   mcp: {
+    rowOpen: '查看 {{name}}',
+    rowEdit: '修改 {{name}}',
+    edit: '修改',
+    cancelEdit: '取消修改',
+    targetTitle: '写入位置',
+    targetHint: '保存时先预览将写入的内容，确认后才落盘。',
+    targetRemoteHint: '保存后直接写入远程主机上的这个 CLI。',
     parseError: '变量和请求头请每行填写 KEY=value',
     confirmDiscard: 'MCP 草稿尚未保存，切换后会丢失修改。',
     importedNotice: '已读取当前工具上的条目。保存只更新这个 CLI。',
