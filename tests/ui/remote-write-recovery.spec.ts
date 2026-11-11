@@ -50,17 +50,18 @@ for (const mode of ['empty', 'committed', 'rolled_back', 'prepare_failed', 'conf
   });
 }
 
-test('write recovery shares the existing resume controls and disappears when inspection settles the fault', async ({ page }) => {
+test('write recovery sits beside the resume action and disappears when inspection settles the fault', async ({ page }) => {
   await install(page, 1, 'unknown', true); await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  // An ended session's banner owns its recovery actions; the toolbar repeats none of them.
   const toolbar = page.getByRole('toolbar', { name: '终端操作' });
-  const resume = toolbar.getByRole('button', { name: '重新附着远程会话', exact: true });
-  const recovery = toolbar.getByRole('button', { name: '写入恢复', exact: true });
+  await expect(toolbar.getByRole('button', { name: '写入恢复', exact: true })).toHaveCount(0);
+  await expect(toolbar.getByRole('button', { name: '继续会话', exact: true })).toHaveCount(0);
+  const resume = stage.getByRole('button', { name: '继续会话', exact: true });
+  const recovery = resume.locator('..').getByRole('button', { name: '写入恢复', exact: true });
   await expect(recovery).toBeVisible();
-  expect(await recovery.evaluate((button, resumeClass) => ({ same: button.className === resumeClass, group: button.parentElement?.querySelectorAll('button').length }), await resume.getAttribute('class'))).toEqual({ same: true, group: 2 });
-  const endedResume = page.getByRole('button', { name: '继续会话', exact: true });
-  const endedRecovery = endedResume.locator('..').getByRole('button', { name: '写入恢复', exact: true });
-  expect(await endedRecovery.getAttribute('class')).toBe(await endedResume.getAttribute('class'));
+  expect(await recovery.getAttribute('class')).toBe(await resume.getAttribute('class'));
   await page.evaluate(() => { (window as any).__recoveryState.after = true; });
   await recovery.click();
   const dialog = page.getByRole('dialog', { name: '远程写入与恢复' });

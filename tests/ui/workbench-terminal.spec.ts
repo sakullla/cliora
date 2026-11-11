@@ -3232,6 +3232,12 @@ test('the worktree menu filters a long list and reads status only for the rows i
   await expect(menu.getByRole('menuitemradio').first()).toHaveAttribute('aria-checked', 'true');
   await expect(menu.getByRole('menuitemradio').nth(11)).toContainText('没有未提交改动');
   expect(await page.evaluate(() => new Set((window as unknown as { __statusReads?: string[] }).__statusReads).size)).toBeLessThanOrEqual(41);
+  // The count says how many matched, not counting the current checkout kept on top.
+  await expect(menu.getByText('11 / 202', { exact: true })).toBeVisible();
+  // Rows scroll on their own: the actions below a long list stay on screen.
+  await menu.getByRole('searchbox', { name: '筛选工作树' }).fill('');
+  await expect(menu.getByRole('menuitem', { name: '管理工作树…' })).toBeInViewport();
+  await expect(menu.getByRole('menuitem', { name: '新建工作树…' })).toBeInViewport();
 });
 
 test('settings can save one prepare command for a project repository', async ({ page }) => {
@@ -3457,6 +3463,9 @@ test('removing a worktree that a running session still uses names the session', 
   await expect(setup.getByRole('alert')).toContainText('运行中的会话 Codex');
   await expect(page.getByRole('dialog', { name: '清理这个工作树？' })).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __cleanups?: unknown[] }).__cleanups ?? [])).toEqual([]);
+  // The way out is one click: close the dialog on the session that holds the checkout.
+  await setup.getByRole('button', { name: '转到会话', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '管理工作树' })).toHaveCount(0);
 });
 test('the dialog shows the branch it will create and edits it in place', async ({ page }) => {
   await page.addInitScript(() => {

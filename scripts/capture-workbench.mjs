@@ -512,9 +512,9 @@ for (const width of widths) {
     await shot(`workbench-remote-${state}-${theme}-${width}`, theme, width, null, false, state);
   }
   await shot(`workbench-remote-write-recovery-${theme}-${width}`, theme, width, async page => {
-    const toolbar = page.getByRole('toolbar', { name: copy('终端操作', 'Terminal actions') });
-    await toolbar.getByRole('button', { name: copy('写入恢复', 'Write recovery'), exact: true }).waitFor();
-    await toolbar.getByRole('button', { name: copy('重新附着远程会话', 'Reattach remote session'), exact: true }).waitFor();
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await stage.getByRole('button', { name: copy('写入恢复', 'Write recovery'), exact: true }).first().waitFor();
+    await stage.getByRole('button', { name: copy('继续会话', 'Resume session'), exact: true }).waitFor();
   }, false, 'disconnected', null, null, true);
   // Stress measurements are independent of theme/viewport; opt in once.
   if (process.argv.includes('--performance') && theme === themes[0] && width === widths[0]) await shot(`workbench-remote-stream-${theme}-${width}`, theme, width, async page => {

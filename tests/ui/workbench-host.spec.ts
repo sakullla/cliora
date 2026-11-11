@@ -526,17 +526,20 @@ test('remote readiness, disconnect, unknown and remote end stay distinct from CL
   await state({ connectionState: 'connected' });
   await expect(stage).toContainText('SSH · 已连接');
   await state({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
-  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage).toContainText('SSH · 已断开，可继续会话');
   await expect(stage).toContainText('CLI 活动未知');
+  // 255 is the SSH transport's code: the title bar and banner do not present it as a CLI failure.
+  await expect(stage).not.toContainText('退出码 255');
   await expect(page.getByRole('button', { name: '清理已结束', exact: true })).toHaveCount(0);
   await stage.getByRole('button', { name: '继续会话', exact: true }).first().click();
   await expect(stage).toContainText('SSH · 连接中');
   await expect(stage.locator('textarea')).toBeEnabled();
   await state({ running: false, connectionState: 'unknown', reattachable: true, exitCode: 46 });
   await expect(stage).toContainText('SSH · 远端状态未知');
+  await expect(stage.getByTitle(/SSH 退出码 46/).first()).toBeVisible();
   await state({ running: false, connectionState: 'remote_ended', reattachable: false, exitCode: 44 });
   await expect(stage).toContainText('SSH · 远端已结束');
-  await expect(stage.getByRole('button', { name: '重新附着远程会话', exact: true })).toHaveCount(0);
+  await expect(stage.getByRole('button', { name: '继续会话', exact: true })).toHaveCount(0);
 });
 
 test('an unconfirmed remote end preserves its tab, terminal and recovery action', async ({ page }) => {
@@ -595,12 +598,12 @@ test('an older event cache cannot replace a newer listed state when an earlier l
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
   await page.locator('[data-session-id="original-a"]').click();
   const stage = page.getByRole('region', { name: '当前会话' });
-  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage).toContainText('SSH · 已断开，可继续会话');
   await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
   await page.evaluate(() => (window as unknown as { __releaseIndependentList: () => void }).__releaseIndependentList());
   await expect.poll(() => page.evaluate(() => (window as unknown as { __independentDelayedListResolved: boolean }).__independentDelayedListResolved)).toBe(true);
   await page.locator('[data-session-id="original-a"]').click();
-  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage).toContainText('SSH · 已断开，可继续会话');
   await expect(page.locator('[data-pane-session="original-a"] textarea')).toBeDisabled();
 });
 
@@ -609,7 +612,7 @@ test('an initially disconnected terminal starts with input disabled', async ({ p
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   const stage = page.getByRole('region', { name: '当前会话' });
-  await expect(stage).toContainText('SSH · 已断开，可重新附着');
+  await expect(stage).toContainText('SSH · 已断开，可继续会话');
   await expect(stage.locator('textarea')).toBeDisabled();
 });
 
@@ -628,7 +631,7 @@ test('reattach uses the mounted grid after a disconnected resize and answers its
   await expect(stage.locator('textarea')).toBeDisabled();
   await page.setViewportSize({ width: 1600, height: 1000 });
   await expect.poll(() => stage.locator('.xterm-screen').evaluate(node => node.clientWidth)).toBeGreaterThan(1000);
-  await stage.getByRole('button', { name: '重新附着远程会话', exact: true }).click();
+  await stage.getByRole('button', { name: '继续会话', exact: true }).click();
   const calls = await page.evaluate(() => (window as unknown as { __reattachCalls: Array<{ sessionId: string; cols: number; rows: number }> }).__reattachCalls);
   expect(calls).toHaveLength(1);
   expect(calls[0].sessionId).toBe('original-a');
@@ -644,7 +647,7 @@ test('reattach uses the mounted grid after a disconnected resize and answers its
 
 for (const width of [900, 640]) {
   for (const theme of ['light', 'dark']) {
-    test(`disconnected reattach does not overlap search at ${width}px in ${theme}`, async ({ page }) => {
+    test(`disconnected sessions continue from the banner, not a second toolbar button, at ${width}px in ${theme}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await installIndependentSessions(page);
       await page.goto('/');
@@ -654,20 +657,14 @@ for (const width of [900, 640]) {
         (window as unknown as { __remoteState: (patch: object) => void }).__remoteState({ running: false, connectionState: 'disconnected', reattachable: true, exitCode: 255 });
       }, theme);
       const stage = page.getByRole('region', { name: '当前会话' });
-      const reattach = stage.getByRole('button', { name: '重新附着远程会话', exact: true });
-      await expect(reattach).toBeVisible();
-      const geometry = await reattach.evaluate(button => {
-        const box = button.getBoundingClientRect();
-        const label = button.querySelector('span[class*="toolLabel"]');
-        const search = button.closest('header')?.querySelector('button[aria-label="查找输出"]');
-        const searchBox = search?.getBoundingClientRect();
-        return { labelVisible: !!label && getComputedStyle(label).display !== 'none', left: box.left, right: box.right, width: box.width, searchLeft: searchBox?.left };
-      });
-      expect(geometry.labelVisible).toBe(false);
-      expect(geometry.width).toBeGreaterThan(20);
-      expect(geometry.searchLeft).toBeDefined();
-      expect(geometry.right).toBeLessThanOrEqual(geometry.searchLeft!);
+      const resume = stage.getByRole('button', { name: '继续会话', exact: true });
+      await expect(resume).toHaveCount(1);
+      await expect(resume).toBeInViewport({ ratio: 1 });
+      await expect(page.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '继续会话', exact: true })).toHaveCount(0);
       await expect(stage.getByRole('button', { name: '查找输出', exact: true })).toBeVisible();
+      // The SSH code stays a hint, not a failure: the banner uses the connection tone.
+      await expect(stage.locator('[data-connection]')).toBeVisible();
+      await expect(stage.locator('[data-failed]')).toHaveCount(0);
     });
   }
 }

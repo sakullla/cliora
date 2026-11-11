@@ -177,7 +177,7 @@ export default {
     remoteRefreshed: 'Refreshed usage records for this host.',
     remoteCoverage: 'Native sessions on this host',
     remoteUnavailable: 'No remote session index is available for this host.',
-    remoteSessionDetail: 'Reattach this remote session in the workbench to view its live details.',
+    remoteSessionDetail: 'Resume this remote session in the workbench to view its live details.',
     scanStopped: 'Stop requested; existing records are kept.',
     copyFailed: 'Copy failed. The resume command is still on the page; select it manually.',
     resumeRequested: 'Session resume requested in the external terminal.',

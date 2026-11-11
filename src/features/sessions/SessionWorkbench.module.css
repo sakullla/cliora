@@ -1241,6 +1241,8 @@
 .endedGlyph { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: var(--radius); background: var(--term-well); color: var(--term-text-3); }
 .endedBar[data-failed] { border-color: color-mix(in srgb, var(--term-danger) 32%, var(--term-line)); background: color-mix(in srgb, var(--term-danger) 6%, var(--term-raise)); }
 .endedBar[data-failed] .endedGlyph { background: color-mix(in srgb, var(--term-danger) 14%, transparent); color: var(--term-danger); }
+.endedBar[data-connection] { border-color: color-mix(in srgb, var(--term-warning) 34%, var(--term-line)); background: color-mix(in srgb, var(--term-warning) 6%, var(--term-raise)); }
+.endedBar[data-connection] .endedGlyph { background: color-mix(in srgb, var(--term-warning) 16%, transparent); color: var(--term-warning); }
 .endedText { display: flex; flex: 1 1 auto; align-items: baseline; gap: var(--space-2_5); min-width: 0; overflow: hidden; white-space: nowrap; }
 .endedText strong { flex: none; color: var(--term-fg); font-weight: var(--fw-semibold); }
 .endedCode { flex: none; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-2); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; line-height: 18px; }
@@ -1341,10 +1343,14 @@ button.gitChip[aria-expanded='true'] { background: var(--term-hover); color: var
 button.gitChip:disabled { opacity: .55; cursor: default; }
 /* Wide enough for a repository name, its branch and its status on two calm lines; the
    viewport clamp keeps it inside narrow windows. */
-.worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; width: min(380px, calc(100vw - 24px)); max-height: min(460px, calc(100vh - 120px)); overflow: auto; overscroll-behavior: contain; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-lg); background: var(--term-float); box-shadow: 0 20px 48px -18px var(--term-shadow), 0 2px 8px -2px var(--term-shadow); animation: wbDrop 140ms var(--ease); }
+.worktreeMenu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; display: flex; flex-direction: column; gap: 1px; width: min(400px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 240px)); overflow: hidden; padding: var(--space-1); border: 1px solid var(--term-float-line); border-radius: var(--radius-lg); background: var(--term-float); box-shadow: 0 20px 48px -18px var(--term-shadow), 0 2px 8px -2px var(--term-shadow); animation: wbDrop 140ms var(--ease); }
 .worktreeMenuHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-1_5) var(--space-1_5); color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 .worktreeMenuHead em { padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-well); font-style: normal; font-variant-numeric: tabular-nums; line-height: 16px; }
-.worktreeFilter { position: sticky; z-index: 1; top: calc(var(--space-1) * -1); display: flex; align-items: center; gap: var(--space-1_5); height: 30px; margin: 0 0 var(--space-1); padding: 0 var(--space-2); border: 1px solid var(--term-frame); border-radius: var(--radius-sm); background: var(--term-float); color: var(--term-text-3); }
+.worktreeMenu > * { flex: none; }
+/* Only the rows scroll: the header, filter, actions and review group keep their place. */
+.worktreeMenu > .worktreeList { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 1px; flex: 0 1 auto; min-height: 52px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.worktreeActions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin-top: var(--space-0_5); padding-top: var(--space-1); border-top: 1px solid var(--term-float-line); }
+.worktreeFilter { display: flex; align-items: center; gap: var(--space-1_5); height: 30px; margin: 0 0 var(--space-1); padding: 0 var(--space-2); border: 1px solid var(--term-frame); border-radius: var(--radius-sm); background: var(--term-float); color: var(--term-text-3); }
 .worktreeFilter:focus-within { border-color: color-mix(in srgb, var(--term-accent) 60%, transparent); }
 .worktreeFilter > :global(svg) { flex: none; }
 .worktreeFilter input[type='search'],
@@ -1363,9 +1369,10 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .worktreeItem:disabled:not([data-current]) { opacity: 0.55; cursor: default; }
 .worktreeName { grid-area: name; min-width: 0; overflow: hidden; color: var(--term-fg); font-family: var(--font-mono); font-size: 12px; font-weight: var(--fw-semibold); text-overflow: ellipsis; }
 .worktreeSub { grid-area: sub; display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; overflow: hidden; color: var(--term-text-3); font-size: 10px; }
-.worktreeBranch { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-0_75); min-width: 0; max-width: 62%; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; }
+.worktreeBranch { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-0_75); min-width: 0; max-width: 78%; overflow: hidden; font-family: var(--font-mono); }
+.worktreeBranch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .worktreeBranch > :global(svg) { flex: none; color: var(--term-accent); }
-.worktreePath { flex: 1 1 0; min-width: 24px; overflow: hidden; font-family: var(--font-mono); opacity: .8; text-overflow: ellipsis; }
+.worktreePath { flex: 1 1 0; min-width: 0; overflow: hidden; font-family: var(--font-mono); opacity: .75; text-overflow: ellipsis; }
 /* Other checkouts open a new session; the hint appears with the hover so the list stays calm. */
 .worktreeOpen { grid-area: action; display: inline-flex; align-items: center; justify-self: end; gap: var(--space-0_5); color: var(--term-accent); font-size: 10px; font-weight: var(--fw-semibold); opacity: 0; transition: opacity var(--fast) var(--ease); }
 .worktreeItem:hover .worktreeOpen,
@@ -1649,6 +1656,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .setupRow[data-in-use] .setupRowGlyph { background: var(--info-soft); color: var(--info); }
 .setupRow[data-busy] { opacity: .7; }
 .setupRemove { flex: none; color: var(--text-2); }
+.setupJump { flex: none; color: var(--accent); }
 .setupRemove:hover:not(:disabled) { color: var(--danger); }
 .setupRow[data-busy] .setupRemove > :global(svg) { animation: wtSpin .9s linear infinite; }
 .cleanupMissing { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--warning-soft, var(--surface-2)); color: var(--warning, var(--text-3)); font-size: 10px; font-weight: var(--fw-semibold); }
@@ -2008,6 +2016,10 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .worktreeChanges::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .9; }
 .worktreeChanges[data-tone='dirty'] { color: var(--term-warning); }
 .worktreeChanges[data-tone='clean'] { color: var(--term-success); }
+.worktreeChangesText { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A clean checkout is the common case: a quiet dot, with the words on hover/focus or for the current row. */
+.worktreeItem:not([data-current]) .worktreeChanges[data-tone='clean'] .worktreeChangesText { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.worktreeItem:not([data-current]):is(:hover, :focus-visible) .worktreeChanges[data-tone='clean'] .worktreeChangesText { position: static; width: auto; height: auto; clip-path: none; }
 .worktreeChanges[data-tone='unknown'] { color: var(--term-warning); }
 .worktreeChanges[data-tone='unknown']::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
 .worktreeChanges[data-tone='loading'] { color: var(--term-text-3); animation: wtPulse 1.2s var(--ease) infinite; }

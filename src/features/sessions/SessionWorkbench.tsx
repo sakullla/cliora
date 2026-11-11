@@ -324,10 +324,12 @@ function matchesQuery(query: string, ...fields: Array<string | null | undefined>
 }
 
 /** The current checkout first, then the rest in Git's order; filtered, then bounded. */
-function menuWorktrees(trees: WorkbenchWorktree[], query: string): { shown: WorkbenchWorktree[]; matched: number } {
+/** `hits` counts real matches only; the current checkout is kept on top even when it does not match. */
+function menuWorktrees(trees: WorkbenchWorktree[], query: string): { shown: WorkbenchWorktree[]; matched: number; hits: number } {
   const ordered = [...trees.filter((tree) => tree.current), ...trees.filter((tree) => !tree.current)];
   const matched = ordered.filter((tree) => tree.current || matchesQuery(query, tree.name, tree.branch, tree.path));
-  return { shown: matched.slice(0, WORKTREE_MENU_LIMIT), matched: matched.length };
+  const hits = matched.filter((tree) => matchesQuery(query, tree.name, tree.branch, tree.path)).length;
+  return { shown: matched.slice(0, WORKTREE_MENU_LIMIT), matched: matched.length, hits };
 }
 
 /** Last path segment, used to name a repository in the worktree dialog. */
@@ -2921,6 +2923,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <span className={styles.cleanupTitle} title={row.branch}>{row.branch}</span>
                   <small><span className={styles.cleanupPath} title={displayPath(row.worktreePath)}>{shortPath(displayPath(row.worktreePath))}</span>{missing && <span className={styles.cleanupMissing} title={t('sessions.worktreeMissingHint')}>{t('sessions.worktreeMissing')}</span>}{user && <span className={styles.cleanupInUse}>{t('sessions.worktreeInUse', { tool: toolName(user) })}</span>}</small>
                 </span>
+                {/* A running session blocks cleanup; the way out is that session, one click away. */}
+                {user && scopedSessions.some((item) => item.id === user.id) && <Button size="sm" variant="ghost" className={styles.setupJump} title={t('sessions.worktreeGoToSessionHint', { tool: toolName(user) })} icon={<Icon name="arrowUpRight" size={13} />} onClick={() => { setWorktreeSetup(null); setSelectedId(user.id); requestAnimationFrame(() => { if (selectedIdRef.current === user.id) handles.current.get(user.id)?.focus(); }); }}>{t('sessions.worktreeGoToSession')}</Button>}
                 <Button size="sm" variant="ghost" className={styles.setupRemove} aria-label={t('sessions.worktreeCleanupAction', { branch: row.branch })} title={user ? t('sessions.worktreeCleanupRunning', { tool: toolName(user) }) : missing ? t('sessions.worktreeMissingHint') : undefined} disabled={!!cleanupBusy} icon={<Icon name={removing ? 'refresh' : missing ? 'close' : 'trash'} size={13} />} onClick={() => void cleanWorktree(row)}>{removing ? t('sessions.worktreeCleaning') : missing ? t('sessions.worktreeForgetButton') : t('sessions.worktreeCleanupButton')}</Button>
               </li>;
             })}
@@ -3345,7 +3349,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           // Offer the worktree menu only when the repository actually has more than one checkout.
           const worktrees = current?.id === gitTarget && worktreeAnchor === gitWorktrees?.anchor ? gitWorktrees?.trees ?? [] : [];
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
-          const { shown: shownTrees, matched: matchedTrees } = menuWorktrees(worktrees, worktreeQuery);
+          const { shown: shownTrees, matched: matchedTrees, hits: worktreeHits } = menuWorktrees(worktrees, worktreeQuery);
           // 只有一个 checkout 时菜单没有别的选择，但仍然要提供审查入口和真实状态。
           const canOpenGitMenu = !!current && !remote && (canSwitchWorktree || !!gitLabel);
           const review = current ? reviewStates.get(current.id) ?? null : null;
@@ -3377,7 +3381,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <span className={styles.identitySubAnchor} aria-hidden="true" />
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : <PathLabel text={stagePlace} />}</span></button>
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
-                    {!current.running && current.exitCode != null && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
+                    {/* A remote session that may still run reports the SSH transport's code, not the CLI's: the
+                        connection banner explains it, so the title bar does not show it as a failure. */}
+                    {!current.running && current.exitCode != null && !remoteSessionMayExist(current) && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>
                 </div>
               </div>
@@ -3387,7 +3393,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
                   </span>
-                  {(current.reattachable || writeRecoveryNeeded) && <span className={styles.actionGroup}>{current.reattachable && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('sessions.reattachRemote')} title={t('sessions.reattachRemote')} disabled={!!busy} onClick={() => void reattachSession(current)} icon={<Icon name="refresh" size={14} />}><span className={styles.toolLabel}>{busy === 'reattach:' + current.id ? t('sessions.reattaching') : t('sessions.reattachShort')}</span></Button>}{writeRecoveryNeeded && <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.unknown')} disabled={!!busy} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={14} />}><span className={styles.toolLabel}>{t('common.remoteWrite.open')}</span></Button>}</span>}
+                  {/* An ended session's banner owns its recovery actions (continue, write recovery); the toolbar
+                      repeats none of them. A live session still reaches write recovery from here. */}
+                  {current.running && writeRecoveryNeeded && <span className={styles.actionGroup}><Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.unknown')} disabled={!!busy} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={14} />}><span className={styles.toolLabel}>{t('common.remoteWrite.open')}</span></Button></span>}
                   <span className={styles.actionGroup}>
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
                     {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
@@ -3450,9 +3458,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       {visible && dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
                       {uploads.tasks[session.id] && <SessionUploadNotice task={uploads.tasks[session.id]} progressLabel={t(remotePane ? 'sessions.uploadRunningLabel' : 'sessions.pasteFilesRunningLabel')} progressText={t(remotePane ? 'sessions.uploadProgress' : 'sessions.pasteFilesProgress', { done: uploads.tasks[session.id].uploaded, total: uploads.tasks[session.id].total })} failedTitle={t(remotePane ? 'sessions.uploadFailedTitle' : 'sessions.pasteFilesFailedTitle')} retryLabel={t(remotePane ? 'sessions.uploadRetry' : 'sessions.pasteFilesRetry')} dismissLabel={t('common.dismissError')} onRetry={() => uploads.retryUpload(session.id)} onDismiss={() => uploads.dismissUploadFailure(session.id)} />}
                     </>}
-                    footer={visible && !session.running ? <div className={styles.endedBar} data-failed={failed || undefined}>
-                      <span className={styles.endedGlyph}><Icon name={failed ? 'alert' : 'info'} size={15} /></span>
-                      <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
+                    footer={visible && !session.running ? <div className={styles.endedBar} data-failed={(failed && !session.reattachable) || undefined} data-connection={session.reattachable || undefined}>
+                      {/* A lost SSH link is a connection state to resume, not a CLI failure. */}
+                      <span className={styles.endedGlyph}><Icon name={session.reattachable ? 'server' : failed ? 'alert' : 'info'} size={15} /></span>
+                      <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && !session.reattachable && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail} title={session.reattachable && session.exitCode != null ? t('sessions.sshExitCodeHint', { code: session.exitCode }) : undefined}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
                       {canResume && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy || restoring} title={t('sessions.resumeSessionHint')} onClick={() => void reconnectLocalSession(session)} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{busy === 'restore:' + session.id ? t('sessions.resumingSession') : t('sessions.resumeSession')}</span></Button>}
                       <Button variant={canResume ? 'secondary' : 'primary'} size="sm" className={styles.endedRestart} disabled={!!busy || restoring} title={session.reattachable ? t('sessions.reattachRemote') : t('sessions.restartHint')} onClick={() => void (session.reattachable ? reattachSession(session) : restartOrCloneSession(session, true))} icon={<Icon name="refresh" size={13} />}><span className={styles.endedRestartLabel}>{session.reattachable ? t(busy === 'reattach:' + session.id ? 'sessions.reattaching' : 'sessions.reattachShort') : busy === 'restart:' + session.id ? t('sessions.restarting') : t('sessions.restartSession')}</span></Button>
                       {writeRecoveryNeeded && <Button variant="primary" size="sm" className={styles.endedRestart} disabled={!!busy} title={t('common.remoteWrite.unknown')} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={13} />}><span className={styles.endedRestartLabel}>{t('common.remoteWrite.open')}</span></Button>}
@@ -3477,7 +3486,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       </span>
                       {git?.branch && <button type="button" className={styles.gitMenuCopy} aria-label={t('sessions.copyBranch')} title={t('sessions.copyBranch')} onClick={(event) => { event.stopPropagation(); void writeClipboard(git.branch!).then((ok) => { if (ok) flashCopied('branch'); }); }}><Icon name={copiedState === 'branch' ? 'check' : 'copy'} size={13} /></button>}
                     </div>
-                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeSection')}</span>{worktreeListState === 'ready' && <em>{worktrees.length}</em>}</div>
+                    <div className={styles.worktreeMenuHead} role="presentation"><span>{t('sessions.worktreeSection')}</span>{worktreeListState === 'ready' && <em title={worktreeQuery.trim() ? t('sessions.worktreeMatchedTitle', { matched: worktreeHits, total: worktrees.length }) : undefined}>{worktreeQuery.trim() ? `${worktreeHits} / ${worktrees.length}` : worktrees.length}</em>}</div>
                     {worktreeListState === 'loading' && !gitWorktrees && <p className={styles.menuHint} role="status">{t('sessions.worktreeListLoading')}</p>}
                     {worktreeListState === 'error' && <p className={styles.menuError} role="alert">{worktreeListError}</p>}
                     {worktreeListState === 'ready' && !worktrees.length && <p className={styles.menuHint}>{t('sessions.worktreeListEmpty')}</p>}
@@ -3490,6 +3499,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                         if (event.key === 'Enter') { event.preventDefault(); focusWorktreeItem(0); }
                       }} />
                     </div>}
+                    {/* Rows scroll on their own; the actions and the review group below stay reachable. */}
+                    <div className={styles.worktreeList} role="presentation">
                     {worktreeQuery.trim() && !shownTrees.some((tree) => !tree.current) && <p className={styles.menuHint}>{t('sessions.worktreeFilterEmpty', { query: worktreeQuery.trim() })}</p>}
                     {shownTrees.map((tree) => {
                       // An unread status stays unknown: it is never shown as "no changes".
@@ -3507,16 +3518,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       return <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} data-status={!read ? 'loading' : status ? status.state : 'unknown'} data-environment={status?.environment ?? undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
                         <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} className={styles.worktreeGlyph} />
                         <span className={styles.worktreeName}>{tree.name}</span>
-                        <span className={styles.worktreeChanges} data-tone={tone} title={tone === 'unknown' ? read?.error || status?.reason || undefined : sessionCount != null ? codeStatusHint(codeStatus, false) : undefined}>{tone === 'loading' ? t('sessions.worktreeStatusLoading') : changes || t('sessions.worktreeStatusUnknown')}</span>
+                        <span className={styles.worktreeChanges} data-tone={tone} title={tone === 'unknown' ? read?.error || status?.reason || undefined : sessionCount != null ? codeStatusHint(codeStatus, false) : tone === 'clean' ? changes : undefined}><span className={styles.worktreeChangesText}>{tone === 'loading' ? t('sessions.worktreeStatusLoading') : changes || t('sessions.worktreeStatusUnknown')}</span></span>
                         <span className={styles.worktreeSub}>
-                          {tree.branch && <span className={styles.worktreeBranch}><Icon name="branch" size={10} />{tree.branch}</span>}
-                          
+                          {tree.branch && <span className={styles.worktreeBranch}><Icon name="branch" size={10} /><span>{tree.branch}</span></span>}
                           <span className={styles.worktreePath}>{shortPath(displayPath(tree.path))}</span>
                         </span>
                         <span className={styles.worktreeOpen}>{tree.current ? t('sessions.worktreeCurrent') : <><Icon name="plus" size={11} />{t('sessions.worktreeOpenAction')}</>}</span>
                       </button>;
                     })}
                     {matchedTrees > shownTrees.length && <p className={styles.menuHint} role="status">{t('sessions.worktreeMoreHidden', { count: matchedTrees - shownTrees.length })}</p>}
+                    </div>
+                    <div className={styles.worktreeActions} role="presentation">
                     {(worktreeListState === 'error' || [...worktreeStatuses.values()].some((entry) => !entry.status)) && <button type="button" role="menuitem" className={styles.floatItem} onClick={() => { setGitReadSeq((seq) => seq + 1); setWorktreeStatusSeq((seq) => seq + 1); }}>
                       <Icon name="refresh" size={13} />
                       <span>{worktreeListState === 'error' ? t('sessions.worktreeListRetry') : t('sessions.worktreeStatusRetry')}</span>
@@ -3529,6 +3541,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       <Icon name="sliders" size={13} />
                       <span>{t('sessions.worktreeSetupOpen')}</span>
                     </button>
+                    </div>
                     <span className={styles.reviewDivider} role="separator" />
                     <div className={styles.reviewGroup} role="group" aria-label={t('sessions.reviewGroup')} onClick={(event) => event.stopPropagation()}>
                       <div className={styles.reviewHead}>
@@ -3548,7 +3561,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     </div>
                   </div>}
                 </span> : <span className={styles.gitChip} title={gitChipTitle} aria-label={gitTitle}><Icon name={git?.worktree ? 'gitWorktree' : 'branch'} size={12} /><span className={styles.gitChipLabel}>{gitLabel}</span></span>)}
-                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={[current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession'), current.remoteSessionId ? t('sessions.sshRemoteSessionId', { id: current.remoteSessionId }) : ''].filter(Boolean).join('\n')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknown')}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
+                {remote && <Badge className={styles.statusBadge} tone={current.connectionState === 'connected' ? 'success' : current.connectionState === 'disconnected' || current.connectionState === 'unknown' ? 'warning' : 'neutral'} title={[current.exitReason === 'connection_lost' ? t('sessions.sshConnectionLostHint') : t('sessions.sshRemoteSession'), current.connectionState === 'unknown' ? t('sessions.sshUnknown') : '', !current.running && current.exitCode != null && remoteSessionMayExist(current) ? t('sessions.sshExitCodeHint', { code: current.exitCode }) : '', current.remoteSessionId ? t('sessions.sshRemoteSessionId', { id: current.remoteSessionId }) : ''].filter(Boolean).join('\n')}>SSH · {t(current.connectionState === 'connected' ? 'sessions.sshConnected' : current.connectionState === 'connecting' ? 'sessions.sshConnecting' : current.connectionState === 'disconnected' ? 'sessions.sshDisconnectedReattachable' : current.connectionState === 'remote_ended' ? 'sessions.sshEnded' : 'sessions.sshUnknownShort')}{current.remoteEndResult && current.remoteEndResult.outcome !== 'confirmed_absent' ? ` · ${t('sessions.sshEndUnconfirmed')}${current.remoteEndResult.exitCode != null ? ` (${current.remoteEndResult.exitCode})` : ''}` : ''}</Badge>}
                 <span ref={linkHintHostRef} className={`${styles.statusSpacer} ${styles.statusLinkHost}`} />
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}

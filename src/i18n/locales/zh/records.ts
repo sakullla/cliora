@@ -177,7 +177,7 @@ export default {
     remoteRefreshed: '已刷新当前主机的记录。',
     remoteCoverage: '来自当前主机的原生会话',
     remoteUnavailable: '远程主机没有可用的会话索引。',
-    remoteSessionDetail: '远程会话详情请在工作台重新附着后查看。',
+    remoteSessionDetail: '远程会话详情请在工作台继续会话后查看。',
     scanStopped: '已请求停止扫描，现有记录保留。',
     copyFailed: '复制失败，恢复命令仍在页面上，可以手动选择。',
     resumeRequested: '已请求外部终端恢复会话。',

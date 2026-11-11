@@ -128,7 +128,7 @@
 .guide-dialog[open] { display: flex; }
 .guide-dialog-head { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-5) var(--space-6) var(--space-4); border-bottom: 1px solid var(--line); background: var(--surface); }
 .guide-dialog-head h2 { font-size: var(--fs-heading); line-height: 1.4; font-weight: var(--fw-semibold); }
-.guide-dialog-head p { margin-top: var(--space-0_5); max-width: 72ch; color: var(--text-3); font-size: var(--fs-control); line-height: 1.55; }
+.guide-dialog-head p { margin-top: var(--space-0_5); max-width: 72ch; color: var(--text-3); font-size: var(--fs-control); line-height: 1.55; text-wrap: pretty; }
 .guide-dialog-close { flex: none; width: 32px; min-height: 32px; margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1) 0 auto; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-3); box-shadow: none; }
 .guide-dialog-close:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .guide-dialog-back { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); align-self: center; margin: 0 0 0 calc(var(--space-2) * -1); padding: var(--space-1) var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-control); box-shadow: none; }
