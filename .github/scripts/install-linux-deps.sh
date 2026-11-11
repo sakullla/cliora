@@ -1,38 +1,51 @@
 #!/usr/bin/env bash
-# GitHub-hosted Ubuntu runners hang on azure.archive.ubuntu.com
-# (actions/runner-images#11347, #12949, #14594). apt's own
-# Acquire::Timeout often never fires after the Ign:/Get: fallback, so
-# the job sits until Actions cancels it. Bypass the Azure mirror,
-# drop unused third-party lists, and SIGTERM hung apt with `timeout`.
+# Install the Ubuntu packages the Tauri build needs on GitHub-hosted runners.
+#
+# The runners' default Ubuntu mirrors fail in two ways: azure.archive.ubuntu.com
+# hangs after its Ign:/Get: fallback (actions/runner-images#11347, #12949, #14594),
+# and at times neither it nor archive.ubuntu.com resolves at all while every other
+# host does. So this script probes several mirrors, writes the first one that
+# answers as the only apt source (main and security suites alike), and installs
+# from it, moving on to the next mirror when one stops answering midway.
+# `timeout` guards every apt call because apt's own Acquire::Timeout is unreliable.
+#
+#   install-linux-deps.sh                   configure a mirror, then install PACKAGES
+#   install-linux-deps.sh --configure-only  configure a working mirror and refresh the
+#                                           index, for tools that run apt themselves
+#                                           (e.g. `playwright install --with-deps`)
+#
+# CLIORA_APT_MIRRORS (space separated) replaces the candidate list.
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-sudo find /etc/apt -type f \( \
-  -name 'apt-mirrors.txt' -o \
-  -name 'sources.list' -o \
-  -name '*.list' -o \
-  -name '*.sources' \
-\) -exec sed -i \
-  -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
-  -e 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' \
-  {} +
+CONFIGURE_ONLY=0
+if [ "${1:-}" = "--configure-only" ]; then CONFIGURE_ONLY=1; fi
 
-if [ -f /etc/apt/apt-mirrors.txt ]; then
-  printf 'http://archive.ubuntu.com/ubuntu/\nhttp://security.ubuntu.com/ubuntu/\n' \
-    | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+# shellcheck disable=SC1091
+. /etc/os-release
+CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-jammy}}"
+
+if [ -n "${CLIORA_APT_MIRRORS:-}" ]; then
+  read -r -a MIRRORS <<<"${CLIORA_APT_MIRRORS}"
+else
+  MIRRORS=(
+    http://archive.ubuntu.com/ubuntu
+    http://azure.archive.ubuntu.com/ubuntu
+    http://us.archive.ubuntu.com/ubuntu
+    http://mirrors.edge.kernel.org/ubuntu
+    http://mirrors.mit.edu/ubuntu
+    http://mirror.math.princeton.edu/pub/ubuntu
+  )
 fi
 
-# Image extras (Azure CLI / Microsoft prod / Chrome) are unused by the
-# Tauri build and independently stall apt-get update on the same runners.
-sudo rm -f \
-  /etc/apt/sources.list.d/azure-cli.list \
-  /etc/apt/sources.list.d/azure-cli.sources \
-  /etc/apt/sources.list.d/microsoft-prod.list \
-  /etc/apt/sources.list.d/microsoft-prod.sources \
-  /etc/apt/sources.list.d/google-chrome.list \
-  /etc/apt/sources.list.d/google-chrome.sources \
-  || true
+PACKAGES=(
+  libwebkit2gtk-4.1-dev
+  libgtk-3-dev
+  libayatana-appindicator3-dev
+  librsvg2-dev
+  patchelf
+)
 
 sudo tee /etc/apt/apt.conf.d/99-gha-acquire >/dev/null <<'EOF'
 Acquire::Retries "1";
@@ -52,15 +65,7 @@ APT_OPTS=(
   -o Dpkg::Use-Pty=0
 )
 
-PACKAGES=(
-  libwebkit2gtk-4.1-dev
-  libgtk-3-dev
-  libayatana-appindicator3-dev
-  librsvg2-dev
-  patchelf
-)
-
-# 124 = timeout(1) sent SIGTERM. apt's Timeout is unreliable (#14594).
+# 124 = timeout(1) sent SIGTERM.
 run_apt() {
   local seconds="$1"
   shift
@@ -68,14 +73,51 @@ run_apt() {
     apt-get "${APT_OPTS[@]}" "$@"
 }
 
-for attempt in 1 2 3; do
-  if run_apt 90 update \
-    && run_apt 180 install -y --no-install-recommends "${PACKAGES[@]}"; then
-    exit 0
+# A mirror counts only when its release file for this codename is actually served.
+reachable() {
+  curl -fsS --ipv4 --connect-timeout 5 --max-time 15 -o /dev/null \
+    "$1/dists/${CODENAME}/InRelease"
+}
+
+# Make the mirror the only apt source. Image extras (Azure CLI, Microsoft, Chrome,
+# PPAs) are unused here and stall `apt-get update` on the same runners, so every
+# other source list is moved aside rather than edited.
+use_mirror() {
+  local mirror="$1"
+  shopt -s nullglob
+  local extras=(/etc/apt/sources.list.d/*)
+  shopt -u nullglob
+  if [ "${#extras[@]}" -gt 0 ]; then
+    sudo mkdir -p /etc/apt/sources.list.d.disabled
+    sudo mv -f "${extras[@]}" /etc/apt/sources.list.d.disabled/
   fi
-  echo "apt failed (attempt ${attempt}/3), retrying..." >&2
-  sleep $((attempt * 5))
+  sudo rm -f /etc/apt/apt-mirrors.txt
+  sudo tee /etc/apt/sources.list >/dev/null <<EOF
+deb ${mirror} ${CODENAME} main restricted universe multiverse
+deb ${mirror} ${CODENAME}-updates main restricted universe multiverse
+deb ${mirror} ${CODENAME}-backports main restricted universe multiverse
+deb ${mirror} ${CODENAME}-security main restricted universe multiverse
+EOF
+}
+
+for pass in 1 2; do
+  for mirror in "${MIRRORS[@]}"; do
+    if ! reachable "${mirror}"; then
+      echo "apt mirror unreachable: ${mirror}" >&2
+      continue
+    fi
+    echo "Using apt mirror ${mirror} (pass ${pass})"
+    use_mirror "${mirror}"
+    if ! run_apt 120 update; then
+      echo "apt-get update failed on ${mirror}" >&2
+      continue
+    fi
+    if [ "${CONFIGURE_ONLY}" = 1 ]; then exit 0; fi
+    if run_apt 240 install -y --no-install-recommends "${PACKAGES[@]}"; then exit 0; fi
+    echo "apt-get install failed on ${mirror}" >&2
+  done
+  sleep $((pass * 10))
 done
 
-echo "apt failed after 3 attempts" >&2
+echo "No apt mirror could install the dependencies: ${MIRRORS[*]}" >&2
 exit 1

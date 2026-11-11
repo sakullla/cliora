@@ -48,7 +48,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
+      - name: Choose a reachable Ubuntu mirror
+        # Playwright installs its system libraries with apt; point apt at a mirror that answers.
+        timeout-minutes: 8
+        run: bash .github/scripts/install-linux-deps.sh --configure-only
+
       - name: Install Playwright browser
+        timeout-minutes: 15
         run: npx playwright install --with-deps --only-shell chromium
 
       - name: Test
