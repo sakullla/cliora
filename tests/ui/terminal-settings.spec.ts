@@ -36,13 +36,14 @@ for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
     }, { terminal, program });
     await page.goto('/');
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('tab', { name: '启动', exact: true }).click();
     const select = page.getByRole('combobox', { name: '启动终端', exact: true });
     await expect(select).toHaveValue('preset:tabby');
     const shown = terminal === 'auto' ? 'workbench' : terminal;
     await select.selectOption(terminal);
     await expect(select).toHaveValue(shown);
     // A saved terminal is stated in place; nothing is claimed before the backend answers.
-    await expect(page.getByRole('region', { name: '外部终端' }).getByRole('status')).toHaveText('终端设置已保存。');
+    await expect(page.getByRole('region', { name: '终端与启动模式' }).getByRole('status')).toHaveText('终端设置已保存。');
     expect(await page.evaluate(() => {
       const { settings } = (window as any).__terminalTest;
       return { selected: settings.selected, program: settings.custom.program };
@@ -51,12 +52,13 @@ for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
     await expect(select).toHaveValue(shown);
     await page.reload();
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('tab', { name: '启动', exact: true }).click();
     await expect(select).toHaveValue(shown);
     await select.selectOption('preset:tabby');
     await expect(select).toHaveValue('preset:tabby');
     await page.evaluate(() => { (window as any).__terminalTest.failSave = true; });
     await select.selectOption(terminal);
-    await expect(page.getByRole('region', { name: '外部终端' }).getByRole('alert')).toContainText('终端设置保存失败');
+    await expect(page.getByRole('region', { name: '终端与启动模式' }).getByRole('alert')).toContainText('终端设置保存失败');
     await expect(select).toHaveValue('preset:tabby');
   });
 }
@@ -78,12 +80,13 @@ test('unsaved or system default shows the workbench, and launch modes stay norma
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  const region = page.getByRole('region', { name: '外部终端' });
+  await page.getByRole('tab', { name: '启动', exact: true }).click();
+  const region = page.getByRole('region', { name: '终端与启动模式' });
   const select = region.getByRole('combobox', { name: '启动终端', exact: true });
   await expect(select).toHaveValue('workbench');
   await expect(select.locator('option', { hasText: '工作台' })).toHaveCount(1);
-  await expect(region.getByRole('combobox')).toHaveCount(4);
-  await expect(region.getByRole('combobox', { name: '启动偏好', exact: true })).toHaveValue('direct');
+  // The worktree start preference lives under Worktrees now.
+  await expect(region.getByRole('combobox')).toHaveCount(3);
   for (const name of ['CLI 默认启动模式', '项目默认启动模式']) {
     const mode = region.getByRole('combobox', { name });
     await expect(mode.locator('option')).toHaveText(['普通模式', 'YOLO 模式']);
@@ -120,9 +123,10 @@ test('English keeps the CMD-length recovery advice by error code and falls back 
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Pages' }).getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('tab', { name: 'Launch', exact: true }).click();
   const select = page.getByRole('combobox', { name: 'Launch terminal', exact: true });
   await expect(select).toHaveValue('preset:tabby');
-  const alert = page.getByRole('region', { name: 'External terminal' }).getByRole('alert');
+  const alert = page.getByRole('region', { name: 'Terminal and launch modes' }).getByRole('alert');
   const rejectWith = (rejection: { code?: string; message: string }) => page.evaluate((payload) => {
     (window as unknown as { __terminalCodeTest: { rejection: { code?: string; message: string } | null } }).__terminalCodeTest.rejection = payload;
   }, rejection);

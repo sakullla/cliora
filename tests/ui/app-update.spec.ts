@@ -84,22 +84,25 @@ for (const fails of [false, true]) test(`updater checkpoints sessions before Win
   if (fails) await expect(card.getByText(/checkpoint failed/)).toBeVisible();
 });
 
-test('the General tab lists its sections beside them from 900px and scrolls to the one chosen', async ({ page }) => {
+test('settings open on General with the update card in view, and keep the chosen category', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 760 });
   await setup(page);
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  const anchors = page.getByRole('navigation', { name: '本页目录' });
-  await expect(anchors).toBeVisible();
-  await expect(anchors.getByRole('link')).toHaveText(['管理的 CLI', '界面', '更新', '外部终端', '远程 SSH', '其它']);
-  await anchors.getByRole('link', { name: '其它' }).click();
-  await expect(page.locator('#settings-other')).toBeInViewport();
-  await expect(anchors.getByRole('link', { name: '其它' })).toHaveAttribute('aria-current', 'true');
-  await anchors.getByRole('link', { name: '更新' }).click();
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  const categories = page.getByRole('tablist', { name: '设置分类' });
+  await expect(categories.getByRole('tab', { name: '通用', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#app-update')).toBeInViewport();
   await expect(page.locator('#app-update').getByRole('button', { name: '检查更新' })).toBeVisible();
+  // A category stays chosen while the page is left and revisited.
+  await categories.getByRole('tab', { name: '迁移与同步', exact: true }).click();
+  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(categories.getByRole('tab', { name: '迁移与同步', exact: true })).toHaveAttribute('aria-selected', 'true');
 
+  // Below 900px the categories become one row above the settings, without a sideways page scroll.
   await page.setViewportSize({ width: 899, height: 760 });
-  await expect(anchors).toBeHidden();
+  await categories.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.locator('#settings-managed')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 

@@ -1,0 +1,31 @@
+/* Settings: categories beside one category's settings. */
+.layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); align-items: start; gap: var(--space-8); min-width: 0; }
+.nav { position: sticky; top: 0; min-width: 0; }
+.list { display: grid; gap: var(--space-0_5); }
+.item { display: flex; align-items: center; gap: var(--space-2_5); width: 100%; min-width: 0; height: auto; min-height: 0; padding: var(--space-2) var(--space-2_5); border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.item:hover { background: var(--row-hover); color: var(--text); }
+.item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.item[aria-selected='true'] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line), 0 1px 2px var(--shadow-color, transparent); }
+.glyph { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.item[aria-selected='true'] .glyph { background: var(--accent-soft); color: var(--accent); }
+.text { display: grid; min-width: 0; }
+.text strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.text small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+
+.panel { display: grid; align-content: start; gap: var(--space-4); min-width: 0; }
+.head { display: none; gap: var(--space-1); }
+.head .title { margin: 0; color: var(--text); font-size: var(--fs-heading); font-weight: var(--fw-bold); letter-spacing: -.01em; }
+.head p { margin: 0; max-width: 60em; color: var(--text-3); font-size: var(--fs-control); line-height: 1.5; text-wrap: pretty; }
+
+/* Narrow pages: one scrolling row of categories above the settings. */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+  .nav { position: static; margin: 0 calc(var(--space-4) * -1); padding: 0 var(--space-4); overflow-x: auto; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .list { display: flex; gap: var(--space-1); width: max-content; }
+  .item { flex: none; width: auto; padding: var(--space-1_5) var(--space-2_5); white-space: nowrap; }
+  .text strong { overflow: visible; }
+  .glyph { width: 24px; height: 24px; }
+  .text small { display: none; }
+  .head { display: grid; }
+}

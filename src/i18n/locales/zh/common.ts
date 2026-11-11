@@ -265,7 +265,7 @@ export default {
     connections: { title: '工具', subtitle: '管理当前 CLI 的配置、账户与资源。' },
     library: { title: '资料库', subtitle: '统一保存提示词、规则、MCP 与 Skill。' },
     records: { title: '记录', subtitle: '查找会话，理解用量。' },
-    settings: { title: '设置', subtitle: '管理外观、主机、迁移与同步。' },
+    settings: { title: '设置', subtitle: '外观、CLI、启动、工作树、远程主机与迁移。' },
   },
   app: {
     leaveDirtyMessage: '工具中有未保存的修改，离开将放弃这些修改。',

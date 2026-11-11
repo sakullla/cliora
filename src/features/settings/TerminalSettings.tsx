@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
@@ -6,7 +6,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { Icon } from '../../components/Icon';
 import { Button } from '../../components/ui';
-import type { LaunchMode, LaunchSettings, Project, TerminalId, TerminalPreset, TrayStatus, WorktreeLaunchMode } from '../../types/launch';
+import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
 import i18n from '../../i18n';
 
 function matchedPreset(current: LaunchSettings | null) {
@@ -33,10 +33,6 @@ function message(error: unknown): string {
   return selfRecovering ? detail : i18n.t('settings.terminal.repickSuffix', { detail });
 }
 
-function rawMessage(error: unknown): string {
-  return error && typeof error === 'object' && 'message' in error ? String((error as { message?: unknown }).message ?? '').trim() : '';
-}
-
 function loadFailure(error: unknown): string {
   const raw = error && typeof error === 'object' && 'message' in error && String(error.message).trim()
     ? String(error.message).trim()
@@ -54,20 +50,12 @@ function loadFailure(error: unknown): string {
 export function TerminalSettings() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LaunchSettings | null>(null);
-  const [tray, setTray] = useState<TrayStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [program, setProgram] = useState('');
   const [argsText, setArgsText] = useState('{script}');
   const [showCustom, setShowCustom] = useState(false);
   const [saved, setSaved] = useState('');
-  const [worktreeError, setWorktreeError] = useState('');
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [prepareProject, setPrepareProject] = useState('');
-  const [prepareCommand, setPrepareCommand] = useState('');
-  const [prepareBusy, setPrepareBusy] = useState(false);
-  const [prepareError, setPrepareError] = useState('');
-  const prepareRequest = useRef(0);
 
   // A write is only announced after the backend returned the stored settings.
   useEffect(() => {
@@ -78,24 +66,12 @@ export function TerminalSettings() {
 
   useEffect(() => {
     if (!nativeAvailable) return;
-    void Promise.all([native.getLaunchSettings(), native.getTrayStatus()]).then(([launch, trayStatus]) => {
+    void native.getLaunchSettings().then((launch) => {
       setSettings(launch);
-      setTray(trayStatus);
       setProgram(launch.custom?.program ?? '');
       setArgsText((launch.custom?.args ?? ['{script}']).join('\n'));
       setShowCustom(launch.selected === 'custom' && !matchedPreset(launch));
     }).catch((value) => setError(loadFailure(value)));
-    void native.listProjects().then((rows) => {
-      const local = (Array.isArray(rows) ? rows : []).filter((item) => item.available && item.path);
-      setProjects(local);
-      if (local[0]) loadPrepare(local[0].id, local);
-    }).catch(() => {});
-    let active = true;
-    let unsubscribe: (() => void) | undefined;
-    void listen<string>('cliora:tray-error', (event) => {
-      if (active) void native.getTrayStatus().then((status) => setTray({ ...status, error: event.payload }));
-    }).then((stop) => { if (active) unsubscribe = stop; else stop(); }).catch(() => {});
-    return () => { active = false; unsubscribe?.(); };
   }, []);
 
   function selectionKey() {
@@ -160,50 +136,6 @@ export function TerminalSettings() {
     finally { setBusy(false); }
   }
 
-  async function chooseWorktree(mode: WorktreeLaunchMode) {
-    setBusy(true);
-    setWorktreeError('');
-    try {
-      setSettings(await native.setWorktreeLaunch(mode));
-      setSaved(t('settings.terminal.saved'));
-    } catch (value) {
-      setSaved('');
-      const raw = value && typeof value === 'object' && 'message' in value ? String((value as { message?: unknown }).message ?? '').trim() : '';
-      setWorktreeError(raw || t('settings.terminal.worktreeSaveFailed'));
-    } finally { setBusy(false); }
-  }
-
-  // The prepare command is stored per Git repository; a project only names which repository to edit.
-  function loadPrepare(projectId: string, list: Project[] = projects) {
-    const request = ++prepareRequest.current;
-    setPrepareProject(projectId);
-    setPrepareCommand('');
-    setPrepareError('');
-    const directory = list.find((item) => item.id === projectId)?.path;
-    if (!directory) return;
-    void native.worktreePrepare(directory).then((value) => {
-      if (prepareRequest.current === request) setPrepareCommand(typeof value === 'string' ? value : '');
-    }).catch((value) => {
-      if (prepareRequest.current === request) setPrepareError(rawMessage(value) || t('settings.terminal.worktreePrepareFailed'));
-    });
-  }
-
-  async function savePrepare() {
-    const directory = projects.find((item) => item.id === prepareProject)?.path;
-    if (!directory || prepareBusy) return;
-    const request = prepareRequest.current;
-    setPrepareBusy(true);
-    setPrepareError('');
-    try {
-      const stored = await native.saveWorktreePrepare(directory, prepareCommand);
-      if (prepareRequest.current === request) setPrepareCommand(stored.command);
-      setSaved(t('settings.terminal.saved'));
-    } catch (value) {
-      setSaved('');
-      setPrepareError(rawMessage(value) || t('settings.terminal.worktreePrepareFailed'));
-    } finally { setPrepareBusy(false); }
-  }
-
   async function chooseMode(target: 'cli' | 'project', mode: LaunchMode) {
     setBusy(true); setError('');
     try {
@@ -214,23 +146,38 @@ export function TerminalSettings() {
     finally { setBusy(false); }
   }
 
-  async function quitApp() {
-    if (busy) return;
-    const accepted = await confirmAction(t('settings.terminal.quitMessage'), () => true, { title: t('settings.terminal.quitTitle'), confirmLabel: t('settings.terminal.quit'), destructive: true });
-    if (!accepted) return;
-    try { await native.quitApp(); }
-    catch (value) { setError(message(value)); }
-  }
-
   return <section className="settings-group" id="settings-terminal" aria-label={t('settings.terminal.title')}>
     <div className="setting-intro"><h2>{t('settings.terminal.title')}</h2><p>{t('settings.terminal.description')}</p>{saved && <span className="setting-saved" role="status"><Icon name="check" size={13} />{saved}</span>}</div>
     <label className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><select aria-label={t('settings.terminal.launch')} value={selectionKey()} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void choose(event.target.value)}>{terminalChoices().map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? '' : t('settings.terminal.unavailableSuffix')}</option>)}{(settings?.presets ?? []).map((item: TerminalPreset) => <option key={item.id} value={`preset:${item.id}`}>{item.label}</option>)}<option value="custom">{t('settings.terminal.custom')}</option></select></label>
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</Button><Button disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</Button></span></span></div>}
     <label className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><select aria-label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('cli', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
     <label className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><select aria-label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('project', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
-    <label className="setting-row"><span><strong>{t('settings.terminal.worktreeLaunch')}</strong><small>{worktreeError || settings?.worktreeLaunchError ? <span role="alert">{worktreeError || t('settings.terminal.worktreeUnrecognized')}</span> : t('settings.terminal.worktreeLaunchHint')}</small></span><select aria-label={t('settings.terminal.worktreeLaunch')} value={settings?.worktreeLaunchError ? '' : (settings?.worktreeLaunch ?? 'direct')} disabled={!nativeAvailable || busy || !settings} onChange={(event) => { const mode = event.target.value; if (mode === 'direct' || mode === 'worktree') void chooseWorktree(mode); }}>{settings?.worktreeLaunchError && <option value="" disabled>{t('settings.terminal.worktreeUnrecognized')}</option>}<option value="direct">{t('settings.terminal.worktreeDirect')}</option><option value="worktree">{t('settings.terminal.worktreeNew')}</option></select></label>
-    {projects.length > 0 && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.worktreePrepare')}</strong><small>{prepareError ? <span role="alert">{prepareError}</span> : t('settings.terminal.worktreePrepareHint')}</small></span><span className="custom-terminal-fields"><select aria-label={t('settings.terminal.worktreePrepareProject')} value={prepareProject} disabled={!nativeAvailable || prepareBusy} onChange={(event) => loadPrepare(event.target.value)}>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input aria-label={t('settings.terminal.worktreePrepare')} value={prepareCommand} placeholder={t('settings.terminal.worktreePreparePlaceholder')} disabled={!nativeAvailable || prepareBusy || !prepareProject} onChange={(event) => setPrepareCommand(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void savePrepare(); }} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || prepareBusy || !prepareProject} onClick={() => void savePrepare()}>{t('settings.terminal.worktreePrepareSave')}</Button></span></span></div>}
     {error && <p role="alert" className="setting-error">{error}</p>}
-    <div className="setting-row"><span><strong>{t('settings.terminal.tray')}</strong><small>{tray?.error ?? (tray?.available ? t('settings.terminal.trayAvailable') : t('settings.terminal.trayChecking'))}</small></span><Button disabled={!nativeAvailable} onClick={() => void quitApp()}>{t('settings.terminal.quit')}</Button></div>
+  </section>;
+}
+
+/** Closing the window keeps Cliora in the tray; quitting fully is an explicit, confirmed action. */
+export function TraySettings() {
+  const { t } = useTranslation();
+  const [tray, setTray] = useState<TrayStatus | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    void native.getTrayStatus().then(setTray).catch((value) => setError(message(value)));
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    void listen<string>('cliora:tray-error', (event) => {
+      if (active) void native.getTrayStatus().then((status) => setTray({ ...status, error: event.payload }));
+    }).then((stop) => { if (active) unsubscribe = stop; else stop(); }).catch(() => {});
+    return () => { active = false; unsubscribe?.(); };
+  }, []);
+  async function quitApp() {
+    const accepted = await confirmAction(t('settings.terminal.quitMessage'), () => true, { title: t('settings.terminal.quitTitle'), confirmLabel: t('settings.terminal.quit'), destructive: true });
+    if (!accepted) return;
+    try { await native.quitApp(); }
+    catch (value) { setError(message(value)); }
+  }
+  return <section className="settings-group" id="settings-tray" aria-label={t('settings.terminal.tray')}>
+    <div className="setting-row"><span><strong>{t('settings.terminal.tray')}</strong><small>{error || tray?.error || (tray?.available ? t('settings.terminal.trayAvailable') : t('settings.terminal.trayChecking'))}</small></span><Button disabled={!nativeAvailable} onClick={() => void quitApp()}>{t('settings.terminal.quit')}</Button></div>
   </section>;
 }

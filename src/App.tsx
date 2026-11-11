@@ -14,7 +14,7 @@ import { EmptyState } from './components/EmptyState';
 import { Badge, Button, IconButton } from './components/ui';
 import { PageSkeleton } from './components/Skeleton';
 import { PageHeader } from './components/PageHeader';
-import { Tabs } from './components/Tabs';
+import { SettingsLayout, type SettingsCategory } from './features/settings/SettingsLayout';
 import { ShortcutHelp } from './components/ShortcutHelp';
 import { RowMenu } from './components/RowMenu';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
@@ -35,6 +35,8 @@ import { ONBOARDING_LAUNCHED_EVENT, completeOnboarding, readOnboardingComplete, 
 const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
+const TerminalSettings = lazy(() => import('./features/settings/TerminalSettings').then((module) => ({ default: module.TerminalSettings })));
+const WorktreeSettings = lazy(() => import('./features/settings/WorktreeSettings').then((module) => ({ default: module.WorktreeSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
 import type { LibraryMcpSpotlight } from './features/library/LibraryPage';
@@ -61,7 +63,7 @@ function greetingPart(): 'morning' | 'afternoon' | 'evening' | 'night' {
   const hour = new Date().getHours();
   return hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : hour < 23 ? 'evening' : 'night';
 }
-type SettingsTab = 'general' | 'hosts' | 'migration';
+type SettingsTab = 'general' | 'tools' | 'launch' | 'worktrees' | 'hosts' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
   | { target: 'project'; id: string; token: number }
@@ -229,6 +231,12 @@ export default function App() {
     return true;
   }, [t]);
   const section = page === 'settings' ? `${page}:${settingsTab}` : page;
+  // Settings categories, in the order people reach for them: the app, the CLIs, how sessions
+  // start, worktrees, remote hosts, then moving to another device.
+  const settingsCategories: SettingsCategory<SettingsTab>[] = (['general', 'tools', 'launch', 'worktrees', 'hosts', 'migration'] as const).map((id) => ({
+    id, icon: ({ general: 'sliders', tools: 'plug', launch: 'terminal', worktrees: 'gitWorktree', hosts: 'server', migration: 'migration' } as const)[id],
+    label: t(`settings.categories.${id}`), hint: t(`settings.categories.${id}Hint`),
+  }));
   const [scrollIntent, setScrollIntent] = useState(0);
   const pageScroll = usePageScroll(`${section}:${remoteIdentity}`, scrollIntent);
   const transitionPending = useRef(false);
@@ -264,9 +272,6 @@ export default function App() {
     }).catch(() => setRemoteTargets([]));
     return () => { live = false; };
   }, [bootstrap.preferences.remote_ssh_enabled, loaded, remoteTargetsRevision]);
-  useEffect(() => {
-    if (!bootstrap.preferences.remote_ssh_enabled && settingsTab === 'hosts') setSettingsTab('general');
-  }, [bootstrap.preferences.remote_ssh_enabled, settingsTab]);
 
   async function openHostManagement() {
     if (await go('settings')) setSettingsTab('hosts');
@@ -336,7 +341,7 @@ export default function App() {
         pageScroll.cancel();
         setScrollIntent(value => value + 1);
         setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
-        if (event.payload.page === 'settings') setSettingsTab('general');
+        if (event.payload.page === 'settings') setSettingsTab('launch');
       });
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
@@ -756,7 +761,7 @@ export default function App() {
   }
 
   function openOnboardingToolSetup() {
-    setSettingsTab('general');
+    setSettingsTab('tools');
     void go('settings');
   }
 
@@ -965,39 +970,39 @@ export default function App() {
         {page === 'home' && <div className="home-band">
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
-            <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
+            <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>
-            {visible.length ? nativeAvailable ? <ManagedTools key={remoteIdentity} visible={page === 'home'} tools={visibleDescriptors} remoteTargetId={remoteTargetId} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><Button size="sm" className="tool-row-action" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></Button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => go('settings')}>{t('common.goSettings')}</Button>} />}
+            {visible.length ? nativeAvailable ? <ManagedTools key={remoteIdentity} visible={page === 'home'} tools={visibleDescriptors} remoteTargetId={remoteTargetId} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><Button size="sm" className="tool-row-action" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></Button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('common.goSettings')}</Button>} />}
           </section>
 
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onPickTool={openTool} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => go('settings')}>{t('common.goSettings')}</Button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onPickTool={openTool} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('common.goSettings')}</Button>} />}
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
-        {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ...(bootstrap.preferences.remote_ssh_enabled ? [['hosts', t('settings.tabs.hosts')] as [SettingsTab, string]] : []), ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
-        {page === 'settings' && settingsTab === 'general' && <Suspense fallback={<PageSkeleton />}><GeneralSettings
-          tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
-          managed={managed}
-          preservedUnknown={catalog?.preservedUnknown ?? []}
-          icons={bootstrap.preferences.tool_icons ?? {}}
-          busy={busy}
-          theme={bootstrap.preferences.theme}
-          onThemeChange={(next) => void updateTheme(next)}
-          onManagedChange={(id, checked) => void updateManaged(id, checked)}
-          onIconChange={updateIcon}
-          onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
-          onOpenMigration={() => setSettingsTab('migration')}
-          onOpenShortcutHelp={() => setHelpOpen(true)}
-          onReopenOnboarding={reopenOnboardingGuide}
-          onOpenHosts={() => setSettingsTab('hosts')}
-          remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled}
-          onRemoteSshChange={(enabled) => void updateRemoteSsh(enabled)}
-        /></Suspense>}
-        {page === 'settings' && settingsTab === 'hosts' && <Suspense fallback={<PageSkeleton />}><RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle={false} /></Suspense>}
-        <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
+        {page === 'settings' && <SettingsLayout value={settingsTab} onChange={setSettingsTab} items={settingsCategories} >
+          {(settingsTab === 'general' || settingsTab === 'tools') && <Suspense fallback={<PageSkeleton />}><GeneralSettings
+            pane={settingsTab}
+            tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
+            managed={managed}
+            preservedUnknown={catalog?.preservedUnknown ?? []}
+            icons={bootstrap.preferences.tool_icons ?? {}}
+            busy={busy}
+            theme={bootstrap.preferences.theme}
+            onThemeChange={(next) => void updateTheme(next)}
+            onManagedChange={(id, checked) => void updateManaged(id, checked)}
+            onIconChange={updateIcon}
+            onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
+            onOpenShortcutHelp={() => setHelpOpen(true)}
+            onReopenOnboarding={reopenOnboardingGuide}
+          /></Suspense>}
+          {settingsTab === 'launch' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <TerminalSettings /> : <EmptyState icon="terminal" title={t('settings.categories.nativeOnly')} />}</Suspense>}
+          {settingsTab === 'worktrees' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <WorktreeSettings /> : <EmptyState icon="gitWorktree" title={t('settings.categories.nativeOnly')} />}</Suspense>}
+          {settingsTab === 'hosts' && <Suspense fallback={<PageSkeleton />}><RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle /></Suspense>}
+          <div hidden={settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
+        </SettingsLayout>}
       </>}
     </div></main>
   </div>{nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;

@@ -140,10 +140,11 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  await page.getByRole('tab', { name: '启动', exact: true }).click();
   await expect(page.getByLabel('启动终端')).toBeEnabled();
   await page.evaluate(() => { (window as unknown as { __statusCopy: { terminalFails: boolean } }).__statusCopy.terminalFails = true; });
   await page.getByLabel('启动终端').selectOption('windows_terminal');
-  const alert = page.getByRole('region', { name: '外部终端' }).getByRole('alert');
+  const alert = page.getByRole('region', { name: '终端与启动模式' }).getByRole('alert');
   await expect(alert).toContainText('终端不可用');
   await expect(alert).toContainText('可以重新选择终端');
   await expect(alert).toHaveClass(/setting-error/);
@@ -152,7 +153,8 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   const light = await dangerColor(alert);
   expect(light.same).toBe(true);
   expect(light.fixed).toBe(false);
-  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click();
+  // The sidebar theme switch stays reachable while the error sits under Launch.
+  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const dark = await dangerColor(alert);
@@ -260,12 +262,13 @@ test('terminal load failure does not ask to reselect a disabled terminal', async
   await page.goto('/');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { settingsLoadFails: boolean } }).__statusCopy.settingsLoadFails = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  const terminal = page.getByRole('region', { name: '外部终端' });
+  await page.getByRole('tab', { name: '启动', exact: true }).click();
+  const terminal = page.getByRole('region', { name: '终端与启动模式' });
   await expect(terminal.getByLabel('启动终端')).toBeDisabled();
   const alert = terminal.getByRole('alert');
   await expect(alert).toContainText('无法读取终端设置');
   await expect(alert).toContainText('迁移与同步');
-  await expect(alert).toContainText('常规');
+  await expect(alert).toContainText('「启动」');
   await expect(alert).not.toContainText('重新选择终端');
 });
 

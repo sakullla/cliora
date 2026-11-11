@@ -596,7 +596,7 @@ test('inspection refuses a replaced host identity while preserving the original 
 
 async function hosts(page: Page) {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '管理主机', exact: true }).click();
+  await page.getByRole('tab', { name: '远程主机', exact: true }).click();
   return page.getByRole('region', { name: '远程主机', exact: true });
 }
 

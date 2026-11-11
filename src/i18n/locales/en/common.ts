@@ -265,7 +265,7 @@ export default {
     connections: { title: 'Tools', subtitle: 'Manage configuration, accounts, and resources for the current CLI.' },
     library: { title: 'Library', subtitle: 'Keep prompts, rules, MCP, and skills in one place.' },
     records: { title: 'Records', subtitle: 'Find sessions and understand usage.' },
-    settings: { title: 'Settings', subtitle: 'Manage appearance, hosts, migration, and sync.' },
+    settings: { title: 'Settings', subtitle: 'Appearance, CLIs, launch, worktrees, remote hosts and migration.' },
   },
   app: {
     leaveDirtyMessage: 'Tools has unsaved changes. Leaving will discard them.',

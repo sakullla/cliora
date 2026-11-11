@@ -250,6 +250,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await nav.getByRole('button', { name: '设置' }).click();
   await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
   await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(8);
   await expect(page.getByRole('main').getByRole('button', { name: '更多（8）', exact: true })).toBeVisible();
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode', 'ZCode', 'Qoder CN', 'Kimi Code']) {
@@ -293,7 +294,10 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await expectNoSideScroll(page);
 
     await nav.getByRole('button', { name: '设置' }).click();
+    await page.getByRole('tab', { name: '通用', exact: true }).click();
     await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
+    await expectNoSideScroll(page);
+    await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
     await expect(page.locator('.managed-checks input[type="checkbox"]').first()).toBeVisible();
     await expectNoSideScroll(page);
   }
@@ -405,6 +409,7 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   // A failed write raises the one global notice: same shape as the environment notice, tone only.
   await page.evaluate(() => { (window as unknown as { __uiPolish: { failManaged: boolean } }).__uiPolish.failManaged = true; });
   await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   const managed = page.locator('.managed-checks input[type="checkbox"]').first();
   await expect(managed).toBeEnabled();
   await managed.click();

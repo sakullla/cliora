@@ -341,7 +341,7 @@ test('auto sync is a switch and a connection error replaces the on state', async
   await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled();
 
   await page.evaluate(() => { (window as unknown as { __syncReady: { lastError: string | null } }).__syncReady.lastError = 'WebDAV 无法连接：offline'; });
-  await page.getByRole('tab', { name: '常规' }).click();
+  await page.getByRole('tab', { name: '通用', exact: true }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
   await expect(webdav.getByText('连接异常', { exact: true })).toBeVisible();
   await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toHaveCount(0);
@@ -419,7 +419,7 @@ test('pending uploads stay usable and a connection failure can be retried', asyn
     state.lastError = 'WebDAV 无法连接：offline';
     state.pending = 0;
   });
-  await page.getByRole('tab', { name: '常规' }).click();
+  await page.getByRole('tab', { name: '通用', exact: true }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
   await expect(webdav.getByText('连接失败：WebDAV 无法连接：offline')).toBeVisible();
   await expect(webdav.getByText('当前可用', { exact: true })).toBeVisible();

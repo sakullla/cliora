@@ -2900,10 +2900,12 @@ test('the new-session dialog follows the start preference saved in Settings', as
   await dialog.getByRole('button', { name: '取消' }).click();
   // The preference is changed in Settings while the workbench stays mounted.
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  const setting = page.getByRole('combobox', { name: '启动偏好' });
-  await expect(setting).toHaveValue('direct');
-  await setting.selectOption('worktree');
-  await expect(setting).toHaveValue('worktree');
+  await page.getByRole('tab', { name: '工作树', exact: true }).click();
+  const setting = page.getByRole('radiogroup', { name: '启动偏好' });
+  await expect(setting.getByRole('radio', { name: /^直接开始/ })).toHaveAttribute('aria-checked', 'true');
+  await setting.getByRole('radio', { name: /^新建工作树/ }).click();
+  await expect(setting.getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('status').filter({ hasText: '启动位置已保存。' })).toBeVisible();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   await expect(dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
@@ -3045,9 +3047,10 @@ test('an unrecognized worktree preference is shown and is not rewritten', async 
   await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  const setting = page.getByRole('combobox', { name: '启动偏好' });
-  await expect(setting).toHaveValue('');
-  await expect(page.locator('.setting-row').filter({ hasText: '启动偏好' }).getByRole('alert')).toContainText('格式无法识别');
+  await page.getByRole('tab', { name: '工作树', exact: true }).click();
+  const setting = page.getByRole('radiogroup', { name: '启动偏好' });
+  await expect(setting.getByRole('radio', { checked: true })).toHaveCount(0);
+  await expect(page.locator('#settings-worktree-launch').getByRole('alert')).toContainText('格式无法识别');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   const place = page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('radiogroup', { name: '启动位置' });
@@ -3250,21 +3253,63 @@ test('settings can save one prepare command for a project repository', async ({ 
   await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  const project = page.getByRole('combobox', { name: '准备命令所属项目' });
-  await expect(project).toHaveValue('p1');
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toContain('C:/work');
-  const input = page.getByRole('textbox', { name: '工作树准备命令' });
+  await page.getByRole('tab', { name: '工作树', exact: true }).click();
+  // Every project's command is read and listed at once; nothing is chosen from a menu first.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toEqual(expect.arrayContaining(['C:/work', 'C:/docs']));
+  const list = page.getByRole('list', { name: '准备命令' });
+  const shop = list.getByRole('listitem').filter({ hasText: 'Shop' });
+  await expect(shop).toContainText('未设置');
+  await shop.getByRole('button', { name: '编辑 Shop 的准备命令' }).click();
+  const input = shop.getByRole('textbox', { name: 'Shop 的准备命令' });
+  await expect(input).toBeFocused();
   await input.fill('npm ci');
-  await page.locator('.setting-row').filter({ has: input }).getByRole('button', { name: '保存', exact: true }).click();
+  await shop.getByRole('button', { name: '保存', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareSaves?: Array<{ directory: string; command: string }> }).__prepareSaves ?? [])).toEqual([{ directory: 'C:/work', command: 'npm ci' }]);
-  await expect(input).toHaveValue('npm ci');
+  await expect(page.getByRole('status').filter({ hasText: '已保存「Shop」的准备命令。' })).toBeVisible();
+  // Escape leaves an edit without writing.
+  const docs = list.getByRole('listitem').filter({ hasText: 'Docs' });
+  await docs.getByRole('button', { name: '编辑 Docs 的准备命令' }).click();
+  await docs.getByRole('textbox', { name: 'Docs 的准备命令' }).fill('ignored');
+  await docs.getByRole('textbox', { name: 'Docs 的准备命令' }).press('Escape');
+  await expect(docs.getByRole('textbox')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __prepareSaveFails?: boolean }).__prepareSaveFails = true; });
-  await project.selectOption('p2');
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __prepareReads?: string[] }).__prepareReads ?? [])).toContain('C:/docs');
-  await input.fill('pnpm i');
-  await input.press('Enter');
-  await expect(page.locator('.setting-row').filter({ has: input }).getByRole('alert')).toContainText('保存失败');
+  await docs.getByRole('button', { name: '编辑 Docs 的准备命令' }).click();
+  await docs.getByRole('textbox', { name: 'Docs 的准备命令' }).fill('pnpm i');
+  await docs.getByRole('textbox', { name: 'Docs 的准备命令' }).press('Enter');
+  await expect(docs.getByRole('alert')).toContainText('保存失败');
+  await expect(docs.getByRole('textbox', { name: 'Docs 的准备命令' })).toHaveValue('pnpm i');
 });
+
+test('settings lists created worktrees, keeps one in use, and removes stale records', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __ledger: [
+        { mainCheckout: 'C:/repo', worktreePath: 'C:/work', branch: 'feat-hello', environment: 'prepared' },
+        { mainCheckout: 'C:/repo', worktreePath: 'C:/work-gone-a', branch: 'gone-a', environment: 'prepared', missing: true },
+        { mainCheckout: 'C:/repo', worktreePath: 'C:/work-gone-b', branch: 'gone-b', environment: 'prepared', missing: true },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '工作树', exact: true }).click();
+  const list = page.getByRole('list', { name: '栖点创建的工作树' });
+  // The running Codex session holds C:/work: it is marked and cannot be cleaned from here.
+  // Rows sit inside a repository group; the innermost item is the worktree itself.
+  const used = list.getByRole('listitem').filter({ hasText: 'feat-hello' }).last();
+  await expect(used).toContainText('使用中');
+  await expect(used.getByRole('button', { name: '清理 feat-hello' })).toBeDisabled();
+  await expect(list.getByText('目录已不存在')).toHaveCount(2);
+  await page.getByRole('button', { name: '移除 2 条失效记录' }).click();
+  await expect(list.getByText('目录已不存在')).toHaveCount(0);
+  await expect(used).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([
+    { path: 'C:/work-gone-a', confirm: false },
+    { path: 'C:/work-gone-b', confirm: false },
+  ]);
+});
+
 test('a new worktree shows its base and is created without blocking other sessions', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, {

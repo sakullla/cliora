@@ -89,12 +89,13 @@ test('settings group preferences by task, confirm each save, and confirm the qui
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
 
-  // Three task clusters: tools, everyday preferences (theme, language, updates), terminal and remote.
-  const preferences = page.getByRole('region', { name: '常规偏好', exact: true });
-  await expect(page.getByRole('region', { name: '工具', exact: true })).toBeVisible();
-  await expect(preferences.getByRole('radiogroup', { name: '主题' })).toBeVisible();
-  await expect(page.getByRole('region', { name: '终端与远程', exact: true }).getByRole('combobox', { name: '启动终端', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: '更多', exact: true }).locator('#settings-other')).toBeVisible();
+  // Settings are one category at a time, chosen from a list of six; General opens first.
+  const categories = page.getByRole('tablist', { name: '设置分类' });
+  expect(await categories.getByRole('tab').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('aria-label')))).toEqual(['通用', 'CLI 工具', '启动', '工作树', '远程主机', '迁移与同步']);
+  await expect(categories.getByRole('tab', { name: '通用', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const panel = page.getByRole('tabpanel', { name: '通用' });
+  await expect(panel.getByRole('radiogroup', { name: '主题' })).toBeVisible();
+  await expect(panel.locator('#settings-other')).toBeVisible();
   await expect(page.getByText('回看首页的首次使用三步清单', { exact: true })).toBeVisible();
   const surface = await page.locator('#settings-interface').evaluate((element) => {
     const style = getComputedStyle(element);
@@ -103,29 +104,36 @@ test('settings group preferences by task, confirm each save, and confirm the qui
   expect(surface).toEqual({ shadow: 'none', background: 'none' });
 
   // A theme write is announced only once the stored preference comes back.
-  await preferences.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色', exact: true }).click();
+  await panel.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.locator('#settings-interface').getByRole('status')).toHaveText('主题已保存。');
 
-  // The same for a managed CLI: the confirmation names the tool it changed.
-  await page.locator('#settings-managed').getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
-  await expect(page.locator('#settings-managed').getByRole('status')).toHaveText('已保存「Codex」的显示设置。');
-
   // Quitting is destructive and irreversible in this window, so it asks and names the effect.
-  const terminal = page.getByRole('region', { name: '外部终端', exact: true });
-  await terminal.getByRole('button', { name: '完全退出' }).click();
+  const tray = page.getByRole('region', { name: '关闭与托盘', exact: true });
+  await tray.getByRole('button', { name: '完全退出' }).click();
   const confirm = page.getByRole('dialog', { name: '完全退出栖点？' });
   await expect(confirm).toBeVisible();
   await confirm.getByRole('button', { name: '取消', exact: true }).click();
   await expect(confirm).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__preferenceSettings.quit)).toBe(0);
-  await terminal.getByRole('button', { name: '完全退出' }).click();
+  await tray.getByRole('button', { name: '完全退出' }).click();
   await page.getByRole('dialog', { name: '完全退出栖点？' }).getByRole('button', { name: '完全退出', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__preferenceSettings.quit)).toBe(1);
 
-  // 640 keeps the same groups without a sideways scroll, and the section list steps aside.
+  // Arrow keys move between categories; the managed CLIs live under CLI tools.
+  await categories.getByRole('tab', { name: '通用', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(categories.getByRole('tab', { name: 'CLI 工具', exact: true })).toBeFocused();
+  await expect(categories.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
+  // The same for a managed CLI: the confirmation names the tool it changed.
+  await page.locator('#settings-managed').getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
+  await expect(page.locator('#settings-managed').getByRole('status')).toHaveText('已保存「Codex」的显示设置。');
+  await categories.getByRole('tab', { name: '启动', exact: true }).click();
+  await expect(page.getByRole('tabpanel', { name: '启动' }).getByRole('combobox', { name: '启动终端', exact: true })).toBeVisible();
+
+  // 640 keeps the categories in one scrolling row without a sideways page scroll.
   await page.setViewportSize({ width: 640, height: 800 });
+  await categories.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.locator('#settings-managed')).toBeVisible();
-  await expect(page.getByRole('navigation', { name: '本页目录' })).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

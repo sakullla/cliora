@@ -160,6 +160,7 @@ test('project cards keep one launch action and home never scrolls sideways', asy
 
   // The same color token drives a checked switch track; its thumb remains distinguishable.
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '远程主机', exact: true }).click();
   const remoteSwitch = page.getByRole('switch').first();
   await expect(remoteSwitch).toBeVisible();
   const offTrack = await remoteSwitch.evaluate((element) => getComputedStyle(element).backgroundColor);

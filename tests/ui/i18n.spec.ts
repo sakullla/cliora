@@ -40,22 +40,22 @@ async function openSettings(page: Page) {
 test('中文环境默认中文，可切换英文、即时生效并在重启后保持', async ({ page }) => {
   await installDesktop(page);
   await openSettings(page);
-  await expect(page.getByRole('heading', { name: '管理的 CLI' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '界面', exact: true })).toBeVisible();
   const chinese = page.getByRole('radiogroup', { name: '界面语言' });
   await expect(chinese.getByRole('radio', { name: '中文' })).toHaveAttribute('aria-checked', 'true');
   await chinese.getByRole('radio', { name: 'English' }).click();
-  await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cliora:language'))).toBe('en');
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('en');
   // Reload must restore the native preference even without the browser cache.
   await page.evaluate(() => localStorage.removeItem('cliora:language'));
   await page.reload();
   await settingsButton(page).click();
-  await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
   const english = page.getByRole('radiogroup', { name: 'Interface language' });
   await expect(english.getByRole('radio', { name: 'English' })).toHaveAttribute('aria-checked', 'true');
   await english.getByRole('radio', { name: '中文' }).click();
-  await expect(page.getByRole('heading', { name: '管理的 CLI' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '界面', exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cliora:language'))).toBe('zh');
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('zh');
 });
@@ -66,7 +66,7 @@ test('旧版浏览器语言偏好迁移到本机设置后保留已加载页面',
   await installDesktop(page);
   await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
   await openSettings(page);
-  await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('test.native-language'))).toBe('en');
   expect(errors).toEqual([]);
 });
@@ -77,7 +77,7 @@ test.describe('英文系统环境', () => {
   test('未存储偏好时默认英文', async ({ page }) => {
     await installDesktop(page);
     await openSettings(page);
-    await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
     await expect(page.getByRole('radiogroup', { name: 'Interface language' }).getByRole('radio', { name: 'English' })).toHaveAttribute('aria-checked', 'true');
   });
 });
@@ -86,7 +86,7 @@ test('切换英文后逐页无残留硬编码中文', async ({ page }) => {
   await installDesktop(page);
   await openSettings(page);
   await page.getByRole('radiogroup', { name: '界面语言' }).getByRole('radio', { name: 'English' }).click();
-  await expect(page.getByRole('heading', { name: 'Managed CLIs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
   const han = /[\u4e00-\u9fff]/;
   const pages: Array<[RegExp, RegExp]> = [
     [/^(首页|Home)$/, /Home/],

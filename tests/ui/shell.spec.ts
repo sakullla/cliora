@@ -107,6 +107,7 @@ test('full pages are navigable and browser mode never implies native data', asyn
     // The window title names the page the sidebar marks as current.
     await expect.poll(() => page.title()).toBe(`${name} · Cliora`);
   }
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.getByRole('checkbox').first()).toBeDisabled();
   await expect(page.locator('dialog')).toHaveCount(0);
   await page.setViewportSize({ width: 640, height: 760 });
@@ -148,13 +149,17 @@ test('native settings result drives the home list and empty management stays rec
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode']) {
     await page.getByRole('checkbox', { name: new RegExp(name) }).uncheck();
   }
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByText('尚未管理工具')).toBeVisible();
+  // With nothing managed, 前往设置 lands on CLI tools directly.
   await page.getByRole('button', { name: '前往设置' }).click();
+  await expect(page.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('checkbox', { name: /Codex/ }).check();
+  await page.getByRole('tab', { name: '通用', exact: true }).click();
   const themes = page.getByRole('radiogroup', { name: '主题' });
   await themes.getByRole('radio', { name: '浅色' }).focus();
   await page.keyboard.press('ArrowRight');
@@ -200,6 +205,7 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  await page.getByRole('tab', { name: '启动', exact: true }).click();
   await page.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
   await page.getByRole('combobox', { name: '项目默认启动模式' }).selectOption('yolo');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
@@ -283,6 +289,7 @@ test('storage failure preserves an actionable page and retry loads repaired data
   await expect(page.getByRole('alert')).toBeVisible();
   await page.evaluate(() => { (window as any).__storageRepaired = true; });
   await page.getByRole('button', { name: '重试读取' }).click();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.getByRole('checkbox', { name: /Codex/ })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
@@ -321,10 +328,12 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await page.getByRole('button', { name: '启动', exact: true }).click();
   expect((await page.evaluate(() => (window as any).__iconCalls)).find((call: any) => call.command === 'launch_cli').args.request).toMatchObject({ mode: 'normal', sessionId: null, projectId: null, directory: 'C:/chosen project' });
   await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await page.getByText('自定义工具图标', { exact: true }).click();
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=';
   await page.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
   await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await page.getByRole('tab', { name: '通用', exact: true }).click();
   await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
   await nav.getByRole('button', { name: '工具' }).click();
   await expect(page.locator('[data-workspace-chrome] h2 img').first()).toHaveAttribute('src', `data:image/png;base64,${base64}`);
@@ -332,6 +341,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await expect(logo).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   await expect(page.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
   await page.getByText('自定义工具图标', { exact: true }).click();
   await page.getByRole('button', { name: '恢复默认', exact: true }).click();
@@ -417,7 +427,8 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   await expect(status).toHaveText('本机资料 · 仅存于此设备');
   const nav = page.getByRole('navigation', { name: '页面' });
   await nav.getByRole('button', { name: '设置' }).click();
-  await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '管理的 CLI' }));
+  await expectFullyInFirstScreen(page, page.getByRole('tablist', { name: '设置分类' }));
+  await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '界面', exact: true }));
   await nav.getByRole('button', { name: '资料库' }).click();
   await expectFullyInFirstScreen(page, page.getByRole('button', { name: '新建提示词', exact: true }));
   await nav.getByRole('button', { name: '记录' }).click();
