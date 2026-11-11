@@ -1,8 +1,9 @@
 /* ==========================================================================
    Workbench
    Rail (app theme, docked in the app sidebar on wide windows) · stage: title bar,
-   terminal canvas, composer and status line (terminal theme). The terminal fills
-   the page canvas; chrome stays quiet so the CLI output is the brightest thing on screen.
+   terminal canvas, composer and status line (terminal theme). The title bar sits on the
+   chrome tint the sidebar shares; the terminal, composer and status line form one rounded
+   card floating on it, so the CLI output is the brightest, most framed thing on screen.
    Type follows the app scale: whole pixels, 11px minimum.
    ========================================================================== */
 
@@ -31,7 +32,7 @@
 .root {
   /* Fixed artwork inks: the theme swatches mirror the terminal palettes below, and the
      empty-state glyph is a small dark terminal in every app theme. */
-  --wb-preview-dark-bg: #0f1311;
+  --wb-preview-dark-bg: #0b0e0d;
   --wb-preview-dark-line: #3d4c44;
   --wb-preview-dark-accent: #7fe0aa;
   --wb-preview-light-bg: #fdfdfc;
@@ -72,8 +73,9 @@
 
 .root[data-term-theme='dark'] {
   /* Neutral graphite with a trace of green; the xterm background in terminalTheme.ts is the same value. */
-  --term-bg: #0f1311;
-  --term-chrome: #090c0b;
+  --term-bg: #0b0e0d;
+  /* Chrome tint around the terminal card; matches the dark app sidebar. */
+  --term-chrome: #111412;
   --term-bar: #121614;
   --term-raise: #181d1b;
   --term-well: rgb(255 255 255 / 4.5%);
@@ -102,6 +104,7 @@
 
 .root[data-term-theme='light'] {
   --term-bg: #fdfdfc;
+  /* Chrome tint around the terminal card; matches the light app sidebar. */
   --term-chrome: #eef0ed;
   --term-bar: #f8f9f7;
   --term-raise: #ffffff;
@@ -168,7 +171,7 @@
   min-height: 0;
   min-width: 0;
   overflow: clip;
-  background: var(--term-bg);
+  background: var(--term-chrome);
 }
 .layout[data-strip] { grid-template-rows: auto minmax(0, 1fr); }
 .root[data-empty] .layout { background: transparent; }
@@ -662,8 +665,8 @@
   background: transparent;
   color: var(--text);
 }
-/* One terminal window: title bar, panes, composer and status line fill the page canvas.
-   The canvas is the only frame; inside it, single hairlines separate the bars. */
+/* One terminal window: the title bar on the chrome tint, then one card holding panes,
+   composer and status line. Inside the card, single hairlines separate the bars. */
 .window {
   position: relative;
   display: flex;
@@ -672,7 +675,7 @@
   min-width: 0;
   min-height: 0;
   overflow: clip;
-  background: var(--term-bg);
+  background: var(--term-chrome);
   color: var(--term-fg);
 }
 .window[hidden] { display: none; }
@@ -681,7 +684,7 @@
   color: var(--text);
 }
 
-/* The title bar is part of the terminal surface: same ink, one hairline, no gradient band. */
+/* The title bar is chrome: it shares the tint around the card and needs no hairline. */
 .stageBar {
   position: relative;
   display: flex;
@@ -690,17 +693,17 @@
   gap: var(--space-3);
   min-height: 46px;
   padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
-  border-bottom: 1px solid var(--term-line);
-  background: var(--term-bar);
+  background: var(--term-chrome);
   /* Double-click toggles focus mode / the rail; it must not select words on the way. */
   user-select: none;
   -webkit-user-select: none;
 }
-/* A hairline of motion under the title bar while the CLI is writing. */
-.stageBar::after {
+/* A hairline of motion along the card's top edge while the CLI is writing. */
+.screen::after {
   content: '';
   position: absolute;
-  bottom: -1px;
+  z-index: 19;
+  top: 0;
   left: 0;
   width: 40%;
   height: 1px;
@@ -710,7 +713,7 @@
   transform: translateX(-100%);
   transition: opacity var(--medium) var(--ease);
 }
-.window[data-tone='live'] .stageBar::after { opacity: .9; animation: wbSweep 2.8s linear infinite; }
+.window[data-tone='live'] .screen::after { opacity: .9; animation: wbSweep 2.8s linear infinite; }
 /* In the desktop window this bar is the window's title bar: one fixed height shared with the
    sidebar's brand row and the macOS traffic lights, and room at the right for caption buttons. */
 .stageBar[data-window-titlebar],
@@ -732,7 +735,7 @@
 .captionSlot :global(.window-control[data-action='close']:hover:not(:disabled)) { background: var(--caption-close); color: var(--on-caption-close); }
 .captionSlot :global(.window-controls[data-chrome='linux'] .window-control) { background: var(--term-well); }
 .captionSlot :global(.window-controls[data-chrome='linux'] .window-control:hover:not(:disabled)) { background: var(--term-press); color: var(--term-fg); }
-.window[data-tone='bell'] .stageBar::after { width: 100%; opacity: .9; background: var(--term-warning); transform: none; }
+.window[data-tone='bell'] .screen::after { width: 100%; opacity: .9; background: var(--term-warning); transform: none; }
 .stageLead { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-2_5); min-width: 0; }
 /* One line: title and state first, then the quiet facts (tool, place, mode, run time) that give
    way first when the bar runs short. */
@@ -755,7 +758,7 @@
 .stageIcon[data-tone='live'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 45%, transparent); }
 .stageIcon[data-tone='bell'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-warning) 60%, transparent); }
 .stageIcon:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 40%, var(--term-frame)); }
-.stageIconDot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border: 2px solid var(--term-bar); border-radius: 50%; background: var(--term-bar); color: var(--term-text-3); }
+.stageIconDot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border: 2px solid var(--term-chrome); border-radius: 50%; background: var(--term-chrome); color: var(--term-text-3); }
 .stageIconDot[data-tone='live'],
 .stageIconDot[data-tone='idle'] { color: var(--term-success); }
 .stageIconDot[data-tone='bell'] { color: var(--term-warning); }
@@ -835,8 +838,8 @@
 .exitCode { flex: none; line-height: 24px; color: var(--term-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .exitCode[data-failed] { color: var(--term-danger); }
 
-/* Toolbar: one quiet row — talk to the CLI | look at the output | end. Hairlines, not boxes,
-   separate the groups so the terminal stays the loudest thing on screen. */
+/* Toolbar: one segmented tray — talk to the CLI | look at the output — then end on its own.
+   The tray is a soft well on the chrome tint; hairlines separate its groups. */
 .terminalActions {
   position: relative;
   z-index: 12;
@@ -844,8 +847,10 @@
   align-items: center;
   gap: 0;
   min-width: 0;
-  padding: 0;
-  background: transparent;
+  padding: var(--space-0_5);
+  border-radius: var(--radius-lg);
+  background: var(--term-well);
+  box-shadow: inset 0 0 0 1px var(--term-line);
 }
 .actionGroup {
   position: relative;
@@ -870,7 +875,7 @@
   background: var(--term-frame);
   pointer-events: none;
 }
-.terminalActions .toolButton[data-size] { position: relative; height: 28px; min-height: 28px; border-radius: var(--radius-sm); }
+.terminalActions .toolButton[data-size] { position: relative; height: 28px; min-height: 28px; border-radius: var(--radius); }
 .terminalActions .toolButton[data-variant] { color: var(--term-text-2); }
 .terminalActions .toolButton[data-variant]:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
 .terminalActions .toolButton[data-variant]:active:not(:disabled) { background: var(--term-press); }
@@ -880,11 +885,11 @@
 .runningActions:not([data-running]) + .actionGroup::before { visibility: hidden; }
 /* Quick input is the everyday action: accent ink with a hairline, filled softly while the composer
    is open — the same pressed language as find and split, one step stronger. */
-.terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 30%, transparent); color: var(--term-accent); }
-.terminalActions .composerTrigger[data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 10%, transparent); color: var(--term-accent); }
+.terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: color-mix(in srgb, var(--term-accent) 13%, var(--term-raise)); box-shadow: 0 1px 2px var(--term-shadow), inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 24%, transparent); color: var(--term-accent); }
+.terminalActions .composerTrigger[data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 20%, var(--term-raise)); color: var(--term-accent); }
 .terminalActions .composerTrigger[data-variant] > :global(svg) { color: inherit; }
 .terminalActions .composerTrigger[aria-pressed='true'][data-variant],
-.terminalActions .composerTrigger[aria-pressed='true'][data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 55%, transparent); color: var(--term-accent); }
+.terminalActions .composerTrigger[aria-pressed='true'][data-variant]:hover:not(:disabled) { background: var(--term-accent); box-shadow: 0 1px 3px var(--term-glow); color: var(--term-on-accent); }
 .terminalActions .composerTrigger[aria-pressed='true'][data-variant] > :global(svg) { color: inherit; }
 .terminalActions .reattachBtn[data-variant] { gap: var(--space-1); padding: 0 var(--space-2); color: var(--term-accent); }
 .toolLabel { color: inherit; font-size: var(--fs-caption); font-weight: var(--fw-semibold); white-space: nowrap; }
@@ -906,19 +911,19 @@
   position: relative;
   flex: none;
   gap: var(--space-1_5);
-  height: 28px;
-  min-height: 28px;
+  height: 32px;
+  min-height: 32px;
   margin-left: var(--space-2);
-  padding: 0 var(--space-2_5) 0 var(--space-2);
+  padding: 0 var(--space-3) 0 var(--space-2_5);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--term-text-2);
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
   box-shadow: none;
 }
-.stageTail .endBtn[data-variant]::before { left: calc(var(--space-1) * -1); }
+.stageTail .endBtn[data-variant]::before { display: none; }
 /* The stop glyph carries the danger hint; the button itself only turns red under the pointer. */
 .endIcon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: var(--radius-xs); }
 .endBtn[data-running] .endIcon { color: var(--term-danger); }
@@ -1018,6 +1023,7 @@
 }
 
 /* Screen, panes and terminal ---------------------------------------- */
+/* The card: terminal, composer and status line, framed once and lifted off the chrome tint. */
 .screen {
   position: relative;
   display: flex;
@@ -1025,8 +1031,15 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  margin: 0 var(--space-2) var(--space-2) var(--space-1);
   overflow: clip;
+  border: 1px solid var(--term-frame);
+  border-radius: var(--radius-xl);
+  background: var(--term-bg);
+  box-shadow: var(--term-card-shadow);
 }
+.root[data-tight] .screen { margin: 0 var(--space-1) var(--space-1); border-radius: var(--radius-lg); }
+.root[data-focus-mode] .screen { margin: 0 var(--space-1_5) var(--space-1_5); }
 .findLayer {
   position: absolute;
   z-index: 18;
@@ -1628,6 +1641,11 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .setupRemove { flex: none; color: var(--text-2); }
 .setupRemove:hover:not(:disabled) { color: var(--danger); }
 .setupRow[data-busy] .setupRemove > :global(svg) { animation: wtSpin .9s linear infinite; }
+.cleanupMissing { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--warning-soft, var(--surface-2)); color: var(--warning, var(--text-3)); font-size: 10px; font-weight: var(--fw-semibold); }
+.setupRow[data-missing] .cleanupTitle, .setupRow[data-missing] .cleanupPath { color: var(--text-3); }
+.setupRow[data-missing] .cleanupPath { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 50%, transparent); }
+.setupRow[data-missing] .setupRowGlyph { opacity: .55; }
+.setupForgetAll { grid-column: 1 / -1; justify-self: start; margin-top: var(--space-1); color: var(--text-2); }
 .cleanupInUse { flex: none; padding: 0 var(--space-1); border-radius: var(--radius-pill); background: var(--info-soft); color: var(--info); font-size: 10px; font-weight: var(--fw-semibold); }
 .cleanupCopy { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .cleanupTitle { min-width: 0; overflow: hidden; color: var(--text); font-family: var(--font-mono); font-size: 12px; font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }

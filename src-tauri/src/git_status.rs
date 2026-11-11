@@ -120,6 +120,52 @@ pub(crate) fn run_git(cwd: &Path, args: &[&str]) -> Result<(bool, String), &'sta
     Ok((ok, String::from_utf8_lossy(&out).into_owned()))
 }
 
+/// Hash files as blobs (`git hash-object --stdin-paths`) without writing any
+/// object into the repository. Paths are relative to `cwd`; one id per path.
+pub(crate) fn hash_paths(cwd: &Path, paths: &[String]) -> Result<Vec<String>, &'static str> {
+    use std::io::Write;
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let git = find_git().ok_or("git_missing")?;
+    let mut child = git_command(git)
+        .arg("-C")
+        .arg(cwd)
+        .args(["hash-object", "--stdin-paths"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "git_missing")?;
+    let mut input = String::new();
+    for path in paths {
+        if path.contains('\n') {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("read_failed");
+        }
+        input.push_str(path);
+        input.push('\n');
+    }
+    let mut stdin = child.stdin.take().ok_or("read_failed")?;
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child.wait_with_output().map_err(|_| "read_failed")?;
+    let _ = writer.join();
+    if !output.status.success() {
+        return Err("read_failed");
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let ids: Vec<String> = text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+    if ids.len() != paths.len() {
+        return Err("read_failed");
+    }
+    Ok(ids)
+}
+
 /// Drain stdout without retaining file paths; every consumer shares the same bound.
 fn stream_git(
     cwd: &Path,

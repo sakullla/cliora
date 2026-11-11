@@ -66,7 +66,7 @@ pub struct ReviewState {
     pub review_id: String,
     pub session_id: String,
     pub worktree_path: String,
-    /// 发起时的 HEAD；空仓库读不到时省略，Twiglane 也不会收到这个参数。
+    /// 会话启动时的 HEAD（见 `baseline`）；空仓库读不到时省略，Twiglane 也不会收到这个参数。
     pub baseline: Option<String>,
     pub status: String,
     pub reason: Option<String>,
@@ -131,6 +131,11 @@ pub struct CodeStatus {
     pub branch: Option<String>,
     pub head_oid: Option<String>,
     pub uncommitted_files: Option<u64>,
+    /// Files this session changed since it started; `None` without a start record
+    /// (the session moved to another worktree, or the launch read failed).
+    pub session_files: Option<u64>,
+    /// HEAD when the session started in this worktree.
+    pub session_base: Option<String>,
     pub state: &'static str,
     pub reason: Option<String>,
 }
@@ -143,6 +148,8 @@ impl CodeStatus {
             branch: None,
             head_oid: None,
             uncommitted_files: None,
+            session_files: None,
+            session_base: None,
             state: "unknown",
             reason: Some(reason.into()),
         }
@@ -570,9 +577,23 @@ pub(crate) fn checked_worktree(directory: &Path) -> Result<PathBuf, &'static str
     Ok(root)
 }
 
-/// 发起审查时记录的基线 HEAD；空仓库读不到时为 None，链接里也不会出现。
-pub(crate) fn baseline(root: &Path) -> Option<String> {
-    head_oid(root)
+/// 审查基线：会话在这个工作树启动时的 HEAD（仍是当前 HEAD 的祖先时），历史被改写后取
+/// 两者的共同祖先；没有启动记录时退回发起时的 HEAD。同一会话上一次审查返回了提交或合入、
+/// 且那个提交仍在当前历史里时，从那里算起，已审查过的提交不再重复出现。
+/// 空仓库读不到时为 None，链接里也不会出现。
+pub(crate) fn baseline(session_id: &str, root: &Path, previous: Option<&ReviewState>) -> Option<String> {
+    let start = crate::session_baseline::for_root(session_id, root)
+        .and_then(|start| crate::session_baseline::review_base(&start, root));
+    let path = url_path(root).ok();
+    let reviewed = previous
+        .filter(|review| review.status == STATUS_RETURNED)
+        .filter(|review| matches!(review.outcome.as_deref(), Some("committed" | "merged")))
+        .filter(|review| path.as_deref() == Some(review.worktree_path.as_str()))
+        .and_then(|review| review.head_oid.clone())
+        .filter(|oid| is_oid(oid))
+        .filter(|oid| crate::session_baseline::is_ancestor(root, oid, "HEAD"))
+        .filter(|oid| start.as_deref().is_none_or(|start| crate::session_baseline::is_ancestor(root, start, oid)));
+    reviewed.or(start).or_else(|| head_oid(root))
 }
 
 fn head_oid(root: &Path) -> Option<String> {
@@ -591,6 +612,7 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
         }
     };
     let path = crate::launch::terminal_path(&root).ok();
+    let start = crate::session_baseline::for_root(session_id, &root);
     match crate::git_status::read(&root) {
         Ok(snapshot) => CodeStatus {
             session_id: session_id.into(),
@@ -598,6 +620,8 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
             branch: snapshot.branch,
             head_oid: snapshot.head_oid,
             uncommitted_files: Some(snapshot.files),
+            session_files: start.as_ref().and_then(|start| crate::session_baseline::session_changes(start, &root).ok()),
+            session_base: start.and_then(|start| start.head),
             state: "ready",
             reason: None,
         },

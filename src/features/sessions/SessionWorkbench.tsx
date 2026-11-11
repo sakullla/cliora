@@ -2395,8 +2395,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return [
       status.branch ?? t('sessions.reviewDetached'),
       status.headOid ? status.headOid.slice(0, 7) : t('sessions.reviewNoCommit'),
-      t('sessions.reviewFiles', { count: status.uncommittedFiles ?? 0 }),
+      status.sessionFiles != null
+        ? (status.sessionFiles > 0 ? t('sessions.reviewSessionFiles', { count: status.sessionFiles }) : t('sessions.reviewSessionClean'))
+        : t('sessions.reviewFiles', { count: status.uncommittedFiles ?? 0 }),
     ].join(' · ');
+  }
+
+  /** Where the session count starts, with the whole-checkout total one hover away. */
+  function codeStatusHint(status: WorkbenchCodeStatus | null, unknown: boolean): string | undefined {
+    if (!status || unknown || status.sessionFiles == null) return status?.worktreePath ?? undefined;
+    return [status.worktreePath ?? '', t('sessions.reviewSessionHint', { base: status.sessionBase?.slice(0, 7) ?? t('sessions.reviewNoCommit'), total: status.uncommittedFiles ?? 0 })].filter(Boolean).join('\n');
   }
 
   /** Start a fresh worktree from this session's repository: the dialog opens with the same
@@ -2774,20 +2782,43 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setCleanupBusy(row.worktreePath);
     setCleanupError('');
     try {
-      const preview = await native.cleanupWorktree(row.worktreePath, false);
-      if (preview.needsConfirmation) {
-        const accepted = await confirmAction(preview.detail || t('sessions.worktreeCleanupConfirmTitle'), () => true, {
-          title: t('sessions.worktreeCleanupConfirmTitle'),
-          confirmLabel: t('sessions.worktreeCleanupConfirm'),
-          destructive: true,
-        });
-        if (!accepted) return;
-        await native.cleanupWorktree(row.worktreePath, true);
-      }
+      await removeLedgerRow(row);
       refreshLedger();
     } catch (value) {
       setCleanupError(formatFailure(value, t('sessions.worktreeCleanupFailed'), t('sessions.failureHint')));
     } finally { setCleanupBusy(''); }
+  }
+
+  /** Remove one row; unmerged commits or uncommitted work still ask first. */
+  async function removeLedgerRow(row: WorktreeLedgerEntry): Promise<boolean> {
+    const preview = await native.cleanupWorktree(row.worktreePath, false);
+    if (!preview.needsConfirmation) return preview.removed;
+    const accepted = await confirmAction(preview.detail || t('sessions.worktreeCleanupConfirmTitle'), () => true, {
+      title: t('sessions.worktreeCleanupConfirmTitle'),
+      confirmLabel: t('sessions.worktreeCleanupConfirm'),
+      destructive: true,
+    });
+    if (!accepted) return false;
+    await native.cleanupWorktree(row.worktreePath, true);
+    return true;
+  }
+
+  /** Forget every listed worktree whose folder another tool already deleted. */
+  async function forgetMissing(rows: WorktreeLedgerEntry[]) {
+    if (cleanupBusy) return;
+    setCleanupError('');
+    try {
+      for (const row of rows) {
+        if (worktreeUser(row)) continue;
+        setCleanupBusy(row.worktreePath);
+        await removeLedgerRow(row);
+      }
+    } catch (value) {
+      setCleanupError(formatFailure(value, t('sessions.worktreeCleanupFailed'), t('sessions.failureHint')));
+    } finally {
+      setCleanupBusy('');
+      refreshLedger();
+    }
   }
 
   function dialogPrepareDirectory(): string | null {
@@ -2841,6 +2872,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       groups.set(key, [...(groups.get(key) ?? []), row]);
     }
     const showFilter = scopedRows.length >= LEDGER_FILTER_MIN || !!ledgerQuery;
+    const missingRows = scopedRows.filter((row) => row.missing);
     const projectName = repositoryRoot ? availableProjects.find((item) => item.path && sameDirectory(item.path, repositoryRoot))?.name ?? folderName(repositoryRoot) : '';
     return <GuideDialog open={!!worktreeSetup} title={t('sessions.worktreeSetupTitle')} hint={t('sessions.worktreeSetupHint')} onClose={() => setWorktreeSetup(null)}>
       <div className={styles.setupForm}>
@@ -2853,6 +2885,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               </button>)}
             </div>}
             <p>{t('sessions.worktreeCleanupDesc')}</p>
+            {missingRows.length > 1 && <Button size="sm" variant="ghost" className={styles.setupForgetAll} disabled={!!cleanupBusy} icon={<Icon name="trash" size={13} />} onClick={() => void forgetMissing(missingRows)}>{t('sessions.worktreeForgetMissing', { count: missingRows.length })}</Button>}
           </header>
           {cleanupError && <p className={styles.setupError} role="alert"><Icon name="alert" size={14} /><span>{cleanupError}</span></p>}
           {showFilter && <div className={styles.setupFilter} data-field-frame="">
@@ -2866,13 +2899,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               {rows.map((row) => {
               const removing = cleanupBusy === row.worktreePath;
               const user = worktreeUser(row);
-              return <li key={row.worktreePath} className={styles.setupRow} data-busy={removing || undefined} data-in-use={user ? '' : undefined}>
+              const missing = !!row.missing;
+              return <li key={row.worktreePath} className={styles.setupRow} data-busy={removing || undefined} data-in-use={user ? '' : undefined} data-missing={missing || undefined}>
                 <span className={styles.setupRowGlyph} aria-hidden="true"><Icon name="gitWorktree" size={14} /></span>
                 <span className={styles.cleanupCopy}>
                   <span className={styles.cleanupTitle} title={row.branch}>{row.branch}</span>
-                  <small><span className={styles.cleanupPath} title={displayPath(row.worktreePath)}>{shortPath(displayPath(row.worktreePath))}</span>{user && <span className={styles.cleanupInUse}>{t('sessions.worktreeInUse', { tool: toolName(user) })}</span>}</small>
+                  <small><span className={styles.cleanupPath} title={displayPath(row.worktreePath)}>{shortPath(displayPath(row.worktreePath))}</span>{missing && <span className={styles.cleanupMissing} title={t('sessions.worktreeMissingHint')}>{t('sessions.worktreeMissing')}</span>}{user && <span className={styles.cleanupInUse}>{t('sessions.worktreeInUse', { tool: toolName(user) })}</span>}</small>
                 </span>
-                <Button size="sm" variant="ghost" className={styles.setupRemove} aria-label={t('sessions.worktreeCleanupAction', { branch: row.branch })} title={user ? t('sessions.worktreeCleanupRunning', { tool: toolName(user) }) : undefined} disabled={!!cleanupBusy} icon={<Icon name={removing ? 'refresh' : 'trash'} size={13} />} onClick={() => void cleanWorktree(row)}>{removing ? t('sessions.worktreeCleaning') : t('sessions.worktreeCleanupButton')}</Button>
+                <Button size="sm" variant="ghost" className={styles.setupRemove} aria-label={t('sessions.worktreeCleanupAction', { branch: row.branch })} title={user ? t('sessions.worktreeCleanupRunning', { tool: toolName(user) }) : missing ? t('sessions.worktreeMissingHint') : undefined} disabled={!!cleanupBusy} icon={<Icon name={removing ? 'refresh' : missing ? 'close' : 'trash'} size={13} />} onClick={() => void cleanWorktree(row)}>{removing ? t('sessions.worktreeCleaning') : missing ? t('sessions.worktreeForgetButton') : t('sessions.worktreeCleanupButton')}</Button>
               </li>;
             })}
             </Fragment>)}
@@ -3446,14 +3480,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       const read = worktreeStatuses.get(tree.path);
                       const status = read?.status ?? null;
                       const ready = status?.state === 'ready' && status.uncommittedFiles != null;
-                      const changes = ready
-                        ? (status.uncommittedFiles! > 0 ? t('sessions.worktreeStatusUncommitted', { count: status.uncommittedFiles }) : t('sessions.worktreeStatusClean'))
-                        : '';
-                      const tone = !read ? 'loading' : ready ? (status.uncommittedFiles! > 0 ? 'dirty' : 'clean') : 'unknown';
+                      // The session's own checkout counts what this session changed since it started.
+                      const sessionCount = tree.current && !codeStatusStale && codeStatus?.sessionFiles != null ? codeStatus.sessionFiles : null;
+                      const changes = sessionCount != null
+                        ? (sessionCount > 0 ? t('sessions.worktreeStatusSession', { count: sessionCount }) : t('sessions.worktreeStatusSessionClean'))
+                        : ready
+                          ? (status.uncommittedFiles! > 0 ? t('sessions.worktreeStatusUncommitted', { count: status.uncommittedFiles }) : t('sessions.worktreeStatusClean'))
+                          : '';
+                      const tone = sessionCount != null ? (sessionCount > 0 ? 'dirty' : 'clean') : !read ? 'loading' : ready ? (status.uncommittedFiles! > 0 ? 'dirty' : 'clean') : 'unknown';
                       return <button key={tree.path} type="button" role="menuitemradio" aria-checked={tree.current} className={styles.worktreeItem} data-current={tree.current || undefined} data-status={!read ? 'loading' : status ? status.state : 'unknown'} data-environment={status?.environment ?? undefined} disabled={tree.current || !!busy} title={tree.current ? tree.path + ' · ' + t('sessions.worktreeCurrent') : t('sessions.worktreeOpenHint', { tool: toolName(current) }) + '\n' + tree.path} onClick={() => void openInWorktree(current, tree)}>
                         <Icon name={tree.current ? 'check' : 'gitWorktree'} size={13} className={styles.worktreeGlyph} />
                         <span className={styles.worktreeName}>{tree.name}</span>
-                        <span className={styles.worktreeChanges} data-tone={tone} title={tone === 'unknown' ? read?.error || status?.reason || undefined : undefined}>{tone === 'loading' ? t('sessions.worktreeStatusLoading') : changes || t('sessions.worktreeStatusUnknown')}</span>
+                        <span className={styles.worktreeChanges} data-tone={tone} title={tone === 'unknown' ? read?.error || status?.reason || undefined : sessionCount != null ? codeStatusHint(codeStatus, false) : undefined}>{tone === 'loading' ? t('sessions.worktreeStatusLoading') : changes || t('sessions.worktreeStatusUnknown')}</span>
                         <span className={styles.worktreeSub}>
                           {tree.branch && <span className={styles.worktreeBranch}><Icon name="branch" size={10} />{tree.branch}</span>}
                           
@@ -3483,7 +3521,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       </div>
                       {reviewError && <p className={styles.reviewError} role="alert">{reviewError}</p>}
                       <p className={styles.reviewState} data-tone={reviewView.tone} role="status">{reviewView.text}</p>
-                      <p className={styles.reviewStatusLine} title={codeStatus?.worktreePath ?? undefined}><Icon name="branch" size={12} /><span>{codeStatusText(codeStatus, codeStatusStale)}</span></p>
+                      <p className={styles.reviewStatusLine} title={codeStatusHint(codeStatus, codeStatusStale)}><Icon name="branch" size={12} /><span>{codeStatusText(codeStatus, codeStatusStale)}</span></p>
                       {reviewView.tone === 'unknown' && <p className={styles.reviewHint}>{t('sessions.reviewUnknownHint')}</p>}
                       {reviewView.tone === 'unconfirmed' && <p className={styles.reviewHint}>{t('sessions.reviewUnconfirmedHint')}</p>}
                       {/* The safety note stays one hover away: it explains, it is not an action. */}

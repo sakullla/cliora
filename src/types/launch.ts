@@ -109,7 +109,8 @@ export type WorkbenchExit = { sessionId: string; exitCode: number | null; stateR
 export type WorkbenchGitContext = { branch: string | null; commit: string | null; worktree: string | null; repository: string | null };
 /** One checkout of the repository a local session sits in (main or linked worktree). */
 export type WorkbenchWorktree = { name: string; branch: string | null; path: string; current: boolean };
-export type WorktreeLedgerEntry = { mainCheckout: string; worktreePath: string; branch: string; environment: string };
+/** `missing`: the directory is gone (usually removed by another tool); removing only forgets it. */
+export type WorktreeLedgerEntry = { mainCheckout: string; worktreePath: string; branch: string; environment: string; missing?: boolean };
 export type WorktreePrepareCommand = { mainCheckout: string; command: string };
 export type WorktreeCleanupReport = { removed: boolean; needsConfirmation: boolean; detail: string };
 export type RemoteSessionEndResult = { outcome: 'confirmed_absent' | 'failed' | 'unknown'; stage: string; exitCode: number | null };
@@ -184,6 +185,10 @@ export type WorkbenchCodeStatus = {
   branch: string | null;
   headOid: string | null;
   uncommittedFiles: number | null;
+  /** Files this session changed since it started here; null without a start record. */
+  sessionFiles?: number | null;
+  /** HEAD when the session started in this worktree. */
+  sessionBase?: string | null;
   state: 'ready' | 'unknown';
   reason: string | null;
 };

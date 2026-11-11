@@ -542,6 +542,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             harness.__cleanups = [...(harness.__cleanups ?? []), { path: args.path, confirm: args.confirm }];
             if (harness.__cleanupError) throw new Error(harness.__cleanupError);
             if (!args.confirm && harness.__cleanupNeedsConfirm) return { removed: false, needsConfirmation: true, detail: harness.__cleanupDetail ?? '将丢弃未提交的改动' };
+            const ledgerHarness = window as unknown as { __ledger?: Array<{ worktreePath: string }> };
+            if (ledgerHarness.__ledger) ledgerHarness.__ledger = ledgerHarness.__ledger.filter((row) => row.worktreePath !== args.path);
             return { removed: true, needsConfirmation: false, detail: '' };
           }
           if (command === 'workbench_git_context') return (window as unknown as { __gitContext?: unknown }).__gitContext ?? null;
@@ -3123,6 +3125,39 @@ test('removing a dirty worktree waits for confirmation and can be cancelled', as
     { path: 'C:/work-task', confirm: false },
     { path: 'C:/work-task', confirm: false },
     { path: 'C:/work-task', confirm: true },
+  ]);
+});
+
+test('a worktree another tool deleted is marked and can be forgotten, one or all at once', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __ledger: [
+        { mainCheckout: 'C:/work', worktreePath: 'C:/work-gone-a', branch: 'gone-a', environment: 'prepared', missing: true },
+        { mainCheckout: 'C:/work', worktreePath: 'C:/work-gone-b', branch: 'gone-b', environment: 'prepared', missing: true },
+        { mainCheckout: 'C:/work', worktreePath: 'C:/work-gone-c', branch: 'gone-c', environment: 'prepared', missing: true },
+        { mainCheckout: 'C:/work', worktreePath: 'C:/work-task', branch: 'feat-hello', environment: 'prepared' },
+      ],
+    });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const setup = await openWorktreeSetup(page);
+  await expect(setup.getByText('目录已不存在')).toHaveCount(3);
+  // A missing folder is never reported as an error that blocks removal.
+  await expect(setup.getByRole('alert')).toHaveCount(0);
+  const goneA = setup.getByRole('button', { name: /清理 gone-a/ });
+  await expect(goneA).toHaveText('移除');
+  await expect(setup.getByRole('button', { name: /清理 feat-hello/ })).toHaveText('清理');
+  await goneA.click();
+  await expect(setup.getByRole('button', { name: /清理 gone-a/ })).toHaveCount(0);
+  await setup.getByRole('button', { name: '移除失效的 2 个' }).click();
+  await expect(setup.getByText('目录已不存在')).toHaveCount(0);
+  await expect(setup.getByRole('button', { name: /清理 feat-hello/ })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __cleanups: unknown[] }).__cleanups)).toEqual([
+    { path: 'C:/work-gone-a', confirm: false },
+    { path: 'C:/work-gone-b', confirm: false },
+    { path: 'C:/work-gone-c', confirm: false },
   ]);
 });
 

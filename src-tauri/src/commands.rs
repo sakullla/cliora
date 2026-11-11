@@ -3848,7 +3848,8 @@ pub async fn twiglane_start_review(
         let directory = review_directory(&session_id)?;
         let root = crate::twiglane::checked_worktree(&directory).map_err(crate::twiglane::api_error)?;
         let path = crate::twiglane::url_path(&root).map_err(crate::twiglane::api_error)?;
-        let baseline = crate::twiglane::baseline(&root);
+        let previous = app.state::<AppState>().reviews.latest_for_session(&session_id);
+        let baseline = crate::twiglane::baseline(&session_id, &root, previous.as_ref());
         let state = crate::twiglane::new_review(&session_id, &path, baseline.clone());
         let url = crate::twiglane::checked_review_url(&state.review_id, &session_id, &path, baseline.as_deref())
             .map_err(crate::twiglane::api_error)?;

@@ -65,10 +65,10 @@ function buildExtendedAnsi(mode: TerminalTheme): string[] {
 }
 
 const DARK_THEME: ITheme = {
-  background: '#0f1311',
+  background: '#0b0e0d',
   foreground: '#edf2ee',
   cursor: '#7fe0aa',
-  cursorAccent: '#0f1311',
+  cursorAccent: '#0b0e0d',
   selectionBackground: '#7fe0aa55',
   selectionInactiveBackground: '#7fe0aa28',
   black: '#18201c',

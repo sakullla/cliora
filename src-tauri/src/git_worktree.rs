@@ -140,6 +140,9 @@ pub struct WorktreeRecord {
     pub branch: String,
     /// `unprepared` until a saved command exits successfully in this worktree.
     pub environment: String,
+    /// The directory is gone, usually removed by another tool. Cleanup then only
+    /// forgets the record (and prunes Git's bookkeeping); there is nothing to delete.
+    pub missing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -286,11 +289,14 @@ pub(crate) fn recorded_worktrees(db: &Database) -> Result<Vec<WorktreeRecord>, S
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| {
+                let worktree_path: String = row.get(1)?;
+                let missing = matches!(Path::new(&worktree_path).try_exists(), Ok(false));
                 Ok(WorktreeRecord {
                     main_checkout: row.get(0)?,
-                    worktree_path: row.get(1)?,
+                    worktree_path,
                     branch: row.get(2)?,
                     environment: row.get(3)?,
+                    missing,
                 })
             })
             .map_err(|error| error.to_string())?;
@@ -395,10 +401,15 @@ pub(crate) fn cleanup_worktree_with_sessions(
         return Err("主检出不能清理。".into());
     }
     let git = find_git().ok_or_else(|| "找不到 Git，无法清理工作树。".to_string())?;
-    // A path that cannot be resolved cannot be proven unrelated to a session, so
-    // it is reported instead of deleted: a wrong delete loses work silently.
+    // A directory another tool already removed leaves only the record and Git's
+    // bookkeeping behind; both are cleared without touching anything on disk.
+    if matches!(worktree.try_exists(), Ok(false)) {
+        return forget_missing_worktree(db, &git, &record, &worktree, &main, confirm, sessions);
+    }
+    // A path that exists but cannot be resolved cannot be proven unrelated to a
+    // session, so it is reported instead of deleted: a wrong delete loses work silently.
     let Some(root) = worktree.canonicalize().ok() else {
-        return Err("无法确认工作树目录（可能已移动或删除），不能清理。".into());
+        return Err("无法读取工作树目录，不能清理。请检查目录权限后重试。".into());
     };
     if main.canonicalize().ok().as_deref() == Some(root.as_path()) {
         return Err("主检出不能清理。".into());
@@ -419,6 +430,50 @@ pub(crate) fn cleanup_worktree_with_sessions(
         });
     }
     delete_worktree(&git, &main, &worktree, &record.branch, !dirty.is_empty(), !commits.is_empty())?;
+    forget_ledger(db, &record.worktree_path)?;
+    Ok(CleanupReport { removed: true, needs_confirmation: false, detail: String::new() })
+}
+
+/// Clear a ledger row whose directory no longer exists. Git's stale worktree entry
+/// is pruned so the branch can be deleted; a branch with commits found on no other
+/// branch is kept until the user confirms, exactly like a present worktree.
+fn forget_missing_worktree(
+    db: &Database,
+    git: &Path,
+    record: &WorktreeRecord,
+    worktree: &Path,
+    main: &Path,
+    confirm: bool,
+    sessions: &[RunningSession],
+) -> Result<CleanupReport, String> {
+    if let Some(session) = sessions.iter().find(|session| same_or_inside(&session.directory, worktree)) {
+        return Err(format!(
+            "工作树仍被运行中的会话 {} 使用，请先结束该会话再清理。",
+            session.session_id
+        ));
+    }
+    // Without the main checkout there is no repository left to tidy.
+    if main.is_dir() {
+        let _ = git_output(git, main, &["worktree", "prune"]);
+        let commits = unmerged_lines(git, main, &record.branch).unwrap_or_default();
+        if !commits.is_empty() && !confirm {
+            return Ok(CleanupReport {
+                removed: false,
+                needs_confirmation: true,
+                detail: format!("工作树目录已不存在。\n{}", discard_detail(&[], &commits)),
+            });
+        }
+        if !record.branch.is_empty() {
+            if commits.is_empty() {
+                let _ = git_output(git, main, &["branch", "-d", &record.branch]);
+            } else {
+                let output = git_output(git, main, &["branch", "-D", &record.branch])?;
+                if !output.status.success() {
+                    return Err(command_failure("Git 无法删除未合并的分支", &output.stderr, &output.stdout));
+                }
+            }
+        }
+    }
     forget_ledger(db, &record.worktree_path)?;
     Ok(CleanupReport { removed: true, needs_confirmation: false, detail: String::new() })
 }
@@ -1776,5 +1831,61 @@ mod tests {
         let path = dir.join("git.cmd");
         std::fs::write(&path, "@echo refusing on purpose 1>&2\r\nexit /b 1\r\n").unwrap();
         path
+    }
+
+    #[test]
+    fn a_worktree_deleted_by_another_tool_is_forgotten_and_pruned() {
+        let (temp, db) = database();
+        let Some(main) = init_repo(temp.path(), "shop") else {
+            eprintln!("git unavailable; skipping missing worktree test");
+            return;
+        };
+        assert!(run_git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        let created = prepare_worktree(&db, &main, Some("task")).unwrap().expect("worktree");
+        std::fs::remove_dir_all(&created.directory).unwrap();
+        let rows = recorded_worktrees(&db).unwrap();
+        assert!(rows[0].missing);
+        let removed = cleanup_worktree_with_sessions(&db, &created.directory, false, &[]).unwrap();
+        assert!(removed.removed, "{removed:?}");
+        assert!(recorded_worktrees(&db).unwrap().is_empty());
+        assert!(!git_text(&main, &["worktree", "list", "--porcelain"]).contains("shop-task"));
+        assert!(!git_text(&main, &["branch", "--list", "task"]).contains("task"));
+    }
+
+    #[test]
+    fn a_missing_worktree_with_unmerged_commits_asks_before_dropping_its_branch() {
+        let (temp, db) = database();
+        let Some(main) = init_repo(temp.path(), "shop") else {
+            eprintln!("git unavailable; skipping missing unmerged test");
+            return;
+        };
+        assert!(run_git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        let created = prepare_worktree(&db, &main, Some("task")).unwrap().expect("worktree");
+        assert!(run_git(&created.directory, &["commit", "-q", "--allow-empty", "-m", "only here"]));
+        std::fs::remove_dir_all(&created.directory).unwrap();
+        let held = cleanup_worktree_with_sessions(&db, &created.directory, false, &[]).unwrap();
+        assert!(held.needs_confirmation, "{held:?}");
+        assert!(held.detail.contains("only here"), "{}", held.detail);
+        assert_eq!(recorded_worktrees(&db).unwrap().len(), 1);
+        let removed = cleanup_worktree_with_sessions(&db, &created.directory, true, &[]).unwrap();
+        assert!(removed.removed, "{removed:?}");
+        assert!(recorded_worktrees(&db).unwrap().is_empty());
+        assert!(!git_text(&main, &["branch", "--list", "task"]).contains("task"));
+    }
+
+    #[test]
+    fn a_missing_worktree_whose_repository_is_gone_is_still_forgotten() {
+        let (temp, db) = database();
+        let Some(main) = init_repo(temp.path(), "shop") else {
+            eprintln!("git unavailable; skipping missing repository test");
+            return;
+        };
+        assert!(run_git(&main, &["commit", "-q", "--allow-empty", "-m", "root"]));
+        let created = prepare_worktree(&db, &main, Some("task")).unwrap().expect("worktree");
+        std::fs::remove_dir_all(&created.directory).unwrap();
+        std::fs::remove_dir_all(&main).unwrap();
+        let removed = cleanup_worktree_with_sessions(&db, &created.directory, false, &[]).unwrap();
+        assert!(removed.removed, "{removed:?}");
+        assert!(recorded_worktrees(&db).unwrap().is_empty());
     }
 }

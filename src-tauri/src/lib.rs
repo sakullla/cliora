@@ -97,6 +97,7 @@ pub mod projects;
 pub mod remote;
 pub mod resources;
 pub mod session_host;
+mod session_baseline;
 pub mod workbench_restore;
 pub mod terminal_replay;
 mod terminal_paths;

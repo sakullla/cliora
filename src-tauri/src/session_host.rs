@@ -541,10 +541,22 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         command.env("TERM", "xterm-256color");
     }
     apply_environment(&mut command, &plan, credential);
+    let id = uuid::Uuid::new_v4().to_string();
+    // Record where this session starts before the CLI can change anything, so
+    // "changes" and the review baseline later mean what this session did.
+    if !remote {
+        crate::session_baseline::capture(&id, &plan.directory);
+    }
     let context = if remote { crate::remote::operations::current() } else { None };
     let slot = context.as_ref().map(|context| crate::remote::operations::acquire_bound(context)).transpose().map_err(|error| error.to_string())?;
     if let Some(context) = &context { context.check().map_err(|error| error.to_string())?; }
-    let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法在工作台启动 CLI：{error}"))?;
+    let mut child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            crate::session_baseline::forget(&id);
+            return Err(format!("无法在工作台启动 CLI：{error}"));
+        }
+    };
     if let Some(context) = &context { context.dispatched(); }
     // A persistent PTY is not a short remote read; only admission/spawn uses
     // the ordinary scheduler slot, never its long-lived connection.
@@ -570,7 +582,7 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     #[cfg(windows)]
     let job = child.as_raw_handle().and_then(process_tree::Job::assign);
     let session = Arc::new(Session {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: id.clone(),
         sequence: NEXT_SEQUENCE.fetch_add(1, Ordering::SeqCst),
         started_at,
         tool_id: plan.tool_id.clone(),
@@ -599,10 +611,10 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
         #[cfg(windows)]
         job: Mutex::new(job),
     });
-    let id = session.id.clone();
     sessions().insert(id.clone(), Arc::clone(&session));
     if let Err(error) = attach_reader(Arc::clone(&session), reader) {
         sessions().remove(&id);
+        crate::session_baseline::forget(&id);
         end_child(&session);
         return Err(error);
     }
@@ -844,6 +856,7 @@ pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>
     end_child(&session);
     session.paste_files.lock().map_err(|_| "会话状态不可用")?.clear();
     sessions().remove(id);
+    crate::session_baseline::forget(id);
     Ok(())
 }
 
