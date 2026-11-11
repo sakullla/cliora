@@ -281,7 +281,7 @@ impl CliAdapter for QoderAdapter {
         // drops the native entry (settings-reference documents the field).
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert(
             "type".into(),
@@ -491,7 +491,7 @@ mod tests {
         McpDefinition {
             id: "definition-1".into(),
             name: "cliora-fixture".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx -y fixture-mcp@1.0.0".into(),
             args: vec![],
             url: String::new(),
@@ -507,7 +507,7 @@ mod tests {
         McpDefinition {
             id: "definition-2".into(),
             name: "cliora-http".into(),
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: vec![],
             url: "https://mcp.example.test/mcp".into(),

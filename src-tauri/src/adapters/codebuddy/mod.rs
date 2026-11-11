@@ -180,7 +180,7 @@ impl CliAdapter for CodeBuddy {
         }
         let map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         Ok(Some(Value::Object(map)))
     }
@@ -534,7 +534,7 @@ mod tests {
         let definition = McpDefinition {
             id: "m1".into(),
             name: "fetch".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["-y".into(), "fetch".into()],
             url: String::new(),

@@ -343,7 +343,7 @@ fn setup(server: &Server) -> SyncSetup {
 
 fn seed_named_mcp(db: &Database, id: &str, command: &str) {
     let definition = crate::resources::mcp::McpDefinition {
-        id: id.into(), name: "shared-server".into(), transport: crate::resources::mcp::McpTransport::Stdio,
+        id: id.into(), name: "shared-server".into(), cwd: String::new(), transport: crate::resources::mcp::McpTransport::Stdio,
         command: command.into(), args: vec!["synthetic-package".into()], url: String::new(),
         env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
     };
@@ -436,6 +436,87 @@ fn different_named_mcp_is_a_resolvable_conflict_and_other_items_keep_syncing() {
 }
 
 #[test]
+fn remote_mcp_conflict_shows_transport_cwd_and_hides_literal_env_and_headers() {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let a = database(&root.path().join("a"));
+    let b = database(&root.path().join("b"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let seed = |db: &Database, id: &str, definition: crate::resources::mcp::McpDefinition| {
+        db.with_connection(|conn| {
+            conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES (?1,?2,'x',?3,1)",
+                rusqlite::params![id, definition.name, serde_json::to_string(&definition).unwrap()]).unwrap();
+            Ok(())
+        }).unwrap();
+    };
+    let mut remote = crate::resources::mcp::McpDefinition {
+        id: "a-resource".into(), name: "shared-server".into(), cwd: String::new(), transport: crate::resources::mcp::McpTransport::Sse,
+        command: String::new(), args: vec![], url: "https://mcp.example.test/sse".into(),
+        env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    remote.headers.insert("Authorization".into(), "Bearer literal-header-secret".into());
+    seed(&a, "a-resource", remote);
+    let mut local = crate::resources::mcp::McpDefinition {
+        id: "z-resource".into(), name: "shared-server".into(), cwd: "workdir".into(), transport: crate::resources::mcp::McpTransport::Stdio,
+        command: "npx".into(), args: vec![], url: String::new(),
+        env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    local.env.insert("API_TOKEN".into(), "literal-env-secret".into());
+    local.env.insert("REFERENCED".into(), "${REFERENCED_TOKEN}".into());
+    seed(&b, "z-resource", local);
+    configure(&a, &store, setup(&server)).unwrap();
+    configure(&b, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    let result = run(&b, &store, &registry, false).unwrap();
+    let conflict = result.conflicts.iter().find(|item| item.key == "mcp:a-resource").unwrap();
+    let preview = preview_conflict(&b, &store, &registry, &conflict.key).unwrap();
+    assert!(preview.local_summary.contains("stdio"), "{}", preview.local_summary);
+    assert!(preview.local_content.contains("workdir"), "{}", preview.local_content);
+    assert!(preview.local_content.contains("${REFERENCED_TOKEN}"));
+    let incoming = &preview.versions[0];
+    assert!(incoming.summary.contains("SSE"), "{}", incoming.summary);
+    assert!(!incoming.summary.contains("Streamable"));
+    let public = format!("{} {} {}", preview.local_content, incoming.content, incoming.summary);
+    assert!(!public.contains("literal-env-secret") && !public.contains("literal-header-secret"), "{public}");
+}
+
+#[test]
+fn synced_cwd_outside_home_waits_for_linking_and_old_snapshots_stay_readable() {
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let a = database(&root.path().join("a"));
+    let b = database(&root.path().join("b"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    // Outside every home: only the sender can resolve it. Windows builds use a
+    // drive path that is absolute there; other platforms use a POSIX root.
+    let local_dir = if cfg!(windows) { r"Z:\elsewhere\work".to_owned() } else { "/opt/elsewhere/work".to_owned() };
+    let definition = crate::resources::mcp::McpDefinition {
+        id: "cwd-resource".into(), name: "with-cwd".into(), cwd: local_dir.clone(), transport: crate::resources::mcp::McpTransport::Stdio,
+        command: "npx".into(), args: vec![], url: String::new(),
+        env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
+    };
+    a.with_connection(|conn| {
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES ('cwd-resource','with-cwd','stdio',?1,1)",
+            [serde_json::to_string(&definition).unwrap()]).unwrap();
+        // A definition saved before cwd existed has no such key at all.
+        conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES ('old-resource','old-shape','stdio',?1,1)",
+            [r#"{"id":"old-resource","name":"old-shape","transport":"stdio","command":"npx","args":[],"url":"","env":{},"headers":{},"inLibrary":true,"version":1}"#]).unwrap();
+        Ok(())
+    }).unwrap();
+    configure(&a, &store, setup(&server)).unwrap();
+    configure(&b, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    run(&b, &store, &registry, false).unwrap();
+    assert_eq!(crate::resources::mcp::get_definition(&a, "cwd-resource").unwrap().cwd, local_dir);
+    let received = crate::resources::mcp::get_definition(&b, "cwd-resource").unwrap();
+    assert!(!received.cwd.contains("elsewhere"), "an absolute source path must not be carried to the receiver: {}", received.cwd);
+    assert!(!received.cwd.is_empty());
+    assert_eq!(crate::resources::mcp::get_definition(&b, "old-resource").unwrap().cwd, "");
+}
+
+#[test]
 fn reconnect_with_valid_password_does_not_need_the_locked_old_credential() {
     let server = Server::new();
     let root = tempfile::tempdir().unwrap();
@@ -485,6 +566,46 @@ fn merged_mcp_remains_managed_in_the_existing_native_file() {
 }
 
 #[test]
+fn receiver_without_cwd_support_gets_a_blocker_while_other_mcp_items_continue() {
+    use crate::resources::mcp;
+    struct Guard;
+    impl Drop for Guard { fn drop(&mut self) { super::super::set_restore_roots_for_test(None); } }
+    let _guard = Guard;
+    let server = Server::new();
+    let root = tempfile::tempdir().unwrap();
+    let source = database(&root.path().join("source"));
+    let target = database(&root.path().join("target"));
+    let (old_store, new_store) = (MemoryCredentials::default(), MemoryCredentials::default());
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    assert!(!registry.get("codex").unwrap().mcp_supports_cwd());
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let make = |id: &str, cwd: &str| mcp::McpDefinition { id: id.into(), name: id.into(), cwd: cwd.into(), transport: mcp::McpTransport::Stdio,
+        command: "npx".into(), args: vec!["-y".into(), "pkg".into()], url: String::new(), env: Default::default(), headers: Default::default(),
+        in_library: true, version: 1, updated_at: None };
+    source.with_connection(|conn| {
+        for definition in [make("a-plain", ""), make("b-with-cwd", "workdir"), make("c-plain", "")] {
+            conn.execute("INSERT INTO mcp_definitions(id,name,transport,data_json,version) VALUES (?1,?1,'stdio',?2,1)", rusqlite::params![definition.id, serde_json::to_string(&definition).unwrap()]).unwrap();
+            conn.execute("INSERT INTO mcp_targets(definition_id,tool,scope_key,enabled,managed_hash) VALUES (?1,'codex','global',1,'synthetic')", [&definition.id]).unwrap();
+        }
+        Ok(())
+    }).unwrap();
+    let roots = |name: &str| super::super::set_restore_roots_for_test(Some((home.clone(), root.path().join(name))));
+    roots("source");
+    configure(&source, &old_store, setup(&server)).unwrap();
+    run(&source, &old_store, &registry, false).unwrap();
+    roots("target");
+    configure(&target, &new_store, setup(&server)).unwrap();
+    let received = run(&target, &new_store, &registry, false).unwrap();
+    let blocker = received.blockers.iter().find(|item| item.detail.contains("cwd")).unwrap_or_else(|| panic!("{:?}", received.blockers));
+    assert_eq!(received.blockers.len(), 1, "{:?}", received.blockers);
+    assert!(blocker.key.starts_with("deployment:"), "{blocker:?}");
+    let native = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+    assert!(native.contains("mcp_servers.a-plain") && native.contains("mcp_servers.c-plain"), "{native}");
+    assert!(!native.contains("b-with-cwd") && !native.contains("workdir"), "{native}");
+    assert!(!mcp::get_definition(&target, "b-with-cwd").unwrap().cwd.is_empty(), "the definition itself still syncs");
+}
+#[test]
 fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver() {
     use crate::native::profile::{RegisteredProfile, Connection, ProfileAuthentication};
     use crate::resources::{mcp, skills};
@@ -509,7 +630,7 @@ fn one_sync_restores_windows_home_credentials_profile_mcp_and_skill_on_receiver(
         connection: Some(Connection { provider_id: "example".into(), interface_format: "openai_responses".into(),
             base_url: "https://example.test/v1".into(), model: "gpt-6".into(), secret_ref: Some("connection-source".into()), auth_env_var: None, model_records: vec![] }),
     };
-    let definition = mcp::McpDefinition { id: "runner".into(), name: "runner".into(), transport: mcp::McpTransport::Stdio,
+    let definition = mcp::McpDefinition { id: "runner".into(), name: "runner".into(), cwd: String::new(), transport: mcp::McpTransport::Stdio,
         command: r"C:\Program Files\nodejs\npx.cmd".into(), args: vec!["-y".into(), "synthetic-mcp-package".into(), r"C:\Users\Alice\projects\demo".into()],
         url: String::new(), env: Default::default(), headers: Default::default(), in_library: true, version: 1, updated_at: None,
     };

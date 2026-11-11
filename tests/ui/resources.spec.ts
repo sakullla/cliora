@@ -147,12 +147,12 @@ function mcpEditor(page: Page, surface: 'library' | 'current CLI') {
   return surface === 'library' ? page.getByRole('dialog', { name: '新建 MCP' }) : page.getByRole('article', { name: '添加 MCP' });
 }
 
-async function openMcpPasteReview(page: Page, surface: 'library' | 'current CLI', source: string) {
+async function openMcpPasteReview(page: Page, surface: 'library' | 'current CLI', source: string, formName: string | null = 'keep-draft') {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: surface === 'library' ? '资料库' : '工具' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: surface === 'library' ? '新建 MCP' : '添加 MCP', exact: true }).first().click();
   const editor = mcpEditor(page, surface);
-  await editor.getByRole('textbox', { name: '名称' }).fill('keep-draft');
+  if (formName !== null) await editor.getByRole('textbox', { name: '名称' }).fill(formName);
   await editor.getByRole('button', { name: '粘贴导入' }).click();
   await editor.getByRole('textbox', { name: '粘贴 MCP JSON' }).fill(source);
   await editor.getByRole('button', { name: '解析并填入' }).click();
@@ -2069,4 +2069,189 @@ test('Skill document sits beside the list and confirms leaving unsaved text', as
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+});
+
+async function mcpDefinitions(page: Page) {
+  return page.evaluate(() => (window as any).__resourceMcpDefinitions as Array<Record<string, any>>);
+}
+
+for (const surface of ['library', 'current CLI'] as const) {
+  test(`${surface} cc-switch record without a name gets an editable default name, keeps cwd and reviews the full command`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    const source = JSON.stringify({ server: { type: 'stdio', command: 'uvx', args: ['mcp-server-fetch', '--root', 'C:/Program Files/data'], cwd: 'C:/work/fetch', env: { REGION: 'eu' } }, apps: { claude: true } });
+    const review = await openMcpPasteReview(page, surface, source, null);
+    const name = review.getByRole('textbox', { name: '第 1 项的导入名称' });
+    await expect(name).toHaveValue('mcp-server');
+    await expect(review.getByRole('checkbox', { name: '选择导入 mcp-server' })).toBeChecked();
+    await expect(review).not.toContainText('请填写名称');
+    const content = review.getByLabel('写入内容');
+    await expect(content).toContainText('uvx');
+    await expect(content).toContainText('mcp-server-fetch');
+    await expect(content).toContainText('C:/Program Files/data');
+    await expect(content).toContainText('C:/work/fetch');
+
+    await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+    await expect(review.getByRole('button', { name: '确认导入 1 项' })).toBeEnabled();
+    // Editing the name drops the old preview, so the row has to be previewed again before it can be confirmed.
+    await name.fill('fetch-tool');
+    await expect(review.getByRole('button', { name: '预览选中的 1 项' })).toBeEnabled();
+    await expect(review.getByRole('button', { name: /确认导入/ })).toHaveCount(0);
+    await expect(review.getByRole('checkbox', { name: '选择导入 fetch-tool' })).toBeChecked();
+    await review.getByRole('button', { name: '预览选中的 1 项' }).click();
+    await review.getByRole('button', { name: '确认导入 1 项' }).click();
+    await expect(review.getByText('已保存 fetch-tool')).toBeVisible();
+    const [saved] = await mcpDefinitions(page);
+    expect(saved).toMatchObject({ name: 'fetch-tool', transport: 'stdio', command: 'uvx', cwd: 'C:/work/fetch', env: { REGION: 'eu' } });
+    expect(saved.args).toEqual(['mcp-server-fetch', '--root', 'C:/Program Files/data']);
+  });
+
+  test(`${surface} unnamed cc-switch entries get distinct non-conflicting default names`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    await page.evaluate(() => {
+      (window as any).__resourceMcpDefinitions.push({ id: 'mcp-existing', name: 'mcp-server', transport: 'stdio', command: 'npx', args: [], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    });
+    const link = `ccswitch://v1/import?resource=mcp&config=${encodeURIComponent(Buffer.from(JSON.stringify({ mcpServers: { '': { command: 'first' }, ' ': { command: 'second' }, named: { command: 'third' } } })).toString('base64'))}`;
+    const review = await openMcpPasteReview(page, surface, link, null);
+    await expect(review.getByRole('textbox', { name: '第 1 项的导入名称' })).toHaveValue('mcp-server-2');
+    await expect(review.getByRole('textbox', { name: '第 2 项的导入名称' })).toHaveValue('mcp-server-3');
+    await expect(review.getByRole('textbox', { name: '第 3 项的导入名称' })).toHaveValue('named');
+    await expect(review.getByRole('checkbox', { checked: true })).toHaveCount(3);
+    await expect(review).not.toContainText('重复或已存在');
+    await review.getByRole('button', { name: '预览选中的 3 项' }).click();
+    await review.getByRole('button', { name: '确认导入 3 项' }).click();
+    await expect(review.getByText('已保存 named')).toBeVisible();
+    const saved = await mcpDefinitions(page);
+    expect(saved.map(item => item.name)).toEqual(['mcp-server', 'mcp-server-2', 'mcp-server-3', 'named']);
+    expect(saved[0].command).toBe('npx');
+  });
+
+  test(`${surface} an edited name that clashes holds the row back until it is changed`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    await page.evaluate(() => {
+      (window as any).__resourceMcpDefinitions.push({ id: 'mcp-existing', name: 'taken', transport: 'stdio', command: 'npx', args: [], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    });
+    const review = await openMcpPasteReview(page, surface, JSON.stringify({ mcpServers: { '': { command: 'one' }, other: { command: 'two' } } }), null);
+    const first = review.getByRole('textbox', { name: '第 1 项的导入名称' });
+    const second = review.getByRole('textbox', { name: '第 2 项的导入名称' });
+    await expect(first).toHaveValue('mcp-server');
+    // Two rows in one batch may not share a name, and an invalid one is flagged instead of being previewed.
+    await second.fill('mcp-server');
+    await expect(review).toContainText('重复或已存在');
+    await expect(review.getByRole('button', { name: '预览选中的 1 项' })).toBeEnabled();
+    await first.fill('has space');
+    await expect(review).toContainText('名称只可用字母');
+    await expect(review.getByRole('checkbox', { name: '选择导入 has space' })).toBeDisabled();
+    await expect(review.getByRole('button', { name: '预览选中的 1 项' })).toBeEnabled();
+    await first.fill('first-one');
+    await second.fill('second-one');
+    await expect(review.getByRole('button', { name: '预览选中的 2 项' })).toBeEnabled();
+  });
+
+  test(`${surface} an unnamed cc-switch entry keeps its other fields but stays blocked while a field is invalid`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    const review = await openMcpPasteReview(page, surface, JSON.stringify({ server: { command: 'npx', args: ['ok', 3], env: { COUNT: 2 }, cwd: '/srv/app' }, apps: {} }), null);
+    await expect(review.getByRole('textbox', { name: '第 1 项的导入名称' })).toHaveValue('mcp-server');
+    await expect(review).toContainText('args 必须是仅包含字符串的数组');
+    await expect(review).toContainText('env 必须是对象，值只能是字符串。');
+    await expect(review.getByLabel('写入内容')).toContainText('npx');
+    await expect(review.getByLabel('写入内容')).toContainText('/srv/app');
+    await expect(review.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(review.getByRole('button', { name: '预览选中的 0 项' })).toBeDisabled();
+    expect(await mcpDefinitions(page)).toEqual([]);
+  });
+
+  test(`${surface} Streamable HTTP and legacy SSE stay distinguishable and are saved as reviewed`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    const source = JSON.stringify({ mcpServers: {
+      legacy: { type: 'sse', url: 'https://docs.test/sse', headers: { 'X-Team': 'desk' } },
+      modern: { type: 'streamable-http', url: 'https://docs.test/mcp' },
+    } });
+    const review = await openMcpPasteReview(page, surface, source, null);
+    const items = review.getByRole('list', { name: '待导入 MCP 列表' }).getByRole('listitem');
+    await expect(items.nth(0).getByLabel('写入内容')).toContainText('旧版 SSE（HTTP+SSE）');
+    await expect(items.nth(0).getByLabel('写入内容')).toContainText('https://docs.test/sse');
+    await expect(items.nth(1).getByLabel('写入内容')).toContainText('Streamable HTTP');
+    await expect(items.nth(1).getByLabel('写入内容')).not.toContainText('SSE');
+    await review.getByRole('button', { name: '预览选中的 2 项' }).click();
+    await review.getByRole('button', { name: '确认导入 2 项' }).click();
+    await expect(review.getByText('已保存 modern')).toBeVisible();
+    const saved = await mcpDefinitions(page);
+    expect(saved.map(item => [item.name, item.transport, item.url])).toEqual([['legacy', 'sse', 'https://docs.test/sse'], ['modern', 'http', 'https://docs.test/mcp']]);
+    expect(saved[0].headers).toEqual({ 'X-Team': 'desk' });
+  });
+
+  test(`${surface} unknown transports and unrepresentable fields are diagnosed by name and cancel writes nothing`, async ({ page }) => {
+    await mockResources(page);
+    await page.addInitScript(() => {
+      const win = window as any;
+      const invoke = win.__TAURI_INTERNALS__.invoke;
+      win.__mcpCalls = [];
+      win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+        if (['preview_mcp_draft', 'commit_mcp_draft', 'save_mcp_definition', 'distribute_mcp'].includes(command)) win.__mcpCalls.push(command);
+        return invoke(command, args);
+      };
+    });
+    await page.goto('/');
+    const source = JSON.stringify({ mcpServers: {
+      socket: { type: 'websocket', url: 'wss://docs.test/mcp' },
+      extra: { command: 'npx', timeout: 30, autoApprove: ['read'] },
+      numeric: { command: 'node', cwd: 4 },
+    } });
+    const review = await openMcpPasteReview(page, surface, source, null);
+    await expect(review).toContainText('无法识别的连接类型「websocket」');
+    await expect(review).toContainText('timeout, autoApprove');
+    await expect(review).toContainText('cwd 必须是字符串');
+    await expect(review.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await review.getByRole('button', { name: '返回', exact: true }).click();
+    expect(await page.evaluate(() => (window as any).__mcpCalls)).toEqual([]);
+    expect(await mcpDefinitions(page)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([]);
+  });
+}
+
+test('library MCP form sets, shows and clears the working directory and treats it as an edit', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await startLibraryMcp(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '工作目录' }).fill('  C:/work/app  ');
+  await expect(dialog.getByText('C:/work/app', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await mcpDefinitions(page))[0]).toMatchObject({ command: 'npx', cwd: 'C:/work/app' });
+
+  await page.getByRole('button', { name: '修改' }).click();
+  const field = page.getByRole('dialog').getByRole('textbox', { name: '工作目录' });
+  await expect(field).toHaveValue('C:/work/app');
+  await expect(page.getByRole('dialog').getByText('草稿尚未保存')).toHaveCount(0);
+  await field.fill('');
+  await expect(page.getByRole('dialog').getByText('草稿尚未保存')).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await mcpDefinitions(page))[0].cwd).toBe('');
+});
+
+test('library MCP form offers legacy SSE as a separate remote type without turning it into HTTP', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await startLibraryMcp(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('radio', { name: 'HTTP', exact: true }).click();
+  await expect(dialog.getByRole('radio', { name: 'Streamable HTTP', exact: true })).toBeChecked();
+  await dialog.getByRole('radio', { name: '旧版 SSE（HTTP+SSE）', exact: true }).click();
+  await expect(dialog.getByRole('radio', { name: 'HTTP', exact: true })).toBeChecked();
+  await expect(dialog.getByRole('note')).toContainText('旧版 SSE');
+  await expect(dialog.getByRole('textbox', { name: '工作目录' })).toHaveCount(0);
+  await dialog.getByRole('textbox', { name: '网址' }).fill('https://docs.test/sse');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await mcpDefinitions(page))[0]).toMatchObject({ transport: 'sse', url: 'https://docs.test/sse', cwd: '' });
+  const row = page.getByRole('list', { name: 'MCP 列表' }).getByRole('listitem').filter({ hasText: 'filesystem' });
+  await expect(row).toContainText('SSE');
+  await expect(row).not.toContainText('HTTP');
 });

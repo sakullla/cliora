@@ -4,7 +4,7 @@ fn draft() -> McpDraft {
     McpDraft {
         id: None,
         name: "example".into(),
-        transport: McpTransport::Stdio,
+        cwd: String::new(), transport: McpTransport::Stdio,
         command: "npx".into(),
         args: vec!["-y".into(), "example-mcp".into()],
         url: String::new(),

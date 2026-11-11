@@ -255,7 +255,7 @@ impl CliAdapter for Pi {
         // keeps the entry without connecting. SSE is rejected.
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert(
             "type".into(),

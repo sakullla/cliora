@@ -206,7 +206,7 @@ impl CliAdapter for CommandCode {
         // per-entry boolean flag, so a disabled entry stays in the file.
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert("enabled".into(), json!(enabled));
         Ok(Some(Value::Object(map)))
@@ -534,7 +534,7 @@ mod tests {
         let definition = McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(enabled["args"], json!(["-y", "example-mcp"]));
         assert_eq!(enabled["enabled"], true);
         let remote_definition = McpDefinition {
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             url: "https://mcp.example.com/mcp".into(),
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition

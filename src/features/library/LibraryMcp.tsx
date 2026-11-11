@@ -10,7 +10,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { SkeletonRows } from '../../components/Skeleton';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
-import { blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { blankMcpDraft, editableRowsOf, hasMcpIssues, isRemoteMcp, keptMcpArgs, mcpCopyName, mcpCwdOf, mcpDefaultName, mcpDraftIssues, mcpDraftOf, mcpParseIssueTexts, mcpSummary, mcpTransportBadge, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
 import { useFeedback } from '../../lib/toast';
@@ -34,7 +34,7 @@ const byName = (left: McpDefinition, right: McpDefinition) => {
   const a = left.name.toLowerCase(), b = right.name.toLowerCase();
   return a < b ? -1 : a > b ? 1 : left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
 };
-const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, state.draft.transport, state.draft.command, keptMcpArgs(state.draft.args), state.draft.url, recordOfRows(state.envRows), recordOfRows(state.headerRows)]);
+const fingerprint = (state: EditorState) => JSON.stringify([state.draft.name, state.draft.transport, state.draft.command, keptMcpArgs(state.draft.args), mcpCwdOf(state.draft), state.draft.url, recordOfRows(state.envRows), recordOfRows(state.headerRows)]);
 
 export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountChange, spotlight = null, onOpenConnections, remoteTargetId = null }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void; spotlight?: { id: string; token: number } | null; onOpenConnections?: () => void; remoteTargetId?: string | null }) {
   const { t } = useTranslation();
@@ -81,7 +81,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       if (remoteTargetId) {
         const bundle = await native.listRemoteResourceStores(remoteTargetId, remoteToolIds, 'mcp', { fresh });
         const stores = remoteToolIds.map(toolId => (bundle.stores?.[toolId] ?? { entries: [] }) as { entries?: NativeMcpEntry[] });
-        const items: McpDefinition[] = stores.flatMap((store, toolIndex) => (store.entries ?? []).map((entry, index) => ({ id: `remote:${remoteToolIds[toolIndex]}:${entry.name}`, name: entry.name, transport: entry.transport, command: entry.command, args: entry.args ?? [], url: entry.url ?? '', env: entry.env ?? {}, headers: entry.headers ?? {}, inLibrary: entry.inLibrary !== false, version: index + 1 })));
+        const items: McpDefinition[] = stores.flatMap((store, toolIndex) => (store.entries ?? []).map((entry, index) => ({ id: `remote:${remoteToolIds[toolIndex]}:${entry.name}`, name: entry.name, transport: entry.transport, command: entry.command, args: entry.args ?? [], cwd: entry.cwd ?? '', url: entry.url ?? '', env: entry.env ?? {}, headers: entry.headers ?? {}, inLibrary: entry.inLibrary !== false, version: index + 1 })));
         if (request !== loadRequest.current) return;
         setDefinitions(items); setPlacements([]); setLoaded(true); setStale(false);
         return;
@@ -156,14 +156,16 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }, [createSignal]);
 
   function importJson(parsed: McpParsedServer[], source: string) {
-    const seen = new Set<string>();
+    // Explicit names are claimed first, so a generated default never takes a name a later entry carries.
+    const explicit = parsed.map(server => server.name.trim() || (parsed.length === 1 ? draft?.name.trim() ?? '' : ''));
+    const taken = new Set([...definitions.map(item => item.name), ...explicit.filter(Boolean)]);
     const items = parsed.map((server, index): McpBatchItem => {
-      const name = server.name.trim() || (parsed.length === 1 ? draft?.name.trim() ?? '' : '');
-      const duplicate = !!name && (seen.has(name) || definitions.some(item => item.name === name));
-      seen.add(name);
-      const blocked = [duplicate ? t('tools.mcp.batchDuplicate', { name }) : '', ...server.invalid.map(issue => t('tools.mcp.parseIssue.' + issue))].filter(Boolean).join(' ');
-      return { key: index + ':' + name, blocked: blocked || undefined,
-        draft: { ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, url: server.url,
+      let name = explicit[index];
+      const generatedName = !name;
+      if (generatedName) { name = mcpDefaultName(taken); taken.add(name); }
+      const blocked = mcpParseIssueTexts(t, server).join(' ');
+      return { key: index + ':' + name, blocked: blocked || undefined, generatedName,
+        draft: { ...blankMcpDraft(), name, transport: server.transport, command: server.command, args: server.args, cwd: server.cwd, url: server.url,
           env: server.env, headers: server.headers, inLibrary: true } };
     });
     setBatchItems(items);
@@ -235,7 +237,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     if (!draft || busy) return;
     if (hasMcpIssues(mcpDraftIssues(draft))) { setShowIssues(true); return; }
     setBusy(true); setDialogError('');
-    const normalized = { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), inLibrary: true, env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
+    const normalized = { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), cwd: mcpCwdOf(draft), inLibrary: true, env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
     try {
       const alreadyPlaced = !!draft.id && placements.some((item) => item.definitionId === draft.id);
       if (remoteTargetId) {
@@ -366,7 +368,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
 
   const needle = search.trim().toLowerCase();
   const library = definitions.filter((item) => item.inLibrary !== false).sort(byName);
-  const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
+  const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.cwd ?? ''} ${item.url ?? ''}`.toLowerCase().includes(needle));
 
   const handledSpotlight = useRef<number | null>(null);
   useEffect(() => {
@@ -405,13 +407,13 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           const places = placements.filter(entry => entry.definitionId === item.id);
           const summary = mcpSummary(item);
           return <li className={styles.row} data-mcp-id={item.id} data-placed={places.length > 0 || undefined} data-spotlight={spotlight?.id === item.id || undefined} key={item.id}>
-            <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={18} /></span>
+            <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={isRemoteMcp(item.transport) ? 'globe' : 'terminal'} size={18} /></span>
             <div className={styles.main}>
               <strong>{item.name}</strong>
-              <Badge className={styles.transport} tone={item.transport === 'http' ? 'info' : 'neutral'}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</Badge>
+              <Badge className={styles.transport} tone={isRemoteMcp(item.transport) ? 'info' : 'neutral'}>{mcpTransportBadge(item.transport)}</Badge>
             </div>
             <Badge className={styles.count} tone={places.length ? 'accent' : 'neutral'} dot={places.length > 0}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</Badge>
-            <code className={styles.command} title={summary}>{summary || t(item.transport === 'http' ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
+            <code className={styles.command} title={summary}>{summary || t(isRemoteMcp(item.transport) ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
             <div className={styles.foot}>
               <ScopeMarks className={styles.marks} contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
                 if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
@@ -476,7 +478,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           <div className={styles.editorForm}>
             <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
           </div>
-          {!remoteTargetId && <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} />}
+          {!remoteTargetId && <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.cwd, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} />}
         </div>
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">
@@ -489,7 +491,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       </>}
     </GuideDialog>
     <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchLibraryHint')} onClose={() => void closeEditor()}>
-      {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)}
+      {batchItems && <McpBatchImport items={batchItems} reservedNames={definitions.map(item => item.name)} onCancel={() => setBatchItems(null)}
         onPreview={value => native.previewMcpDraft(value, [])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: true, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
         onDefinitionSaved={result => { keepDefinition(result.definition); setNotice(t('library.resources.saved')); }}

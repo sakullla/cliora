@@ -314,7 +314,7 @@ impl CliAdapter for Devin {
                 map.insert("transport".into(), json!("stdio"));
                 map
             }
-            McpTransport::Http => {
+            McpTransport::Http | McpTransport::Sse => {
                 let mut map = mcp::http_doc(definition, existing, "headers");
                 map.insert("transport".into(), json!("http"));
                 map
@@ -614,6 +614,7 @@ mod tests {
         McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
+            cwd: String::new(),
             transport,
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],

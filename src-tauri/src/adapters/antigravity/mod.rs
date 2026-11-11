@@ -196,9 +196,13 @@ impl CliAdapter for Antigravity {
         }
         let map = match definition.transport {
             McpTransport::Stdio => {
-                // stdio shape: command/args/env (+ preserved cwd and other
-                // native keys the CLI owns).
-                mcp::stdio_doc_with_env(definition, existing, "env")
+                // stdio shape: command/args/env/cwd (+ other native keys the CLI owns).
+                let mut map = mcp::stdio_doc_with_env(definition, existing, "env");
+                mcp::apply_cwd(&mut map, definition);
+                map
+            }
+            McpTransport::Sse => {
+                return Err("Antigravity 没有已确认的旧版 HTTP+SSE 映射，未改写为 Streamable HTTP".into());
             }
             McpTransport::Http => {
                 // Remote shape: serverUrl + headers; the oauth/trust fields of
@@ -216,6 +220,9 @@ impl CliAdapter for Antigravity {
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会移除原生条目，Cliora 中的定义仍保留")
+    }
+    fn mcp_supports_cwd(&self) -> bool {
+        true
     }
     fn supports_skills(&self) -> bool {
         true
@@ -455,6 +462,7 @@ mod tests {
         McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
+            cwd: String::new(),
             transport,
             command: "npx -y example-mcp".into(),
             args: Vec::new(),
@@ -604,9 +612,12 @@ mod tests {
             .unwrap();
         let parsed = crate::native::format::parse(FileKind::Json, MCP_FIXTURE).unwrap();
         let entries = Antigravity.mcp_entries(&parsed, &location).unwrap();
-        // stdio: command/args split like Grok/Codex, env map, preserved cwd.
+        // stdio: command/args split like Grok/Codex, env map, cwd set from the definition.
+        let mut with_cwd = definition(McpTransport::Stdio);
+        with_cwd.cwd = "C:\\tools\\example".into();
+        assert!(Antigravity.mcp_supports_cwd());
         let stdio = Antigravity
-            .mcp_document(&definition(McpTransport::Stdio), true, Some(&entries["example-stdio"]))
+            .mcp_document(&with_cwd, true, Some(&entries["example-stdio"]))
             .unwrap()
             .unwrap();
         assert_eq!(stdio["command"], "npx");
@@ -614,6 +625,14 @@ mod tests {
         assert_eq!(stdio["env"]["EXAMPLE_MODE"], "fixture");
         assert_eq!(stdio["cwd"], "C:\\tools\\example");
         assert!(stdio.get("url").is_none(), "stdio 条目不带远程键");
+        // An empty cwd clears the native working directory; legacy SSE has no mapping.
+        let cleared = Antigravity
+            .mcp_document(&definition(McpTransport::Stdio), true, Some(&entries["example-stdio"]))
+            .unwrap()
+            .unwrap();
+        assert!(cleared.get("cwd").is_none());
+        assert!(!Antigravity.mcp_supports_sse());
+        assert!(Antigravity.mcp_document(&definition(McpTransport::Sse), true, None).is_err());
         // Remote: serverUrl + headers; the native oauth flag survives.
         let remote = Antigravity
             .mcp_document(&definition(McpTransport::Http), true, Some(&entries["example-remote"]))

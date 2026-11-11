@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isSensitiveKey, isValueReference, mcpCommandLine } from '../../lib/mcp';
+import { isRemoteMcp, isSensitiveKey, isValueReference, mcpCommandLine, mcpTransportBadge } from '../../lib/mcp';
 import type { McpDefinition, NativeMcpEntry } from '../../types/resources';
 import { Icon } from '../Icon';
 import styles from './McpDetails.module.css';
@@ -26,18 +26,20 @@ export function McpDetails({ item, children, statusInHeader = false }: { item: M
   const enabled = 'enabled' in item ? item.enabled : null;
   return <div className={styles.details}>
     <div className={styles.summary}>
-      {!statusInHeader && <span className={styles.transport} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={15} />{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>}
+      {!statusInHeader && <span className={styles.transport} data-transport={item.transport}><Icon name={isRemoteMcp(item.transport) ? 'globe' : 'terminal'} size={15} />{mcpTransportBadge(item.transport)}</span>}
       {enabled !== null && !statusInHeader && <span className={styles.enabled} data-on={enabled || undefined}>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>}
       {'protectedValues' in item && item.protectedValues && <span className={styles.protected}><Icon name="lock" size={12} />{t('tools.mcp.detailProtected')}</span>}
-      <span className={styles.commandPreview} title={mcpCommandLine(item.command, item.args) || item.url || ''}><code>{item.transport === 'http' ? item.url || '—' : mcpCommandLine(item.command, item.args) || '—'}</code></span>
+      <span className={styles.commandPreview} title={mcpCommandLine(item.command, item.args) || item.url || ''}><code>{isRemoteMcp(item.transport) ? item.url || '—' : mcpCommandLine(item.command, item.args) || '—'}</code></span>
     </div>
     <section className={styles.section}>
       <h4>{t('library.resources.connectionSection')}</h4>
       <dl className={styles.fields}>
         <div><dt>{t('tools.mcp.name')}</dt><dd>{item.name}</dd></div>
+        <div><dt>{t('tools.mcp.type')}</dt><dd>{t('tools.mcp.transportName.' + item.transport)}</dd></div>
         {item.transport === 'stdio' ? <>
           <div><dt>{t('tools.mcp.command')}</dt><dd><code>{item.command || '—'}</code></dd></div>
           <div><dt>{t('tools.mcp.args')}</dt><dd>{item.args.length ? <ol className={styles.args}>{item.args.map((arg, index) => <li key={index}><code>{arg}</code></li>)}</ol> : '—'}</dd></div>
+          <div><dt>{t('tools.mcp.cwd')}</dt><dd><code>{item.cwd?.trim() || '—'}</code></dd></div>
         </> : <div><dt>{t('tools.mcp.urlAria')}</dt><dd><code>{item.url || '—'}</code></dd></div>}
       </dl>
     </section>

@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { mcpCommandLine, mcpDraftIssues, parseMcpServerCollection, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { isRemoteMcp, mcpCommandLine, mcpDraftIssues, parseMcpServerCollection, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { writeClipboard } from '../../lib/clipboard';
 import type { McpDraft, McpTransport } from '../../types/resources';
 import { Icon } from '../Icon';
@@ -53,6 +53,8 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   const commandIssue = showIssues ? issues.command : undefined;
   const urlIssue = showIssues || (urlBlurred && draft.url.trim()) ? issues.url : undefined;
   const preview = draft.transport === 'stdio' ? mcpCommandLine(draft.command, draft.args) : '';
+  const cardOn = (value: McpTransport) => value === 'stdio' ? draft.transport === 'stdio' : isRemoteMcp(draft.transport);
+  const cwd = draft.transport === 'stdio' ? (draft.cwd ?? '').trim() : '';
 
   function imported(parsed: McpParsedServer[], source: string) {
     const needsCorrection = onImport?.(parsed, source) ?? false;
@@ -99,11 +101,13 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
       {nameIssue && <small id={`${id}-name`} className={styles.fieldError}>{t(`tools.mcp.issue.${nameIssue}`)}</small>}
     </label>
     <div className={styles.typeField}><span>{t('tools.mcp.type')}</span>
-      <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')} onKeyDown={navigateChoices}>{transports.map((item) => <button key={item.value} type="button" role="radio" aria-checked={draft.transport === item.value} tabIndex={draft.transport === item.value ? 0 : -1} aria-label={item.label} aria-describedby={`${id}-${item.value}`} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value })}>
+      <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')} onKeyDown={navigateChoices}>{transports.map((item) => <button key={item.value} type="button" role="radio" aria-checked={cardOn(item.value)} tabIndex={cardOn(item.value) ? 0 : -1} aria-label={item.label} aria-describedby={`${id}-${item.value}`} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value === 'http' && isRemoteMcp(draft.transport) ? draft.transport : item.value })}>
         <span className={styles.typeIcon}><Icon name={item.icon} size={16} /></span>
         <span className={styles.typeText}><strong>{t(`tools.mcp.transportCard.${item.value}.title`)}<code>{item.label}</code></strong><small id={`${id}-${item.value}`}>{t(`tools.mcp.transportCard.${item.value}.detail`)}</small></span>
         <span className={styles.typeCheck} aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span>
       </button>)}</div>
+      {isRemoteMcp(draft.transport) && <div className={styles.remoteKind} role="radiogroup" aria-label={t('tools.mcp.remoteKind')} onKeyDown={navigateChoices}>{(['http', 'sse'] as const).map((kind) => <button key={kind} type="button" role="radio" aria-checked={draft.transport === kind} tabIndex={draft.transport === kind ? 0 : -1} disabled={disabled} onClick={() => onChange({ ...draft, transport: kind })}>{t('tools.mcp.transportName.' + kind)}</button>)}</div>}
+      {draft.transport === 'sse' && <p className={styles.legacyNote} role="note">{t('tools.mcp.sseNote')}</p>}
     </div>
     {draft.transport === 'stdio' ? <>
       <label className={styles.field}>{t('tools.mcp.command')}
@@ -111,9 +115,13 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
         {commandIssue && <small id={`${id}-command`} className={styles.fieldError}>{t(`tools.mcp.issue.${commandIssue}`)}</small>}
       </label>
       <KeyValueRows single label={t('tools.mcp.args')} rows={draft.args.length ? draft.args.map((value) => ({ key: '', value })) : [{ key: '', value: '' }]} disabled={disabled} onChange={(rows) => onChange({ ...draft, args: rows.map((row) => row.value) })} valuePlaceholder={t('tools.mcp.argPlaceholder')} />
+      <label className={styles.field}>{t('tools.mcp.cwd')}
+        <input className={styles.mono} aria-label={t('tools.mcp.cwd')} value={draft.cwd ?? ''} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, cwd: event.target.value })} placeholder={t('tools.mcp.cwdPlaceholder')} />
+      </label>
       {preview && <div className={styles.preview}>
         <span className={styles.previewLabel}><Icon name="terminal" size={13} />{t('tools.mcp.commandPreview')}</span>
         <code>{preview}</code>
+        {cwd && <small className={styles.previewCwd}><span>{t('tools.mcp.cwd')}</span><code>{cwd}</code></small>}
         <button type="button" className={styles.previewCopy} data-copied={copied || undefined} aria-label={copied ? t('tools.mcp.commandCopied') : t('tools.mcp.copyCommand')} title={t('tools.mcp.copyCommand')} onClick={() => void writeClipboard(preview).then(ok => setCopied(ok))}><Icon name={copied ? 'check' : 'copy'} size={14} /></button>
       </div>}
       <KeyValueRows maskSensitive label={t('tools.mcp.env')} rows={envRows} disabled={disabled} onChange={onEnvRowsChange} keyPlaceholder={t('tools.mcp.envKeyPlaceholder')} valuePlaceholder={t('tools.mcp.envValuePlaceholder')} />

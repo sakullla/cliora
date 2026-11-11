@@ -37,7 +37,7 @@ fn sample(db: &Database) -> McpDefinition {
         McpDraft {
             id: None,
             name: "example".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
@@ -327,7 +327,7 @@ fn literal_mcp_credential_is_saved_and_visible() {
         McpDraft {
             id: None,
             name: "remote".into(),
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
@@ -366,7 +366,7 @@ fn literal_mcp_credential_is_saved_and_visible() {
         McpDraft {
             id: None,
             name: "literal".into(),
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
@@ -399,7 +399,7 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
         McpDraft {
             id: None,
             name: "db".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["server".into()],
             url: String::new(),
@@ -428,7 +428,7 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
         McpDraft {
             id: Some(saved.id.clone()),
             name: "db".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["server".into()],
             url: String::new(),
@@ -578,6 +578,7 @@ fn preview_is_bound_to_definition_version_scope_and_target_content() {
             id: Some(definition.id.clone()),
             expected_version: Some(definition.version),
             name: definition.name.clone(),
+            cwd: String::new(),
             transport: definition.transport,
             command: "different-command".into(),
             args: definition.args.clone(),
@@ -692,7 +693,7 @@ fn opencode_v2_remote_writes_servers_shape_and_flips_disabled() {
         McpDraft {
             id: None,
             name: "example".into(),
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
@@ -874,7 +875,7 @@ fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
         McpDraft {
             id: None,
             name: "chrome-devtools-mcp".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx -y chrome-devtools-mcp@latest".into(),
             args: vec![],
             url: String::new(),
@@ -900,7 +901,7 @@ fn env_order_is_preserved_from_save_to_native_write() {
         McpDraft {
             id: None,
             name: "ordered".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["-y".into(), "ordered-mcp".into()],
             url: String::new(),
@@ -954,7 +955,7 @@ fn reordering_env_keys_rewrites_the_native_file_in_the_new_order() {
             McpDraft {
                 id,
                 name: "reorder".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "npx".into(),
                 args: vec!["-y".into(), "reorder-mcp".into()],
                 url: String::new(),
@@ -1026,7 +1027,7 @@ fn list_orders_by_name_regardless_of_update_time() {
         serde_json::to_string(&McpDefinition {
             id: id.into(),
             name: name.into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec![],
             url: String::new(),
@@ -1101,6 +1102,7 @@ fn list_orders_by_name_regardless_of_update_time() {
         McpDraft {
             id: Some(saved.id.clone()),
             name: saved.name.clone(),
+            cwd: String::new(),
             transport: saved.transport,
             command: "updated-runner".into(),
             args: saved.args.clone(),
@@ -1132,7 +1134,7 @@ fn export_masks_literal_secrets_and_keeps_reference_and_plain_values() {
         McpDraft {
             id: None,
             name: "stdio-export".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "npx".into(),
             args: vec!["-y".into(), "stdio-mcp".into()],
             url: String::new(),
@@ -1177,7 +1179,7 @@ fn export_http_masks_headers_and_unknown_ids_error() {
         McpDraft {
             id: None,
             name: "http-export".into(),
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             command: String::new(),
             args: vec![],
             url: "https://example.com/mcp".into(),
@@ -1209,4 +1211,140 @@ fn export_http_masks_headers_and_unknown_ids_error() {
         "MCP 定义不存在",
         "不存在的定义返回明确错误"
     );
+}
+
+fn interop_draft(name: &str, transport: McpTransport) -> McpDraft {
+    let remote = transport != McpTransport::Stdio;
+    McpDraft {
+        id: None,
+        name: name.into(),
+        cwd: String::new(),
+        transport,
+        command: if remote { String::new() } else { "npx".into() },
+        args: if remote { Vec::new() } else { vec!["-y".into(), "example-mcp".into()] },
+        url: if remote { "https://mcp.example.com/mcp".into() } else { String::new() },
+        env: IndexMap::new(),
+        headers: IndexMap::new(),
+        in_library: true,
+        expected_version: None,
+    }
+}
+
+#[test]
+fn legacy_rows_default_cwd_and_keep_existing_transport_values() {
+    let legacy = r#"{"id":"a","name":"old","transport":"http","command":"","args":[],"url":"https://x.example/mcp","env":{},"headers":{},"version":1}"#;
+    let parsed: McpDefinition = serde_json::from_str(legacy).unwrap();
+    assert_eq!(parsed.cwd, "");
+    assert_eq!(parsed.transport, McpTransport::Http);
+    let stdio: McpDefinition = serde_json::from_str(&legacy.replace("\"http\"", "\"stdio\"")).unwrap();
+    assert_eq!(stdio.transport, McpTransport::Stdio);
+    let sse: McpDefinition = serde_json::from_str(&legacy.replace("\"http\"", "\"sse\"")).unwrap();
+    assert_eq!(sse.transport, McpTransport::Sse);
+}
+
+#[test]
+fn cwd_is_validated_and_exported_with_remote_type() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let mut remote_cwd = interop_draft("remote", McpTransport::Sse);
+    remote_cwd.cwd = "/work".into();
+    assert!(save_definition(&db, remote_cwd).unwrap_err().contains("工作目录"));
+    let mut bad = interop_draft("bad", McpTransport::Stdio);
+    bad.cwd = "/work\n".into();
+    assert!(save_definition(&db, bad).is_err());
+
+    let mut local = interop_draft("local", McpTransport::Stdio);
+    local.cwd = "  /work/app ".into();
+    local.env = IndexMap::from([("API_TOKEN".into(), "literal".into())]);
+    let local = save_definition(&db, local).unwrap();
+    assert_eq!(local.cwd, "/work/app");
+    let exported: Value = serde_json::from_str(&export_definition(&db, &local.id).unwrap()).unwrap();
+    assert_eq!(exported["mcpServers"]["local"]["cwd"], "/work/app");
+    assert_eq!(exported["mcpServers"]["local"]["env"]["API_TOKEN"], "${API_TOKEN}");
+
+    for (name, transport, kind) in [("legacy", McpTransport::Sse, "sse"), ("modern", McpTransport::Http, "http")] {
+        let saved = save_definition(&db, interop_draft(name, transport)).unwrap();
+        let exported: Value = serde_json::from_str(&export_definition(&db, &saved.id).unwrap()).unwrap();
+        assert_eq!(exported["mcpServers"][name]["type"], kind);
+        assert_eq!(exported["mcpServers"][name]["url"], "https://mcp.example.com/mcp");
+    }
+}
+
+#[test]
+fn unsupported_targets_report_cwd_and_sse_without_touching_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let pi_file = temp.path().join(".pi/agent/mcp.json");
+    std::fs::create_dir_all(pi_file.parent().unwrap()).unwrap();
+    let original = "{\"mcpServers\":{\"other\":{\"command\":\"echo\",\"args\":[]}}}";
+    std::fs::write(&pi_file, original).unwrap();
+    let mut with_cwd = interop_draft("local", McpTransport::Stdio);
+    with_cwd.cwd = "/work/app".into();
+    let local = save_definition(&db, with_cwd).unwrap();
+    let legacy = save_definition(&db, interop_draft("legacy", McpTransport::Sse)).unwrap();
+    for definition in [&local, &legacy] {
+        let preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![target("pi", true)]);
+        assert_eq!(preview[0].status, "unsupported", "{preview:?}");
+        let result = distribute(&db, &keys, &registry, temp.path(), &definition.id, vec![target("pi", true)]);
+        assert_eq!(result[0].status, "unsupported", "{result:?}");
+        assert_eq!(std::fs::read_to_string(&pi_file).unwrap(), original);
+    }
+}
+
+#[test]
+fn antigravity_cwd_round_trips_clears_and_rejects_sse() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let file = temp.path().join(".gemini/config/mcp_config.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{\"mcpServers\":{\"other\":{\"command\":\"echo\"}}}").unwrap();
+    let mut draft = interop_draft("local", McpTransport::Stdio);
+    draft.cwd = "/work/app".into();
+    let saved = save_definition(&db, draft).unwrap();
+    let written = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![target("antigravity", true)]));
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let entries = list_native(&db, &registry, temp.path(), &target("antigravity", true)).unwrap();
+    assert_eq!(entries.iter().find(|entry| entry.name == "local").unwrap().cwd, "/work/app");
+    assert!(entries.iter().any(|entry| entry.name == "other"));
+
+    let mut cleared = interop_draft("local", McpTransport::Stdio);
+    cleared.id = Some(saved.id.clone());
+    cleared.expected_version = Some(saved.version);
+    let cleared = save_definition(&db, cleared).unwrap();
+    let written = distribute(&db, &keys, &registry, temp.path(), &cleared.id, previewed(&db, &registry, temp.path(), &cleared.id, vec![target("antigravity", true)]));
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let entries = list_native(&db, &registry, temp.path(), &target("antigravity", true)).unwrap();
+    assert_eq!(entries.iter().find(|entry| entry.name == "local").unwrap().cwd, "");
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("cwd"));
+
+    let before = std::fs::read_to_string(&file).unwrap();
+    let legacy = save_definition(&db, interop_draft("legacy", McpTransport::Sse)).unwrap();
+    let preview = preview_targets(&db, &registry, temp.path(), &legacy.id, vec![target("antigravity", true)]);
+    assert_eq!(preview[0].status, "unsupported", "{preview:?}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}
+
+#[test]
+fn minimax_maps_sse_and_streamable_http_and_reads_them_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let file = temp.path().join(".minimax/mcp.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{\"mcpServers\":{}}").unwrap();
+    for (name, transport, kind) in [("legacy", McpTransport::Sse, "sse"), ("modern", McpTransport::Http, "streamable-http")] {
+        let saved = save_definition(&db, interop_draft(name, transport)).unwrap();
+        let written = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![target("minimax_code", true)]));
+        assert_eq!(written[0].status, "written", "{written:?}");
+        let native: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(native["mcpServers"][name]["type"], kind);
+    }
+    let entries = list_native(&db, &registry, temp.path(), &target("minimax_code", true)).unwrap();
+    assert_eq!(entries.iter().find(|entry| entry.name == "legacy").unwrap().transport, McpTransport::Sse);
+    assert_eq!(entries.iter().find(|entry| entry.name == "modern").unwrap().transport, McpTransport::Http);
 }

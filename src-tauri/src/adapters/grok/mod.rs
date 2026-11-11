@@ -151,7 +151,7 @@ impl CliAdapter for Grok {
     ) -> Result<Option<Value>, String> {
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         map.insert("enabled".into(), serde_json::json!(enabled));
         Ok(Some(Value::Object(map)))

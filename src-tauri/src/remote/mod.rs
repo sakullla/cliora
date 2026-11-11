@@ -420,8 +420,30 @@ fn materialize_remote_mcp(target: &RemoteTarget, tool_id: &str, value: &serde_js
     let path = mcp_seed_path(tool_id).ok_or_else(|| RemoteError::Storage("适配器未声明远程 MCP 能力".into()))?;
     let expr = remote_path_expr(&path);
     let raw = run_command(target, &format!("if [ -f {expr} ]; then cat {expr}; fi"))?;
+    check_remote_mcp_cwd(adapter.mcp_supports_cwd(), adapter.parse_remote_mcp(&raw.stdout).ok().as_ref(), value).map_err(RemoteError::Storage)?;
     let text = adapter.render_remote_mcp(&raw.stdout, value).map_err(RemoteError::Storage)?;
     prepare_upload(&[], &[(path, text)])
+}
+
+/// Capability gate for remote MCP `cwd`, kept in this shared service so the
+/// codecs stay format-only. A CLI without a confirmed cwd mapping may keep a
+/// cwd already on disk (unrelated saves still work) but a new or changed one
+/// is refused by entry name instead of being written to an unknown schema.
+fn check_remote_mcp_cwd(supports_cwd: bool, on_disk: Option<&serde_json::Value>, value: &serde_json::Value) -> Result<(), String> {
+    if supports_cwd { return Ok(()); }
+    let existing = |name: &str| on_disk
+        .and_then(|doc| doc.get("entries")).and_then(serde_json::Value::as_array)
+        .and_then(|items| items.iter().find(|item| item.get("name").and_then(serde_json::Value::as_str) == Some(name)))
+        .and_then(|item| item.get("cwd")).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+    for item in value.get("entries").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        let Some(name) = item.get("name").and_then(serde_json::Value::as_str) else { continue; };
+        if matches!(item.get("transport").and_then(serde_json::Value::as_str), Some("http" | "sse")) { continue; }
+        let cwd = item.get("cwd").and_then(serde_json::Value::as_str).unwrap_or_default();
+        if !cwd.is_empty() && cwd != existing(name) {
+            return Err(format!("MCP「{name}」的工作目录（cwd）此 CLI 没有已确认的映射，未写入"));
+        }
+    }
+    Ok(())
 }
 
 /// Merge MCP servers into an existing TOML document.
@@ -2861,6 +2883,43 @@ mod tests {
         assert_eq!(store["definitions"].as_array().unwrap().len(), 1);
         assert_eq!(store["definitions"][0]["name"], "node_repl");
         assert!(!parsed.to_string().contains("chrome-devtools"));
+    }
+
+    fn remote_cwd_save(tool: &str, disk: &str, entries: serde_json::Value) -> Result<String, String> {
+        let registry = crate::adapters::Registry::builtins();
+        let adapter = registry.get(tool).unwrap();
+        let value = serde_json::json!({"entries": entries});
+        check_remote_mcp_cwd(adapter.mcp_supports_cwd(), adapter.parse_remote_mcp(disk).ok().as_ref(), &value)?;
+        adapter.render_remote_mcp(disk, &value).map(|bytes| String::from_utf8(bytes).unwrap())
+    }
+
+    #[test]
+    fn remote_cwd_fails_by_name_on_undeclared_adapters_and_keeps_unchanged_cwd() {
+        let json_disk = r#"{"mcpServers":{"old":{"command":"node","cwd":"/w"}}}"#;
+        let toml_disk = "[mcp_servers.old]\ncommand = \"node\"\ncwd = \"/w\"\n";
+        let old = serde_json::json!({"name": "old", "transport": "stdio", "command": "node", "cwd": "/w"});
+        for (tool, disk) in [("claude_code", json_disk), ("codex", toml_disk)] {
+            let fresh = serde_json::json!({"name": "fresh", "transport": "stdio", "command": "x", "cwd": "/n"});
+            let error = remote_cwd_save(tool, disk, serde_json::json!([old, fresh])).unwrap_err();
+            assert!(error.contains("「fresh」"), "{tool}: {error}");
+            let changed = serde_json::json!({"name": "old", "transport": "stdio", "command": "node", "cwd": "/other"});
+            assert!(remote_cwd_save(tool, disk, serde_json::json!([changed])).unwrap_err().contains("「old」"));
+            let other = serde_json::json!({"name": "other", "transport": "stdio", "command": "y"});
+            let kept = remote_cwd_save(tool, disk, serde_json::json!([old, other])).unwrap();
+            assert!(kept.contains("/w") && !kept.contains("/n"), "{tool}: {kept}");
+        }
+    }
+
+    #[test]
+    fn remote_cwd_is_written_when_the_adapter_declares_support() {
+        // Antigravity declares cwd but has no remote document; the gate is the
+        // shared decision, the codecs then write the field.
+        let value = serde_json::json!({"entries": [{"name": "fresh", "transport": "stdio", "command": "x", "cwd": "/n"}]});
+        check_remote_mcp_cwd(true, None, &value).unwrap();
+        let json = String::from_utf8(crate::adapters::remote_resources::render_json_mcp("{}", &value, "mcpServers", false).unwrap()).unwrap();
+        assert!(json.contains("\"cwd\": \"/n\""));
+        let toml = String::from_utf8(crate::adapters::remote_resources::render_toml_mcp_table("", &value, "mcp_servers").unwrap()).unwrap();
+        assert!(toml.contains("cwd = \"/n\""));
     }
 
     #[test]

@@ -193,7 +193,7 @@ impl CliAdapter for Cline {
         }
         let map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         Ok(Some(Value::Object(map)))
     }
@@ -482,7 +482,7 @@ mod tests {
         let definition = McpDefinition {
             id: "fixture-definition".into(),
             name: "example".into(),
-            transport: McpTransport::Stdio,
+            cwd: String::new(), transport: McpTransport::Stdio,
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
@@ -513,7 +513,7 @@ mod tests {
             "停用会移除原生条目（条目内部停用键未取证），Cliora 中的定义仍保留"
         );
         let remote_definition = McpDefinition {
-            transport: McpTransport::Http,
+            cwd: String::new(), transport: McpTransport::Http,
             url: "https://mcp.example.com/sse".into(),
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition

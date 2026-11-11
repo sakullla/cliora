@@ -207,7 +207,7 @@ impl CliAdapter for KimiCode {
     ) -> Result<Option<Value>, String> {
         let mut map = match definition.transport {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Http | McpTransport::Sse => mcp::http_doc(definition, existing, "headers"),
         };
         if definition.transport == McpTransport::Stdio { mcp_command::normalize(&mut map)?; }
         map.insert("enabled".into(), json!(enabled));
@@ -879,7 +879,7 @@ mod tests {
             mcp::McpDraft {
                 id: None,
                 name: "example".into(),
-                transport: McpTransport::Stdio,
+                cwd: String::new(), transport: McpTransport::Stdio,
                 command: "fixture-runner".into(),
                 args: vec!["-y".into(), "example-mcp".into()],
                 url: String::new(),

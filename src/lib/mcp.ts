@@ -2,12 +2,41 @@ import type { McpDefinition, McpDraft, McpTransport } from '../types/resources';
 
 export type KeyValueRow = { key: string; value: string };
 
+/** `http` is Streamable HTTP; `sse` is the legacy standalone HTTP+SSE transport kept only for configuration compatibility. */
+export function isRemoteMcp(transport: McpTransport): boolean {
+  return transport !== 'stdio';
+}
+
+/** Compact badge text. The long names live in `tools.mcp.transportName.*`. */
+export function mcpTransportBadge(transport: McpTransport): string {
+  return transport === 'stdio' ? 'stdio' : transport === 'sse' ? 'SSE' : 'HTTP';
+}
+
+/** Trims the working directory and drops it for remote transports, which have none. */
+export function mcpCwdOf(draft: Pick<McpDraft, 'transport' | 'cwd'>): string {
+  return draft.transport === 'stdio' ? (draft.cwd ?? '').trim() : '';
+}
+
+const DEFAULT_MCP_NAME = 'mcp-server';
+
+/** First `mcp-server`, `mcp-server-2`, … not in `taken`; always a valid backend name (ASCII, within 80 bytes). */
+export function mcpDefaultName(taken: Iterable<string>): string {
+  const used = new Set(taken);
+  let index = 1;
+  let candidate = DEFAULT_MCP_NAME;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `${DEFAULT_MCP_NAME}-${index}`;
+  }
+  return candidate;
+}
+
 export function blankMcpDraft(): McpDraft {
-  return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: true, expectedVersion: null };
+  return { id: null, name: '', transport: 'stdio', command: '', args: [], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, expectedVersion: null };
 }
 
 export function mcpDraftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
+  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, cwd: item.cwd ?? '', url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
 }
 
 export function keyValueRowsOf(value: Record<string, string>): KeyValueRow[] {
@@ -88,7 +117,7 @@ export function mcpDraftIssues(draft: Pick<McpDraft, 'name' | 'transport' | 'com
   if (!name) issues.name = 'nameEmpty';
   else if (!MCP_NAME_PATTERN.test(name)) issues.name = 'nameInvalid';
   if (draft.transport === 'stdio' && !draft.command.trim()) issues.command = 'commandEmpty';
-  if (draft.transport === 'http') {
+  if (isRemoteMcp(draft.transport)) {
     const url = draft.url.trim();
     if (!url) issues.url = 'urlEmpty';
     else {
@@ -125,10 +154,10 @@ export function mcpCommandLine(command: string, args: string[]): string {
 }
 
 export function mcpSummary(item: { transport: McpTransport; command: string; args: string[]; url: string | null }): string {
-  return item.transport === 'http' ? (item.url ?? '').trim() : mcpCommandLine(item.command, item.args);
+  return isRemoteMcp(item.transport) ? (item.url ?? '').trim() : mcpCommandLine(item.command, item.args);
 }
 
-export type McpParseIssue = 'serverInvalid' | 'argsInvalid' | 'envInvalid' | 'headersInvalid' | 'cwdUnsupported';
+export type McpParseIssue = 'serverInvalid' | 'argsInvalid' | 'envInvalid' | 'headersInvalid' | 'cwdInvalid' | 'transportUnknown' | 'fieldUnknown';
 
 export type McpParsedServer = {
   total: number;
@@ -136,7 +165,12 @@ export type McpParsedServer = {
   transport: McpTransport;
   command: string;
   args: string[];
+  cwd: string;
   url: string;
+  /** Keys the server spec carries that Cliora cannot represent; kept so the diagnostic can name them. */
+  unknownFields: string[];
+  /** Raw `type`/`transport` text when it names no known transport. */
+  unknownTransport: string;
   env: Record<string, string>;
   headers: Record<string, string>;
   invalid: McpParseIssue[];
@@ -161,6 +195,9 @@ function plainObject(value: unknown): value is Record<string, unknown> {
 }
 
 const MCP_SERVER_FIELDS = new Set(['command', 'args', 'env', 'cwd', 'url', 'serverUrl', 'headers', 'type', 'transport']);
+
+// Normalized `type`/`transport` spellings (case, '-', '_' and spaces ignored) that name a known transport.
+const KNOWN_TRANSPORTS = new Map<string, McpTransport>([['stdio', 'stdio'], ['http', 'http'], ['streamablehttp', 'http'], ['streamable', 'http'], ['sse', 'sse']]);
 
 function looksLikeServer(value: unknown): value is Record<string, unknown> {
   return plainObject(value)
@@ -237,21 +274,41 @@ export function parseMcpServerCollection(text: string): McpParsedServer[] {
     const value = ccSwitchRecord(entry) ? entry.server : entry;
     const server = plainObject(value) ? value : {};
     if (!plainObject(value)) invalid.push('serverInvalid');
-    // Cliora has no working-directory field; keep the entry visible but not importable as is.
-    if (server.cwd !== undefined && !(typeof server.cwd === 'string' && !server.cwd.trim())) invalid.push('cwdUnsupported');
+    // A non-empty cwd is a real field. It is kept for local commands and reported when a remote entry carries it.
+    let cwd = '';
+    if (server.cwd !== undefined) {
+      if (typeof server.cwd !== 'string') invalid.push('cwdInvalid');
+      else cwd = server.cwd.trim();
+    }
     const command = typeof server.command === 'string' ? server.command : '';
     const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
-    const hint = typeof server.type === 'string' ? server.type : typeof server.transport === 'string' ? server.transport : '';
-    const transport: McpTransport = url || /^(http|sse|streamable)/i.test(hint) ? 'http' : 'stdio';
+    const rawHint = server.type !== undefined ? server.type : server.transport;
+    const hint = typeof rawHint === 'string' ? rawHint : '';
+    let transport: McpTransport = url ? 'http' : 'stdio';
+    let unknownTransport = '';
+    if (rawHint !== undefined && typeof rawHint !== 'string') { unknownTransport = String(rawHint); invalid.push('transportUnknown'); }
+    else if (hint.trim()) {
+      const known = KNOWN_TRANSPORTS.get(hint.trim().toLowerCase().replace(/[-_\s]/g, ''));
+      if (known === 'sse' || known === 'http') transport = known;
+      else if (!known) { unknownTransport = hint; invalid.push('transportUnknown'); }
+    }
+    if (cwd && transport !== 'stdio') invalid.push('cwdInvalid');
+    const unknownFields = plainObject(value) ? Object.keys(value).filter(key => !MCP_SERVER_FIELDS.has(key)) : [];
+    if (unknownFields.length) invalid.push('fieldUnknown');
     const args = Array.isArray(server.args) ? server.args.filter((item): item is string => typeof item === 'string') : [];
     if (server.args !== undefined && (!Array.isArray(server.args) || server.args.some(item => typeof item !== 'string'))) invalid.push('argsInvalid');
-    return { total, name, transport, command, args, url, env: stringMap(server.env, 'envInvalid', invalid), headers: stringMap(server.headers, 'headersInvalid', invalid), invalid: [...new Set(invalid)] };
+    return { total, name, transport, command, args, cwd, url, unknownFields, unknownTransport, env: stringMap(server.env, 'envInvalid', invalid), headers: stringMap(server.headers, 'headersInvalid', invalid), invalid: [...new Set(invalid)] };
   });
+}
+
+/** Text for each parse diagnostic; `t` is the i18n translate function. */
+export function mcpParseIssueTexts(t: (key: string, options?: Record<string, unknown>) => string, server: Pick<McpParsedServer, 'invalid' | 'unknownFields' | 'unknownTransport'>): string[] {
+  return server.invalid.map(issue => t('tools.mcp.parseIssue.' + issue, { fields: server.unknownFields.join(', '), transport: server.unknownTransport }));
 }
 
 export function applyParsedServer(draft: McpDraft, parsed: McpParsedServer): { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] } {
   return {
-    draft: { ...draft, name: parsed.name || draft.name, transport: parsed.transport, command: parsed.command, args: parsed.args, url: parsed.url },
+    draft: { ...draft, name: parsed.name || draft.name, transport: parsed.transport, command: parsed.command, args: parsed.args, cwd: parsed.cwd, url: parsed.url },
     envRows: editableRowsOf(parsed.env),
     headerRows: editableRowsOf(parsed.headers),
   };
@@ -260,6 +317,6 @@ export function applyParsedServer(draft: McpDraft, parsed: McpParsedServer): { d
 // Single-item compatibility helper for paste targets that intentionally fill one draft.
 export function parseMcpServerJson(text: string): McpParsedServer | null {
   const first = parseMcpServerCollection(text)[0];
-  if (!first || (first.transport === 'http' ? !first.url : !first.command)) return null;
+  if (!first || (isRemoteMcp(first.transport) ? !first.url : !first.command)) return null;
   return first;
 }
