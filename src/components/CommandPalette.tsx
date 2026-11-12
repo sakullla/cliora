@@ -45,6 +45,26 @@ function matchScore(item: CommandItem, needle: string): number {
   return 0;
 }
 
+/** Splits a label into plain and matched runs so the reader sees why a row matched. */
+export function highlightRuns(label: string, query: string): { text: string; hit: boolean }[] {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return [{ text: label, hit: false }];
+  const lower = label.toLowerCase();
+  const hits = new Array<boolean>(label.length).fill(false);
+  for (const token of tokens) {
+    const at = lower.indexOf(token);
+    // toLowerCase keeps length for the scripts used in labels; skip a token when it would not line up.
+    if (at >= 0 && lower.length === label.length) hits.fill(true, at, at + token.length);
+  }
+  const runs: { text: string; hit: boolean }[] = [];
+  for (let index = 0; index < label.length; index += 1) {
+    const last = runs[runs.length - 1];
+    if (last && last.hit === hits[index]) last.text += label[index];
+    else runs.push({ text: label[index], hit: hits[index] });
+  }
+  return runs.length ? runs : [{ text: label, hit: false }];
+}
+
 export function CommandPalette({ open, commands, sourceFailed = false, onRetrySources, onClose }: {
   open: boolean;
   commands: CommandItem[];
@@ -153,7 +173,7 @@ export function CommandPalette({ open, commands, sourceFailed = false, onRetrySo
           <div className="command-item-wrap" data-selected={itemIndex === index || undefined}>
             <button type="button" id={`command-option-${itemIndex}`} role="option" aria-selected={itemIndex === index} className="command-option" onMouseMove={() => setActive(itemIndex)} onClick={() => choose(item)}>
               <span className="command-glyph" aria-hidden="true">{item.toolId ? <ToolIcon toolId={item.toolId} size={18} /> : item.icon ? <Icon name={item.icon} size={16} /> : null}</span>
-              <span className="command-label">{item.label}</span>
+              <span className="command-label">{highlightRuns(item.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text)}</span>
               {item.hint && <small>{item.hint}</small>}
             </button>
             {item.onSecondary && item.secondaryLabel && <button type="button" className="command-secondary" aria-label={`${item.label} · ${item.secondaryLabel}`} title={`${item.secondaryLabel} (Alt+Enter)`} onMouseEnter={() => setActive(itemIndex)} onClick={() => chooseSecondary(item)}>{item.secondaryLabel}</button>}

@@ -893,6 +893,9 @@
 .terminalActions .toolButton[aria-expanded='true'][data-variant] { background: color-mix(in srgb, var(--term-accent) 14%, transparent); color: var(--term-accent); }
 .runningActions:not([data-running]) { visibility: hidden; }
 .runningActions:not([data-running]) + .actionGroup::before { visibility: hidden; }
+/* The hidden group keeps its width so the tools never jump, but the well only frames what is visible. */
+.terminalActions:has(> .runningActions:not([data-running])) { background: transparent; box-shadow: none; }
+.terminalActions:has(> .runningActions:not([data-running])) > .actionGroup:last-child { margin-block: calc(-1 * var(--space-0_5)); margin-right: calc(-1 * var(--space-0_5)); padding: var(--space-0_5); border-radius: var(--radius-lg); background: var(--term-well); box-shadow: inset 0 0 0 1px var(--term-line); }
 /* Quick input is the everyday action: accent ink with a hairline, filled softly while the composer
    is open — the same pressed language as find and split, one step stronger. */
 .terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: color-mix(in srgb, var(--term-accent) 13%, var(--term-raise)); box-shadow: 0 1px 2px var(--term-shadow), inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 24%, transparent); color: var(--term-accent); }
@@ -1501,8 +1504,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .emptyGlyphLine { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-3); color: var(--wb-glyph-ink); font-family: var(--font-mono); font-size: 22px; }
 .emptyGlyphLine b { font-weight: var(--fw-semibold); }
 .emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; }
-.emptyEyebrow { display: inline-flex; align-items: center; gap: var(--space-1_5); margin-top: var(--space-5); padding: 0 var(--space-2_5); border: 1px solid var(--accent-line); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-soft) 80%, var(--surface)); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-bold); letter-spacing: .14em; line-height: 22px; text-transform: uppercase; }
-.emptyHero h2 { margin: var(--space-3) 0 0; color: var(--text); font-family: var(--font-display); font-size: clamp(26px, 2.6vw, 34px); font-weight: var(--fw-bold); letter-spacing: -.8px; line-height: 1.2; text-wrap: balance; }
+.emptyHero h2 { margin: var(--space-5) 0 0; color: var(--text); font-family: var(--font-display); font-size: clamp(26px, 2.6vw, 34px); font-weight: var(--fw-bold); letter-spacing: -.8px; line-height: 1.2; text-wrap: balance; }
 .emptyHero > p { max-width: min(640px, 100%); margin: var(--space-2_5) 0 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.7; text-wrap: pretty; }
 .emptyActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2_5); margin-top: var(--space-3); }
 .emptyActions .emptyAction { min-height: var(--control-h); padding-inline: var(--space-3); border-radius: var(--radius); }
@@ -1740,6 +1742,8 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .stage:has(> .window:not([hidden])) .restoreQueue { max-height: 55%; }
 .restoreQueue:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .restoreQueueHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 26px; padding: 0 var(--space-1_5); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-bold); letter-spacing: .08em; text-transform: uppercase; }
+.restoreQueueCount { margin-left: var(--space-1_5); color: var(--text-3); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.restoreQueueTools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-1_5); letter-spacing: 0; text-transform: none; }
 .restoreRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; padding: var(--space-2) var(--space-2_5); border-radius: var(--radius); }
 .restoreRow:hover { background: var(--surface-2); }
 .restoreRow[data-stage='failed'] { background: color-mix(in srgb, var(--danger-soft) 55%, var(--surface)); }

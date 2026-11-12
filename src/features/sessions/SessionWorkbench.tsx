@@ -727,6 +727,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       .then(() => dropRestoreRow(savedId))
       .catch((value) => setActionError(String(value?.message ?? value)));
   }
+  /** Forgets every failed row at once; rows still waiting keep their own exit. */
+  function forgetFailedRestoreRows() {
+    const failed = restoreRowsRef.current.filter((row) => row.stage === 'failed' && !restoringIds.has(row.saved.id));
+    void Promise.allSettled(failed.map((row) => native.forgetWorkbenchRestore(row.saved.id).then(() => dropRestoreRow(row.saved.id))))
+      .then((results) => {
+        const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (rejected) setActionError(String(rejected.reason?.message ?? rejected.reason));
+      });
+  }
   /** The session list is the authority on what already runs: a saved record that is live must not
    *  keep a pending row, or it would wait forever for a restore that native deliberately skips. */
   function pruneLiveRestoreRows(sessions: WorkbenchSession[]) {
@@ -3251,8 +3260,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         {restoreError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{restoreError}</p></div><Button size="sm" disabled={restoring} onClick={() => void restoreLocalSessions()}>{t('sessions.retryRestore')}</Button></div>}
         {restoreRows.length > 0 && <div className={styles.restoreQueue} role="group" tabIndex={0} aria-label={t('sessions.restoreQueueLabel')} data-restore-queue={restoreRows.length}>
           <div className={styles.restoreQueueHead}>
-            <span>{t('sessions.restoreQueueLabel')}</span>
-            {!scopedSessions.length && terminalTools.length > 0 && <Button size="sm" icon={<Icon name="plus" size={13} />} onClick={() => openNewSessionDialog()}>{t('sessions.newSession')}</Button>}
+            <span>{t('sessions.restoreQueueLabel')}<span className={styles.restoreQueueCount}>{restoreRows.length}</span></span>
+            <span className={styles.restoreQueueTools}>
+              {restoreRows.filter((row) => row.stage === 'failed').length > 1 && <Button size="sm" variant="ghost" onClick={forgetFailedRestoreRows}>{t('sessions.dismissFailedRestores', { count: restoreRows.filter((row) => row.stage === 'failed').length })}</Button>}
+              {!scopedSessions.length && terminalTools.length > 0 && <Button size="sm" icon={<Icon name="plus" size={13} />} onClick={() => openNewSessionDialog()}>{t('sessions.newSession')}</Button>}
+            </span>
           </div>
           {restoreRows.map((row) => {
             const failed = row.stage === 'failed';
@@ -3383,7 +3395,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
                     {/* A remote session that may still run reports the SSH transport's code, not the CLI's: the
                         connection banner explains it, so the title bar does not show it as a failure. */}
-                    {!current.running && current.exitCode != null && !remoteSessionMayExist(current) && <span className={styles.exitCode} data-failed={current.exitCode !== 0 || undefined}>{t('sessions.exitCode', { code: current.exitCode })}</span>}
+                    {/* A clean exit is already said by the ended status and the banner below; only a failure earns room here. */}
+                    {!current.running && current.exitCode != null && current.exitCode !== 0 && !remoteSessionMayExist(current) && <span className={styles.exitCode} data-failed>{t('sessions.exitCode', { code: current.exitCode })}</span>}
                   </div>
                 </div>
               </div>

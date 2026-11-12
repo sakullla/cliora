@@ -621,7 +621,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </button>)}
       </div>
     </Toolbar>
-    <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span><Badge>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</Badge></div>
+    <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span></div>
     {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} />}
     {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} />}
     {(section === 'prompt' || section === 'rule') && <>
