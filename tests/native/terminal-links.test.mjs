@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTerminalLinkCache, findTerminalLinks, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT } from '../../src/features/sessions/terminalLinkDetection.ts';
+import { createTerminalLinkCache, findTerminalLinks, oscTerminalLink, terminalPathContinuation, TERMINAL_LINK_TEXT_LIMIT } from '../../src/features/sessions/terminalLinkDetection.ts';
 
 test('terminal paths retain native separators, Unicode, spaces and source locations', () => {
   const paths = ['C:\\work\\src\\main.ts:12:3', 'C:/work/readme.md', '\\\\server\\share\\file.txt', '\\\\?\\C:\\work\\file.txt', '/tmp/文档.txt', '~/project/', './src/a.ts', '../docs/guide.md', 'src/features/app.tsx(42,3)', 'src/(app)/[id]/page.tsx', 'node_modules/@types/node/index.d.ts', 'README.md', '.env', 'Dockerfile'];
@@ -75,4 +75,21 @@ test('wrapped rows in full-width brackets and Chinese prose hand the native laye
   const single = findTerminalLinks('分析完成（' + expected + '），详见上述文档。');
   assert.equal(single.length, 1);
   assert.equal(single[0].value, expected);
+});
+
+test('a path split by a TUI hard wrap joins only when the next row completes its extension', () => {
+  // Reproduction of the 2026-11-12 report: Codex paints its own wrapped rows, so xterm
+  // reports two independent buffer lines instead of one isWrapped line.
+  const path = 'docs/requirements/2026-11-12-通用工作流可靠性与重复执行优化.md';
+  const cut = path.indexOf('复');
+  assert.equal(terminalPathContinuation(`已生成并通过检查（${path.slice(0, cut)}`, `${path.slice(cut)}）。`), path);
+  assert.equal(terminalPathContinuation('docs/requirements/2026-11-12-通用工作流可靠性与重', '复执行优化.md），详见上述文档。'), path);
+
+  // Complete paths, ordinary prose and fragments without a known final extension stay apart.
+  assert.equal(terminalPathContinuation('see docs/guide.md', '下一行从这里开始。'), null);
+  assert.equal(terminalPathContinuation('目录 docs/requirements', '覆盖六类通用改进及回归验收，'), null);
+  assert.equal(terminalPathContinuation('见 docs/requirements', '没有扩展名'), null);
+  assert.equal(terminalPathContinuation('plain output', 'guide.md'), null);
+  // A tail with trailing prose is not a path cut at the row edge.
+  assert.equal(terminalPathContinuation('see docs/requirements 后面还有文字', '续写.md'), null);
 });

@@ -81,6 +81,26 @@ function pathCandidate(value: string): boolean {
   return /^[\p{L}\p{N}_-][\p{L}\p{N}_.@+ -]*$/u.test(path) && FILE_EXTENSIONS.has(extension(path)) && !PROSE_NAME.test(path);
 }
 
+function completePath(value: string): boolean {
+  const path = value.replace(/(?::\d+(?::\d+)?|\(\d+(?:,\s*\d+)?\))$/, '');
+  return /[\\/]$/.test(path) || FILE_EXTENSIONS.has(extension(path.split(/[\\/]/).pop() ?? ''));
+}
+
+/** Full-screen TUIs wrap text themselves and write each visual row separately, so xterm
+ *  cannot mark the continuation with `isWrapped`. Join a path fragment cut at the end of
+ *  one row only when the next row starts with the token that completes its extension.
+ *  Complete links and ordinary prose never join, so unrelated rows stay separate. */
+export function terminalPathContinuation(tailText: string, headText: string): string | null {
+  const tailMatches = findTerminalLinks(tailText).filter(match => match.kind === 'path' && match.end === tailText.length);
+  const tail = tailMatches.at(-1);
+  if (!tail || completePath(tail.value)) return null;
+  const head = headText.replace(/^[\s\u3000]+/u, '');
+  const next = findTerminalLinks(head)[0];
+  if (!next || next.kind !== 'path' || next.start !== 0) return null;
+  const value = tail.value + next.value;
+  return pathCandidate(value) && completePath(value) ? value : null;
+}
+
 /** Cheap test before any per-cell work: text with none of these cannot hold a link. */
 export function mayContainTerminalLink(text: string): boolean {
   return /[\\/]|\.[\p{L}\p{N}]|\b(?:Dockerfile|Makefile|GNUmakefile|LICENSE|README|AGENTS|SKILL|CLAUDE)\b/u.test(text);

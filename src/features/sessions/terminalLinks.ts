@@ -1,5 +1,5 @@
 import type { IBufferCellPosition, IBufferLine, IBufferRange, IDisposable, ILink, Terminal } from '@xterm/xterm';
-import { createTerminalLinkCache, mayContainTerminalLink, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT, type TerminalLinkMatch } from './terminalLinkDetection';
+import { createTerminalLinkCache, mayContainTerminalLink, oscTerminalLink, TERMINAL_LINK_TEXT_LIMIT, terminalPathContinuation, type TerminalLinkMatch } from './terminalLinkDetection';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalLinks = IDisposable & { dismiss: () => void };
@@ -38,7 +38,7 @@ function logicalRows(term: Terminal, bufferLineNumber: number): { first: number;
   return mayContainTerminalLink(text) ? { first, last } : null;
 }
 
-function readPhysicalLine(term: Terminal, line: IBufferLine, row: number, trimWrapPadding: boolean): PhysicalLine {
+function readPhysicalLine(term: Terminal, line: IBufferLine, row: number, trimWrapPadding: boolean, trimStart = false): PhysicalLine {
   let text = '';
   const columns: number[] = [];
   const ends: number[] = [];
@@ -60,24 +60,69 @@ function readPhysicalLine(term: Terminal, line: IBufferLine, row: number, trimWr
     if (chars) contentLength = text.length;
     column += width;
   }
-  if (!trimWrapPadding || contentLength === text.length) return { row, text, columns, ends };
-  return { row, text: text.slice(0, contentLength), columns: columns.slice(0, contentLength), ends: ends.slice(0, contentLength) };
+  if (trimWrapPadding && contentLength !== text.length) {
+    text = text.slice(0, contentLength);
+    columns.length = contentLength;
+    ends.length = contentLength;
+  }
+  if (trimStart) {
+    const start = text.search(/[^\s\u3000]/u);
+    if (start > 0) {
+      text = text.slice(start);
+      columns.splice(0, start);
+      ends.splice(0, start);
+    }
+  }
+  return { row, text, columns, ends };
 }
+
+/** A TUI paints its own wrapped rows as separate buffer lines. Extend a row across those
+ *  hard wraps when the previous row ends in a path fragment the next row completes. */
+const HARD_WRAP_ROW_LIMIT = 3;
 
 function readLogicalLines(term: Terminal, bufferLineNumber: number): PhysicalLine[] {
   const buffer = term.buffer.active;
   const rows = logicalRows(term, bufferLineNumber);
   if (!rows) return [];
+  const parts: Array<{ row: number; trimStart: boolean }> = [];
+  for (let row = rows.first; row <= rows.last; row += 1) {
+    parts.push({ row, trimStart: false });
+  }
+  const readPart = (part: { row: number; trimStart: boolean }) => {
+    const line = buffer.getLine(part.row);
+    return line ? readPhysicalLine(term, line, part.row, true, part.trimStart) : null;
+  };
+  // Look above the first row only when the join completes a path; a complete link or prose
+  // line never matches, so the scan stops at the real start of the painted line.
+  for (let count = 0; count < HARD_WRAP_ROW_LIMIT && parts[0].row > 0; count += 1) {
+    const current = readPart(parts[0]);
+    const line = buffer.getLine(parts[0].row - 1);
+    const previous = line ? readPhysicalLine(term, line, parts[0].row - 1, true) : null;
+    if (!current || !previous || !terminalPathContinuation(previous.text, current.text)) break;
+    parts.unshift({ row: previous.row, trimStart: false });
+    parts[1].trimStart = true;
+  }
   const lines: PhysicalLine[] = [];
   let length = 0;
-  for (let row = rows.first; row <= rows.last; row += 1) {
-    const line = buffer.getLine(row);
-    if (!line) break;
+  for (const part of parts) {
     if (lines.length >= LOGICAL_LINE_LIMIT || length + term.cols > TERMINAL_LINK_TEXT_LIMIT) return [];
-    const physical = readPhysicalLine(term, line, row, row < rows.last);
+    const physical = readPart(part);
+    if (!physical) break;
     length += physical.text.length;
     if (length > TERMINAL_LINK_TEXT_LIMIT) return [];
     lines.push(physical);
+  }
+  // A path can also continue below this row when the pointer is on the first painted row.
+  let text = lines.map(line => line.text).join('');
+  for (let count = 0; count < HARD_WRAP_ROW_LIMIT && lines.length > 0 && lines.length < LOGICAL_LINE_LIMIT; count += 1) {
+    const row = lines[lines.length - 1].row + 1;
+    const line = buffer.getLine(row);
+    const next = line ? readPhysicalLine(term, line, row, true, true) : null;
+    if (!next || !terminalPathContinuation(text, next.text)) break;
+    length += next.text.length;
+    if (length > TERMINAL_LINK_TEXT_LIMIT) return [];
+    lines.push(next);
+    text += next.text;
   }
   return lines;
 }

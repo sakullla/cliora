@@ -1808,6 +1808,29 @@ test('a wide character wrapped at the last column keeps the file path whole', as
   await expect.poll(requests).toEqual([path, path]);
 });
 
+test('a path split by a TUI row wrap opens whole from either painted row', async ({ page }) => {
+  await openWorkbench(page);
+  const path = 'docs/requirements/2026-11-12-通用工作流可靠性与重复执行优化.md';
+  const cut = path.indexOf('复');
+  await page.evaluate(({ first, second }) => {
+    (window as unknown as { __output: (text: string) => void }).__output(`\x1b[2;3H已生成并检查（${first}\x1b[3;5H${second}）。`);
+  }, { first: path.slice(0, cut), second: path.slice(cut) });
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('复执行优化.md');
+  const requests = () => page.evaluate(() => (window as unknown as { __pathOpens: Array<{ path: string }> }).__pathOpens.map(item => item.path));
+  // The TUI painted two independent rows, not an xterm auto-wrap. Hovering either row's
+  // visible fragment must reveal the whole path and send that whole path to the native layer.
+  for (const label of ['与重', '复执行优化.md']) {
+    const point = await pointForTerminalText(page, label);
+    await page.mouse.move(point.x, point.y);
+    await expect(page.getByRole('tooltip').locator('code')).toHaveText(path);
+    await page.keyboard.down('Control');
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up('Control');
+    await page.mouse.move(8, 8);
+  }
+  await expect.poll(requests).toEqual([path, path]);
+});
+
 test('long output does not probe files and overlong logical lines keep the terminal responsive', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\r\n' + 'src/file.ts\r\n'.repeat(1000) + './' + 'a'.repeat(20_000) + '/last.txt\r\n'));
