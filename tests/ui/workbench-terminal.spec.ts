@@ -2412,6 +2412,31 @@ test('a slow saved record does not block the ones that are already usable', asyn
   expect(await page.evaluate(() => (window as unknown as { __restoreCalls: number }).__restoreCalls)).toBe(1);
 });
 
+test('failed restore rows can be dismissed together while a waiting row stays', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, {
+    __emptySessions: true,
+    __savedRestores: [
+      { id: 'gone-a', toolId: 'codex', projectId: null, directory: 'C:/gone-a', mode: 'normal', startedAt: 1, stoppedAt: 2, nativeId: null, accountId: null, contextId: null },
+      { id: 'gone-b', toolId: 'codex', projectId: null, directory: 'C:/gone-b', mode: 'normal', startedAt: 3, stoppedAt: 4, nativeId: null, accountId: null, contextId: null },
+      { id: 'waiting', toolId: 'claude_code', projectId: null, directory: 'D:/slow', mode: 'normal', startedAt: 5, stoppedAt: 6, nativeId: null, accountId: null, contextId: null },
+    ],
+    __restoreScript: [
+      { event: { savedSessionId: 'gone-a', stage: 'failed', detail: '原会话已被删除' } },
+      { event: { savedSessionId: 'gone-b', stage: 'failed', detail: '原会话已被删除' } },
+      { event: { savedSessionId: 'waiting', stage: 'starting' }, hold: true },
+    ],
+  }));
+  await installWorkbenchMock(page);
+  await openRestoreQueue(page);
+  const queue = page.getByLabel('待恢复的会话');
+  await expect(page.locator('[data-restore-row][data-stage="failed"]')).toHaveCount(2);
+  await queue.getByRole('button', { name: '全部不再恢复（2 项失败）' }).click();
+  await expect(page.locator('[data-restore-row]')).toHaveCount(1);
+  await expect(page.locator('[data-restore-row="waiting"]')).toContainText('正在启动会话…');
+  // With one failure or none left, the bulk action is gone again.
+  await expect(queue.getByRole('button', { name: /全部不再恢复/ })).toHaveCount(0);
+});
+
 test('a saved record for a session that is already running never becomes a pending row', async ({ page }) => {
   await page.addInitScript(() => Object.assign(window, {
     // The default mock already has s1 running in C:/work. One record carries that session id

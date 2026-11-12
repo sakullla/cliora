@@ -32,7 +32,6 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
           <span className={styles.emptyGlyphBar}><i /><i /><i /></span>
           <span className={styles.emptyGlyphLine}><b>›</b><span className={styles.emptyGlyphCursor} /></span>
         </span>
-        <span className={styles.emptyEyebrow}>{t('sessions.workspaceEyebrow')}</span>
         <h2>{t('sessions.emptyTitle')}</h2>
         <p>{t('sessions.emptyDetail')}</p>
         {/* One launcher bar, like a command field: the whole bar opens the new-session dialog. */}
@@ -41,16 +40,17 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
           <span className={styles.launcherCopy}><strong>{t('sessions.newSession')}</strong><small>{t('sessions.launcherHint')}</small></span>
           <span className={styles.launcherKeys} aria-hidden="true"><kbd>Alt</kbd><kbd>N</kbd></span>
         </button>}
-        <div className={styles.emptyActions}>
-          <Button variant={tools.length > 0 ? 'ghost' : 'primary'} className={styles.emptyAction} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></Button>
-        </div>
+        {/* With tools, the launcher bar is the next step and the sidebar already reaches Home. */}
+        {tools.length === 0 && <div className={styles.emptyActions}>
+          <Button variant="primary" className={styles.emptyAction} onClick={onOpenHome}><span>{t('sessions.openHome')}</span><Icon name="arrowRight" size={14} /></Button>
+        </div>}
       </header>
 
       {tools.length > 0 && <section className={styles.launchSection} aria-label={t('sessions.quickTools')}>
         <div className={styles.launchSectionHead}><span>{t('sessions.quickTools')}</span><small>{t('sessions.quickToolsHint')}</small></div>
         <div className={styles.toolGrid}>{quickTools.map((tool) => <button key={tool.id} type="button" className={styles.toolChip} title={t('sessions.quickToolTitle', { name: tool.name })} onClick={() => onNewSession({ toolId: tool.id })}>
           <span className={styles.launchToolIcon}><ToolIcon toolId={tool.id} size={22} /></span>
-          <span className={styles.toolChipName}><strong>{tool.name}</strong><small>{tool.yoloAvailable ? t('sessions.toolSupportsYolo') : t('sessions.toolLaunch')}</small></span>
+          <span className={styles.toolChipName}><strong>{tool.name}</strong>{!tool.yoloAvailable && <small>{t('sessions.toolNoYolo')}</small>}</span>
           <span className={styles.toolChipAction} aria-hidden="true"><Icon name="arrowRight" size={14} /></span>
         </button>)}{tools.length > QUICK_TOOL_LIMIT && <button type="button" className={styles.toolChip} data-more onClick={() => onNewSession()}>
           <span className={styles.launchToolIcon}><Icon name="more" size={18} /></span>

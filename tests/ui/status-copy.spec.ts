@@ -485,7 +485,9 @@ test('an empty workbench follows the light and dark theme and offers a next step
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   const stage = page.getByRole('region', { name: '当前会话' });
   await expect(stage.getByRole('heading', { name: '还没有进行中的会话' })).toBeVisible();
-  await expect(stage.getByRole('button', { name: '去首页' })).toBeVisible();
+  await expect(stage.getByRole('button', { name: '新建会话' })).toBeVisible();
+  // With tools available the launcher is the next step; Home stays in the sidebar.
+  await expect(stage.getByRole('button', { name: '去首页' })).toHaveCount(0);
   const color = () => stage.evaluate((element) => {
     const probe = document.createElement('span');
     probe.style.background = 'var(--bg)';
@@ -502,6 +504,6 @@ test('an empty workbench follows the light and dark theme and offers a next step
   await expect.poll(async () => { const current = await color(); return current.actual === current.expected; }).toBe(true);
   const dark = await color();
   expect(dark.actual).not.toBe(light.actual);
-  await stage.getByRole('button', { name: '去首页' }).click();
-  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  await expect(page.getByRole('dialog', { name: '新建工作台会话' })).toBeVisible();
 });

@@ -31,7 +31,6 @@
 .sectionContextCopy { display: grid; flex: 1; gap: 1px; min-width: 0; }
 .sectionContextCopy strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
 .sectionContextCopy small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; overflow-wrap: anywhere; }
-.sectionContext > [data-tone] { flex: none; }
 .layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
 .list { display: grid; align-content: start; gap: 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .list > .card {

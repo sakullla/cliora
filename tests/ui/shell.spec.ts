@@ -520,6 +520,8 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('设置');
+  // The matched part of each label is marked, so the reason for a hit is visible.
+  await expect(dialog.getByRole('option', { name: '设置' }).locator('mark')).toHaveText('设置');
   await dialog.getByRole('option', { name: '设置' }).click();
   await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
   await expect(page.locator('dialog')).toHaveCount(0);

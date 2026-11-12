@@ -114,7 +114,9 @@ test('the running time stops when the session ends, and an already-ended session
   const bar = stage.locator('header').first();
   await expect(bar.getByTitle('会话时长 14m')).toBeVisible();
   await page.evaluate(() => (window as unknown as { __emit: (event: string, payload: unknown) => void }).__emit('cliora:session-exit', { sessionId: 'local-1', exitCode: 0 }));
-  await expect(bar.getByText('退出码 0')).toBeVisible();
+  // A clean exit is told by the ended banner; the title bar keeps only a failing code.
+  await expect(stage.getByText('此会话进程已结束')).toBeVisible();
+  await expect(bar.getByText('退出码 0')).toHaveCount(0);
   await page.clock.fastForward(30 * 60_000);
   await expect(bar.getByTitle('会话时长 14m')).toBeVisible();
   await expect(bar.getByTitle(/会话时长 4\dm/)).toHaveCount(0);
