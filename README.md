@@ -97,6 +97,8 @@ The desktop shell now mounts the tool workspace, project launcher, records, migr
 
 ## History and memory loading
 
+Remote records reuse the current list snapshot when searching or filtering. Refresh keeps the current transcript readable, supports cancellation, and reports slow reads and source failures. Remote usage and local-only favorite/project actions are hidden. No remote helper is installed. The backend shares immutable parsed history between list and detail reads, copies only the selected transcript, counts cache admission size without allocating a JSON buffer, and borrows archive payloads before releasing the transfer buffer ahead of parsing. Cold reads still transfer bounded native files over SSH; this is not a remote index or a measured live-host speed guarantee.
+
 Parent/child session cards share a transcript summary cached by immutable message snapshot; returning through nested sessions reuses that summary, while refreshed transcripts compute it again. Timeline merging uses a cursor instead of repeatedly removing array heads. Memory wiki links use an index of entry ids and frontmatter names, retaining same-store preference and source-order fallback; refreshed, renamed or deleted entries rebuild the index.
 
 Usage records display the saved index before starting automatic native discovery. The usage dashboard reuses a completed report for up to 60 seconds when its filters and data revision match. Scans, favorites, project associations and saved prices invalidate that reuse.

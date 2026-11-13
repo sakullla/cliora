@@ -33,26 +33,26 @@ pub fn list(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result
 }
 
 pub fn list_snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<HistorySnapshot, String> {
-    let (details, source_failures) = snapshot(registry, target, refresh)?;
-    Ok(HistorySnapshot { sessions: details.into_iter().map(|detail| detail.session).collect(), source_failures })
+    let (sessions, source_failures) = snapshot(registry, target, refresh)?;
+    Ok(HistorySnapshot { sessions, source_failures })
 }
 
 pub fn detail(registry: &Registry, target: &RemoteTarget, id: &str) -> Result<HistoryDetail, String> {
     let tool = id.strip_prefix(&format!("remote-native:{}:", target.id)).and_then(|suffix| suffix.split(':').next()).ok_or("会话不属于当前主机")?;
     let adapter = registry.get(tool).filter(|adapter| adapter.history_supported() && adapter.remote_history_layout().is_some()).ok_or("当前历史来源不可用")?;
     let owned = target.clone();
-    let details = crate::remote::read_cache::read(target, &format!("history:{}", adapter.id()), false, move || {
+    let details = crate::remote::read_cache::read_shared(target, &format!("history:{}", adapter.id()), false, move || {
         fetch_source(adapter, &owned).map_err(crate::remote::RemoteError::Storage)
     }).map_err(|error| error.to_string())?;
-    details.into_iter().find(|item| item.session.id == id).ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
+    details.iter().find(|item| item.session.id == id).cloned().ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
 }
 
-fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<(Vec<HistoryDetail>, Vec<SourceFailure>), String> {
+fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<(Vec<HistorySession>, Vec<SourceFailure>), String> {
     snapshot_with_loader(registry, target, refresh, std::sync::Arc::new(fetch_source))
 }
 
 type SourceLoader = std::sync::Arc<dyn Fn(&dyn CliAdapter, &RemoteTarget) -> Result<Vec<HistoryDetail>, String> + Send + Sync>;
-fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: bool, loader: SourceLoader) -> Result<(Vec<HistoryDetail>, Vec<SourceFailure>), String> {
+fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: bool, loader: SourceLoader) -> Result<(Vec<HistorySession>, Vec<SourceFailure>), String> {
     let context = crate::remote::operations::current().unwrap_or_else(|| crate::remote::operations::Context::local(crate::remote::operations::Kind::Read, std::time::Duration::from_secs(40)));
     context.bind(target).map_err(|error| error.to_string())?;
     let adapters: Vec<_> = registry.iter().filter(|adapter| adapter.history_supported() && adapter.remote_history_layout().is_some()).collect();
@@ -68,7 +68,7 @@ fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: boo
                 let adapter = *adapter;
                 scope.spawn(move || crate::remote::operations::scoped(context, || {
                     let target_owned = target.clone();
-                    crate::remote::read_cache::read(target, &format!("history:{}", adapter.id()), refresh, move || {
+                    crate::remote::read_cache::read_shared(target, &format!("history:{}", adapter.id()), refresh, move || {
                         loader(adapter, &target_owned).map_err(crate::remote::RemoteError::Storage)
                     }).map_err(|error| error.to_string())
                 }))
@@ -76,19 +76,18 @@ fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: boo
             jobs.into_iter().map(|job| job.join().unwrap_or_else(|_| Err("历史来源读取意外中断".into()))).collect::<Vec<_>>()
         });
         for (adapter, result) in batch.iter().zip(results) {
-            match result { Ok(mut rows) => details.append(&mut rows), Err(message) => {
+            match result { Ok(rows) => details.extend(rows.iter().map(|row| row.session.clone())), Err(message) => {
                 let remote = message.strip_prefix("cliora:remote:").and_then(|encoded| serde_json::from_str::<crate::remote::operations::Failure>(encoded).ok());
                 let message = remote.as_ref().map(|failure| format!("{} {}", failure.message, failure.action)).unwrap_or(message);
-                if let Some(mut previous) = crate::remote::read_cache::previous::<Vec<HistoryDetail>>(target, &format!("history:{}", adapter.id())) {
-                    for detail in &mut previous { detail.session.stale = true; }
-                    details.append(&mut previous);
+                if let Some(previous) = crate::remote::read_cache::previous_shared::<Vec<HistoryDetail>>(target, &format!("history:{}", adapter.id())) {
+                    details.extend(previous.iter().map(|detail| { let mut session = detail.session.clone(); session.stale = true; session }));
                 }
                 failures.push(SourceFailure { tool_id: adapter.id().into(), message, remote });
             } }
         }
         context.check().map_err(|error| error.to_string())?;
     }
-    details.sort_by(|left, right| right.session.updated_at.cmp(&left.session.updated_at).then_with(|| left.session.id.cmp(&right.session.id)));
+    details.sort_by(|left, right| right.updated_at.cmp(&left.updated_at).then_with(|| left.id.cmp(&right.id)));
     Ok((details, failures))
 }
 
@@ -101,6 +100,8 @@ fn fetch_source(adapter: &dyn CliAdapter, target: &RemoteTarget) -> Result<Vec<H
     let bytes = crate::remote::run_command_bytes(target, &command).map_err(|error| error.to_string())?;
     let files = decode_archive(&bytes, layout.relative)?;
     write_tree(&home, &files)?;
+    drop(files);
+    drop(bytes);
     sessions_from_home(adapter, &home, &target.id)
 }
 
@@ -207,7 +208,7 @@ fn valid_relative(value: &str) -> bool {
         })
 }
 
-pub(crate) fn decode_archive(bytes: &[u8], relative: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn decode_archive<'a>(bytes: &'a [u8], relative: &str) -> Result<Vec<(String, &'a [u8])>, String> {
     if !valid_relative(relative) {
         return Err("远程历史目录无效".into());
     }
@@ -245,7 +246,7 @@ pub(crate) fn decode_archive(bytes: &[u8], relative: &str) -> Result<Vec<(String
         if total > ARCHIVE_CAP {
             return Err("远程历史超出读取上限".into());
         }
-        files.push((path.to_owned(), rest[..size].to_vec()));
+        files.push((path.to_owned(), &rest[..size]));
         rest = &rest[size..];
     }
     Ok(files)
@@ -261,7 +262,7 @@ fn archive_path_allowed(path: &str, relative: &str) -> bool {
     path == relative || path.starts_with(&format!("{relative}/"))
 }
 
-fn write_tree(home: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
+fn write_tree(home: &Path, files: &[(String, &[u8])]) -> Result<(), String> {
     for (path, bytes) in files {
         let relative = Path::new(path);
         if relative.is_absolute() || relative.components().any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
@@ -277,13 +278,22 @@ fn write_tree(home: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
 }
 
 fn sessions_from_home(adapter: &dyn CliAdapter, home: &Path, target_id: &str) -> Result<Vec<HistoryDetail>, String> {
-    let sources = adapter.history_sources(home)?;
+    let context = crate::remote::operations::current();
+    let cancelled = || context.as_ref().is_some_and(|context| context.check().is_err());
+    let sources = adapter.history_sources_controlled(home, &cancelled)?;
     let mut details = Vec::new();
     for source in sources {
+        if let Some(context) = &context {
+            context.check().map_err(|error| error.to_string())?;
+        }
         if !source.path.starts_with(home) || source.fingerprint_error.is_some() {
             continue;
         }
-        let parsed = match adapter.parse_history(&source) {
+        let parsed = adapter.parse_history_controlled(&source, &cancelled);
+        if let Some(context) = &context {
+            context.check().map_err(|error| error.to_string())?;
+        }
+        let parsed = match parsed {
             Ok(parsed) => parsed,
             Err(error) if error == EMPTY_SESSION => continue,
             Err(_) => continue,
@@ -369,15 +379,15 @@ mod tests {
         });
         let registry = Registry::builtins();
         let (cold, failures) = snapshot_with_loader(&registry, &target, false, loader.clone()).unwrap();
-        assert_eq!(cold.len(), 1); assert!(cold[0].messages.iter().any(|row| row.text.contains("nonempty source")));
+        assert_eq!(cold.len(), 1); assert!(cold[0].message_count > 0);
         assert_eq!(failures.len(), 1); assert_eq!(failures[0].tool_id, "claude_code");
         assert!(failures[0].message.contains("permission failure"));
-        assert_eq!(detail(&registry, &target, &cold[0].session.id).unwrap().messages.len(), cold[0].messages.len());
+        assert_eq!(detail(&registry, &target, &cold[0].id).unwrap().messages.len(), cold[0].message_count);
         let (hot, _) = snapshot_with_loader(&registry, &target, false, loader.clone()).unwrap();
         assert_eq!(hot.len(), 1); assert_eq!(codex.load(Ordering::SeqCst), 1); assert_eq!(claude.load(Ordering::SeqCst), 2);
         let failing: SourceLoader = Arc::new(|_, _| Err("refresh failed".into()));
         let (stale, failed) = snapshot_with_loader(&registry, &target, true, failing).unwrap();
-        assert_eq!(stale.len(), 1); assert!(stale[0].session.stale); assert_eq!(failed.len(), 2);
+        assert_eq!(stale.len(), 1); assert!(stale[0].stale); assert_eq!(failed.len(), 2);
         let mut changed = target.clone(); changed.host = "replacement.invalid".into(); changed.updated_at += 1;
         let (replaced, _) = snapshot_with_loader(&registry, &changed, false, Arc::new(|_, _| Err("offline replacement".into()))).unwrap();
         assert!(replaced.is_empty(), "same ID cannot expose the old host's cached history");
@@ -456,6 +466,8 @@ mod tests {
         let files = decode_archive(&bytes, ".codex").unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].1, payload);
+        let start = files[0].1.as_ptr() as usize;
+        assert!((bytes.as_ptr() as usize..bytes.as_ptr() as usize + bytes.len()).contains(&start), "archive payload must borrow the input buffer");
 
         let mut escaped = b"F\n.codex/../secrets\n1\nxZ\n".to_vec();
         assert!(decode_archive(&escaped, ".codex").is_err());

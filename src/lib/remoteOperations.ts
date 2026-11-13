@@ -19,6 +19,8 @@ export type RemoteOperationOptions = {
   shareKey?: string;
   /** Bypass settled freshness; overlapping refreshes still share work. */
   fresh?: boolean;
+  /** Re-read IPC after a related native refresh without repeating remote work. */
+  bypassCache?: boolean;
   cacheTtlMs?: number;
   onFreshness?: (state: RemoteFreshness) => void;
 };
@@ -121,7 +123,7 @@ export class RemoteOperations {
     const deadline = Date.now() + timeout;
     const deadlineCeiling = options.timeoutCeilingMs === undefined ? undefined : ceiling;
     const key = kind === 'read' && options.shareKey ? JSON.stringify([targetId, options.targetRevision, name, options.shareKey, args]) : undefined;
-    const cached = key && !options.fresh && !options.signal?.aborted ? this.cache.get(key) : undefined;
+    const cached = key && !options.fresh && !options.bypassCache && !options.signal?.aborted ? this.cache.get(key) : undefined;
     if (cached && Date.now() - cached.at < (options.cacheTtlMs ?? 30_000)) {
       const request: RemoteOperationRequest = {
         requestId: crypto.randomUUID(), cancelToken: crypto.randomUUID(), targetId,

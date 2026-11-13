@@ -7,6 +7,20 @@ const source = readFileSync(new URL('../../src/lib/remoteOperations.ts', import.
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { RemoteOperations, RemoteDraftVersions } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 
+test('reading a refreshed native snapshot replaces browser data without forcing another SSH refresh', async () => {
+  const requests = [];
+  const operations = new RemoteOperations(async (_name, args) => {
+    requests.push(args.operation);
+    return { text: requests.length === 1 ? 'before' : 'after' };
+  });
+  const options = { shareKey: 'detail' };
+  assert.equal((await operations.start('detail', {}, 'host', 'read', options).promise).text, 'before');
+  assert.equal((await operations.start('detail', {}, 'host', 'read', { ...options, bypassCache: true }).promise).text, 'after');
+  assert.equal((await operations.start('detail', {}, 'host', 'read', options).promise).text, 'after');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].refresh, false);
+});
+
 test('freshness follows the full cached resource across subscriptions and recovers only after revalidation', async () => {
   let fail = false;
   let calls = 0;

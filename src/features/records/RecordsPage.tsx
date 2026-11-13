@@ -8,7 +8,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { native as localNative, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
-import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus } from '../../types/history';
 import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
@@ -123,6 +123,9 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const [detailRetry, setDetailRetry] = useState(0);
   const [listError, setListError] = useState(false);
   const remotePartial = useRef(false);
+  const remoteSnapshot = useRef<RemoteHistorySnapshot | null>(null);
+  const [remoteCancelled, setRemoteCancelled] = useState(false);
+  const [remoteSlow, setRemoteSlow] = useState(false);
   const [sourceFailures, setSourceFailures] = useState<{ toolId: string; message: string }[]>([]);
   const listController = useRef<AbortController | null>(null);
   useEffect(() => () => { listController.current?.abort(); request.current++; }, [active, remoteTargetId]);
@@ -170,6 +173,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const [scanning, setScanning] = useState(false);
   const [backgroundScanning, setBackgroundScanning] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
+  useEffect(() => {
+    setRemoteSlow(false);
+    if (!filterLoading || remoteTargetId === 'local') return;
+    const timer = window.setTimeout(() => setRemoteSlow(true), 5000);
+    return () => window.clearTimeout(timer);
+  }, [filterLoading, remoteTargetId]);
   const [initialListSettled, setInitialListSettled] = useState(false);
   const [scanMetadataReady, setScanMetadataReady] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ running: boolean; toolId: string; completedSources: number; totalSources: number } | null>(null);
@@ -206,6 +215,9 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     backgroundScanningRef.current = false;
     setScanning(false); setBackgroundScanning(false); setScanProgress(null);
     initialized.current = false;
+    remoteSnapshot.current = null;
+    setRemoteCancelled(false);
+    setModelCatalog([]);
     loadedFilter.current = '';
     setInitialListSettled(false);
     setScanMetadataReady(false);
@@ -213,7 +225,8 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       // Do not leave the previous local scan summary visible for one render
       // after switching hosts.
       setSourceFailures([]); setSessions([]); setScans([]); setProjects([]); setPrices([]); setUnfilteredTotal(0); setSelectedId(null);
-      setScanMetadataReady(true); setInitialListSettled(true);
+      setFavoriteOnly(false); setProjectId('');
+      setScanMetadataReady(true);
     }
   }, [remoteTargetId]);
   const dates = useMemo(() => rangeDates(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
@@ -227,40 +240,55 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
 
   const filterRef = useRef(filter); filterRef.current = filter;
   const loadedFilter = useRef('');
-  const load = useCallback(async (current: HistoryFilter, refresh = false) => {
+  const load = useCallback(async (current: HistoryFilter, refresh = false, revalidate = false) => {
     if (!nativeAvailable) return false;
     if (remoteTargetId !== 'local') {
-      const previous = listController.current;
-      const controller = new AbortController(); listController.current = controller;
-      const sequence = ++request.current;
-      setFilterLoading(true); setListError(false);
-      try {
-        const pending = native.listRemoteNativeHistorySnapshot(remoteTargetId, refresh, { signal: controller.signal });
-        previous?.abort();
-        const snapshot = await pending;
-        const indexed = snapshot.sessions;
-        const rows = new Map(indexed.map((item) => [item.id, item]));
+      const applySnapshot = (snapshot: RemoteHistorySnapshot, current: HistoryFilter) => {
+        const rows = new Map(snapshot.sessions.map((item) => [item.id, item]));
+        const query = current.search?.toLowerCase();
         const items = [...rows.values()].filter((item) => {
           if (current.toolId && item.toolId !== current.toolId) return false;
           if (current.tools?.length && !current.tools.includes(item.toolId)) return false;
           if (current.favoriteOnly && !item.favorite) return false;
           if (current.projectId === '__unknown__' ? !!item.projectId : current.projectId && item.projectId !== current.projectId) return false;
           if (current.model === '__unknown__' ? !!item.model : current.model && item.model !== current.model) return false;
-          if (current.search && !`${item.title} ${item.cwd ?? ''} ${item.model ?? ''}`.toLowerCase().includes(current.search.toLowerCase())) return false;
+          if (query && !`${item.title} ${item.cwd ?? ''} ${item.model ?? ''}`.toLowerCase().includes(query)) return false;
           if (current.fromMs !== null && current.fromMs !== undefined && (item.updatedAt ?? 0) < current.fromMs) return false;
           if (current.toMs !== null && current.toMs !== undefined && (item.updatedAt ?? 0) >= current.toMs) return false;
           return true;
         });
-        if (sequence !== request.current || remoteTargetId === 'local') return false;
         if (!snapshot.sourceFailures.length) readingContexts.current.retainSessions(remoteTargetId, new Set(rows.keys()));
-        if (unfilteredQuery(current)) setUnfilteredTotal(rows.size);
+        setUnfilteredTotal(rows.size);
         loadedFilter.current = JSON.stringify(current);
         setSessions(items); setSourceFailures(snapshot.sourceFailures); remotePartial.current = snapshot.sourceFailures.length > 0;
-        setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
-        setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null); toasts.setError(null);
+        setModelCatalog([...new Set(snapshot.sessions.flatMap((item) => item.model ? [item.model] : []))].sort());
+        setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+      };
+      // Filtering an existing snapshot must not cancel an in-flight refresh.
+      if (!refresh && !revalidate && remoteSnapshot.current) {
+        applySnapshot(remoteSnapshot.current, current);
+        return true;
+      }
+      const previous = listController.current;
+      const controller = new AbortController(); listController.current = controller;
+      const sequence = ++request.current;
+      setFilterLoading(true); setListError(false); setRemoteCancelled(false);
+      try {
+        const pending = native.listRemoteNativeHistorySnapshot(remoteTargetId, refresh, { signal: controller.signal });
+        previous?.abort();
+        const snapshot = await pending;
+        if (sequence !== request.current || controller.signal.aborted) return false;
+        remoteSnapshot.current = snapshot;
+        applySnapshot(snapshot, filterRef.current);
+        toasts.setError(null);
         return true;
       } catch (value) {
-        if (sequence === request.current && !controller.signal.aborted) { setListError(true); setSessions(rows => rows.map(row => ({ ...row, stale: true }))); showReadError(value); }
+        if (sequence === request.current && !controller.signal.aborted) {
+          setListError(true);
+          if (remoteSnapshot.current) remoteSnapshot.current = { ...remoteSnapshot.current, sessions: remoteSnapshot.current.sessions.map(row => ({ ...row, stale: true })) };
+          setSessions(rows => rows.map(row => ({ ...row, stale: true })));
+          showReadError(value);
+        }
         return false;
       } finally {
         if (sequence === request.current) { setFilterLoading(false); setInitialListSettled(true); }
@@ -310,12 +338,24 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   // periodically while it stays open; today's numbers then track running sessions.
   useEffect(() => {
     // Give the saved index the first disk read before discovering native logs.
-    if (!active || !nativeAvailable || !initialListSettled || !scanMetadataReady) return;
+    if (!active || !nativeAvailable || !initialListSettled || !scanMetadataReady || remoteTargetId !== 'local') return;
     const run = () => { if (Date.now() - lastScan.current > 45_000) void refresh(false, true); };
     run();
     const timer = window.setInterval(run, 120_000);
     return () => window.clearInterval(timer);
-  }, [active, initialListSettled, scanMetadataReady]);
+  }, [active, initialListSettled, scanMetadataReady, remoteTargetId]);
+
+  useEffect(() => {
+    if (!active || remoteTargetId === 'local') return;
+    // Revalidate on return; filters reuse this page's bounded source snapshot.
+    loadedFilter.current = '';
+    remoteSnapshot.current = null;
+    const timer = window.setInterval(() => {
+      if (!listController.current || listController.current.signal.aborted) return;
+      void load(filterRef.current, false, true).then((loaded) => { if (loaded) setScanVersion(value => value + 1); });
+    }, 120_000);
+    return () => window.clearInterval(timer);
+  }, [active, remoteTargetId, load]);
 
   useEffect(() => {
     if (!initialized.current || !active) return;
@@ -326,14 +366,17 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
 
   useEffect(() => {
     const sequence = ++detailRequest.current;
-    const fresh = detailFreshness.current.retry !== detailRetry || detailFreshness.current.scan !== scanVersion;
+    const fresh = detailFreshness.current.retry !== detailRetry;
+    const refreshed = detailFreshness.current.scan !== scanVersion;
     detailFreshness.current = { retry: detailRetry, scan: scanVersion };
     setDetailError('');
     if (!active || tab !== 'sessions' || !selectedId || !nativeAvailable) { setDetail(null); return; }
     if (remoteTargetId !== 'local') {
       const controller = new AbortController();
-      setDetail(null);
-      void native.getRemoteNativeHistory(remoteTargetId, selectedId, { signal: controller.signal, fresh }).then((value) => {
+      setDetail((current) => current?.session.id === selectedId ? current : null);
+      // Bypass the frontend detail cache after a list refresh, but reuse the
+      // source just fetched by the backend instead of downloading it again.
+      void native.getRemoteNativeHistory(remoteTargetId, selectedId, { signal: controller.signal, fresh, bypassCache: refreshed }).then((value) => {
         if (sequence !== detailRequest.current) return;
         setDetail(value);
       }).catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, t('records.page.detailFailed'), t('records.page.detailFailedNext'))); });
@@ -345,7 +388,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
     })
       .catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, t('records.page.detailFailed'), t('records.page.detailFailedNext'))); });
     return () => { detailRequest.current++; };
-  }, [active, tab, selectedId, detailRetry, scanVersion, remoteTargetId, t]);
+  }, [active, tab, selectedId, detailRetry, scanVersion, remoteTargetId, native, t]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const selectedFacet = tools.find((item) => item.id === selected?.session.toolId)?.association;
@@ -401,7 +444,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   async function refresh(announce = true, auto = false) {
     if (!nativeAvailable || scanningRef.current || backgroundScanningRef.current) return;
     if (remoteTargetId !== 'local') {
-      const loaded = await load(filterRef.current, !auto);
+      const loaded = await load(filterRef.current, !auto, true);
       if (!loaded) return;
       if (!auto) setScanVersion((value) => value + 1);
       if (announce && !remotePartial.current) showNotice(t('records.page.remoteRefreshed'));
@@ -443,6 +486,13 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
       setScanning(false);
       setScanProgress(null);
     }
+  }
+  function cancelRemoteRead() {
+    request.current++;
+    listController.current?.abort();
+    setFilterLoading(false);
+    setRemoteCancelled(true);
+    setInitialListSettled(true);
   }
   async function cancelScan() {
     scanRequest.current++; scanningRef.current = false; backgroundScanningRef.current = false;
@@ -649,23 +699,24 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   return <section className={styles.page} aria-label={t('records.page.label')} data-host-target={remoteTargetId} data-mobile-detail={mobileDetail || undefined}><RemoteReadStatus state={remoteReads} />{sourceFailures.length > 0 && <StatusBanner tone="warning">{sourceFailures.map(item => `${tools.find(tool => tool.id === item.toolId)?.name ?? item.toolId}: ${item.message}`).join("；")}</StatusBanner>}
     <div className={styles.board}>
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label={t('records.page.typesAria')} onKeyDown={navigateChoices}>
-      <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={16} />{t('records.page.sessions')}{initialized.current ? <Badge tone={tab === 'sessions' ? 'accent' : 'neutral'} className={styles.tabCount}>{sessions.length}</Badge> : null}</button>
-      <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={16} />{t('records.page.usage')}</button>
+      <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={16} />{t('records.page.sessions')}{initialListSettled && !remoteCancelled && (!listError || sessions.length > 0) ? <Badge tone={tab === 'sessions' ? 'accent' : 'neutral'} className={styles.tabCount}>{sessions.length}</Badge> : null}</button>
+      {remoteTargetId === 'local' && <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={16} />{t('records.page.usage')}</button>}
     </div>{tab === 'sessions' && <div className={styles.filterBar} role="group" aria-label={t('records.page.filterBarAria')}>
-      <button type="button" className={styles.favoriteToggle} aria-pressed={favoriteOnly} onClick={() => setFavoriteOnly((value) => !value)}><span aria-hidden="true">{favoriteOnly ? '★' : '☆'}</span>{t('records.page.favoriteOnly')}</button>
+      {remoteTargetId === 'local' && <button type="button" className={styles.favoriteToggle} aria-pressed={favoriteOnly} onClick={() => setFavoriteOnly((value) => !value)}><span aria-hidden="true">{favoriteOnly ? '★' : '☆'}</span>{t('records.page.favoriteOnly')}</button>}
       <details className={styles.advancedFilters}><summary title={t('records.page.moreFiltersHint')}><Icon name="sliders" size={14} />{t('records.page.moreFilters')}{advancedFilterCount > 0 && <Badge>{advancedFilterCount}</Badge>}</summary><div className={styles.advancedContent}>
         <DateRangeFilter value={rangeKey} customFrom={customFrom} customTo={customTo} presets={rangePresets()} onChange={setRangeKey}
           onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRangeKey('custom'); }} />
-        <FilterSelect className={styles.barSelect} label={t('records.page.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.unclassified') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
+        {remoteTargetId === 'local' && <FilterSelect className={styles.barSelect} label={t('records.page.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.unclassified') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />}
         <FilterSelect className={styles.barSelect} label={t('records.page.modelFilter')} value={model} options={[{ value: '', label: t('records.page.allModels') }, { value: '__unknown__', label: t('records.page.modelUnknown') }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} />
       </div></details>
-    </div>}<Button className={styles.refresh} size="sm" icon={<Icon name="refresh" size={16} />} loading={scanning} disabled={backgroundScanning} aria-label={t('records.page.refreshAria')} onClick={() => void refresh()}><span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></Button></div>
+    </div>}<Button className={styles.refresh} size="sm" icon={<Icon name="refresh" size={16} />} loading={scanning || (remoteTargetId !== 'local' && filterLoading)} disabled={backgroundScanning} aria-label={t(remoteTargetId === 'local' ? 'records.page.refreshAria' : 'records.page.remoteRefreshAria')} onClick={() => void refresh()}><span>{scanning || (remoteTargetId !== 'local' && filterLoading) ? t('records.page.refreshing') : t('records.page.refresh')}</span></Button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><Button size="sm" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</Button></p>}
+    {remoteTargetId !== 'local' && (filterLoading || remoteCancelled) && <div className={styles.remoteProgress} role="status"><span>{filterLoading ? t(remoteSlow ? 'records.page.remoteSlowHint' : 'records.page.remoteLoadingHint') : t('records.page.remoteCancelled')}</span><Button size="sm" variant="ghost" onClick={filterLoading ? cancelRemoteRead : () => void refresh()}>{t(filterLoading ? 'records.page.cancelRemoteRead' : 'records.page.retryList')}</Button></div>}
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label={t('records.page.libraryAria')}>
         <div className={styles.filters}>
-      <label className={styles.search}><span className="sr-only">{t('records.page.searchSr')}</span><SearchField className={styles.searchBox} label={t('records.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('records.page.searchPlaceholder')} /></label>
+      <label className={styles.search}><span className="sr-only">{t('records.page.searchSr')}</span><SearchField className={styles.searchBox} label={t('records.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t(remoteTargetId === 'local' ? 'records.page.searchPlaceholder' : 'records.page.remoteSearchPlaceholder')} /></label>
       <label className={styles.filterSelect}><span className="sr-only">{t('records.page.toolSr')}</span><FilterSelect label={t('records.page.toolFilter')} value={toolId} options={[{ value: '', label: t('records.page.allTools') }, ...toolOptions(tools)]} onChange={setToolId} /></label>
     </div>
     {filterChips.length > 0 && <div className={styles.activeFilters} aria-label={t('records.page.activeAria')}>
@@ -675,7 +726,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
         <div className={styles.listToolbar}>{/* A failed refresh keeps the previous rows, so the count names itself as the last
           read instead of matching them against an unfiltered number from before the filter. */}
         <span>{filterLoading ? t('records.page.updating') : listError && sessions.length > 0 ? t('records.page.countStale', { count: sessions.length }) : activeFilters.length ? t('records.page.countFiltered', { filtered: sessions.length, total: Math.max(unfilteredTotal, sessions.length) }) : t('records.page.allSessions')}</span><select aria-label={t('records.page.sortAria')} value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">{t('records.page.sortRecent')}</option><option value="oldest">{t('records.page.sortOldest')}</option><option value="messages">{t('records.page.sortMessages')}</option></select></div>
-      {listError && sessions.length > 0 && <div className={styles.staleBanner}><StatusBanner tone="error" action={<Button size="sm" onClick={() => void load(filter)}>{t('records.page.retryList')}</Button>}>{t('records.page.listStale')}</StatusBanner></div>}
+      {listError && sessions.length > 0 && <div className={styles.staleBanner}><StatusBanner tone="error" action={<Button size="sm" onClick={() => void (remoteTargetId === 'local' ? load(filter) : refresh())}>{t('records.page.retryList')}</Button>}>{t('records.page.listStale')}</StatusBanner></div>}
       <div className={styles.list} aria-label={t('records.page.listAria')} aria-busy={filterLoading || undefined}>{sessions.length ? <>{visibleGroups.flatMap(({ group, items, total }, groupIndex) => [
         <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{sort === 'recent' ? groupLabel(group) : sort === 'messages' ? t('records.page.groupByMessages') : t('records.page.groupByTime')}<span>{total}</span></div>,
         ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => selectSession(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(orderedSessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(orderedSessions[orderedSessions.length - 1]); } }}>
@@ -684,14 +735,14 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
           <span className={styles.rowContext}><Icon name="folder" size={12} /><span title={item.cwd ?? undefined}>{projects.find((project) => project.id === item.projectId)?.name ?? item.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.noProject')}</span><span>{t('records.reader.messageCount', { count: item.messageCount.toLocaleString() })}</span></span>
           {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <Badge tone="warning">{t('records.page.partial')}</Badge>}{item.stale && <Badge>{t('records.page.stale')}</Badge>}</small>}
         </button>),
-      ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading ? t('records.page.loading') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading ? t('records.page.loadingHint') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{tool.name}：{tool.history.reason}</p>)}{listError ? <Button size="sm" onClick={() => void load(filter)}>{t('records.page.retryList')}</Button> : activeFilters.length > 0 && <Button variant="ghost" size="sm" onClick={clearAllFilters}>{t('records.page.clearAll')}</Button>}</div>}</div>
+      ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading && (!remoteSnapshot.current || remoteTargetId === 'local') ? t('records.page.loading') : remoteCancelled ? t('records.page.remoteCancelledTitle') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading && (!remoteSnapshot.current || remoteTargetId === 'local') ? t(remoteTargetId === 'local' ? 'records.page.loadingHint' : 'records.page.remoteInitialHint') : remoteCancelled ? t('records.page.remoteCancelled') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{tool.name}：{tool.history.reason}</p>)}{listError ? <Button size="sm" onClick={() => void (remoteTargetId === 'local' ? load(filter) : refresh())}>{t('records.page.retryList')}</Button> : activeFilters.length > 0 && <Button variant="ghost" size="sm" onClick={clearAllFilters}>{t('records.page.clearAll')}</Button>}</div>}</div>
         <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning || backgroundScanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
       </aside>
       <div className={styles.detail} ref={detailRef} onScroll={rememberPosition}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
         {selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>{!openedChild && <button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button>}</div>
+        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>{remoteTargetId === 'local' && !openedChild && <button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button>}</div>
         {openedChild && openedTrail ? <nav className={styles.childTrail} aria-label={t('records.association.trail')}>
           <button type="button" onClick={() => setChildPath([])}>{selected.session.title || t('records.page.untitled')}</button>
           {openedTrail.map((node, index) => {
@@ -719,13 +770,13 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>{t('records.page.relinkProject')}</button>}
         </div>}
         </div>
-        {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
+        {remoteTargetId === 'local' && !openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
         {openedChild && !openedChild.readable ? <>{detailNotice}<div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div></> : readerDetail && <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={readerDetail} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) : undefined} onOpenChild={openChild} context={readerContext} onContextChange={saveReading} notice={detailNotice} />}
-      </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={retryDetail}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
+      </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={retryDetail}>{t('records.page.reloadSession')}</button></div> : (selectedId && sessions.some((item) => item.id === selectedId)) || (remoteTargetId !== 'local' && filterLoading && !sessions.length) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><h3>{t('records.page.pickSessionTitle')}</h3><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
-    <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} onSearchChange={setSearch} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
-      scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
+    {remoteTargetId === 'local' && <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} onSearchChange={setSearch} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
+      scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>}
     </div>
   </section>;
 }

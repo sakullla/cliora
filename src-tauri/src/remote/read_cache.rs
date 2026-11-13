@@ -44,26 +44,38 @@ pub fn invalidate(target_id: &str) {
 /// Retained success for an explicitly marked stale history source. Identity
 /// and write invalidation remove these entries too; this never crosses hosts.
 pub fn previous<T: Clone + Send + Sync + 'static>(target: &RemoteTarget, resource: &str) -> Option<T> {
+    previous_shared::<T>(target, resource).map(|value| (*value).clone())
+}
+
+pub fn previous_shared<T: Send + Sync + 'static>(target: &RemoteTarget, resource: &str) -> Option<Arc<T>> {
     let key = format!("{}:{resource}", operations::target_identity(target));
     state().lock().unwrap_or_else(|e| e.into_inner()).entries.get(&key)
-        .and_then(|entry| entry.value.downcast_ref::<T>()).cloned()
+        .and_then(|entry| entry.value.clone().downcast::<T>().ok())
 }
 
 pub fn read<T>(target: &RemoteTarget, resource: &str, refresh: bool,
     load: impl FnOnce() -> Result<T, RemoteError> + Send + 'static) -> Result<T, RemoteError>
 where T: Serialize + Clone + Send + Sync + 'static {
+    read_shared(target, resource, refresh, load).map(|value| Arc::try_unwrap(value).unwrap_or_else(|value| (*value).clone()))
+}
+
+/// Immutable consumers can select a summary or one transcript without copying
+/// the entire source. Admission, cancellation and eviction remain shared.
+pub fn read_shared<T>(target: &RemoteTarget, resource: &str, refresh: bool,
+    load: impl FnOnce() -> Result<T, RemoteError> + Send + 'static) -> Result<Arc<T>, RemoteError>
+where T: Serialize + Send + Sync + 'static {
     let caller = operations::current().unwrap_or_else(|| Context::local(Kind::Read, Duration::from_secs(40)));
     caller.bind(target)?;
     // Read-modify-write must inspect current remote contents and cannot share
     // a cancellable read with other subscribers.
-    if caller.kind == Kind::Write { return load(); }
+    if caller.kind == Kind::Write { return load().map(Arc::new); }
     caller.check()?;
     let key = format!("{}:{resource}", operations::target_identity(target));
     let mut cache = state().lock().unwrap_or_else(|e| e.into_inner());
     if !refresh && !caller.refresh() {
         if let Some(entry) = cache.entries.get(&key).filter(|entry| entry.at.elapsed() < TTL) {
             caller.merge_files(entry.versions.clone());
-            return entry.value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into()));
+            return entry.value.clone().downcast::<T>().map_err(|_| RemoteError::Storage("远程缓存类型无效".into()));
         }
     }
     let mut start = false;
@@ -86,7 +98,7 @@ where T: Serialize + Clone + Send + Sync + 'static {
                 worker.context.bind(&target)?;
                 let value = load()?;
                 worker.context.check()?;
-                bytes = serde_json::to_vec(&value).map(|v| v.len()).unwrap_or(BYTE_LIMIT + 1);
+                bytes = serialized_size(&value);
                 Ok(Arc::new(value) as Value)
             }))).unwrap_or_else(|_| Err(RemoteError::Storage("远程读取意外中断".into())));
             let mut cache = state().lock().unwrap_or_else(|e| e.into_inner());
@@ -131,10 +143,26 @@ where T: Serialize + Clone + Send + Sync + 'static {
         if flight.invalidated.load(Ordering::Acquire) { return Err(caller.failure("identity", "远程读取期间目标或内容已变化，请刷新")); }
         if let Some(result) = result.as_ref() {
             caller.merge_files(flight.context.file_versions());
-            return result.clone().and_then(|value| value.downcast_ref::<T>().cloned().ok_or_else(|| RemoteError::Storage("远程缓存类型无效".into()))).map_err(|error| caller.subscriber_error(error));
+            return result.clone().and_then(|value| value.downcast::<T>().map_err(|_| RemoteError::Storage("远程缓存类型无效".into()))).map_err(|error| caller.subscriber_error(error));
         }
         result = flight.ready.wait_timeout(result, Duration::from_millis(15)).unwrap_or_else(|e| e.into_inner()).0;
     }
+}
+
+// Count without allocating another complete JSON copy of large transcripts.
+// Stop as soon as the value cannot be admitted to the cache.
+fn serialized_size(value: &impl Serialize) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            if self.0 > BYTE_LIMIT / 2 { return Err(std::io::Error::other("cache entry too large")); }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut counter = Counter(0);
+    if serde_json::to_writer(&mut counter, value).is_err() { BYTE_LIMIT + 1 } else { counter.0 }
 }
 
 #[cfg(test)]
@@ -146,6 +174,28 @@ mod tests {
         RemoteTarget { id: uuid::Uuid::new_v4().to_string(), name: "cache fixture".into(),
             host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(),
             identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 }
+    }
+
+    #[test]
+    fn immutable_reads_share_payload_and_legacy_reads_remain_independent() {
+        let target = target();
+        let first = read_shared(&target, "large-history", false, || Ok(vec!["transcript".repeat(100_000)])).unwrap();
+        let second = read_shared(&target, "large-history", false, || -> Result<Vec<String>, _> { panic!("cached") }).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&first, &previous_shared::<Vec<String>>(&target, "large-history").unwrap()));
+        let mut editable = read(&target, "large-history", false, || -> Result<Vec<String>, _> { panic!("cached") }).unwrap();
+        editable[0].clear();
+        assert_eq!(first[0].len(), 1_000_000);
+        invalidate(&target.id);
+        assert!(previous_shared::<Vec<String>>(&target, "large-history").is_none());
+        assert_eq!(second[0].len(), 1_000_000);
+    }
+
+    #[test]
+    fn serialized_budget_counts_utf8_and_escaping_without_retaining_json() {
+        let value = vec!["正文\n\"\\".repeat(100)];
+        assert_eq!(serialized_size(&value), serde_json::to_vec(&value).unwrap().len());
+        assert!(serialized_size(&"x".repeat(BYTE_LIMIT / 2 + 1)) > BYTE_LIMIT);
     }
 
 
