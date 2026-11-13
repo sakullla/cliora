@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadApp } from '../ui/loadApp.ts';
+import { retryPlan } from '../../scripts/ui-test-report.mjs';
 
 function runReporterScenario(first, args = []) {
   const root = mkdtempSync(path.join(tmpdir(), 'cliora-runner-regression-'));
   try {
     for (const dir of ['scripts', 'src', 'dist', 'node_modules/@playwright/test']) mkdirSync(path.join(root, dir), { recursive: true });
     copyFileSync(new URL('../../scripts/test-ui.mjs', import.meta.url), path.join(root, 'scripts/test-ui.mjs'));
+    copyFileSync(new URL('../../scripts/ui-test-report.mjs', import.meta.url), path.join(root, 'scripts/ui-test-report.mjs'));
     for (const file of ['src/index.ts', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package-lock.json', 'dist/index.html']) {
       const target = path.join(root, file);
       writeFileSync(target, '');
@@ -55,16 +57,12 @@ test('global errors, mixed product errors and flaky failures cannot be cleared b
     failedReport([network], { stats: { unexpected: 1, flaky: 1 } }),
     failedReport([]),
   ]) {
-    const result = runReporterScenario(report);
-    assert.equal(result.status, 1, result.output);
-    assert.equal(result.calls.length, 1);
+    assert.equal(retryPlan(report, [], process.cwd()), null);
   }
 });
 
 test('an unknown CLI option keeps the failed run instead of silently losing its value', () => {
-  const result = runReporterScenario(failedReport([network]), ['--future-option', 'value']);
-  assert.equal(result.status, 1);
-  assert.equal(result.calls.length, 1);
+  assert.equal(retryPlan(failedReport([network]), ['--future-option', 'value'], process.cwd()), null);
 });
 
 test('app startup retries only a network failure, never a missing app shell', async () => {

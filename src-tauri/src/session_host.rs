@@ -515,6 +515,10 @@ pub fn install(app: AppHandle) {
 }
 
 pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<LaunchResult, String> {
+    start_with_baseline(plan, credential, None)
+}
+
+pub(crate) fn start_with_baseline(plan: LaunchPlan, credential: Option<&(String, String)>, restored: Option<Option<crate::session_baseline::SessionBaseline>>) -> Result<LaunchResult, String> {
     let remote = plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:"));
     if !remote && !plan.executable.is_file() {
         return Err("CLI 可执行文件不存在，请在工具页重新检测".into());
@@ -545,7 +549,10 @@ pub fn start(plan: LaunchPlan, credential: Option<&(String, String)>) -> Result<
     // Record where this session starts before the CLI can change anything, so
     // "changes" and the review baseline later mean what this session did.
     if !remote {
-        crate::session_baseline::capture(&id, &plan.directory);
+        match restored {
+            Some(baseline) => crate::session_baseline::restore(&id, baseline),
+            None => crate::session_baseline::capture(&id, &plan.directory),
+        }
     }
     let context = if remote { crate::remote::operations::current() } else { None };
     let slot = context.as_ref().map(|context| crate::remote::operations::acquire_bound(context)).transpose().map_err(|error| error.to_string())?;

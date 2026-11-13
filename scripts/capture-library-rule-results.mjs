@@ -20,7 +20,7 @@ import { preview } from 'vite';
 const option = (flag, fallback) => { const index = process.argv.indexOf(flag); return index < 0 ? fallback : process.argv[index + 1] ?? fallback; };
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
-const sizeOption = option('--size', 'all');
+const sizeOption = option('--size', '1360');
 const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
 if (themes.some(theme => theme !== 'light' && theme !== 'dark') || widths.some(width => !Number.isFinite(width) || width <= 0)) {
   console.error('--theme accepts all|light|dark and --size accepts all or comma-separated widths');

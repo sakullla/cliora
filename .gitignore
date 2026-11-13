@@ -34,6 +34,7 @@ docs/architecture/*
 !docs/architecture/configuration-adapters.md
 !docs/architecture/cli-maintenance.md
 !docs/architecture/terminal-attachments.md
+!docs/architecture/terminal-activity.md
 
 # Track this redesign's verification document and its dedicated UI captures only.
 !docs/verification/
@@ -43,6 +44,7 @@ docs/verification/*
 !docs/verification/usage-audit-2026-10-18.md
 !docs/verification/performance-after-0.4.17.md
 !docs/verification/git-worktree-performance.md
+!docs/verification/session-recovery-status-2026-11-13.md
 !docs/verification/performance-installation/
 docs/verification/performance-installation/*
 !docs/verification/performance-installation/README.md

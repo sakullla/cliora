@@ -11,7 +11,7 @@ const out = path.resolve(process.env.CLIORA_PRODUCT_CAPTURE_OUT ?? path.join(roo
 const buildDirectory = path.resolve(root, process.env.CLIORA_PRODUCT_BUILD_OUT ?? 'dist');
 if (!fs.existsSync(path.join(buildDirectory, 'index.html'))) throw new Error('Run npm run build before capturing the product.');
 const allScenes = [
-  { id: 'pages', script: 'capture-ui.mjs', args: ['--quick', '--skip-migration'] },
+  { id: 'pages', script: 'capture-ui.mjs', args: ['--only', 'tools,library,sessions,usage,settings'] },
   { id: 'home', script: 'capture-ui.mjs', args: ['--home'] },
   { id: 'workbench', script: 'capture-workbench.mjs', args: [] },
   { id: 'memory', script: 'capture-memory.mjs', args: [] },
@@ -29,7 +29,7 @@ const option = (flag, fallback) => {
   return value;
 };
 const theme = option('--theme', 'all');
-const size = option('--size', '1360,900,640');
+const size = option('--size', '1360');
 fs.mkdirSync(out, { recursive: true });
 const port = await new Promise((resolve, reject) => {
   const reservation = net.createServer();
@@ -56,6 +56,7 @@ try {
     const log = fs.createWriteStream(path.join(directory, 'capture.log'));
     const args = [path.join(root, 'scripts', scene.script), ...scene.args, '--theme', theme, '--size', size];
     if (scene.id === 'workbench' && process.argv.includes('--performance')) args.push('--performance');
+    if (scene.id === 'workbench' && process.argv.includes('--full')) args.push('--full');
     console.log(`Capturing ${scene.id}: ${theme} × ${size}`);
     const exitCode = await new Promise(resolve => {
       child = spawn(process.execPath, args, { cwd: root, windowsHide: true, env: { ...process.env, CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory }, stdio: ['ignore', 'pipe', 'pipe'] });

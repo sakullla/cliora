@@ -374,12 +374,18 @@ const option = (flag, fallback) => {
 };
 const themeOption = option('--theme', 'all');
 if (!['all', 'light', 'dark'].includes(themeOption)) throw new Error('Invalid --theme; use all, light or dark');
-const sizeOption = option('--size', 'all');
+const sizeOption = option('--size', '1360');
 const widths = sizeOption === 'all' ? [1360, 900, 640] : [...new Set(sizeOption.split(',').map(Number))];
 if (!widths.length || widths.some((width) => ![1360, 900, 640].includes(width))) throw new Error('Invalid --size; use 1360,900,640');
 
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
-const onlyPatterns = option('--only', '*').split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
+// Routine desktop review: one example of each distinct primary surface. The
+// exhaustive platform/error/large-list variants remain opt-in via --full/--only.
+const defaultScenes = ['workbench-active', 'workbench-worktrees', 'workbench-ended', 'workbench-appearance',
+  'workbench-composer', 'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-empty'];
+const defaultPatterns = defaultScenes.flatMap(scene => ['light', 'dark'].map(theme => `${scene}-${theme}-*`));
+if (process.argv.includes('--performance')) defaultPatterns.push('workbench-remote-stream-*');
+const onlyPatterns = option('--only', process.argv.includes('--full') ? '*' : defaultPatterns.join(',')).split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
 try {
 if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();

@@ -25,6 +25,9 @@ export type ModelMappingControl = {
 };
 export type ToolUiAdapter = {
   id: string;
+  /** Native TUI evidence after escape sequences are parsed. null means unknown;
+      shared terminal activity then falls back to changing screen content. */
+  terminalActivity?: (view: { title: string; lines: readonly string[] }) => boolean | null;
   /** Prompt payloads, each delivered as a separate paste event. Owns native
       image-path parsing differences; never returns keyboard shortcuts. */
   attachmentPastes?: (paths: string[]) => string[];

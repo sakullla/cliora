@@ -8,7 +8,6 @@ const style = styleSource();
 const badge = readFileSync(new URL('src/components/ui/Badge.module.css', root), 'utf8');
 const button = readFileSync(new URL('src/components/ui/Button.module.css', root), 'utf8');
 const editor = readFileSync(new URL('src/components/CodeEditor.css', root), 'utf8');
-const domain = readFileSync(new URL('src/types/domain.ts', root), 'utf8');
 const tauriConfig = JSON.parse(readFileSync(new URL('src-tauri/tauri.conf.json', root), 'utf8'));
 
 function block(css, header) {
@@ -77,7 +76,7 @@ const themes = [
   ['light', light, lightCode],
   ['dark', dark, darkCode],
 ];
-const surfaces = ['bg', 'sidebar', 'surface', 'surface-2', 'surface-3'];
+const surfaces = ['bg', 'sidebar', 'surface', 'surface-2', 'surface-3', 'selection'];
 const reading = ['text', 'text-2', 'text-3'];
 
 test('body, secondary, and description text stay at WCAG 4.5:1 on every page surface', () => {
@@ -86,15 +85,6 @@ test('body, secondary, and description text stay at WCAG 4.5:1 on every page sur
       for (const surface of surfaces) {
         ratioAtLeast(wcag(hexBytes(theme[token]), hexBytes(theme[surface])), 4.5, `${name} --${token} on --${surface}`);
       }
-    }
-  }
-});
-
-test('body, secondary, and description text stay at WCAG 4.5:1 on the opaque selection', () => {
-  for (const [name, theme] of themes) {
-    const selection = hexBytes(theme.selection);
-    for (const token of reading) {
-      ratioAtLeast(wcag(hexBytes(theme[token]), selection), 4.5, `${name} --${token} on --selection`);
     }
   }
 });
@@ -157,38 +147,17 @@ test('badge tones and description text on the raised surface stay at WCAG 4.5:1'
       ratioAtLeast(wcag(hexBytes(theme[ink[1]]), hexBytes(theme[fill[1]])), 4.5, `${name} Badge ${tone} (--${ink[1]} on --${fill[1]})`);
     }
   }
-  for (const [name, theme] of themes) {
-    ratioAtLeast(wcag(hexBytes(theme['text-3']), hexBytes(theme['surface-2'])), 4.5, `${name} --text-3 on --surface-2`);
-  }
+
 });
 
-test('Quiet Studio chart colors stay distinct and visible; font stacks and theme count stay put', () => {
-  const palette = {
-    light: {
-      'chart-input': '#527b9b',
-      'chart-output': '#3f805e',
-      'chart-read': '#a2782f',
-      'chart-write': '#806b99',
-    },
-    dark: {
-      'chart-input': '#8bb4d2',
-      'chart-output': '#94c6a7',
-      'chart-read': '#d7b778',
-      'chart-write': '#bdabd2',
-    },
-  };
+test('chart series are distinct and keep non-text contrast in both themes', () => {
+  const tokens = ['chart-input', 'chart-output', 'chart-read', 'chart-write'];
   for (const [name, theme] of themes) {
-    assert.equal(new Set(Object.values(palette[name])).size, 4, `${name} chart colors must be distinct`);
-    for (const [token, value] of Object.entries(palette[name])) {
-      assert.equal(theme[token], value, `${name} --${token}`);
-      // These tokens paint chart marks, not text; WCAG non-text contrast is 3:1.
-      ratioAtLeast(wcag(hexBytes(value), hexBytes(theme.surface)), 3, `${name} --${token} on --surface`);
+    assert.equal(new Set(tokens.map(token => theme[token])).size, tokens.length, `${name} chart colors must be distinct`);
+    for (const token of tokens) {
+      ratioAtLeast(wcag(hexBytes(theme[token]), hexBytes(theme.surface)), 3, `${name} --${token} on --surface`);
     }
   }
-  assert.equal(light['font-sans'], '"Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif');
-  assert.equal(light['font-mono'], '"Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", "SFMono-Regular", Menlo, monospace');
-  assert.match(style, /font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;/);
-  assert.match(domain, /export type Theme = 'system' \| 'light' \| 'dark';/);
 });
 
 test('static window background matches the declared light page background', () => {

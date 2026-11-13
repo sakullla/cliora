@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 30 {
+        if version > 31 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -623,6 +623,17 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 31 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS workbench_baselines (
+                   session_key TEXT PRIMARY KEY NOT NULL REFERENCES app_settings(key) ON DELETE CASCADE,
+                   data TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 31;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -888,7 +899,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 30);
+            assert_eq!(version, 31);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

@@ -10,7 +10,7 @@
 //!   launch and still has the same content;
 //! - a file that was changed at launch but is now back to the start HEAD counts too.
 //!
-//! The record lives in memory for the life of the session host process. A session
+//! The record is cached in the session host and saved with the workbench checkpoint. A session
 //! that moved into another worktree, or a launch whose read failed, has no record;
 //! callers then fall back to the whole-checkout status.
 
@@ -28,7 +28,7 @@ const MAX_FINGERPRINTS: usize = 5_000;
 const CAPTURE_WAIT: Duration = Duration::from_secs(5);
 const DELETED: &str = "-";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SessionBaseline {
     pub root: PathBuf,
     /// HEAD at launch; `None` in a repository without commits.
@@ -37,7 +37,7 @@ pub(crate) struct SessionBaseline {
     dirty: HashMap<String, Option<String>>,
 }
 
-type Slot = Arc<(Mutex<Option<Option<SessionBaseline>>>, Condvar)>;
+type Slot = Arc<(Mutex<Option<Option<Arc<SessionBaseline>>>>, Condvar)>;
 
 static BASELINES: LazyLock<Mutex<HashMap<String, Slot>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -58,10 +58,19 @@ pub(crate) fn capture(session_id: &str, directory: &Path) {
     }
 }
 
+/// Install the original checkpoint before starting a restored CLI. Missing legacy
+/// evidence stays missing: reading today's HEAD would falsely reset session changes.
+pub(crate) fn restore(session_id: &str, baseline: Option<SessionBaseline>) {
+    let slot: Slot = Arc::new((Mutex::new(Some(baseline.map(Arc::new))), Condvar::new()));
+    if let Ok(mut map) = BASELINES.lock() {
+        map.insert(session_id.to_owned(), slot);
+    }
+}
+
 fn publish(slot: &Slot, value: Option<SessionBaseline>) {
     let (lock, ready) = &**slot;
     if let Ok(mut current) = lock.lock() {
-        *current = Some(value);
+        *current = Some(value.map(Arc::new));
         ready.notify_all();
     }
 }
@@ -73,7 +82,7 @@ pub(crate) fn forget(session_id: &str) {
 }
 
 /// The record of `session_id`, if its capture finished and found a repository.
-pub(crate) fn get(session_id: &str) -> Option<SessionBaseline> {
+pub(crate) fn get(session_id: &str) -> Option<Arc<SessionBaseline>> {
     let slot = BASELINES.lock().ok()?.get(session_id).cloned()?;
     let (lock, ready) = &*slot;
     let guard = lock.lock().ok()?;
@@ -82,7 +91,7 @@ pub(crate) fn get(session_id: &str) -> Option<SessionBaseline> {
 }
 
 /// The record of `session_id` when it belongs to the worktree at `root`.
-pub(crate) fn for_root(session_id: &str, root: &Path) -> Option<SessionBaseline> {
+pub(crate) fn for_root(session_id: &str, root: &Path) -> Option<Arc<SessionBaseline>> {
     get(session_id).filter(|baseline| same_root(&baseline.root, root))
 }
 

@@ -621,7 +621,7 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
             head_oid: snapshot.head_oid,
             uncommitted_files: Some(snapshot.files),
             session_files: start.as_ref().and_then(|start| crate::session_baseline::session_changes(start, &root).ok()),
-            session_base: start.and_then(|start| start.head),
+            session_base: start.and_then(|start| start.head.clone()),
             state: "ready",
             reason: None,
         },

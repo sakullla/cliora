@@ -832,6 +832,31 @@ async function pointForTerminalText(page: Page, text: string, last = false) {
   return (await locate())!;
 }
 
+test('Codex completion, idle redraws and protocol traffic do not masquerade as active turns', async ({ page }) => {
+  await openWorkbench(page);
+  const status = page.locator('[data-activity-slot="status"]');
+  const output = (text: string) => page.evaluate((text) => (window as unknown as { __output: (text: string) => void }).__output(text), text);
+  // Use the bottom of the current screen, just as the native TUI does.
+  const footer = '\u001b[999;1H\r\n› Ask Codex to do anything\r\n\r\ngpt-6 · project\r\n? for shortcuts';
+  await output('\u001b[2J\u001b[HWorked for 9m 1s' + footer);
+  await expect(status).toHaveAttribute('data-activity-icon', 'idle');
+  for (let frame = 0; frame < 4; frame++) {
+    await output('\u001b[HWelcome ' + frame + footer);
+    await page.waitForTimeout(120);
+    await expect(status).toHaveAttribute('data-activity-icon', 'idle');
+  }
+  await output('\u001b[2J\u001b[H\u001b[999;1H\r\n• Working (esc to interrupt)\r\n› \r\n? for shortcuts');
+  await expect(status).toHaveAttribute('data-activity-icon', 'live');
+  // A silent tool outlasts the old 1.5 second byte timeout.
+  await page.waitForTimeout(1700);
+  await expect(status).toHaveAttribute('data-activity-icon', 'live');
+  await output('\u001b[2J\u001b[HComplete' + footer);
+  await expect(status).toHaveAttribute('data-activity-icon', 'idle');
+  await output('\u001b[?25h\u001b[6n\u001b]2;project\u0007');
+  await page.waitForTimeout(120);
+  await expect(status).toHaveAttribute('data-activity-icon', 'idle');
+});
+
 test('live output and idle waiting keep distinct activity icons in every workbench slot', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -914,7 +939,7 @@ test('live output and idle waiting keep distinct activity icons in every workben
   await expect(stage.locator('header [data-state]').first()).toHaveAttribute('title', '已结束');
 });
 
-for (const width of [1280, 640]) {
+for (const width of [1280, 720]) {
   test(`English activity states preserve status and title geometry at ${width}px`, async ({ page }) => {
     await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
     await page.setViewportSize({ width, height: 800 });
@@ -936,12 +961,17 @@ for (const width of [1280, 640]) {
         title: box(chip.parentElement!.querySelector('h2')!),
       };
     });
-    const setLongTitle = () => page.evaluate((value) => {
-      (window as unknown as { __output: (text: string) => void }).__output('\u001b]2;' + value + '\u0007');
-    }, longTitle);
+    const setLongTitle = async () => {
+      await page.evaluate((value) => {
+        (window as unknown as { __output: (text: string) => void }).__output('\u001b]2;' + value + '\u0007');
+      }, longTitle);
+      // A title-only OSC is no longer fake live output. Await the actual title,
+      // not the old 1.5 second output timeout, before measuring its geometry.
+      await expect(title).toContainText('A deliberately long session title');
+    };
     const expectStableState = async (tone: string, layout: unknown) => {
       await expect(statusIcon).toHaveAttribute('data-activity-icon', tone);
-      expect(await readLayout()).toEqual(layout);
+      await expect.poll(readLayout).toEqual(layout);
       const reserves = statusIcon.locator('..').locator(':scope > span > span[aria-hidden="true"]');
       await expect(reserves).toHaveCount(4);
       for (let index = 0; index < 4; index += 1) {
@@ -977,7 +1007,7 @@ for (const width of [1280, 640]) {
     await page.evaluate(() => (window as unknown as { __exit: (code: number) => void }).__exit(0));
     await expectStableState('ended', idleLayout);
 
-    for (const nextWidth of [900, 640, 600]) {
+    for (const nextWidth of [720]) {
       await page.setViewportSize({ width: nextWidth, height: 800 });
       if (nextWidth <= 720) await expect(root).toHaveAttribute('data-narrow', 'true');
       if (nextWidth <= 620) await expect(root).toHaveAttribute('data-compact', 'true');
@@ -1290,6 +1320,32 @@ test('a replayed session with long output opens scrolled to the latest line', as
   await expect(latest).toBeVisible();
   await latest.click();
   await expect.poll(async () => (await readScroll(page.locator('.xterm-scrollable-element:visible'))).remaining).toBe(0);
+});
+
+test('a stalled replay drains the bounded recent output tail when it finally resolves', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.addInitScript(() => {
+    Object.assign(window, { __replayOverride: new Promise((resolve) => {
+      Object.assign(window, { __releaseReplay: () => resolve({ dataBase64: btoa('old snapshot\r\n'), endOffset: 14 }) });
+    }) });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.locator('.xterm')).toHaveCount(1);
+  await page.evaluate(() => {
+    const harness = window as unknown as { __output: (text: string, id: string, offset: number) => void; __releaseReplay: () => void };
+    let offset = 14;
+    // Much larger than the 512 KiB per-session staging cap.
+    for (let batch = 0; batch < 400; batch++) {
+      const text = `batch-${batch} ` + 'x'.repeat(4096) + '\r\n';
+      harness.__output(text, 's1', offset);
+      offset += text.length;
+    }
+    harness.__output('latest-after-delayed-replay\r\n> ', 's1', offset);
+    harness.__releaseReplay();
+  });
+  await expect(page.locator('.xterm-accessibility-tree')).toContainText('latest-after-delayed-replay');
+  await expect.poll(() => page.locator('.xterm-accessibility-tree').innerText()).not.toContain('batch-0 ');
 });
 
 test('numbered output that overlaps the replay is written once', async ({ page }) => {

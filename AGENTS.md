@@ -47,11 +47,12 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 ```
 
 - `--theme all|light|dark` chooses the theme. The default is `all`.
-- `--size all|1360,900,640` chooses widths. The default is `all`.
+- With no area selector, capture page overviews only. Use `--full` for the exhaustive capture set.
+- `--size all|1360,900,640` chooses widths. The default is desktop width `1360`; smaller widths are opt-in compatibility checks. The native window minimum is 720px, so 640px is not a normal desktop scenario.
 - `--skills` captures the Skill list, the SKILL.md reading view, and the SKILL.md editor.
 - `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
 - `--mcp` captures the tool MCP list with its details, edit and add dialogs, plus the library MCP list, editor, and CLI target panel.
-- `--list` prints feature scenario names. `--only 'kimi-*'` limits those scenarios. It does not filter `--skills`.
+- `--list` prints page and feature scenario names. `--only settings` captures only Settings; `--only 'tools,library,sessions,usage,settings'` selects page overviews; `--only 'kimi-*'` limits feature scenarios. It does not filter `--skills`.
 - `CLIORA_CAPTURE_OUT` sets the output directory. The default is `docs/verification/ui`.
 - `CLIORA_PREVIEW_URL` sets the preview. The default is `http://127.0.0.1:14736`.
 
@@ -59,9 +60,11 @@ The Skill fixture treats the directory name as the skill. `crud-page` has a mism
 
 `scripts/capture-sync.mjs` captures only 迁移与同步: WebDAV unconnected, healthy, needs-attention, failing and paused states, the connect/export/import dialogs, an open conflict, and the sync progress and result dialogs. It takes the same `--theme`/`--size` options and writes to `docs/verification/ui-sync` unless `CLIORA_CAPTURE_OUT` is set.
 
-`scripts/capture-workbench.mjs` captures the 工作台 screen: the session rail with long titles, terminal canvas and scrollbar, display preferences, quick input and find bar, ended-session state, the folded sidebar (including the macOS title-bar layout), the worktree menu and management dialog (including hundreds of worktrees: the menu filter, the current-project scope and the all-projects grouping), the new-session dialog, and the empty launchpad in both themes at 1360, 900, and 640. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes `docs/verification/ui-workbench` unless `CLIORA_CAPTURE_OUT` is set.
+`scripts/capture-workbench.mjs` captures the 工作台 screen: the session rail with long titles, terminal canvas and scrollbar, display preferences, quick input and find bar, ended-session state, the folded sidebar (including the macOS title-bar layout), the worktree menu and management dialog (including hundreds of worktrees: the menu filter, the current-project scope and the all-projects grouping), the new-session dialog, and the empty launchpad in both themes at 1360 by default (900 and 640 are opt-in). It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes `docs/verification/ui-workbench` unless `CLIORA_CAPTURE_OUT` is set.
 
-Workbench captures wait for fixture content and paint readiness. The ended-session capture also records layout metrics. Add `--performance` to run the remote-stream stress measurement once, at the first selected theme/size; ordinary captures omit it. `scripts/capture-product-ux.mjs` forwards `--theme`, `--size`, and `--performance`, and its pages gallery omits the migration overview covered by the sync gallery.
+Workbench captures wait for fixture content and paint readiness. The ended-session capture also records layout metrics. Add `--performance` to run the remote-stream stress measurement once, at the first selected theme/size; ordinary captures omit it. `scripts/capture-product-ux.mjs` forwards `--theme`, `--size`, and `--performance`, defaults to 1360px, and its pages gallery omits the home and migration overviews covered by their dedicated galleries.
+
+Workbench's default gallery includes nine representative desktop states per theme. Use `--full` for all platform/error/large-list variants or `--only 'workbench-restore-*'` to target one area. The product capture wrapper forwards `--full` to workbench captures. `--size all` is an explicit compatibility sweep, not the daily default.
 
 `scripts/capture-memory.mjs` captures only 工具与连接 → 记忆: the grouped list, reading, frontmatter properties, editing, creating, type filtering, no-match, the CLI-wide switch off, per-store and per-entry switches, a read-only CLI, and the empty state. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes to `docs/verification/ui-memory` unless `CLIORA_CAPTURE_OUT` is set.
 

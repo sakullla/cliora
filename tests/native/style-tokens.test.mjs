@@ -45,6 +45,8 @@ function splitTop(text, separator) {
 export function declarations(css) {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '));
   const list = [];
+  let line = 1;
+  let newline = text.indexOf('\n');
   for (const block of text.matchAll(/\{([^{}]*)\}/g)) {
     const bodyStart = block.index + 1;
     for (const part of splitTop(block[1], /;/)) {
@@ -54,7 +56,11 @@ export function declarations(css) {
       const value = part.text.slice(colon + 1).trim();
       if (!property || !value) continue;
       const leading = part.text.length - part.text.trimStart().length;
-      const line = text.slice(0, bodyStart + part.offset + leading).split('\n').length;
+      const position = bodyStart + part.offset + leading;
+      while (newline >= 0 && newline < position) {
+        line += 1;
+        newline = text.indexOf('\n', newline + 1);
+      }
       list.push({ property, value, line });
     }
   }

@@ -7,7 +7,7 @@ import { chromium } from '@playwright/test';
 const option = (flag, fallback) => { const index = process.argv.indexOf(flag); return index < 0 ? fallback : process.argv[index + 1]; };
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
-const sizeOption = option('--size', 'all');
+const sizeOption = option('--size', '1360');
 const languageOption = option('--language', 'zh');
 const languages = languageOption === 'all' ? ['zh', 'en'] : [languageOption];
 // The General tab is captured too when asked, so the settings grouping has browser evidence.

@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { native, nativeAvailable } from '../../lib/native';
+import { uiAdapterFor } from '../../adapters';
 import { writeClipboard } from '../../lib/clipboard';
 import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalTheme';
 import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
@@ -314,8 +315,9 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, label, active, keepRendererWarm = false, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
+  toolId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
   label: string;
@@ -441,10 +443,16 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     let replayReady = false;
     let liveStreaming = false;
     let liveTimer = 0;
+    const activity = uiAdapterFor(toolId).terminalActivity;
+    let terminalTitle = '';
+    let knownActivity: boolean | null = null;
+    let pendingLiveOutput = false;
+    let lastScreen = '';
+    let activityTimer = 0;
+    let publishedTitle = '';
     // Stream offset past the newest byte already written. Live events and the replay
     // overlap around mount; offsets let each byte reach xterm exactly once.
     let streamEnd: number | null = null;
-    const queued: OutputChunk[] = [];
     const links = registerTerminalLinks(term, {
       mac: MAC,
       hint: () => linkHintRef.current,
@@ -488,6 +496,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
     };
     const markLiveOutput = () => {
       if (disposed || !runningRef.current) return;
+      if (knownActivity !== null) return;
       if (!liveStreaming) {
         liveStreaming = true;
         bridge.current.outputActive(sessionId, true);
@@ -503,13 +512,15 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       try {
         const fresh = bytesPastEnd(decodeBase64(chunk.data), chunk.offset, streamEnd);
         streamEnd = fresh.end;
-        if (isLive && fresh.bytes.length > 0) markLiveOutput();
+        if (isLive && fresh.bytes.length > 0) pendingLiveOutput = true;
         scheduleWriteBytes(fresh.bytes);
       } catch { /* Malformed bytes stay out of the terminal. */ }
     };
     const publish = (chunk: OutputChunk) => {
       if (acceptLive) writeChunk(chunk, true);
-      else queued.push(chunk);
+      // A slow replay used to collect an unbounded per-terminal array. Share
+      // the existing byte/session limits while mounting as well as unmounted.
+      else pending.current.push(sessionId, chunk);
     };
     writers.current.set(sessionId, publish);
 
@@ -626,7 +637,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       if (!disposed) bridge.current.bell(sessionId);
     });
     const titleSub = term.onTitleChange((title) => {
-      if (!disposed) bridge.current.title(sessionId, title);
+      terminalTitle = title;
     });
     const gridSub = term.onResize(({ cols, rows }) => {
       if (!disposed) bridge.current.grid(sessionId, cols, rows);
@@ -728,7 +739,37 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       reportScroll();
     };
     const scrollSub = term.onScroll(reportScroll);
+    const inspectActivity = () => {
+      activityTimer = 0;
+      if (disposed) return;
+      const buffer = term.buffer.active;
+      const previousActivity = knownActivity;
+      // Only CLI-specific footer readers need these rows. Known states never
+      // allocate a copy of the full viewport or inspect the scrollback buffer.
+      const footer = activity ? Array.from({ length: Math.min(term.rows, 12) }, (_, row) => buffer.getLine(buffer.baseY + Math.max(0, term.rows - 12) + row)?.translateToString(true) ?? '') : [];
+      knownActivity = activity?.({ title: terminalTitle, lines: footer }) ?? null;
+      if (knownActivity !== null) {
+        lastScreen = '';
+        window.clearTimeout(liveTimer);
+        if (liveStreaming !== knownActivity) {
+          liveStreaming = knownActivity;
+          if (!disposed && runningRef.current) bridge.current.outputActive(sessionId, knownActivity);
+        }
+      } else {
+        const screen = Array.from({ length: term.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '').join('\n');
+        if ((pendingLiveOutput && screen !== lastScreen) || (previousActivity !== null && liveStreaming)) markLiveOutput();
+        lastScreen = screen;
+      }
+      pendingLiveOutput = false;
+      if (publishedTitle !== terminalTitle) {
+        publishedTitle = terminalTitle;
+        bridge.current.title(sessionId, terminalTitle);
+      }
+    };
     const parsedSub = term.onWriteParsed(() => {
+      // Coalesce output bursts across many xterm parse callbacks. The timer is
+      // demand-driven, including when hidden, and leaves no idle polling loop.
+      if (!activityTimer) activityTimer = window.setTimeout(inspectActivity, 80);
       // Do not start a second animation frame when xterm already follows the
       // last row. Keep the deferred correction for a genuinely moved viewport.
       if (activeRef.current && !awayFromBottom && term.buffer.active.viewportY < term.buffer.active.baseY) scrollToLatest();
@@ -942,9 +983,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       let snapshot = new Uint8Array(0);
       try { snapshot = decodeBase64(encoded); }
       catch { snapshot = new Uint8Array(0); }
-      const earlier = pending.current.drain(sessionId);
-      const arrived = queued.splice(0);
-      const chunks = [...earlier, ...arrived];
+      const chunks = pending.current.drain(sessionId);
       let suffix: Uint8Array;
       if (replayEnd !== null && chunks.every((chunk) => chunk.offset !== undefined)) {
         // The host numbers every byte, so the overlap with the replay is exact.
@@ -993,7 +1032,6 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       replayReady = true;
       fitNow();
       pending.current.drain(sessionId).forEach((item) => writeChunk(item));
-      queued.splice(0).forEach((item) => writeChunk(item));
     });
     return () => {
       flushInput();
@@ -1004,6 +1042,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
       replies.dispose();
       window.clearTimeout(repaintTimer);
       window.clearTimeout(liveTimer);
+      window.clearTimeout(activityTimer);
       flushWrites();
       cancelAnimationFrame(resizeFrame);
       cancelAnimationFrame(scrollUiFrame);
@@ -1041,7 +1080,7 @@ export function SessionTerminal({ sessionId, label, active, keepRendererWarm = f
         fitNowRef.current = null;
       }
     };
-  }, [sessionId, writers, pending, handles, bridge]);
+  }, [sessionId, toolId, writers, pending, handles, bridge]);
 
   useEffect(() => {
     const term = termRef.current;

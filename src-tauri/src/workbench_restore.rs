@@ -62,8 +62,26 @@ pub fn from_plan(plan: &LaunchPlan) -> Option<SavedSession> {
 
 pub fn save(db: &Database, session: &SavedSession) -> Result<(), String> {
     let text = serde_json::to_string(session).map_err(|error| error.to_string())?;
-    db.with_connection(|conn| conn.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        rusqlite::params![format!("{PREFIX}{}", session.id), text]).map(|_| ()).map_err(|error| error.to_string()))
+    let baseline = serde_json::to_string(&crate::session_baseline::get(&session.id).as_deref()).map_err(|error| error.to_string())?;
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let key = format!("{PREFIX}{}", session.id);
+        tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            rusqlite::params![key, text]).map_err(|error| error.to_string())?;
+        // Never replace the original start point on later checkpoint updates.
+        tx.execute("INSERT INTO workbench_baselines(session_key,data) VALUES(?1,?2) ON CONFLICT(session_key) DO NOTHING",
+            rusqlite::params![key, baseline]).map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
+fn saved_baseline(db: &Database, id: &str) -> Result<Option<crate::session_baseline::SessionBaseline>, String> {
+    use rusqlite::OptionalExtension;
+    db.with_read_connection(|conn| {
+        let text: Option<String> = conn.query_row("SELECT data FROM workbench_baselines WHERE session_key=?1",
+            [format!("{PREFIX}{id}")], |row| row.get(0)).optional().map_err(|error| error.to_string())?;
+        text.map(|text| serde_json::from_str(&text).map_err(|_| "会话起点记录无法读取；原记录已保留".to_owned())).transpose().map(Option::flatten)
+    })
 }
 
 pub fn forget(db: &Database, id: &str) -> Result<(), String> {
@@ -400,7 +418,8 @@ fn restore_items(
                 directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None,
             }, Path::new(&session.directory), context.cloned()).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
-            let result = launch::spawn(db, plan)?;
+            let baseline = saved_baseline(db, &session.id)?;
+            let result = launch::spawn_with_baseline(db, plan, Some(baseline))?;
             let id = result.session_id.ok_or("未创建恢复终端")?;
             let cleanup = if live.contains_key(&session.id) { crate::session_host::close(&session.id) } else { Ok(()) };
             if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
@@ -427,6 +446,61 @@ fn restore_items(
 #[cfg(test)]#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn git_baseline_survives_database_reopen_and_repeated_session_id_changes() {
+        use crate::session_baseline as baseline;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let result = std::process::Command::new("git").arg("-C").arg(&root)
+                .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+                .args(args).output().unwrap();
+            assert!(result.status.success(), "git failed: {}", String::from_utf8_lossy(&result.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "fixture@example.com"]);
+        git(&["config", "user.name", "Fixture"]);
+        std::fs::write(root.join("before.txt"), "base\n").unwrap();
+        std::fs::write(root.join("session.txt"), "base\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::write(root.join("before.txt"), "pre-existing\n").unwrap();
+        let mut saved = SavedSession { id: uuid::Uuid::new_v4().to_string(), tool_id: "codex".into(),
+            project_id: None, directory: root.display().to_string(), mode: LaunchMode::Normal,
+            started_at: 0, stopped_at: None, native_id: None, account_id: None, context_id: None };
+        let path = temp.path().join("restore.db");
+        baseline::capture(&saved.id, &root);
+        let original = baseline::get(&saved.id).unwrap();
+        {
+            let db = Database::open(&path).unwrap();
+            save(&db, &saved).unwrap();
+        }
+        std::fs::write(root.join("session.txt"), "committed during session\n").unwrap();
+        git(&["add", "session.txt"]);
+        git(&["commit", "-qm", "session"]);
+        // Simulate process loss, then repeat restart/id remapping three times.
+        baseline::forget(&saved.id);
+        for _ in 0..3 {
+            let db = Database::open(&path).unwrap();
+            let restored = saved_baseline(&db, &saved.id).unwrap().unwrap();
+            assert_eq!(&restored, original.as_ref());
+            assert_eq!(baseline::session_changes(&restored, &root).unwrap(), 1);
+            assert_eq!(baseline::review_base(&restored, &root), original.head);
+            let old = saved.id.clone();
+            saved.id = uuid::Uuid::new_v4().to_string();
+            baseline::restore(&saved.id, Some(restored));
+            save(&db, &saved).unwrap();
+            forget(&db, &old).unwrap();
+            assert!(saved_baseline(&db, &old).unwrap().is_none());
+            baseline::forget(&saved.id);
+        }
+        // Old versions did not save this evidence. Never manufacture a new start.
+        let db = Database::open(&path).unwrap();
+        assert!(saved_baseline(&db, "legacy-tab").unwrap().is_none());
+    }
+
     #[test]
     fn codebuddy_empty_logs_do_not_block_restore_but_read_errors_do() {
         use crate::adapters::CliAdapter;
@@ -705,16 +779,22 @@ mod tests {
         let program = home.join("fixture.ps1");
         std::fs::write(&program, "[Console]::WriteLine('restored-args:' + ($args -join '|')); $null = [Console]::ReadLine(); [Console]::WriteLine('RESTORE_EXIT_TAIL')").unwrap();
         let saved = SavedSession { id: "previous-process".into(), tool_id: "codex".into(), project_id: None, directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None };
+        let original: crate::session_baseline::SessionBaseline = serde_json::from_value(serde_json::json!({
+            "root": home, "head": "a".repeat(40), "dirty": {"old.txt": null}
+        })).unwrap();
+        crate::session_baseline::restore(&saved.id, Some(original.clone()));
         {
             let db = Database::open(&database).unwrap();
             save(&db, &saved).unwrap();
         }
+        crate::session_baseline::forget(&saved.id);
         let db = Database::open(&database).unwrap();
         let mut registry = Registry::builtins();
         registry.fixture_installations.insert("codex".into(), vec![crate::native::adapter::Installation { path: program.display().to_string(), version: Some("0.165.0".into()), source: "test", status: "available", detail: None }]);
         let report = restore(&db, &registry, home).unwrap();
         assert!(report.failures.is_empty(), "{:?}", report.failures.iter().map(|failure| &failure.detail).collect::<Vec<_>>());
         let id = report.restored.get(&saved.id).unwrap();
+        assert_eq!(crate::session_baseline::get(id).as_deref(), Some(&original));
         let output = crate::session_host::wait_for_replay(id, &format!("resume|{native}"));
         assert!(restore_selected(&db, &registry, home, id, None).is_err(), "a running tab must not be duplicated");
         let again = restore(&db, &registry, home).unwrap();
@@ -742,6 +822,7 @@ mod tests {
         assert!(crate::session_host::list().iter().any(|session| session.id == *id), "failed recovery must retain the old terminal");
         let resumed = restore_selected(&db, &registry, home, id, None).unwrap();
         let resumed_id = resumed.restored.get(id).expect("ended tab resumes its exact conversation");
+        assert_eq!(crate::session_baseline::get(resumed_id).as_deref(), Some(&original));
         assert!(!crate::session_host::list().iter().any(|session| session.id == *id));
         crate::session_host::wait_for_replay(resumed_id, &format!("resume|{native}")).unwrap();
         crate::session_host::close(resumed_id).unwrap();
@@ -749,6 +830,7 @@ mod tests {
         // the original conversation's creation time.
         let next = restore(&db, &registry, home).unwrap();
         let next_id = next.restored.get(resumed_id).unwrap();
+        assert_eq!(crate::session_baseline::get(next_id).as_deref(), Some(&original));
         let output = crate::session_host::wait_for_replay(next_id, &format!("resume|{native}"));
         crate::session_host::close(next_id).unwrap();
         forget(&db, next_id).unwrap();

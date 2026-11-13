@@ -20,7 +20,7 @@ async function openCli(page, name) {
 const option = (flag, fallback) => { const index = process.argv.indexOf(flag); return index < 0 ? fallback : process.argv[index + 1]; };
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
-const sizeOption = option('--size', 'all');
+const sizeOption = option('--size', '1360');
 const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-memory`;

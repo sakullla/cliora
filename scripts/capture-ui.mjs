@@ -12,7 +12,7 @@ const option=(flag,fallback)=>{const index=process.argv.indexOf(flag);if(index<0
 const themeOption=option('--theme','all');
 if(!['all','light','dark'].includes(themeOption))throw new Error('Invalid --theme; use all, light or dark');
 const themes=themeOption==='all'?['light','dark']:[themeOption];
-const sizeOption=option('--size','all');
+const sizeOption=option('--size','1360');
 // --home adds the 1280 width where the reported two-column project grid squeezed card titles.
 const homeCapture=process.argv.includes('--home');
 const allowedWidths=homeCapture?[1360,1280,900,640]:[1360,900,640];
@@ -26,14 +26,18 @@ const firstScreen={};
 if(measure&&(!themes.includes('light')||!widths.includes(measureViewport.width)))throw new Error('--measure needs the light theme and the 1360 width in the capture matrix');
 const onlyOption=option('--only','*');
 const patterns=onlyOption.split(',').map(pattern=>new RegExp('^'+pattern.split('').map(char=>char==='*'?'.*':char==='?'?'.':char.replace(/[\\^$+.[\]{}()|]/g,'\\$&')).join('')+'$'));
+const quickPageNames=['home','tools','library','sessions','usage','settings','migration'];
+const selectedPages=quickPageNames.filter(name=>patterns.some(pattern=>pattern.test(name)));
 const candidates=(process.argv.includes('--features')||process.argv.includes('--workflows'))&&!process.argv.includes('--only')?configurationScenarios.map(item=>item.name):scenarioNames;
 const selectedScenarios=candidates.filter(name=>patterns.some(pattern=>pattern.test(name)));
-if((process.argv.includes('--features')||process.argv.includes('--workflows')||process.argv.includes('--list')||process.argv.includes('--only'))&&!selectedScenarios.length)throw new Error('No matching feature scenarios');
-if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
+if((process.argv.includes('--features')||process.argv.includes('--workflows')||process.argv.includes('--list')||process.argv.includes('--only'))&&!selectedScenarios.length&&!selectedPages.length)throw new Error('No matching capture scenarios');
+if(process.argv.includes('--list')){console.log([...selectedPages,...selectedScenarios].join('\n'));process.exit(0);}
+const pagesOnly=process.argv.includes('--only')&&selectedPages.length>0&&selectedScenarios.length===0;
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const quickCapture=process.argv.includes('--quick');
-const fullCapture=!quickCapture&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
+const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
+const quickCapture=process.argv.includes('--quick')||!scopedCapture;
+const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
 const captureMode=homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
 const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
@@ -463,7 +467,7 @@ const ids=['scenario','theme','width','query'];const controls=ids.map(id=>docume
 </script></body></html>`);
  const rows=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`| ${title} | ${captures.filter(item=>item.name===name).map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
  fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--rules\` 捕获远程规则绑定读取、失败、陈旧、编辑草稿与恢复；\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
- fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,...(measure?{firstScreen:{viewport:measureViewport,theme:'light',selector:'[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]',counts:firstScreen}}:{}),captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
+ fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:pagesOnly?selectedPages:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,...(measure?{firstScreen:{viewport:measureViewport,theme:'light',selector:'[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]',counts:firstScreen}}:{}),captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
 // Default full capture includes the screens that used to require --sessions, --connections, or --mcp.
@@ -817,6 +821,17 @@ for(const width of widths)for(const theme of themes){
   await page.getByRole('region',{name:'工具'}).getByLabel('配置列表').waitFor();
   await captureSkillViews(page,capture);
   await page.close(); continue;
+ }
+ if(pagesOnly){
+  for(const name of selectedPages){
+   if(name==='home')await nav.getByRole('button',{name:'首页',exact:true}).click();
+   if(name==='tools'){await nav.getByRole('button',{name:'工具',exact:true}).click();await page.getByRole('region',{name:'工具'}).getByLabel('配置列表').waitFor();}
+   if(name==='library'){await nav.getByRole('button',{name:'资料库',exact:true}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();}
+   if(name==='sessions'||name==='usage'){await nav.getByRole('button',{name:'记录',exact:true}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(name==='usage')await page.getByRole('tab',{name:'用量',exact:true}).click();}
+   if(name==='settings'||name==='migration'){await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});if(name==='migration'){await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();}}
+   await capture(name);
+  }
+  await page.close();continue;
  }
  await capture('home');
  if(quickCapture){

@@ -2203,6 +2203,10 @@ fn browser_login_invocation(invocation: &str, endpoint: &str, receipt: &Path) ->
 }
 
 pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
+    spawn_with_baseline(db, plan, None)
+}
+
+pub(crate) fn spawn_with_baseline(db: &Database, plan: LaunchPlan, restored: Option<Option<crate::session_baseline::SessionBaseline>>) -> Result<LaunchResult, String> {
     if let Some((id,context))=&plan.account_context { if Some(crate::accounts::get(db,id)?.version)!=plan.account_version {return Err("账号在计划后发生变化，请重新启动".into());} crate::accounts::validate_selected_context(db,id,&context.id)?; crate::accounts::context::check_path(&context.root)?; }
     // The stored connection key is read here, at injection time, and only
     // travels into the child process environment.
@@ -2212,7 +2216,10 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     }
     if plan.terminal == TerminalId::Workbench {
         let saved = crate::workbench_restore::from_plan(&plan);
-        let result = crate::session_host::start(plan, credential.as_ref())?;
+        let result = match restored {
+            Some(baseline) => crate::session_host::start_with_baseline(plan, credential.as_ref(), Some(baseline))?,
+            None => crate::session_host::start(plan, credential.as_ref())?,
+        };
         if let (Some(mut saved), Some(id)) = (saved, result.session_id.as_ref()) {
             saved.id = id.clone();
             if let Err(error) = crate::workbench_restore::save(db, &saved) {

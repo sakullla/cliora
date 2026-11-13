@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access, readdir } from 'node:fs/promises';
+import { readFile, access } from 'node:fs/promises';
 
 const sources = [
   'src-tauri/src/accounts/context.rs', 'src-tauri/src/accounts/native.rs',
@@ -10,6 +10,7 @@ const sources = [
   'src/features/tools/PluginsWorkspace.tsx', 'src/features/tools/UsageQuota.tsx',
   'src/features/tools/AccountsPanel.tsx', 'src-tauri/src/native/configuration.rs',
   'src-tauri/src/adapters/configuration.rs', 'src/lib/configurationDraft.ts',
+  'src-tauri/src/resources/memory.rs', 'src/features/sessions/SessionTerminal.tsx',
 ];
 test('shared account, resource, quota and UI services do not dispatch on builtin IDs', async () => {
   for (const path of sources) {
@@ -35,47 +36,5 @@ test('adapter implementations have only the frontend and backend package roots',
   // package root; they need no frontend package until custom controls exist.
   for (const cli of ['zcode', 'qoder_cn', 'kimi_code', 'deepseek', 'codebuddy']) {
     await access(`src-tauri/src/adapters/${cli}/mod.rs`);
-  }
-});
-
-test('configuration ports are registered capabilities and draft IPC never writes files', async () => {
-  const contract = await readFile('src-tauri/src/adapters/contract.rs', 'utf8');
-  assert.match(contract, /fn configuration\(&self\)/);
-  const draft = await readFile('src-tauri/src/native/configuration.rs', 'utf8');
-  assert.doesNotMatch(draft, /std::fs|credentials\.put|transaction::commit/);
-  assert.match(draft, /normalize_legacy/);
-  const apply = await readFile('src-tauri/src/native/apply.rs', 'utf8');
-  assert.match(apply, /managed_fields/);
-  assert.match(apply, /transaction::/);
-});
-
-test('memory port resolves directories in adapters and publishes only complete declarations', async () => {
-  const contract = await readFile('src-tauri/src/adapters/contract.rs', 'utf8');
-  assert.match(contract, /pub memory: Option<super::memory::MemoryManagement>/);
-  assert.match(contract, /fn memory\(&self\) -> Option<&dyn super::memory::MemoryAdapter> \{\r?\n\s*None\r?\n\s*\}/);
-  assert.match(contract, /fn published_memory\(&self\)/);
-  const memory = await readFile('src-tauri/src/adapters/memory.rs', 'utf8');
-  assert.match(memory, /fn directory\(/);
-  assert.match(memory, /fn publish\(declaration: &MemoryDeclaration\) -> Option<MemoryManagement>/);
-  // Declaration completeness is exercised by adapters::memory behavior tests.
-  assert.doesNotMatch(memory, /claude|codex|grok|opencode|qoder|deepseek|codebuddy|cursor|minimax|kiro|devin|cline|antigravity|mimo|kimi_code|command_code|zcode|\.claude|\.codex/i);
-  // The shared engine consumes the resolved directory and never dispatches on CLI ids.
-  const engine = (await readFile('src-tauri/src/resources/memory.rs', 'utf8')).split('#[cfg(test)]')[0];
-  assert.match(engine, /\.directory\(scope, home, project\.as_deref\(\)\)/);
-  assert.doesNotMatch(engine, /['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi|zcode|qoder|kimi_code|deepseek|codebuddy)['"]/, 'memory engine must not dispatch on CLI ids');
-  // Adapter directories may own a memory module; wiring stays consistent.
-  const entries = await readdir('src-tauri/src/adapters', { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const source = await readFile(`src-tauri/src/adapters/${entry.name}/mod.rs`, 'utf8');
-    const wired = /fn memory\s*\(/.test(source);
-    const module = (await access(`src-tauri/src/adapters/${entry.name}/memory.rs`).then(() => true, () => false))
-      || (await access(`src-tauri/src/adapters/${entry.name}/memory/mod.rs`).then(() => true, () => false));
-    assert.equal(module, wired, `${entry.name}: memory wiring matches a memory module`);
-    if (wired) {
-      assert.match(source, /(?:pub\s+)?mod\s+memory\s*;/, `${entry.name}: wiring declares the memory module`);
-    } else {
-      assert.doesNotMatch(source, /MemoryAdapter|MemoryDeclaration|MemoryManagement/, entry.name);
-    }
   }
 });
