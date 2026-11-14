@@ -119,12 +119,20 @@ fn run_remote_mux_shell(command: &str, scenario: &str) -> std::process::Output {
     let shell = format!(r#"
 scenario={scenario}
 created=0
+setup_attempted=0
 tmux() {{
     [ "$1" = -u ] || return 90
     shift
     case "$1" in
         new-session) created=1; printf 'NEW\n' ;;
         list-sessions)
+            if [ "$setup_attempted" = 1 ]; then
+                case "$scenario" in
+                    *setup_vanished) echo 'no server running on /tmp/tmux-fixture/default' >&2; return 1 ;;
+                    *setup_session_ended) echo cliora-sibling; return 0 ;;
+                    *setup_unknown) echo 'permission denied' >&2; return 1 ;;
+                esac
+            fi
             case "$scenario" in
                 unknown) echo 'permission denied' >&2; return 1 ;;
                 screen|absent) echo cliora-fixture-other ;;
@@ -144,7 +152,10 @@ tmux() {{
                 mouse)
                     [ "$4" = on ] || return 92
                     printf 'MOUSE:=cliora-fixture:on\n'
-                    [ "$scenario" != setup_failed ] && [ "$scenario" != new_setup_failed ] ;;
+                    setup_attempted=1
+                    case "$scenario" in
+                        *setup_failed|*setup_vanished|*setup_session_ended|*setup_unknown) return 1 ;;
+                    esac ;;
                 # Chrome options are session-scoped and best effort: a refusal never blocks attach.
                 status) [ "$4" = off ] || return 92; printf 'STATUS:off\n'; [ "$scenario" != chrome_refused ] ;;
                 set-titles) [ "$4" = on ] || return 92; printf 'TITLES:on\n'; [ "$scenario" != chrome_refused ] ;;
@@ -370,6 +381,30 @@ fn remote_tmux_escape_time_is_only_raised_and_never_blocks_attach() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_tmux_startup_waits_for_a_client_and_stops_on_probe_failure() {
+    for failed in [false, true] {
+        let failure = if failed { "return 1" } else { ":" };
+        let gate = REMOTE_TMUX_STARTUP_GATE;
+        let output = run_posix_shell(&format!(r#"
+TMUX_PANE=%42
+polls=0
+tmux() {{
+    [ "$*" = '-u display-message -p -t %42 #{{session_attached}}' ] || exit 90
+    {failure}
+    if [ "$polls" -lt 3 ]; then echo 0; else echo 1; fi
+}}
+sleep() {{ [ "$1" = 0.05 ] || exit 91; polls=$((polls + 1)); }}
+{gate}
+printf 'CLI_STARTED:%s\n' "$polls"
+"#));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(output.status.code(), Some(if failed { 46 } else { 0 }), "{stdout}");
+        assert_eq!(stdout.contains("CLI_STARTED:3"), !failed, "{stdout}");
+    }
+}
+
+#[test]
 #[ignore = "requires local POSIX shell and tmux; opt in with --include-ignored"]
 fn remote_generated_commands_use_real_tmux_target_parsing_on_an_isolated_socket() {
     // Optional paths let Windows development use a locally extracted tmux in WSL.
@@ -380,6 +415,7 @@ fn remote_generated_commands_use_real_tmux_target_parsing_on_an_isolated_socket(
     let legacy = reattach.replace("set-option -t '=cliora-fixture:'", "set-option -t '=cliora-fixture'");
     assert_ne!(legacy, reattach, "negative control must reproduce the original target");
     let new = remote_persistent_command("/tmp", "sleep", &["60".into()], "cliora-fixture", Default::default());
+    let fast = remote_persistent_command("/tmp", "sh", &["-c".into(), "printf 'CLIORA_STARTUP_FAILURE\\n' >&2; exit 7".into()], "cliora-fast", Default::default());
     let shell = format!(r#"
 set -eu
 tmux_bin={binary}
@@ -390,14 +426,27 @@ socket="$task_root/socket"
 export HOME="$task_root/home"
 mkdir "$HOME"
 cleanup() {{
-    "$tmux_bin" -S "$socket" kill-server >/dev/null 2>&1 || :
+    command "$tmux_bin" -S "$socket" kill-server >/dev/null 2>&1 || :
     if [ -S "$socket" ]; then rm -- "$socket"; fi
+    if [ -f "$task_root/failure.txt" ]; then rm -- "$task_root/failure.txt"; fi
     rmdir "$HOME" "$task_root"
 }}
 trap cleanup EXIT
-mux() {{ "$tmux_bin" -f /dev/null -S "$socket" "$@"; }}
+mux() {{ command "$tmux_bin" -f /dev/null -S "$socket" "$@"; }}
 tmux() {{
     if [ "$1" = -u ] && [ "$2" = attach-session ]; then
+        if [ "$4" = '=cliora-fast' ]; then
+            # Verify the failure stays visible, then acknowledge it as a user.
+            # Bound the wait so a broken startup gate fails instead of hanging.
+            (count=0; while [ "$count" -lt 100 ]; do
+                mux capture-pane -p -t '=cliora-fast:' > "$task_root/failure.txt" 2>/dev/null || break
+                if grep -Fq 'Press Enter to close this session.' "$task_root/failure.txt"; then
+                    mux send-keys -t '=cliora-fast:' Enter; break
+                fi
+                count=$((count + 1)); sleep 0.05
+            done; count=0; while mux has-session -t '=cliora-fast' 2>/dev/null && [ "$count" -lt 100 ]; do count=$((count + 1)); sleep 0.05; done) | mux -C "$@"
+            return $?
+        fi
         # Control mode exercises the real attach-session parser and attachment,
         # then detaches immediately without requiring a desktop PTY.
         printf 'detach-client\n' | mux -C "$@"
@@ -438,6 +487,12 @@ mux kill-session -t '=cliora-fixture'
 if missing_output=$( ( set +e; {reattach} ) ); then exit 83; else [ "$?" = 44 ] || exit 84; fi
 case "$missing_output" in *';ready'*) exit 85 ;; esac
 mux has-session -t '=cliora-fixture-long'
+fast_output=$( ( set +e; {fast} ) )
+printf 'FAST_RESULT:%s\n' "$fast_output"
+grep -Fq CLIORA_STARTUP_FAILURE "$task_root/failure.txt" || exit 86
+grep -Fq 'CLI exited with status 7.' "$task_root/failure.txt" || exit 88
+cat "$task_root/failure.txt"
+case "$fast_output" in *';cliora-fast;ended'*) ;; *) exit 87 ;; esac
 printf 'ISOLATED_TMUX_OK\n'
 "#);
     let output = run_posix_shell(&shell);
@@ -445,9 +500,33 @@ printf 'ISOLATED_TMUX_OK\n'
     assert!(output.status.success(), "{stdout}: {}", String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("LEGACY_FAILED_BEFORE_READY") && stdout.contains("ISOLATED_TMUX_OK"), "{stdout}");
     assert_eq!(stdout.matches(";cliora-fixture;ready").count(), 2, "{stdout}");
-    assert_eq!(stdout.matches("%session-changed").count(), 2, "{stdout}");
+    assert_eq!(stdout.matches("%session-changed").count(), 3, "{stdout}");
     assert_eq!(stdout.matches(";cliora-fixture;disconnected").count(), 2, "{stdout}");
+    assert!(stdout.contains("%output") && stdout.contains("CLIORA_STARTUP_FAILURE"), "{stdout}");
+    assert!(stdout.contains(";cliora-fast;ended"), "{stdout}");
     assert!(!stdout.contains("%error"), "{stdout}");
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
+fn remote_tmux_exit_during_mouse_setup_rechecks_session_before_reporting_failure() {
+    for new in [false, true] {
+        for (scenario, exit) in [("setup_vanished", 44), ("setup_session_ended", 44), ("setup_unknown", 46), ("setup_failed", 46)] {
+            let scenario = if new { format!("new_{scenario}") } else { scenario.to_owned() };
+            let command = if new {
+                remote_persistent_command("/srv/fixture", "fixture-cli", &[], "cliora-fixture", Default::default())
+            } else {
+                remote_reattach_command("cliora-fixture")
+            };
+            let output = run_remote_mux_shell(&command, &scenario);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(output.status.code(), Some(exit), "{scenario}: {stdout}: {stderr}");
+            assert_eq!(stdout.contains(";cliora-fixture;ended"), exit == 44, "{scenario}: {stdout}");
+            assert!(!stdout.contains(";ready") && !stdout.contains("ATTACH"), "{scenario}: {stdout}");
+            assert_eq!(stderr.contains("could not enable remote session history scrolling"), exit == 46, "{scenario}: {stderr}");
+        }
+    }
 }
 
 #[test]

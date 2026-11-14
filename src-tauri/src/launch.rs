@@ -457,13 +457,22 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     // its own TERM value, which is not sufficient for full-screen CLIs.
     // Run the payload through a shell that advertises the PTY we provide.
     let interactive = remote_shell_quote(&format!("{REMOTE_TERMINAL_ENV}; {command}"));
+    // Detached panes can run and exit before attach, dropping the CLI's
+    // startup diagnostics along with the last tmux session. Wait for a client
+    // before starting the CLI, so interactive setup and failures are visible.
+    // Keep a failed CLI's diagnostics on screen until Enter; otherwise tmux
+    // can destroy the pane before the attached client receives its final output.
+    let tmux_interactive = remote_shell_quote(&format!("{REMOTE_TMUX_STARTUP_GATE}; {REMOTE_TERMINAL_ENV}; ({command}); cliora_exit=$?; if [ \"$cliora_exit\" -ne 0 ]; then printf '\\nCliora: CLI exited with status %s. Press Enter to close this session.\\n' \"$cliora_exit\"; read -r cliora_close; fi; exit \"$cliora_exit\""));
     let session_q = remote_shell_quote(session);
     let path_q = remote_shell_quote(path);
     format!(
-        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -d -s {session_q} -c {path_q} -- sh -lc {interactive} || exit $?; elif command -v screen >/dev/null 2>&1; then if screen -list | grep -Fq -- {session_q}; then echo 'Cliora remote session identity already exists' >&2; exit 45; fi; screen -U -dmS {session_q} sh -lc {interactive} || exit $?; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi; {}",
+        "{}; if command -v tmux >/dev/null 2>&1; then tmux -u set-option -g status off >/dev/null 2>&1 || true; tmux -u set-window-option -g status off >/dev/null 2>&1 || true; tmux -u set-environment -g COLORTERM truecolor >/dev/null 2>&1 || true; tmux -u new-session -d -s {session_q} -c {path_q} -- sh -lc {tmux_interactive} || exit $?; elif command -v screen >/dev/null 2>&1; then if screen -list | grep -Fq -- {session_q}; then echo 'Cliora remote session identity already exists' >&2; exit 45; fi; screen -U -dmS {session_q} sh -lc {interactive} || exit $?; else echo 'Cliora requires tmux or screen for persistent remote sessions' >&2; exit 42; fi; {}",
         crate::remote::LINUX_TMUX_INSTALL, remote_reattach_command(session)
     )
 }
+
+// TMUX_PANE targets this pane even if another session is current on the server.
+const REMOTE_TMUX_STARTUP_GATE: &str = "while :; do cliora_attached=$(tmux -u display-message -p -t \"$TMUX_PANE\" '#{session_attached}') || exit 46; case \"$cliora_attached\" in 0) sleep 0.05 ;; *) break ;; esac; done";
 
 /// Minimum tmux escape-time for remote sessions; see `remote_reattach_command`.
 pub(crate) const REMOTE_TMUX_ESCAPE_TIME_MS: u32 = 150;
@@ -494,9 +503,13 @@ pub(crate) fn remote_reattach_command(session: &str) -> String {
     // forwards the CLI's own title to the client so the session can be named by its task.
     // The global `status off` at creation is a no-op before the first server starts.
     // Neither is worth failing an attach over.
+    // A CLI can exit between the presence probe and mouse setup. Confirm
+    // absence again on failure so a short-lived session reports ended instead
+    // of an unknown scrolling failure. Probe errors still remain unknown.
+    let ended_signal = remote_state_signal(session, "ended");
     let title_q = remote_shell_quote(REMOTE_TMUX_TITLE_FORMAT);
     format!(
-        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {pane_target_q} mouse on || {{ echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; tmux -u set-option -t {pane_target_q} status off 2>/dev/null || :; tmux -u set-option -t {pane_target_q} set-titles on 2>/dev/null || :; tmux -u set-option -t {pane_target_q} set-titles-string {title_q} 2>/dev/null || :; cliora_escape=$(tmux -u show-options -sv escape-time 2>/dev/null) || cliora_escape=; case \"$cliora_escape\" in ''|*[!0-9]*) ;; *) if [ \"$cliora_escape\" -lt {REMOTE_TMUX_ESCAPE_TIME_MS} ]; then tmux -u set-option -s escape-time {REMOTE_TMUX_ESCAPE_TIME_MS} 2>/dev/null || :; fi ;; esac; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {session_target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
+        "{REMOTE_TERMINAL_ENV}; {}; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; exit 44; elif [ \"$cliora_status\" -ne 0 ]; then exit 46; fi; if [ \"$cliora_mux\" = tmux ]; then tmux -u set-option -t {pane_target_q} mouse on || {{ cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {ended_signal}; exit 44; fi; echo 'Cliora could not enable remote session history scrolling' >&2; exit 46; }}; tmux -u set-option -t {pane_target_q} status off 2>/dev/null || :; tmux -u set-option -t {pane_target_q} set-titles on 2>/dev/null || :; tmux -u set-option -t {pane_target_q} set-titles-string {title_q} 2>/dev/null || :; cliora_escape=$(tmux -u show-options -sv escape-time 2>/dev/null) || cliora_escape=; case \"$cliora_escape\" in ''|*[!0-9]*) ;; *) if [ \"$cliora_escape\" -lt {REMOTE_TMUX_ESCAPE_TIME_MS} ]; then tmux -u set-option -s escape-time {REMOTE_TMUX_ESCAPE_TIME_MS} 2>/dev/null || :; fi ;; esac; fi; {}; if [ \"$cliora_mux\" = tmux ]; then tmux -u attach-session -t {session_target_q}; else screen -U -r {session_q}; fi; cliora_probe; cliora_status=$?; if [ \"$cliora_status\" -eq 1 ]; then {}; elif [ \"$cliora_status\" -eq 0 ]; then {}; else exit 46; fi",
         remote_mux_probe(session), remote_state_signal(session, "ended"), remote_state_signal(session, "ready"),
         remote_state_signal(session, "ended"), remote_state_signal(session, "disconnected")
     )
