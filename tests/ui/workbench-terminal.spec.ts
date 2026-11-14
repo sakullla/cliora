@@ -390,6 +390,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
     const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: (window as unknown as { __oldSessions?: boolean }).__oldSessions ? 1 : Date.now() }];
     if ((window as unknown as { __twoSessions?: boolean }).__twoSessions) sessions.push({ id: 's2', toolId: 'claude_code', projectId: null, directory: 'D:/a-long-project-directory/for-the-second-session', mode: 'yolo', running: true, exitCode: null, startedAt: Date.now() });
+    const moreSessions = (window as unknown as { __moreSessions?: typeof sessions }).__moreSessions;
+    if (moreSessions) sessions.push(...moreSessions);
     if ((window as unknown as { __emptySessions?: boolean }).__emptySessions) sessions.length = 0;
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const writes: string[] = [];
@@ -558,7 +560,10 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             return null;
           }
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'list_workbench_sessions') {
+            if ((window as unknown as { __failSessionList?: boolean }).__failSessionList) throw new Error('列表读取失败');
+            return sessions.map((item) => ({ ...item }));
+          }
           if (command === 'list_workbench_restore_sessions') {
             const harness = window as unknown as {
               __savedRestores?: Array<Record<string, any>>;
@@ -3704,4 +3709,160 @@ test('the worktree menu is fully usable from the keyboard', async ({ page }) => 
     worktreeIntent: 'given',
   });
   await expect(menu).toHaveCount(0);
+});
+
+test('a covered session rail repeats the waiting count on the stage and selects the same session', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const root = page.locator('[data-term-theme]');
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const jumpName = /^\d+ 个会话等你处理$/;
+  const jumps = page.getByRole('button', { name: jumpName });
+  const railJump = rail.getByRole('button', { name: jumpName });
+  const stageJump = stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: jumpName });
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const bell = (id: string) => page.evaluate((sessionId) => {
+    (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output('\u0007', sessionId);
+  }, id);
+  const armClaude = async () => {
+    await bell('s2');
+    await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
+  };
+  const backToCodex = async () => {
+    await page.getByRole('tab', { name: /Codex/ }).click();
+    await expect(selected).toHaveAttribute('data-session-id', 's1');
+    await expect(page.locator('[data-attention]')).toHaveCount(0);
+  };
+
+  await armClaude();
+  await expect(railJump).toHaveText('1 个会话等你处理');
+  await expect(stageJump).toHaveCount(0);
+  await expect(jumps).toHaveCount(1);
+  const waitingTitle = (await railJump.getAttribute('title')) ?? '';
+  expect(waitingTitle).not.toBe('');
+  const sameJump = async () => {
+    await expect(stageJump).toHaveText('1 个会话等你处理');
+    await expect(stageJump).toHaveAttribute('title', waitingTitle);
+    await expect(jumps).toHaveCount(1);
+  };
+  await railJump.click();
+  await expect(selected).toHaveAttribute('data-session-id', 's2');
+  const picked = 's2';
+  await expect(page.locator('[data-drag-id="s2"]')).not.toHaveAttribute('data-attention');
+  await expect(page.locator('[data-pane-session]')).toHaveCount(2);
+  expect(await page.evaluate(() => ((window as unknown as { __launches?: unknown[] }).__launches ?? []).length)).toBe(0);
+
+  await backToCodex();
+  await armClaude();
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(root).toHaveAttribute('data-focus-mode', 'true');
+  await expect(rail).toHaveCount(0);
+  await sameJump();
+  await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+  await stageJump.click();
+  const claudeInput = page.locator('[data-pane-session="s2"] .xterm-helper-textarea');
+  await expect(claudeInput).toBeFocused();
+  await claudeInput.press('z');
+  await expect.poll(() => writeLog(page)).toContainEqual({ sessionId: picked, text: 'z' });
+  expect((await writeLog(page)).filter((item) => item.text === 'z').map((item) => item.sessionId)).toEqual([picked]);
+  await expect(page.locator('[data-pane-session]')).toHaveCount(2);
+  expect(await page.evaluate(() => ((window as unknown as { __launches?: unknown[] }).__launches ?? []).length)).toBe(0);
+  await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
+  await expect(root).not.toHaveAttribute('data-focus-mode');
+  await expect(selected).toHaveAttribute('data-session-id', picked);
+  await expect(page.locator(`[data-drag-id="${picked}"]`)).not.toHaveAttribute('data-attention');
+
+  await backToCodex();
+  await armClaude();
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+  await expect(rail).toHaveAttribute('data-slim', 'true');
+  await expect(railJump).toHaveCount(0);
+  await sameJump();
+  await stageJump.click();
+  await expect(selected).toHaveAttribute('data-session-id', picked);
+  await expect(page.locator(`[data-drag-id="${picked}"]`)).not.toHaveAttribute('data-attention');
+
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
+  await expect(rail).not.toHaveAttribute('data-slim');
+  await backToCodex();
+  await armClaude();
+  // The session list leaves the sidebar below the 761px dock and becomes the undocked strip.
+  await page.setViewportSize({ width: 720, height: 760 });
+  await expect(rail).toHaveAttribute('data-strip', 'true');
+  await expect(page.locator('[data-term-theme]').getByRole('tablist', { name: '会话列表' })).toBeVisible();
+  await expect(page.getByLabel('主导航').getByRole('tablist', { name: '会话列表' })).toHaveCount(0);
+  await expect(railJump).toHaveCount(0);
+  await sameJump();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await stageJump.click();
+  await expect(selected).toHaveAttribute('data-session-id', picked);
+  await expect(page.locator(`[data-drag-id="${picked}"]`)).not.toHaveAttribute('data-attention');
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(rail).not.toHaveAttribute('data-strip');
+  await backToCodex();
+  await expect(jumps).toHaveCount(0);
+
+  // The selected session's own bell never becomes this jump. Focused, it is ignored; unfocused, the row
+  // shows 待处理 and the count stays absent.
+  await page.evaluate(() => { document.hasFocus = () => true; });
+  await bell('s1');
+  await bell('s2');
+  await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
+  await expect(page.locator('[data-drag-id="s1"]')).not.toHaveAttribute('data-attention');
+  await expect(railJump).toHaveText('1 个会话等你处理');
+  await expect(stageJump).toHaveCount(0);
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(page.locator('[data-attention]')).toHaveCount(0);
+  await page.evaluate(() => { document.hasFocus = () => false; });
+  await bell('s1');
+  await expect(page.locator('[data-drag-id="s1"]')).toHaveAttribute('data-attention');
+  await expect(page.locator('[data-activity-slot="status"]')).toHaveAttribute('data-activity-icon', 'bell');
+  await expect(jumps).toHaveCount(0);
+  await page.evaluate(() => { document.hasFocus = () => true; });
+});
+
+test('searching away every waiting session removes the waiting count until the search is cleared', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __twoSessions: true,
+      // The rail search field appears at four sessions. These two are ended, so they do not mount terminals.
+      __moreSessions: [
+        { id: 's3', toolId: 'codex', projectId: null, directory: 'C:/notes', mode: 'normal', running: false, exitCode: 0, startedAt: Date.now() },
+        { id: 's4', toolId: 'codex', projectId: null, directory: 'C:/logs', mode: 'normal', running: false, exitCode: 0, startedAt: Date.now() },
+      ],
+    });
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const jumpName = /^\d+ 个会话等你处理$/;
+  const jumps = page.getByRole('button', { name: jumpName });
+  const railJump = page.getByRole('complementary', { name: '会话列表' }).getByRole('button', { name: jumpName });
+  const stageJump = stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: jumpName });
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id?: string) => void }).__output('\u0007', 's2'));
+  await expect(railJump).toHaveText('1 个会话等你处理');
+  await expect(stageJump).toHaveCount(0);
+  await page.getByRole('searchbox', { name: '搜索会话、工具或目录…' }).fill('Codex');
+  await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
+  await expect(jumps).toHaveCount(0);
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(jumps).toHaveCount(0);
+  await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
+  await page.getByRole('button', { name: '显示全部会话', exact: true }).click();
+  await expect(railJump).toHaveText('1 个会话等你处理');
+  await expect(stageJump).toHaveCount(0);
+});
+
+test('a failed session list keeps its error and does not show zero sessions waiting', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __failSessionList: true }); });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '会话列表没有读出来' })).toBeVisible();
+  await expect(page.getByText('0 个会话等你处理', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /个会话等你处理/ })).toHaveCount(0);
 });

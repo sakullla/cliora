@@ -3238,13 +3238,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     shell.style.setProperty('--rail-w', railWidth + 'px');
     return () => { shell.style.removeProperty('--rail-w'); };
   }, [railHost, railWidth]);
+  // The rail draws this jump only while docked and expanded. Focus mode, a slim rail and the
+  // undocked strip cover that button, so the stage repeats the same filtered waiting list.
+  const stageAttention = showRail && railDocked && !railSlim
+    ? []
+    : railSessions.filter((item) => item.attention && item.session.id !== selectedId);
+  const stageAttentionTarget = stageAttention[0];
+  function selectSession(id: string, focusTerminal = true) {
+    setSelectedId(id);
+    if (focusTerminal) requestAnimationFrame(() => {
+      if (selectedIdRef.current === id) handles.current.get(id)?.focus();
+    });
+  }
   const rail = <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} search={railSearch} selectedId={selectedId} narrow={!railDocked} slim={railDocked && railSlim} docked={railDocked} busy={!!busy} canLaunch={terminalTools.length > 0}
-    endedCollapsed={endedCollapsed} onToggleEnded={toggleEndedCollapsed} onSearch={setRailSearch} onSelect={(id, focusTerminal = true) => {
-      setSelectedId(id);
-      if (focusTerminal) requestAnimationFrame(() => {
-        if (selectedIdRef.current === id) handles.current.get(id)?.focus();
-      });
-    }} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} onReorder={reorderSessions} />;
+    endedCollapsed={endedCollapsed} onToggleEnded={toggleEndedCollapsed} onSearch={setRailSearch} onSelect={selectSession} onNewSession={() => openNewSessionDialog()} onOpenMenu={openRowMenu} onRemove={(session) => void endSession(session)} onClearEnded={() => void clearEndedSessions()} onToggleSlim={toggleRail} onReorder={reorderSessions} />;
 
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-docked={railDocked || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
@@ -3402,6 +3409,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               </div>
               <div className={styles.stageTail}>
                 <div className={styles.terminalActions} role="toolbar" aria-label={t('sessions.terminalMenu')}>
+                  {stageAttentionTarget && <button type="button" className={styles.stageAttention} title={stageAttention.map((item) => item.title || item.name).join('\n')} onClick={() => { if (stageAttentionTarget) selectSession(stageAttentionTarget.session.id); }}>
+                    <SessionActivityIcon tone="bell" slot="stage" className={styles.stageAttentionIcon} />
+                    <span>{t('sessions.attentionJump', { count: stageAttention.length })}</span>
+                    <Icon name="arrowRight" size={13} />
+                  </button>}
                   <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>

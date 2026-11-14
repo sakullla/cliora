@@ -914,7 +914,35 @@
 .focusBtn:focus-visible,
 .endBtn:focus-visible,
 .statusButton:focus-visible,
-.findToggle:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.findToggle:focus-visible,
+.stageAttention:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+/* Same jump as the rail, only while that rail button is off screen. It yields before the icon tools. */
+.stageTail:has(.stageAttention) { flex: 0 1 auto; min-width: 0; }
+.stageAttention {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 16rem;
+  height: 28px;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  text-align: left;
+  box-shadow: none;
+  animation: wbFindIn 160ms var(--ease);
+}
+.stageAttention > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stageAttention > :global(svg) { flex: none; }
+.stageAttention:hover:not(:disabled) { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, var(--warning-soft)); color: var(--warning); box-shadow: none; }
+.stageAttentionIcon { width: 14px; height: 14px; }
 .terminalActions .toolButton[data-variant]:disabled { opacity: .35; }
 .root .iconBtn[data-size] { width: var(--space-8); min-width: 0; height: var(--space-8); min-height: 0; color: var(--term-text-2); }
 .root .iconBtn[data-variant]:disabled { opacity: .35; }
@@ -1796,6 +1824,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .composerDock,
   .endedBar,
   .railAttention,
+  .stageAttention,
   .liveDot[data-live],
   .sessionIconWrap,
   .rail[data-slim] .sessionIconWrap[data-tone='live']::after,
