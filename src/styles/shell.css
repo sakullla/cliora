@@ -172,7 +172,8 @@ main.content:focus, main.content:focus-visible { outline: none; }
 .host-switcher-menu > button:hover:not(:disabled), .host-switcher-menu > button:focus-visible { background: var(--surface-2); outline: none; }
 .host-switcher-menu > button[aria-checked="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .host-switcher-menu > button .host-switcher-glyph { width: 28px; height: 28px; border-radius: var(--radius-sm); }
-.host-switcher-menu > button[role="menuitem"] { min-height: 38px; color: var(--text-2); }
+.host-switcher-menu > button[role="menuitem"],
+.host-switcher-menu > button[role="menuitem"]:hover:not(:disabled) { min-height: 38px; color: var(--text-2); }
 .host-switcher-manage .host-switcher-glyph { background: var(--surface-2); color: var(--text-2); }
 .host-switcher-check { flex: none; color: var(--accent); }
 .host-switcher-separator { height: 1px; margin: var(--space-1) var(--space-1_5); background: var(--line); }

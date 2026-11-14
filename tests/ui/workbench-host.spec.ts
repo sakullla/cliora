@@ -147,6 +147,32 @@ test('a typed remote path stays in the picker path field', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', 'typed-project · /tmp/typed-project');
 });
 
+test('moving onto manage hosts does not shift the host menu', async ({ page }) => {
+  await installHostDesktop(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：本机' }).click();
+  const menu = page.locator('.host-switcher-menu');
+  const manage = menu.getByRole('menuitem', { name: '管理远程主机…' });
+  await expect(manage).toBeVisible();
+  const before = await menu.boundingBox();
+  await manage.hover();
+  const tops = await page.evaluate(async () => {
+    const node = document.querySelector('.host-switcher-menu');
+    if (!node) return [];
+    const samples: number[] = [];
+    for (let frame = 0; frame < 12; frame += 1) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      samples.push(node.getBoundingClientRect().top);
+    }
+    return samples;
+  });
+  const after = await menu.boundingBox();
+  expect(before && after).toBeTruthy();
+  expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThan(1);
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+});
+
 test('choosing a remote host in the sidebar makes the next new session remote', async ({ page }) => {
   await installHostDesktop(page);
   await page.goto('/');
