@@ -150,7 +150,8 @@
 .charCount { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
 .groupTitle { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
-.fields label, .tags, .body { display: grid; gap: var(--space-1_5); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.fields label, .launchModeField, .tags, .body { display: grid; gap: var(--space-1_5); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.launchModeField { grid-column: 1 / -1; justify-items: start; }
 .fields input, .fields select, .fields textarea { width: 100%; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .fields textarea, .body textarea { width: 100%; font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 192px), 1fr)); gap: var(--space-2); }

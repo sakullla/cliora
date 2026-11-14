@@ -6,8 +6,8 @@ import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
-import type { Project } from '../../types/launch';
-import { worktreeIntentForNewWorkbench } from '../../types/launch';
+import type { LaunchMode, LaunchSettings, Project } from '../../types/launch';
+import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RulePlacement, RuleSyncResult } from '../../types/resources';
@@ -16,6 +16,7 @@ import { LibraryMcp } from './LibraryMcp';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
+import { RowMenu } from '../../components/RowMenu';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon, type IconName } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
@@ -29,7 +30,7 @@ import { ToastScope } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
-import { Badge, Button, Card, Toolbar } from '../../components/ui';
+import { Badge, Button, Card, Segmented, Toolbar } from '../../components/ui';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -106,7 +107,7 @@ function ruleReportSettled(report: RuleReport) {
 export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
 export type LibraryMcpSpotlight = { id: string; token: number; source: 'connections' };
 
-export function LibraryPage({ managedTools = [], remoteTargetId = 'local', active = true, spotlight = null, mcpSpotlight = null, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; remoteTargetId?: string; active?: boolean; spotlight?: LibrarySpotlight | null; mcpSpotlight?: LibraryMcpSpotlight | null; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function LibraryPage({ managedTools = [], remoteTargetId = 'local', active = true, spotlight = null, mcpSpotlight = null, sectionIntent = null, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { managedTools?: AdapterDescriptor[]; remoteTargetId?: string; active?: boolean; spotlight?: LibrarySpotlight | null; mcpSpotlight?: LibraryMcpSpotlight | null; sectionIntent?: { section: 'mcp' | 'skill'; token: number } | null; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
@@ -154,6 +155,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const bindingsKnown = binding.rows !== null && !binding.loading && !binding.error;
   const [launchItem, setLaunchItem] = useState<LibraryItem | null>(null);
   const [launchTool, setLaunchTool] = useState('');
+  const [launchMode, setLaunchMode] = useState<LaunchMode>('normal');
+  const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   // Same choices as the workbench's new-session dialog: `__home`, `project:<id>` or `custom:<path>`.
   const [launchPlace, setLaunchPlace] = useState('__home');
   const [launchFolder, setLaunchFolder] = useState('');
@@ -164,12 +167,18 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   // choices as the local view; availability is resolved only when launching.
   const scopedTools = managedTools;
   useEffect(() => {
+    if (!nativeAvailable || !active) return;
+    let live = true;
+    void native.getLaunchSettings().then((value) => { if (live) setLaunchSettings(value); }).catch(() => {});
+    return () => { live = false; };
+  }, [active, native]);
+  useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
     return () => window.clearTimeout(timer);
   }, [copiedId, toasts.notice]);
   remoteReads.bindWriteDraft(draft ? `${draft.id ?? 'new'}:${draft.expectedVersion ?? ''}` : null);
-  const dirty = !!draft && JSON.stringify(draft) !== savedText;
+  const dirty = !!draft && (JSON.stringify(draft) !== savedText || !!tagText.trim());
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active, busy]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -294,6 +303,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     revealedMcpSpotlight.current = mcpSpotlight.token;
   }, [active, mcpSpotlight?.token, section]);
 
+  const revealedSectionIntent = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !sectionIntent || revealedSectionIntent.current === sectionIntent.token) return;
+    revealedSectionIntent.current = sectionIntent.token;
+    if (section !== sectionIntent.section) void openSection(sectionIntent.section);
+  }, [active, sectionIntent?.section, sectionIntent?.token, section]);
+
   const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
@@ -331,14 +347,26 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   function keepSaved(saved: LibraryItem) {
     setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
   }
+  function withTags(base: LibraryDraft, raw: string): LibraryDraft {
+    const incoming = tagsOf(raw);
+    if (!incoming.length) return base;
+    const merged = [...tagsOf(base.category)];
+    for (const tag of incoming) {
+      if (!merged.includes(tag)) merged.push(tag);
+    }
+    const category = categoryOf(merged);
+    return category.length <= 80 ? { ...base, category } : base;
+  }
   async function save() {
     if (!draft || busy || !nativeAvailable || (draft.kind === 'rule' && !bindingsKnown)) return;
+    const candidate = tagText.trim() ? withTags(draft, tagText) : draft;
+    if (tagText.trim()) { setDraft(candidate); setTagText(''); }
     setBusy(true); clearDialogResult();
     try {
       // Resolve actual bindings before committing the body. Unknown or stale
       // bindings must never turn a bound rule into a save without distribution.
-      const placements = draft.kind === 'rule' ? await reloadRulePlacements(true) : [];
-      const saved = await (remoteTargetId === 'local' ? native.saveLibraryItem(draft) : native.saveRemoteLibraryItem(remoteTargetId, draft));
+      const placements = candidate.kind === 'rule' ? await reloadRulePlacements(true) : [];
+      const saved = await (remoteTargetId === 'local' ? native.saveLibraryItem(candidate) : native.saveRemoteLibraryItem(remoteTargetId, candidate));
       setCountStamp((value) => value + 1);
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));
@@ -461,23 +489,38 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
-    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(scopedTools[0]?.id ?? ''); setLaunchPlace(item.projectId && projects.some((project) => project.id === item.projectId && project.available) ? `project:${item.projectId}` : '__home'); setLaunchError('');
+    const initialTool = scopedTools[0]?.id ?? '';
+    const initialPlace = item.projectId && projects.some((project) => project.id === item.projectId && project.available) ? `project:${item.projectId}` : '__home';
+    const descriptor = scopedTools.find((tool) => tool.id === initialTool);
+    setLaunchItem(item);
+    setLaunchText(item.body);
+    setLaunchTool(initialTool);
+    setLaunchPlace(initialPlace);
+    setLaunchMode(preferredLaunchMode(launchSettings, initialPlace.startsWith('project:') ? 'project' : 'cli', !!descriptor?.yoloAvailable));
+    setLaunchError('');
+    void native.getLaunchSettings().then((settings) => {
+      if (!mounted.current) return;
+      setLaunchSettings(settings);
+      setLaunchMode(preferredLaunchMode(settings, initialPlace.startsWith('project:') ? 'project' : 'cli', !!descriptor?.yoloAvailable));
+    }).catch(() => {});
   }
   async function startSession() {
     if (!launchItem || !launchTool || launchBusy) return;
     setLaunchBusy(true); setLaunchError('');
-    const desktop = scopedTools.find((item) => item.id === launchTool)?.launchForm === 'desktop';
-    const projectId = launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null;
+    const selectedDescriptor = scopedTools.find((item) => item.id === launchTool);
+    const desktop = selectedDescriptor?.launchForm === 'desktop';
+    const projectId = !desktop && launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null;
     // Desktop apps open without a directory, as on the home page.
     const directory = !desktop && launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null;
-    const settings = await native.getLaunchSettings().catch(() => null);
-    const request = { toolId: launchTool, projectId, sessionId: null, mode: 'normal' as const, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }) };
+    const settings = await native.getLaunchSettings().catch(() => launchSettings);
+    const mode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
+    const request = { toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }) };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
       setLaunchItem(null);
       if (opened) { onWorkbenchSession?.(opened); return; }
-      showNotice(t('library.page.sessionStarted'));
+      showNotice(desktop ? t('home.tools.launchedDesktop', { name: selectedDescriptor?.name ?? launchTool }) : t('library.page.sessionStarted'));
     } catch (value) {
       if (await failedInWorkbench(desktop)) {
         setLaunchItem(null);
@@ -499,6 +542,39 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ...projects.filter((project) => project.available).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ...(launchFolder ? [{ value: `custom:${launchFolder}`, label: shortPath(displayPath(launchFolder)), detail: displayPath(launchFolder), icon: <Icon name="folder" size={14} /> }] : []),
   ];
+  async function duplicateItem(item: LibraryItem) {
+    if (busy || !nativeAvailable) return;
+    setBusy(true); toasts.setError(null); toasts.setNotice(null);
+    try {
+      let title = `${item.title}${t('tools.workspace.copySuffix')}`;
+      let suffix = 2;
+      while (items.some((entry) => entry.title === title)) title = `${item.title}${t('tools.workspace.copySuffix')} ${suffix++}`;
+      const copyDraft: LibraryDraft = { id: null, kind: item.kind, title, body: item.body, category: item.category, projectId: item.projectId, expectedVersion: null };
+      const saved = await (remoteTargetId === 'local' ? native.saveLibraryItem(copyDraft) : native.saveRemoteLibraryItem(remoteTargetId, copyDraft));
+      setCountStamp((value) => value + 1);
+      try { await refresh(); }
+      catch { keepSaved(saved); }
+      showNotice(t('library.resources.duplicated', { name: saved.title }));
+    } catch (value) { showError(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
+    finally { setBusy(false); }
+  }
+  async function removeItem(item: LibraryItem) {
+    if (busy || !nativeAvailable || !await confirmCurrent(t('library.page.confirmDelete', { title: item.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
+    setBusy(true); toasts.setError(null); toasts.setNotice(null);
+    try {
+      if (remoteTargetId === 'local') await native.deleteLibraryItem(item.id, item.version);
+      else await native.deleteRemoteLibraryItem(remoteTargetId, item.id, item.version);
+      setCountStamp((value) => value + 1);
+      try { await refresh(); }
+      catch (value) {
+        setItems((current) => current.filter((entry) => entry.id !== item.id));
+        toasts.showMixed(t('library.page.deleted'), formatFailure(value, t('library.page.listFailed'), t('library.page.listNext')));
+        return;
+      }
+      showNotice(t(remoteTargetId === 'local' ? 'library.page.deleted' : 'library.page.remoteDeleted'));
+    } catch (value) { showError(formatFailure(value, t('library.page.deleteFailed'), t('library.page.deleteFailedNext'))); }
+    finally { setBusy(false); }
+  }
   async function remove() {
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
     setBusy(true); clearDialogResult();
@@ -530,13 +606,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   }
   function addTag(raw: string) {
     if (!draft) return;
-    const next = raw.trim();
-    if (!next) return;
-    const tags = tagsOf(draft.category);
-    if (tags.includes(next)) { setTagText(''); return; }
-    const category = categoryOf([...tags, next]);
-    if (category.length > 80) return;
-    setDraft({ ...draft, category });
+    const next = withTags(draft, raw);
+    if (next !== draft) setDraft(next);
     setTagText('');
   }
 
@@ -658,7 +729,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           }}>{item.title}</button>
             <div className={styles.cardActions} role="group" aria-label={t('library.page.itemActions', { title: item.title })}>{copiedId === item.id && toasts.notice?.text === copiedText()
               ? <Button variant="ghost" size="sm" aria-label={t('library.page.copy')} data-copied="true" icon={<Icon name="check" size={14} />} onClick={() => void copy(item.body, 'page', item.id)}>{t('home.launcher.copied')}</Button>
-              : <Button variant="ghost" size="sm" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</Button>}{kind === 'prompt' && <Button size="sm" onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</Button>}<Button variant="ghost" size="sm" onClick={() => choose(item)}>{t('tools.workspace.edit')}</Button></div>
+              : <Button variant="ghost" size="sm" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</Button>}{kind === 'prompt' && <Button size="sm" onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</Button>}<Button variant="ghost" size="sm" onClick={() => choose(item)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.moreActions')}><button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateItem(item)}><Icon name="copy" size={14} /><span>{t('library.resources.duplicate')}</span></button><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removeItem(item)}><Icon name="trash" size={14} /><span>{t('tools.agents.delete')}</span></button></RowMenu></div>
           </div>
           <p className={styles.cardBody}>{item.body ? item.body.length > 200 ? `${item.body.slice(0, 200)}…` : item.body : t('library.page.emptyBody')}</p>
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <div className={styles.cardMeta}>
@@ -691,7 +762,14 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           <div className={styles.tags}>{t('library.page.tags')}
             <div className={styles.tagList} data-field-frame="">
               {tagsOf(draft.category).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
-              <input disabled={busy} aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
+              <input disabled={busy} aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onBlur={() => { if (tagText.trim()) addTag(tagText); }} onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === 'Enter' || event.key === ',' || event.key === '，') { event.preventDefault(); addTag(tagText); return; }
+                if (event.key === 'Backspace' && !tagText) {
+                  const existing = tagsOf(draft.category);
+                  if (existing.length) setDraft({ ...draft, category: categoryOf(existing.slice(0, -1)) });
+                }
+              }} />
             </div>
             {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
           </div>
@@ -701,15 +779,33 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       </div>}
     </GuideDialog>
     <GuideDialog open={!!launchItem} title={t('library.page.launchTitle')} hint={t('library.page.launchHint')} onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
-      {launchItem && <div className={styles.editor}>
-        {launchError && <div className={styles.error} role="alert">{launchError}</div>}
-        <div className={styles.fields}>
-          <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
-          <label>{t('sessions.pickWorkspaceLabel')}<FilterSelect label={t('sessions.pickWorkspaceLabel')} value={launchPlace} options={launchPlaces} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickLaunchFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={setLaunchPlace} /></label>
-        </div>
-        <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchBusy && launchTool && launchText.trim()) { event.preventDefault(); void startSession(); } }} /></label>
-        <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" data-dialog-save disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>{t('library.page.launchSubmit')}</Button></div>
-      </div>}
+      {launchItem && (() => {
+        const selectedDescriptor = scopedTools.find((item) => item.id === launchTool);
+        const desktop = selectedDescriptor?.launchForm === 'desktop';
+        const inWorkbench = !desktop && launchSettings?.selected === 'workbench';
+        const effectiveMode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
+        const submitLabel = launchBusy ? t('library.page.launchStarting') : desktop ? t('library.page.launchSubmitDesktop') : inWorkbench ? t('library.page.launchSubmitWorkbench') : t('library.page.launchSubmit');
+        return <div className={styles.editor}>
+          {launchError && <div className={styles.error} role="alert">{launchError}</div>}
+          <div className={styles.fields}>
+            <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={(nextTool) => {
+              setLaunchTool(nextTool);
+              const nextDesc = scopedTools.find((item) => item.id === nextTool);
+              setLaunchMode(preferredLaunchMode(launchSettings, launchPlace.startsWith('project:') ? 'project' : 'cli', !!nextDesc?.yoloAvailable));
+            }} /></label>
+            {!desktop && <label>{t('sessions.pickWorkspaceLabel')}<FilterSelect label={t('sessions.pickWorkspaceLabel')} value={launchPlace} options={launchPlaces} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickLaunchFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(nextPlace) => {
+              setLaunchPlace(nextPlace);
+              setLaunchMode(preferredLaunchMode(launchSettings, nextPlace.startsWith('project:') ? 'project' : 'cli', !!selectedDescriptor?.yoloAvailable));
+            }} /></label>}
+            {!desktop && <div className={styles.launchModeField}><span>{t('sessions.launchModeLabel')}</span><Segmented size="sm" label={t('sessions.launchModeLabel')} value={effectiveMode} onChange={setLaunchMode} options={[
+              { value: 'normal', label: t('settings.terminal.modeNormal') },
+              { value: 'yolo', label: t('settings.terminal.modeYolo'), disabled: !selectedDescriptor?.yoloAvailable },
+            ]} /></div>}
+          </div>
+          <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchBusy && launchTool && launchText.trim()) { event.preventDefault(); void startSession(); } }} /></label>
+          <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" data-dialog-save loading={launchBusy} disabled={launchBusy || !launchTool || !launchText.trim()} icon={<Icon name="play" size={14} />} onClick={() => void startSession()}>{submitLabel}</Button></div>
+        </div>;
+      })()}
     </GuideDialog>
     </>}
   </ToastScope></section>;

@@ -7,8 +7,8 @@
   min-height: var(--control-h);
   justify-content: flex-start;
   padding: 0 calc(var(--space-6) + var(--space-1_5)) 0 var(--space-2_5);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
   background-color: var(--surface);
   background-image: var(--chevron);
   background-repeat: no-repeat;
@@ -19,7 +19,7 @@
   font-weight: var(--fw-regular);
   text-align: left;
 }
-.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-2); }
+.trigger:hover:not(:disabled) { border-color: var(--control-line-hover); background-color: var(--surface-2); }
 .trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
@@ -76,6 +76,13 @@
 }
 .panel > input { width: 100%; border-radius: var(--radius-sm); background-color: var(--surface); }
 .panel > input:focus { box-shadow: none; }
+.searchRow { display: flex; align-items: center; gap: var(--space-2); min-height: 34px; padding: 0 var(--space-1) 0 var(--space-2_5); border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+.searchRow:focus-within { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: -1px; }
+.searchRow > svg { flex: none; }
+.searchRow > input { flex: 1; width: 0; min-width: 0; min-height: 30px; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.searchRow > input:hover, .searchRow > input:focus { border: 0; box-shadow: none; }
+.searchClear, .searchClear:hover:not(:disabled) { display: grid; place-items: center; flex: none; width: 26px; min-height: 26px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text-3); box-shadow: none; }
+.searchClear:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
 .list { display: grid; align-content: start; gap: var(--space-0_5); min-height: 0; overflow: auto; }
 .list > button {
@@ -100,6 +107,7 @@
 .optionCopy > strong,
 .optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .optionCopy > strong { font-weight: var(--fw-semibold); }
+.optionCopy > strong mark { padding: 0; border-radius: var(--radius-xs); background: transparent; color: var(--accent); font-weight: var(--fw-semibold); text-decoration: underline; text-decoration-color: var(--accent-line); text-decoration-thickness: 2px; text-underline-offset: 2px; }
 .optionCopy > small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .optionMarks { display: inline-flex; align-items: center; gap: var(--space-1_5); }
 .optionMarks > em { color: var(--text); font-size: var(--fs-body); font-style: normal; font-weight: var(--fw-medium); }

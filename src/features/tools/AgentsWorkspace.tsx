@@ -16,7 +16,7 @@ import { SearchField } from '../../components/SearchField';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
-import { modLabel, saveShortcutHint, withMod } from '../../lib/shortcut';
+import { modLabel, saveShortcutHint, searchShortcutHint, withMod } from '../../lib/shortcut';
 import { Badge, Button, IconButton } from '../../components/ui';
 
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
@@ -262,7 +262,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       <IconButton variant="primary" size="sm" aria-label={t('tools.agents.create')} title={t('tools.agents.create')} disabled={busy || !supported} onClick={() => void createNew()} icon={<Icon name="plus" size={16} />} />
       <input ref={importInput} hidden aria-label={t('tools.agents.importAria')} type="file" accept={format === 'toml' ? '.toml' : '.md'} disabled={busy || !supported} onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ''; }} />
     </>}
-    search={supported ? <SearchField type="search" label={t('tools.agents.searchLabel')} placeholder={t('tools.agents.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
+    search={supported ? <SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.agents.searchLabel')} placeholder={t('tools.agents.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
     filters={supported ? <select className={styles.filter} aria-label={t('tools.agents.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}>
       <option value="all">{t('tools.agents.filterAll')}</option>
       <option value="enabled">{t('tools.plugins.enabled')}</option>

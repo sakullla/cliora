@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { highlightRuns } from './CommandPalette';
 import { Icon } from './Icon';
 import styles from './FilterSelect.module.css';
 
@@ -55,7 +56,13 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const [active, setActive] = useState(0);
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const setTriggerNode = (node: HTMLButtonElement | null) => {
+    buttonRef.current = node;
+    if (triggerRef) (triggerRef as { current: HTMLButtonElement | null }).current = node;
+  };
   const revealIndex = useRef<number | null>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement>(document.body);
   useLayoutEffect(() => { setPortalTarget(anchor.current?.closest('dialog') ?? document.body); }, []);
@@ -134,7 +141,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     setOpen(false);
     setQuery('');
     onChange(option.value);
-    triggerRef?.current?.focus();
+    buttonRef.current?.focus();
   }
 
   function onPanelKey(event: KeyboardEvent<HTMLElement>) {
@@ -146,7 +153,14 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     if (event.key === 'End' && (!showSearch || !query)) { event.preventDefault(); const last = Math.max(matches.length - 1, 0); revealIndex.current = last; setActive(last); return; }
     const current = matches[Math.min(active, matches.length - 1)];
     if (event.key === 'Enter' && current) { event.preventDefault(); choose(current); return; }
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); triggerRef?.current?.focus(); }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (query) { changeQuery(''); return; }
+      setOpen(false);
+      setQuery('');
+      buttonRef.current?.focus();
+    }
   }
 
   function onTrigger(event: KeyboardEvent<HTMLButtonElement>) {
@@ -156,14 +170,18 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }
 
   return <div ref={anchor} className={className ? `${styles.select} ${className}` : styles.select}>
-    <button ref={triggerRef} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
+    <button ref={setTriggerNode} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
       {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected?.label ?? placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
     </button>
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
-      {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => changeQuery(event.target.value)} />}
+      {showSearch && <div className={styles.searchRow} data-field-frame="">
+        <Icon name="search" size={14} />
+        <input ref={searchInputRef} aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => changeQuery(event.target.value)} />
+        {query && <button type="button" className={styles.searchClear} aria-label={t('common.search.clear')} title={t('common.search.clear')} onClick={() => { changeQuery(''); searchInputRef.current?.focus(); }}><Icon name="close" size={14} /></button>}
+      </div>}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
         {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
-          {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
+          {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
           <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
         </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>

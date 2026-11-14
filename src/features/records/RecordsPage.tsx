@@ -99,11 +99,18 @@ function rangeCaption(from: string, to: string) {
   if (from) return i18n.t('records.page.captionFrom', { date: dayLabel(from) });
   return i18n.t('records.page.captionTo', { date: dayLabel(to) });
 }
-export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent = null, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; tabIntent?: { tab: 'sessions' | 'usage'; token: number } | null; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const remoteReads = useRemoteReads(remoteTargetId, '', active);
   const native = remoteReads.native;
   const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
+  const handledTabIntent = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !tabIntent || handledTabIntent.current === tabIntent.token) return;
+    handledTabIntent.current = tabIntent.token;
+    if (tabIntent.tab === 'usage' && remoteTargetId !== 'local') return;
+    setTab(tabIntent.tab);
+  }, [active, tabIntent?.tab, tabIntent?.token, remoteTargetId]);
   // Find, reading options and place per conversation. The page owns them so a hidden page
   // can release the transcript and still return the reader to where it was.
   const readingContexts = useRef(new ReadingContexts());
@@ -188,11 +195,17 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
   const lastScan = useRef(0);
   const toasts = useToasts();
   const [copyFlash, setCopyFlash] = useState(0);
+  const [cwdCopied, setCwdCopied] = useState(0);
   useEffect(() => {
     if (!copyFlash) return;
     const timer = window.setTimeout(() => setCopyFlash(0), 1800);
     return () => window.clearTimeout(timer);
   }, [copyFlash]);
+  useEffect(() => {
+    if (!cwdCopied) return;
+    const timer = window.setTimeout(() => setCwdCopied(0), 1800);
+    return () => window.clearTimeout(timer);
+  }, [cwdCopied]);
   const copied = !!copyFlash;
   function showError(value: unknown) {
     toasts.showFailure(value, t('records.page.operationFailed'), recordNext());
@@ -755,7 +768,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, onOpenPro
           })}
         </nav> : null}
         <div className={styles.detailHead}><h2 title={openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : selected.session.title}>{openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : (selected.session.title || t('records.page.untitled'))}</h2></div>
-        {!openedChild && <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown')}</span><time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>}
+        {!openedChild && <div className={styles.detailMeta}>{selected.session.cwd ? <button type="button" className={styles.cwdChip} data-copied={cwdCopied > 0 || undefined} title={`${displayPath(selected.session.cwd)} · ${t('records.page.copyPath')}`} onClick={() => void writeClipboard(displayPath(selected.session.cwd!)).then((ok) => { if (ok) setCwdCopied((value) => value + 1); })}><Icon name={cwdCopied > 0 ? 'check' : 'folder'} size={13} /><span>{cwdCopied > 0 ? t('records.page.pathCopied') : (projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown'))}</span></button> : <span><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? t('records.page.cwdUnknown')}</span>}<time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>}
         {!openedChild && !listError && activeFilters.length > 0 && <p className={styles.detailScope}><Icon name="sliders" size={14} /><span>{t('records.page.readerScope', { count: sessions.length, total: Math.max(unfilteredTotal, sessions.length) })}</span><button type="button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button></p>}
         {!openedChild && (selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
         {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : remoteTargetId !== 'local' ? (selected.session.cwd ? <p className={styles.fullPath}>{displayPath(selected.session.cwd)}</p> : null) : <div className={styles.resume}>

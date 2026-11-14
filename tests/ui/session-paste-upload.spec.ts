@@ -315,6 +315,29 @@ test('a local pane stages image bytes and pastes their path without a simulated 
   expect(await uploadCalls(page)).toEqual([]);
 });
 
+test('pasting an image inside the quick composer stages and inserts its path into the session', async ({ page }) => {
+  await installPasteDesktop(page, 'local');
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = page.getByRole('region', { name: '多行输入与提示词' }).getByRole('textbox');
+  await expect(composer).toBeVisible();
+  await composer.evaluate((node) => {
+    const data = new DataTransfer();
+    const canvas = document.createElement('canvas');
+    canvas.width = 6;
+    canvas.height = 4;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#225544';
+    context.fillRect(0, 0, 6, 4);
+    const url = canvas.toDataURL('image/png');
+    const binary = atob(url.slice(url.indexOf(',') + 1));
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    data.items.add(new File([bytes], 'composer-shot.png', { type: 'image/png' }));
+    node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect.poll(() => writesFor(page, 'local-1')).toEqual([expect.stringMatching(/^C:\/fixture\/cliora-paste-.*\.png$/)]);
+});
+
 test('OSC 52 keeps its write-only behaviour: writes land in the clipboard, queries are ignored, nothing is sent back', async ({ page }) => {
   await installPasteDesktop(page, 'remote');
   await openWorkbench(page);

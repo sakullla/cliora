@@ -256,6 +256,15 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode', 'ZCode', 'Qoder CN', 'Kimi Code']) {
     await expect(page.getByRole('checkbox', { name: new RegExp(name) })).toBeEnabled();
   }
+  // Pressing '/' focuses the CLI search and finds folded CLIs without expanding first.
+  await page.keyboard.press('/');
+  const cliSearch = page.getByLabel('搜索 CLI 工具');
+  await expect(cliSearch).toBeFocused();
+  await cliSearch.fill('Kiro');
+  await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(1);
+  await expect(page.getByRole('checkbox', { name: /Kiro/ })).toBeVisible();
+  await cliSearch.press('Escape');
+  await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(8);
 
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');

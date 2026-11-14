@@ -1161,7 +1161,7 @@ test('a library prompt opens in the workbench with its initial text', async ({ p
   await place.click();
   await page.getByRole('button', { name: '选择其他文件夹…' }).click();
   await expect(place).toContainText('folder');
-  await dialog.getByRole('button', { name: '在外部终端启动' }).click();
+  await dialog.getByRole('button', { name: '在工作台启动' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __promptLaunches: Array<{ initialPrompt?: string; directory?: string | null; projectId: string | null }> }).__promptLaunches.map((item) => [item.initialPrompt, item.directory, item.projectId]))).toEqual([['请先阅读 diff', 'C:/sample/folder', null]]);
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toBeVisible();
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
@@ -1193,7 +1193,8 @@ test('a desktop library launch failure stays in the dialog', async ({ page }) =>
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库', exact: true }).click();
   await page.getByRole('button', { name: '启动会话', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '用这条提示词启动' });
-  await dialog.getByRole('button', { name: '在外部终端启动' }).click();
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '启动应用' }).click();
   await expect(dialog.getByRole('alert')).toContainText('桌面没有打开');
   await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: '工作台', level: 1 })).toHaveCount(0);

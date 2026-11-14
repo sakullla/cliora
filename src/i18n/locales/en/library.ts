@@ -160,6 +160,9 @@ export default {
     firstMessage: 'First message',
     launchPromptAria: 'Launch prompt',
     launchSubmit: 'Launch in external terminal',
+    launchSubmitWorkbench: 'Start in workbench',
+    launchSubmitDesktop: 'Launch app',
+    launchStarting: 'Launching…',
   },
   resources: {
     sourceManaged: 'Managed package',

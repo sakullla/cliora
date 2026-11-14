@@ -161,6 +161,13 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
     setCurrent(next);
     revealMatch(matches[next].item.id);
   }
+  function jumpFirst() {
+    const first = visible[0];
+    if (!first) return;
+    const scroller = root.current?.parentElement;
+    if (scroller) scroller.scrollTo({ top: 0, behavior: 'instant' });
+    else root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(first.id)}"]`)?.scrollIntoView({ block: 'start', behavior: 'instant' });
+  }
   function jumpLatest() {
     const latest = visible[visible.length - 1];
     if (!latest) return;
@@ -186,10 +193,11 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
       </div>
       <div className={styles.readerOptions}>
         <button type="button" ref={findButton} data-reader-find="" aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { focusFind.current = !findOpen; setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
-        <details className={styles.readingOptions} ref={optionsRef}><summary>{t('records.reader.options')}</summary><div>
+        <details className={styles.readingOptions} data-active={(onlyQuestions || raw) || undefined} ref={optionsRef}><summary>{t('records.reader.options')}</summary><div>
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
         </div></details>
+        {visible.length > 4 && <button type="button" title={t('records.reader.firstTitle')} onClick={jumpFirst}><Icon name="arrowUp" size={14} />{t('records.reader.first')}</button>}
         <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={14} />{t('records.reader.latest')}</button>
       </div>
       {findOpen && <div className={styles.find} data-field-frame="">

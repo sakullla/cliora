@@ -15,7 +15,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { confirmAction } from '../../lib/confirm';
-import { saveShortcutHint, withMod } from '../../lib/shortcut';
+import { saveShortcutHint, searchShortcutHint, withMod } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { useFeedback } from '../../lib/toast';
 import { SkeletonRows } from '../../components/Skeleton';
@@ -764,7 +764,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     heading={needsProject ? undefined : t('tools.workspace.view.skills')}
     count={needsProject || !entries.length ? undefined : t('tools.skills.count', { filtered: visible.length, total: entries.length })}
     actions={needsProject || (remoteTargetId && !remoteWritable) ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}
-    search={needsProject || !entries.length ? undefined : <SearchField type="search" label={t('tools.skills.searchLabel')} placeholder={t('tools.skills.searchPlaceholder')} value={query} onChange={setQuery} />}
+    search={needsProject || !entries.length ? undefined : <SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.skills.searchLabel')} placeholder={t('tools.skills.searchPlaceholder')} value={query} onChange={setQuery} />}
     filters={needsProject || !entries.length ? undefined : <>
       <FilterSelect className={styles.filterSelect} label={t('tools.skills.sourceFilter')} value={source} triggerDetail={false} options={[
         { value: 'all', label: t('tools.skills.sourceAll') },

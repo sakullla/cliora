@@ -228,6 +228,11 @@ test('long conversations defer distant Markdown and render it when jumping to la
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toHaveCount(0);
   await reader.getByRole('button', { name: '最新', exact: true }).click();
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toBeVisible();
+  await reader.getByRole('button', { name: '开头', exact: true }).click();
+  await expect(reader.getByText('请检查缓存策略', { exact: true })).toBeInViewport();
+  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  await expect(page.getByRole('button', { name: '已复制路径', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as typeof window & { __reader: { copied: string[] } }).__reader.copied.at(-1))).toBe('C:\\demo');
 });
 
 test('child session reader shows only that level and hides favorite, resume and export', async ({ page }) => {

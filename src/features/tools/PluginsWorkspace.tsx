@@ -11,6 +11,7 @@ import panel from './ManagementPanel.module.css';
 import styles from './PluginsWorkspace.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
 import { useFeedback } from '../../lib/toast';
+import { searchShortcutHint } from '../../lib/shortcut';
 import { SearchField } from '../../components/SearchField';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
@@ -384,7 +385,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
       <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || working} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()} icon={<Icon name="refresh" size={15} />} />
       {offersInstall && <IconButton size="sm" variant="primary" aria-label={t('tools.plugins.installTitle')} title={t('tools.plugins.installTitle')} disabled={!canInstall} onClick={openInstall} icon={<Icon name="plus" size={16} />} />}
     </>}
-    search={snapshot ? <SearchField type="search" label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
+    search={snapshot ? <SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
     filters={snapshot ? <select className={panel.filter} aria-label={t('tools.plugins.filterLabel')} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{t('tools.plugins.filterAll')}</option><option value="enabled">{t('tools.plugins.enabled')}</option><option value="disabled">{t('tools.plugins.disabled')}</option><option value="readonly">{t('tools.plugins.filterReadonly')}</option></select> : undefined}
     notices={<><RemoteReadStatus state={remoteReads} />
       {busy && snapshot && <p className={panel.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p>}

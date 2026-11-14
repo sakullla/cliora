@@ -15,6 +15,8 @@ export type CommandItem = {
   toolId?: string;
   /** Optional context boost when ranking search matches (e.g. current tool or active page). */
   contextBoost?: number;
+  /** Hidden when the query is empty so deep destinations stay searchable without crowding the default list. */
+  searchOnly?: boolean;
   run: () => void;
   secondaryLabel?: string;
   onSecondary?: () => void;
@@ -51,10 +53,17 @@ export function highlightRuns(label: string, query: string): { text: string; hit
   if (!tokens.length) return [{ text: label, hit: false }];
   const lower = label.toLowerCase();
   const hits = new Array<boolean>(label.length).fill(false);
-  for (const token of tokens) {
-    const at = lower.indexOf(token);
-    // toLowerCase keeps length for the scripts used in labels; skip a token when it would not line up.
-    if (at >= 0 && lower.length === label.length) hits.fill(true, at, at + token.length);
+  // toLowerCase keeps length for the scripts used in labels; skip when casing would change length.
+  if (lower.length === label.length) {
+    for (const token of tokens) {
+      let from = 0;
+      while (from < lower.length) {
+        const at = lower.indexOf(token, from);
+        if (at < 0) break;
+        hits.fill(true, at, at + token.length);
+        from = at + token.length;
+      }
+    }
   }
   const runs: { text: string; hit: boolean }[] = [];
   for (let index = 0; index < label.length; index += 1) {
@@ -82,7 +91,7 @@ export function CommandPalette({ open, commands, sourceFailed = false, onRetrySo
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return commands;
+    if (!needle) return commands.filter((item) => !item.searchOnly);
     return commands
       .map((item, order) => ({ item, order, score: matchScore(item, needle) }))
       .filter((entry) => entry.score > 0)

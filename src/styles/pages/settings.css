@@ -40,6 +40,9 @@ label.setting-row:hover { background: var(--surface-2); }
 .custom-terminal-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
 
 /* Managed CLI chips */
+.managed-search { padding: var(--space-3) var(--space-5) 0; max-width: 380px; }
+.managed-empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-4) var(--space-5); color: var(--text-2); font-size: var(--fs-body); }
+.managed-empty p { margin: 0; }
 .managed-checks {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 148px), 188px));
@@ -135,6 +138,8 @@ label.setting-row:hover { background: var(--surface-2); }
   .setting-error { padding: 0 var(--space-4) var(--space-3); }
   .custom-terminal-fields { min-width: 0; }
   .custom-terminal-actions { justify-content: flex-start; }
+  .managed-search { padding: var(--space-3) var(--space-4) 0; max-width: none; }
+  .managed-empty { padding: var(--space-3) var(--space-4); }
   .managed-checks { grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr)); padding: var(--space-3) var(--space-4); }
   .icon-setting-row { flex-wrap: wrap; }
   .icon-setting-row > .tool-identity { flex: 1 1 100%; }

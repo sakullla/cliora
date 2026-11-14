@@ -11,7 +11,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { formatNativeValue, nativeUnitLabel, nativeValue, knownTokens, formatTotalTokens, usageSummary, usageDetail, DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
-import { saveShortcutHint } from '../../lib/shortcut';
+import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { Button, Segmented } from '../../components/ui';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import i18n from '../../i18n';
@@ -353,7 +353,7 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
       <DateRangeFilter variant="toolbar" value={range} customFrom={customFrom} customTo={customTo} presets={ranges()} onChange={setRange}
         onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRange('custom'); }} />
       <div className={styles.headerFilters}>
-        <SearchField className={styles.usageSearch} label={t('records.page.searchLabel')} pageSearch value={search} onChange={onSearchChange} placeholder={t('records.page.searchPlaceholder')} />
+        <SearchField className={styles.usageSearch} label={t('records.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={onSearchChange} placeholder={t('records.page.searchPlaceholder')} />
         <FilterSelect label={t('records.usage.toolFilter')} value={toolId} options={[{ value: '', label: t('records.page.allTools') }, ...toolOptions(tools)]} onChange={setToolId} />
         <FilterSelect label={t('records.usage.modelFilter')} value={model} options={modelOptions} onChange={setModel} />
         <FilterSelect label={t('records.usage.projectFilter')} value={projectId} options={[{ value: '', label: t('records.page.allProjects') }, { value: '__unknown__', label: t('records.page.noProject') }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
@@ -399,18 +399,23 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
     </div> : totals && <>
       <NativeUsageSummary totals={totals} />
       <section className={styles.summary} aria-label={t('records.usage.summaryAria')}>
-        <div className={styles.primary} data-focus={shownMetric === 'tokens' || undefined}>
-          <small><Icon name="sparkle" size={16} />{t(totals.unknownTokenRecords && knownTokens(totals) ? 'records.native.knownTokens' : 'records.usage.totalTokens')}</small>
-          <strong>{formatTotalTokens(totals)}</strong>
-          <Delta current={totals.unknownTokenRecords ? null : totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
-        </div>
-        <div className={styles.metric} data-focus={shownMetric === 'cost' || undefined}>
-          <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
-          <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
-          {totals.unpricedTokens > 0
-            ? <button type="button" className={styles.metricNote} onClick={() => openPrice()}>{t('records.usage.unpricedNote', { percent: formatPercent(1 - pricedShare) })}</button>
-            : <Delta current={totals.cost} previous={previous?.totals.cost ?? (previous ? 0 : undefined)} label={compare} title={compareTitle} />}
-        </div>
+        {(() => {
+          const canSwitch = knownTokens(totals) && totals.cost !== null;
+          return <>
+            <div className={styles.primary} data-focus={shownMetric === 'tokens' || undefined} data-interactive={canSwitch || undefined} role={canSwitch ? 'button' : undefined} tabIndex={canSwitch ? 0 : undefined} title={canSwitch && shownMetric !== 'tokens' ? t('records.usage.switchMetricTokens') : undefined} onClick={canSwitch ? () => setMetric('tokens') : undefined} onKeyDown={canSwitch ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setMetric('tokens'); } } : undefined}>
+              <small><Icon name="sparkle" size={16} />{t(totals.unknownTokenRecords && knownTokens(totals) ? 'records.native.knownTokens' : 'records.usage.totalTokens')}</small>
+              <strong>{formatTotalTokens(totals)}</strong>
+              <Delta current={totals.unknownTokenRecords ? null : totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
+            </div>
+            <div className={styles.metric} data-focus={shownMetric === 'cost' || undefined} data-interactive={canSwitch || undefined} role={canSwitch ? 'button' : undefined} tabIndex={canSwitch ? 0 : undefined} title={canSwitch && shownMetric !== 'cost' ? t('records.usage.switchMetricCost') : undefined} onClick={canSwitch ? (event) => { if (!(event.target instanceof Element && event.target.closest('button'))) setMetric('cost'); } : undefined} onKeyDown={canSwitch ? (event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMetric('cost'); } } : undefined}>
+              <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
+              <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
+              {totals.unpricedTokens > 0
+                ? <button type="button" className={styles.metricNote} onClick={() => openPrice()}>{t('records.usage.unpricedNote', { percent: formatPercent(1 - pricedShare) })}</button>
+                : <Delta current={totals.cost} previous={previous?.totals.cost ?? (previous ? 0 : undefined)} label={compare} title={compareTitle} />}
+            </div>
+          </>;
+        })()}
         <div className={styles.metric}>
           <small><Icon name="connections" size={16} />{totals.unknownRequestRecords ? t('records.usage.knownCalls') : t('records.usage.calls')}</small>
           <strong>{totals.requests.toLocaleString()}</strong>

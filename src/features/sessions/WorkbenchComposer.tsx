@@ -7,7 +7,7 @@ import type { LibraryItem } from '../../types/library';
 import { PromptPicker } from './PromptPicker';
 import styles from './SessionWorkbench.module.css';
 
-export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, promptFeedback, inputRef, onChange, onSubmit, onClose }: {
+export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, promptFeedback, inputRef, onChange, onFilesPaste, onSubmit, onClose }: {
   toolId: string;
   toolName: string;
   place: string;
@@ -16,6 +16,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, pro
   promptFeedback?: ReactNode;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onChange: (text: string) => void;
+  onFilesPaste?: (files: File[]) => void;
   onSubmit: () => void;
   onClose: () => void;
 }) {
@@ -46,7 +47,15 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, pro
       {promptFeedback}
       <div className={styles.composerInputRow}>
         <span className={styles.promptMark} aria-hidden="true">›</span>
-        <textarea ref={inputRef} rows={1} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => {
+        <textarea ref={inputRef} rows={1} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => onChange(event.target.value)} onPaste={(event) => {
+          if (!onFilesPaste) return;
+          const data = event.clipboardData;
+          if (!data || data.getData('text/plain')) return;
+          const files = Array.from(data.files);
+          if (!files.length) return;
+          event.preventDefault();
+          onFilesPaste(files);
+        }} onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             onSubmit();

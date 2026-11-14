@@ -7,7 +7,7 @@ import type { Scope } from '../../types/native';
 import type { McpCommitResult, McpDefinition, McpDraft, McpDraftPreview, McpTargetRequest, NativeMcpEntry } from '../../types/resources';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SearchField } from '../../components/SearchField';
-import { saveShortcutHint } from '../../lib/shortcut';
+import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useFeedback } from '../../lib/toast';
@@ -322,7 +322,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         </div>
       </header>
       <p className={styles.hint}>{t('tools.mcp.description')}</p>
-      {(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) && <SearchField type="search" className={styles.search} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
+      {(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) && <SearchField type="search" className={styles.search} pageSearch title={searchShortcutHint()} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
       <RemoteReadStatus state={remoteReads} />
       {stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}
       {loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div>}

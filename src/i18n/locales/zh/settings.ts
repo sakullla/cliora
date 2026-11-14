@@ -101,6 +101,10 @@ export default {
   managed: {
     title: '管理的 CLI',
     description: '首页、工具页与记录只显示勾选的工具。关闭管理不会删除已有配置。',
+    enabledCount: '已启用 {{enabled}} / {{total}}',
+    searchLabel: '搜索 CLI 工具',
+    searchPlaceholder: '筛选 CLI 名称或标识…',
+    noMatch: '没有匹配「{{query}}」的 CLI。',
     more: '更多（{{count}}）',
     less: '收起',
     preservedUnknown: '未安装适配器，保留 {{count}} 份配置，只读',

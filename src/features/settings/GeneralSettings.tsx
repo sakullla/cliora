@@ -6,11 +6,13 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { Icon } from '../../components/Icon';
 import type { IconName } from '../../components/Icon';
+import { SearchField } from '../../components/SearchField';
 import { ToolIcon } from '../../components/ToolIcon';
 import { ToastStack } from '../../components/Toast';
 import { ToolIconSettings } from './ToolIconSettings';
 import { TraySettings } from './TerminalSettings';
 import { native, nativeAvailable } from '../../lib/native';
+import { searchShortcutHint } from '../../lib/shortcut';
 import { useToasts } from '../../lib/toast';
 import { setUpdateOffer, useUpdateOffer, type UpdateOffer } from '../../lib/appUpdate';
 import brandIcon from '../../../src-tauri/icons/128x128@2x.png';
@@ -216,18 +218,22 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
   const catalogKey = tools.map((item) => item.id).join('\0');
   const managedKey = managed.join('\0');
   const [managedExpanded, setManagedExpanded] = useState(false);
+  const [toolQuery, setToolQuery] = useState('');
   const [managedPreview, setManagedPreview] = useState(() => orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
   // Refresh the collapsed set when the catalog changes or the list is folded again, so a toggle does not move the chip just clicked.
   useEffect(() => {
     if (!managedExpanded) setManagedPreview(orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
   }, [catalogKey, managedExpanded]);
   const managedById = new Map(tools.map((item) => [item.id, item]));
-  const managedShown = managedExpanded || tools.length <= MANAGED_PREVIEW
-    ? orderedManagedTools(tools, managed)
-    : managedPreview.flatMap((id) => {
-      const item = managedById.get(id);
-      return item ? [item] : [];
-    });
+  const toolNeedle = toolQuery.trim().toLowerCase();
+  const managedShown = toolNeedle
+    ? orderedManagedTools(tools, managed).filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(toolNeedle))
+    : managedExpanded || tools.length <= MANAGED_PREVIEW
+      ? orderedManagedTools(tools, managed)
+      : managedPreview.flatMap((id) => {
+        const item = managedById.get(id);
+        return item ? [item] : [];
+      });
   const managedHidden = tools.length - managedShown.length;
   async function handleIconChange(toolId: string, dataUrl: string | null) {
     try {
@@ -274,9 +280,11 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
     : null;
   if (pane === 'tools') return <div className={styles.stack}>
     <section className="settings-group" id="settings-managed">
-      <div className="setting-intro"><h2>{t('settings.managed.title')}</h2><p>{t('settings.managed.description')}</p>{ack('settings-managed')}</div>
-      <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => chooseManaged(item.id, event.target.checked)} /></label>)}</div>
-      {tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
+      <div className="setting-intro"><h2>{t('settings.managed.title')}{tools.length > 0 && <Badge className="heading-count">{t('settings.managed.enabledCount', { enabled: tools.filter((item) => managed.includes(item.id)).length, total: tools.length })}</Badge>}</h2><p>{t('settings.managed.description')}</p>{ack('settings-managed')}</div>
+      {(tools.length > MANAGED_PREVIEW || !!toolNeedle) && <div className="managed-search"><SearchField type="search" pageSearch title={searchShortcutHint()} label={t('settings.managed.searchLabel')} placeholder={t('settings.managed.searchPlaceholder')} value={toolQuery} onChange={setToolQuery} /></div>}
+      {managedShown.length > 0 ? <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => chooseManaged(item.id, event.target.checked)} /></label>)}</div>
+        : !!toolNeedle && <div className="managed-empty"><p>{t('settings.managed.noMatch', { query: toolQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setToolQuery('')}>{t('common.search.clear')}</Button></div>}
+      {!toolNeedle && tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
       <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
       {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
     </section>

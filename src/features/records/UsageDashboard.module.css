@@ -4,7 +4,7 @@
 /* Header */
 .overviewHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-0_5) 0 0; }
 .overviewHead h2 { font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.1px; }
-.overviewHead p { margin-top: var(--space-0_5); color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.overviewHead p { margin-top: var(--space-0_5); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-regular); }
 .overviewHead > button { flex: none; }
 /* Range, filters and their chips share one filter bar. */
 .header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
@@ -14,7 +14,7 @@
 .headerFilters > * { width: 138px; }
 .headerFilters > .usageSearch { flex: 1 1 220px; width: auto; min-width: 180px; }
 .usageSearch > input { width: 100%; }
-.subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); margin-top: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); margin-top: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .subhead p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-1_5); margin: 0; }
 .activeChips { display: inline-flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; overflow: visible; }
 /* The way out of the filters never hides behind a clipped row. */
@@ -29,17 +29,20 @@
 
 /* Summary */
 .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
-.primary, .metric { position: relative; display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; }
+.primary, .metric { position: relative; display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .primary { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.primary[data-interactive], .metric[data-interactive] { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.metric[data-interactive]:hover:not([data-focus]) { border-color: var(--line-strong); background: var(--surface-hover); }
+.primary[data-interactive]:hover:not([data-focus]) { border-color: var(--accent); }
 .primary > small, .metric > small { display: flex; align-items: center; gap: var(--space-1_5); }
 .primary > small { color: var(--accent); }
 .currency { margin-left: auto; font-size: var(--fs-micro); letter-spacing: .5px; }
-.primary small, .metric small { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.primary small, .metric small { color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
 .primary > strong, .metric > strong { font-size: 30px; font-weight: var(--fw-bold); line-height: 1.15; letter-spacing: -.8px; font-variant-numeric: tabular-nums; }
 .primary > strong { color: var(--accent); }
 .metric strong[data-unpriced] { color: var(--text-3); font-size: 17px; font-weight: var(--fw-semibold); }
-.metricNote { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
-button.metricNote { justify-self: start; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); text-decoration: underline dotted; text-underline-offset: 3px; }
+.metricNote { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.5; }
+button.metricNote { justify-self: start; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-medium); text-decoration: underline dotted; text-underline-offset: 3px; }
 button.metricNote:hover:not(:disabled) { background: none; color: var(--text); text-decoration-style: solid; }
 .delta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-0_5) var(--space-1_5); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .delta small { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
@@ -149,7 +152,7 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 .rankIcon { display: grid; place-items: center; color: var(--text-3); }
 .rankName { display: grid; gap: 1px; min-width: 0; }
 .rankName strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
-.rankName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.rankName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
 .rankBar { height: 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--surface-3); }
 .rankBar i { display: block; height: 100%; border-radius: inherit; background: var(--chart-input); transition: width 320ms var(--ease); }
 .rank li[data-active] .rankBar i { background: var(--accent); }

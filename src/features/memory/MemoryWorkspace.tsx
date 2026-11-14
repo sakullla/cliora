@@ -15,7 +15,7 @@ import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
 import { writeClipboard } from '../../lib/clipboard';
 import { useFeedback } from '../../lib/toast';
-import { modLabel, withMod } from '../../lib/shortcut';
+import { modLabel, searchShortcutHint, withMod } from '../../lib/shortcut';
 import { displayPath } from '../../lib/paths';
 import type { MemoryAggregate, MemoryDocument, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
 import { createTemplate, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
@@ -800,7 +800,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       <IconButton size="sm" className={doc.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()} icon={<Icon name="refresh" size={15} />} />
       {can('create') && <IconButton variant="primary" size="sm" aria-label={t('common.memory.create')} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : t('common.memory.create')} onClick={() => void startCompose()} icon={<Icon name="plus" size={16} />} />}
     </> : undefined}
-    search={aggregate && total > 0 ? <SearchField type="search" label={t('common.memory.searchLabel')} placeholder={t('common.memory.searchPlaceholder')} value={query} onChange={setQuery} /> : undefined}
+    search={aggregate && total > 0 ? <SearchField type="search" pageSearch title={searchShortcutHint()} label={t('common.memory.searchLabel')} placeholder={t('common.memory.searchPlaceholder')} value={query} onChange={setQuery} /> : undefined}
     filters={aggregate && total > 0 && (listedStores.length > 1 || types.length > 0) ? <>
       {listedStores.length > 1 && <FilterSelect className={styles.sourceSelect} label={t('common.memory.sourceFilter')} value={source} options={sourceOptions} triggerDetail={false} onChange={setSource} />}
       {types.length > 0 && <div className={styles.typeFilter} role="group" aria-label={t('common.memory.typeFilter')}>

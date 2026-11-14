@@ -519,10 +519,10 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       const openConfig = () => onOpenTool(tool.id, { resource: 'config' });
       const chooseDir = () => void launchTool(tool.id, true);
       const menuItems = [
-        !desktop && <button key="dir" type="button" role="menuitem" disabled={!installed || !!loaded?.busy} onClick={chooseDir}>{t('home.tools.chooseOtherDir')}</button>,
-        !desktop && rememberedDir && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>,
-        installed && workspace && !loaded?.error && profiles.length === 0 && <button key="new" type="button" role="menuitem" onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>,
-        !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}>{t('home.tools.editConfigItem')}</button>,
+        !desktop && <button key="dir" type="button" role="menuitem" disabled={!installed || !!loaded?.busy} onClick={chooseDir}><Icon name="folder" size={14} /><span>{t('home.tools.chooseOtherDir')}</span></button>,
+        !desktop && rememberedDir && <button key="clear" type="button" role="menuitem" onClick={() => clearRememberedDir(tool.id)}><Icon name="close" size={14} /><span>{t('home.tools.clearRememberedDir')}</span></button>,
+        installed && workspace && !loaded?.error && profiles.length === 0 && <button key="new" type="button" role="menuitem" onClick={() => onOpenTool(tool.id, { create: true })}><Icon name="plus" size={14} /><span>{t('home.tools.newProfile')}</span></button>,
+        !recovery && <button key="config" type="button" role="menuitem" onClick={openConfig}><Icon name="sliders" size={14} /><span>{t('home.tools.editConfigItem')}</span></button>,
       ].filter(Boolean);
       return <div className={styles.row} data-tool-row key={tool.id}>
         <div className={styles.name}><ToolIcon toolId={tool.id} size={24} /><strong title={tool.name}>{tool.name}</strong>{status}</div>

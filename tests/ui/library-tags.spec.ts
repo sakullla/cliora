@@ -405,3 +405,59 @@ test('the Skill section waits before its first read settles and never flashes th
   await expect(library.getByRole('button', { name: 'code-review', exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__librarySeen.skillFailure)).toBe(false);
 });
+
+test('library prompt editor commits pending tag text on save and cards support duplicate and delete', async ({ page }) => {
+  await page.addInitScript(() => {
+    const library: Array<Record<string, any>> = [
+      { id: 'prompt-1', kind: 'prompt', title: '架构评审', body: '检查分层边界', category: '架构', projectId: null, version: 1, updatedAt: 1790758800 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
+          if (command === 'save_library_item') {
+            const draft = args.draft;
+            const saved = { ...draft, id: draft.id ?? `item-${library.length + 1}`, version: (draft.expectedVersion ?? 0) + 1, updatedAt: 1790759000, projectId: draft.projectId ?? null };
+            const index = library.findIndex((entry) => entry.id === saved.id);
+            if (index < 0) library.push(saved); else library[index] = saved;
+            return saved;
+          }
+          if (command === 'delete_library_item') {
+            const index = library.findIndex((entry) => entry.id === args.id);
+            if (index >= 0) library.splice(index, 1);
+            return null;
+          }
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('button', { name: '新建提示词' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建提示词' });
+  await dialog.getByLabel('标题').fill('测试提示词');
+  // Typing a tag without pressing Enter still saves that tag when clicking Save.
+  await dialog.getByLabel('添加标签').fill('测试,回归');
+  await dialog.getByRole('button', { name: '保存' }).click();
+  await expect(dialog).toHaveCount(0);
+  const createdCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '测试提示词', exact: true }) });
+  await expect(createdCard.getByText('测试', { exact: true })).toBeVisible();
+  await expect(createdCard.getByText('回归', { exact: true })).toBeVisible();
+
+  // Duplicate and delete directly from the card's row menu.
+  await createdCard.getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: '更多操作' }).getByRole('menuitem', { name: '创建副本' }).click();
+  const copyCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '测试提示词 副本', exact: true }) });
+  await expect(copyCard).toBeVisible();
+  await copyCard.getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menu', { name: '更多操作' }).getByRole('menuitem', { name: '删除' }).click();
+  await page.getByRole('dialog', { name: '删除资料' }).getByRole('button', { name: '删除资料' }).click();
+  await expect(copyCard).toHaveCount(0);
+});

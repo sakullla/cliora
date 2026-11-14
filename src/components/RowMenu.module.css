@@ -6,15 +6,15 @@
   justify-content: center;
   width: var(--control-h-sm); height: var(--control-h-sm);
   padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text-2);
   font-size: var(--fs-title);
   line-height: 1;
   letter-spacing: 1px;
 }
-.rowMenuButton:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
+.rowMenuButton:hover:not(:disabled) { color: var(--text); border-color: var(--control-line-hover); background: var(--surface-hover); }
 .rowMenuList {
   position: fixed;
   z-index: var(--z-popover);

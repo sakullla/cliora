@@ -10,7 +10,8 @@
 .readerOptions { display: flex; align-items: center; gap: var(--space-0_5); margin-left: auto; }
 .readerOptions button { min-height: 28px; padding: 0 var(--space-2); border-color: transparent; background: transparent; color: var(--text-2); box-shadow: none; font-size: var(--fs-caption); }
 .readerOptions button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
-.readerOptions button[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.readerOptions button[aria-pressed="true"],
+.readerOptions button[aria-expanded="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .find { display: flex; align-items: center; flex: 1 1 100%; gap: var(--space-1); min-width: 0; min-height: 40px; padding: var(--space-0_5) var(--space-1) var(--space-0_5) var(--space-2_5); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-3); }
 .find:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .find input { flex: 1; width: 0; min-width: 0; min-height: 30px; padding: var(--space-1) var(--space-1_5); border: 0; background: transparent; box-shadow: none; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
@@ -89,8 +90,11 @@
   .avatar { width: 26px; height: 26px; }
 }
 
-.readingOptions { position: relative; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.readingOptions summary { padding: var(--space-1_5) var(--space-2); cursor: pointer; }
+.readingOptions { position: relative; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.readingOptions summary { display: inline-flex; align-items: center; min-height: 28px; padding: 0 var(--space-2); border-radius: var(--radius); cursor: pointer; }
+.readingOptions summary:hover { background: var(--surface-2); color: var(--text); }
+.readingOptions[data-active] > summary,
+.readingOptions[open] > summary { background: var(--accent-soft); color: var(--accent); }
 .readingOptions > div { position: absolute; top: calc(100% + 6px); right: 0; display: grid; gap: var(--space-0_5); width: 156px; padding: var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-md); }
 .readingOptions label { display: flex; align-items: center; gap: var(--space-2_5); min-height: 34px; padding: 0 var(--space-2); border-radius: var(--radius-xs); cursor: pointer; }
 .readingOptions label:hover { background: var(--surface-2); }

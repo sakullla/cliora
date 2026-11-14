@@ -160,6 +160,9 @@ export default {
     firstMessage: '第一条消息',
     launchPromptAria: '启动提示词',
     launchSubmit: '在外部终端启动',
+    launchSubmitWorkbench: '在工作台启动',
+    launchSubmitDesktop: '启动应用',
+    launchStarting: '正在启动…',
   },
   resources: {
     sourceManaged: '托管包',

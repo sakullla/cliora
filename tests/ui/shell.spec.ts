@@ -1297,3 +1297,56 @@ test('workbench re-reads library prompts after the library changes', async ({ pa
   await page.keyboard.press('Control+Shift+M');
   await expect(composerPrompts).toContainText('第三版');
 });
+
+test('command palette surfaces live workbench sessions and searches deep settings and usage sections', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 0,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'list_workbench_sessions') return [{ id: 'live-1', toolId: 'codex', projectId: null, directory: 'C:/repos/alpha-service', mode: 'normal', running: true, exitCode: null }];
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'get_usage_report') return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', previous: null, timeline: [], totals: { requests: 0, usageRecords: 0, unknownRequestRecords: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 }, byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
+          if (command === 'get_webdav_status') return { configured: false, enabled: false, endpoint: '', lastSuccess: null, lastError: null, pendingChanges: 0, retryAfter: null, uploaded: 0, downloaded: 0, conflicts: [] };
+          if (command.startsWith('plugin:event|')) return 1;
+          return [];
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  // Active workbench sessions appear at rest; deep settings sections stay hidden until searched.
+  await expect(dialog.locator('.command-group', { hasText: '进行中会话' })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: /alpha-service/ })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: /迁移与同步/ })).toHaveCount(0);
+
+  // Searching "webdav" jumps directly to Settings -> Migration & sync.
+  const input = dialog.getByRole('combobox', { name: '搜索页面、工具或项目' });
+  await input.fill('webdav');
+  await expect(dialog.getByRole('option', { name: /迁移与同步/ })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '迁移与同步', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+  // Searching "token" jumps directly to Records -> Usage.
+  await page.keyboard.press('Control+K');
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('token');
+  await expect(dialog.getByRole('option', { name: /用量总览/ })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '用量', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+  // Selecting the live session switches straight to Workbench on that session.
+  await page.keyboard.press('Control+K');
+  await dialog.getByRole('option', { name: /alpha-service/ }).click();
+  await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
+});

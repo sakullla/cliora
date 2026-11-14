@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { displayPath, shortPath } from '../../lib/paths';
+import { searchShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import type { LaunchSettings, Project, WorkbenchSession, WorktreeLaunchMode, WorktreeLedgerEntry } from '../../types/launch';
@@ -192,7 +193,7 @@ export function WorktreeSettings() {
       <div className={`setting-intro ${styles.introRow}`}>
         <div><h2 id="worktree-prepare-title">{t('settings.worktrees.prepareTitle')}</h2><p>{t('settings.worktrees.prepareDescription')}</p></div>
       </div>
-      {(projects?.length ?? 0) >= FILTER_MIN && <label className={styles.filter} data-field-frame=""><Icon name="search" size={14} /><input type="search" value={query} placeholder={t('settings.worktrees.prepareFilter')} aria-label={t('settings.worktrees.prepareFilter')} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} /></label>}
+      {(projects?.length ?? 0) >= FILTER_MIN && <label className={styles.filter} data-field-frame=""><Icon name="search" size={14} /><input type="search" data-page-search="" title={searchShortcutHint()} value={query} placeholder={t('settings.worktrees.prepareFilter')} aria-label={t('settings.worktrees.prepareFilter')} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} /></label>}
       {projects === null ? <p className={styles.muted} role="status">{t('settings.worktrees.loading')}</p>
         : !projects.length ? <p className={styles.empty}><Icon name="folder" size={16} />{t('settings.worktrees.prepareEmpty')}</p>
         : !shownProjects.length ? <p className={styles.empty}><Icon name="search" size={16} />{t('settings.worktrees.prepareNoMatch', { query: query.trim() })}</p>

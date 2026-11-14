@@ -47,11 +47,12 @@ import { native, nativeAvailable } from './lib/native';
 import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
+import { displayPath, shortPath } from './lib/paths';
 import { usePageScroll } from './lib/uiNavigation';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
-import type { Project, TrayRepairTarget, TwiglaneReviewSignal } from './types/launch';
+import type { Project, TrayRepairTarget, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
@@ -186,11 +187,14 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
+  const [paletteLiveSessions, setPaletteLiveSessions] = useState<WorkbenchSession[]>([]);
   const [paletteSessions, setPaletteSessions] = useState<HistorySession[]>([]);
-  const [paletteLibrary, setPaletteLibrary] = useState<LibraryItem[]>([]);
+  const [paletteLibrary, setPaletteLibrary] = useState<Array<{ item: LibraryItem; searchOnly: boolean }>>([]);
   const [paletteSourceFailed, setPaletteSourceFailed] = useState(false);
   const [paletteReload, setPaletteReload] = useState(0);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
+  const [librarySectionIntent, setLibrarySectionIntent] = useState<{ section: 'mcp' | 'skill'; token: number } | null>(null);
+  const [recordsTabIntent, setRecordsTabIntent] = useState<{ tab: 'sessions' | 'usage'; token: number } | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const [remoteWorkbenchIntent, setRemoteWorkbenchIntent] = useState<RemoteWorkbenchIntent | null>(null);
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
@@ -309,12 +313,18 @@ export default function App() {
     }).catch(markFailed);
     // Palette data is read-only: sessions come straight from the indexed DB snapshot
     // (list_history_sessions never scans) and library items from the library tables.
-    void native.listHistorySessions({ limit: 5 }).then((result) => {
+    void native.listWorkbenchSessions().then((result) => {
       if (!live || !Array.isArray(result)) return;
-      setPaletteSessions([...result].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 5));
+      setPaletteLiveSessions(result.filter((item) => !!item && item.running));
+    }).catch(() => {});
+    void native.listHistorySessions({ limit: 20 }).then((result) => {
+      if (!live || !Array.isArray(result)) return;
+      setPaletteSessions([...result].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 20));
     }).catch(markFailed);
     void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, '')])
-      .then((groups) => { if (live) setPaletteLibrary(groups.flatMap((entries) => entries.slice(0, 5))); })
+      .then((groups) => {
+        if (live) setPaletteLibrary(groups.flatMap((entries) => entries.map((item, entryIndex) => ({ item, searchOnly: entryIndex >= 5 }))));
+      })
       .catch(markFailed);
     return () => { live = false; };
   }, [paletteOpen, paletteReload]);
@@ -791,17 +801,33 @@ export default function App() {
     contextBoost: (page === 'home' ? 6 : 4) + (index < 5 ? 2 : 0),
     run: () => { void revealProject(project.id); },
   }));
-  const sessionCommands: CommandItem[] = paletteSessions.map((session) => ({
+  const liveSessionCommands: CommandItem[] = paletteLiveSessions.map((session) => {
+    const toolLabel = (catalog?.registered ?? []).find((item) => item.id === session.toolId)?.name ?? session.toolId;
+    const projectLabel = session.projectId ? paletteProjects.find((item) => item.id === session.projectId)?.name : '';
+    const place = projectLabel || (session.directory ? shortPath(displayPath(session.directory)) : '');
+    return {
+      id: `live-session-${session.id}`,
+      group: t('common.palette.groupActiveSessions'),
+      label: [toolLabel, place].filter(Boolean).join(' · ') || toolLabel,
+      hint: t('common.palette.hintSwitchSession'),
+      keywords: `${toolLabel} ${session.toolId} ${projectLabel ?? ''} ${session.directory ?? ''}`,
+      toolId: session.toolId,
+      contextBoost: 7,
+      run: () => openWorkbenchSession(session.id),
+    };
+  });
+  const sessionCommands: CommandItem[] = paletteSessions.map((session, index) => ({
     id: `session-${session.id}`,
     group: t('common.palette.groupSessions'),
     label: session.title.trim() || t('common.palette.untitledSession'),
     hint: t('common.palette.hintResumeSession'),
-    keywords: session.toolId,
+    keywords: `${session.toolId} ${session.cwd ?? ''} ${session.model ?? ''}`,
     toolId: session.toolId,
     contextBoost: session.toolId === selectedTool ? 6 : 4,
+    searchOnly: index >= 5,
     run: () => { void resumePaletteSession(session.id); },
     secondaryLabel: t('common.palette.hintOpenRecords'),
-    onSecondary: () => { void go('records'); },
+    onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', token: Date.now() }); void go('records'); },
   }));
   const pageCommands: CommandItem[] = pages.map((item) => {
     const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
@@ -816,14 +842,65 @@ export default function App() {
       run: () => { void go(item.id); },
     };
   });
-  const libraryCommands: CommandItem[] = paletteLibrary.map((item) => ({
+  const settingsKeywords: Record<SettingsTab, string> = {
+    general: 'general theme language update tray 外观 主题 语言 更新 托盘 引导',
+    tools: 'cli tools icons 工具 图标 管理',
+    launch: 'launch terminal yolo 启动 终端 模式',
+    worktrees: 'worktree git branch 工作树 分支 仓库 清理',
+    hosts: 'remote ssh host server 远程 主机 服务器 连接',
+    migration: 'migration sync webdav backup bundle export import 迁移 同步 备份 导出 恢复 云端',
+  };
+  const settingsSectionCommands: CommandItem[] = settingsCategories.map((category) => ({
+    id: `settings-${category.id}`,
+    group: t('common.nav.settings'),
+    label: category.label,
+    hint: category.hint,
+    keywords: settingsKeywords[category.id],
+    icon: category.icon,
+    searchOnly: true,
+    run: () => { void go('settings').then((allowed) => { if (allowed) setSettingsTab(category.id); }); },
+  }));
+  const deepSectionCommands: CommandItem[] = [
+    ...(remoteTargetId === 'local' ? [{
+      id: 'records-usage',
+      group: t('common.nav.records'),
+      label: t('records.usage.title'),
+      hint: t('records.page.usage'),
+      keywords: 'usage token cost price billing 用量 统计 费用 价格 单价 趋势',
+      icon: 'connections' as const,
+      searchOnly: true,
+      run: () => { setRecordsTabIntent({ tab: 'usage', token: Date.now() }); void go('records'); },
+    }] : []),
+    {
+      id: 'library-section-mcp',
+      group: t('common.palette.groupLibrary'),
+      label: 'MCP',
+      hint: t('common.nav.library'),
+      keywords: 'mcp server library 连接 服务器 分发 资料库',
+      icon: 'connections' as const,
+      searchOnly: true,
+      run: () => { setLibrarySectionIntent({ section: 'mcp', token: Date.now() }); void go('library'); },
+    },
+    {
+      id: 'library-section-skill',
+      group: t('common.palette.groupLibrary'),
+      label: 'Skill',
+      hint: t('common.nav.library'),
+      keywords: 'skill package zip 技能 资源包 导入 资料库',
+      icon: 'package' as const,
+      searchOnly: true,
+      run: () => { setLibrarySectionIntent({ section: 'skill', token: Date.now() }); void go('library'); },
+    },
+  ];
+  const libraryCommands: CommandItem[] = paletteLibrary.map(({ item, searchOnly }) => ({
     id: `library-${item.id}`,
     group: t('common.palette.groupLibrary'),
     label: item.title,
     hint: t('common.palette.hintOpenItem'),
-    keywords: libraryKindLabel(item.kind),
+    keywords: `${libraryKindLabel(item.kind)} ${item.category ?? ''}`,
     icon: 'library' as const,
     contextBoost: page === 'library' ? 5 : 2,
+    searchOnly,
     run: () => { void revealLibraryItem(item.kind, item.id); },
   }));
   const toolCommands: CommandItem[] = visible.map((item) => {
@@ -852,15 +929,18 @@ export default function App() {
     ...themes.map((item) => ({ id: `theme-${item.id}`, group: t('common.palette.groupActions'), label: t(`common.theme.${item.id}`), hint: bootstrap.preferences.theme === item.id ? t('common.theme.current') : t('common.theme.switch'), icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
     { id: 'help', group: t('common.palette.groupActions'), label: t('common.shortcuts.title'), hint: '?', icon: 'info', run: () => setHelpOpen(true) },
   ];
-  const hasRecentWork = projectCommands.length > 0 || sessionCommands.length > 0;
+  const hasRecentWork = liveSessionCommands.length > 0 || projectCommands.length > 0 || sessionCommands.some((item) => !item.searchOnly);
   const commands: CommandItem[] = hasRecentWork
     ? [
       ...startCommands,
+      ...liveSessionCommands,
       ...projectCommands.slice(0, 5),
       ...sessionCommands,
       ...pageCommands,
       ...toolCommands,
       ...libraryCommands,
+      ...deepSectionCommands,
+      ...settingsSectionCommands,
       ...actionCommands,
       ...projectCommands.slice(5),
     ]
@@ -869,6 +949,8 @@ export default function App() {
       ...pageCommands,
       ...toolCommands,
       ...libraryCommands,
+      ...deepSectionCommands,
+      ...settingsSectionCommands,
       ...actionCommands,
     ];
 
@@ -979,8 +1061,8 @@ export default function App() {
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
           {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onPickTool={openTool} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('common.goSettings')}</Button>} />}
         </div>}
-        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
+        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} sectionIntent={page === 'library' ? librarySectionIntent : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
+        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} tabIntent={page === 'records' ? recordsTabIntent : null} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
         {page === 'settings' && <SettingsLayout value={settingsTab} onChange={setSettingsTab} items={settingsCategories} >
           {(settingsTab === 'general' || settingsTab === 'tools') && <Suspense fallback={<PageSkeleton />}><GeneralSettings
