@@ -532,6 +532,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
   const [titles, setTitles] = useState<Map<string, string>>(() => new Map());
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // A temporary look covers the current terminal. It is not a selection or a split pane.
+  const [peekSessionId, setPeekSessionId] = useState<string | null>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const worktreeMenuRef = useRef<HTMLDivElement>(null);
@@ -612,6 +614,26 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     });
     setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
   }, [activeTargetId, scopedSessions]);
+  const peekSessionIdRef = useRef(peekSessionId);
+  peekSessionIdRef.current = peekSessionId;
+  // The looked-at session leaving the list closes the cover. A list error does not,
+  // and neither does keeping the original selection. Split replaces the cover.
+  useEffect(() => {
+    if (!peekSessionId) return;
+    if (split || peekSessionId === selectedId || !scopedSessions.some((item) => item.id === peekSessionId)) setPeekSessionId(null);
+  }, [peekSessionId, selectedId, scopedSessions, split]);
+  useEffect(() => {
+    if (!peekSessionId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setPeekSessionId(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [peekSessionId]);
 
   useEffect(() => { setActiveTargetId(remoteTargetId); }, [remoteTargetId]);
   useEffect(() => {
@@ -657,6 +679,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const node = composerInputRef.current;
+    if (node) node.disabled = !!peekSessionId;
+  }, [peekSessionId, composerOpen, selectedId]);
   const [copiedState, setCopiedState] = useState<'path' | 'output' | 'selection' | 'empty' | 'branch' | null>(null);
   const copyTimerRef = useRef<number>(0);
   const linkErrorTimer = useRef<number>(0);
@@ -1685,6 +1711,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!others.length) return;
     const partner = recentSessionIds.find((id) => id !== current && others.some((item) => item.id === id))
       ?? (others.find((item) => item.running) ?? others[0]).id;
+    setPeekSessionId(null);
     setSplit([current, partner]);
   }
 
@@ -2452,6 +2479,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   async function submitComposer() {
+    if (peekSessionIdRef.current) return;
     if (!selected || !selected.running) return;
     const text = composerDrafts[selected.id] ?? '';
     if (!await sendToSession(selected, text ? `${text}\r` : '\r')) return;
@@ -2637,7 +2665,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function openRowMenu(session: WorkbenchSession, x: number, y: number) {
     const previous = selectedIdRef.current;
-    setSelectedId(session.id);
+    // The row stays unselected. Selecting it would fit its PTY and drop its unread mark.
     setAppearanceOpen(false);
     setShortcutsOpen(false);
     // Worktree setup opens in its own dialog; the ledger is read so its entry stays current.
@@ -3221,7 +3249,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   // Every live terminal stays mounted, including other hosts' sessions: a remount replays history
   // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
-  const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id));
+  // A temporary look keeps its own terminal mounted without putting it in visibleIds.
+  const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
   // A pending selection has no input target until that identity has been listed.
   const stageSession = selected;
 
@@ -3244,7 +3273,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     ? []
     : railSessions.filter((item) => item.attention && item.session.id !== selectedId);
   const stageAttentionTarget = stageAttention[0];
+  const peekOffered = !listError && !split && railSessions.length > 1;
+  const peekSession = peekSessionId ? scopedSessions.find((item) => item.id === peekSessionId) ?? null : null;
+  function openPeek(id: string) {
+    if (!peekOffered || !id || id === selectedIdRef.current) return;
+    if (!scopedSessions.some((item) => item.id === id)) return;
+    setPeekSessionId(id);
+  }
   function selectSession(id: string, focusTerminal = true) {
+    setPeekSessionId(null);
     setSelectedId(id);
     if (focusTerminal) requestAnimationFrame(() => {
       if (selectedIdRef.current === id) handles.current.get(id)?.focus();
@@ -3414,6 +3451,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <span>{t('sessions.attentionJump', { count: stageAttention.length })}</span>
                     <Icon name="arrowRight" size={13} />
                   </button>}
+                  {stageAttentionTarget && peekOffered && <button type="button" className={styles.stagePeek} onClick={() => openPeek(stageAttentionTarget.session.id)}>{t('sessions.peekSession')}</button>}
                   <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
@@ -3448,7 +3486,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 </div>
               </div>}
 
-              <div ref={canvasRef} className={styles.canvas} data-split={split ? 'true' : undefined}
+              <div ref={canvasRef} className={styles.canvas} data-split={split ? 'true' : undefined} data-peek={peekSession ? '' : undefined}
                 onPointerDownCapture={(event) => {
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
                   if (id && id !== selectedIdRef.current && visibleIdsRef.current.includes(id)) setSelectedId(id);
@@ -3469,7 +3507,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   // 适配器只在支持该能力时才带对应端口；缺少 resume 端口不能让整个工作台崩掉。
                   const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  const peeking = peekSessionId === session.id;
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -3483,7 +3522,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       {visible && dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
                       {uploads.tasks[session.id] && <SessionUploadNotice task={uploads.tasks[session.id]} progressLabel={t(remotePane ? 'sessions.uploadRunningLabel' : 'sessions.pasteFilesRunningLabel')} progressText={t(remotePane ? 'sessions.uploadProgress' : 'sessions.pasteFilesProgress', { done: uploads.tasks[session.id].uploaded, total: uploads.tasks[session.id].total })} failedTitle={t(remotePane ? 'sessions.uploadFailedTitle' : 'sessions.pasteFilesFailedTitle')} retryLabel={t(remotePane ? 'sessions.uploadRetry' : 'sessions.pasteFilesRetry')} dismissLabel={t('common.dismissError')} onRetry={() => uploads.retryUpload(session.id)} onDismiss={() => uploads.dismissUploadFailure(session.id)} />}
                     </>}
-                    footer={visible && !session.running ? <div className={styles.endedBar} data-failed={(failed && !session.reattachable) || undefined} data-connection={session.reattachable || undefined}>
+                    footer={(visible || peeking) && !session.running ? <div className={styles.endedBar} data-failed={(failed && !session.reattachable) || undefined} data-connection={session.reattachable || undefined}>
                       {/* A lost SSH link is a connection state to resume, not a CLI failure. */}
                       <span className={styles.endedGlyph}><Icon name={session.reattachable ? 'server' : failed ? 'alert' : 'info'} size={15} /></span>
                       <span className={styles.endedText}><strong>{session.reattachable ? t(session.connectionState === 'unknown' ? 'sessions.sshUnknown' : 'sessions.sshDisconnectedReattachable') : t('sessions.sessionEndedBanner')}</strong>{session.exitCode != null && !session.reattachable && <span className={styles.endedCode}>{t('sessions.exitCode', { code: session.exitCode })}</span>}<span className={styles.endedDetail} title={session.reattachable && session.exitCode != null ? t('sessions.sshExitCodeHint', { code: session.exitCode }) : undefined}>{session.reattachable ? t('sessions.reattachNext') : t('sessions.endedHintShort')}</span></span>
@@ -3493,6 +3532,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     </div> : null} />;
                 })}
                 {copiedState && <div className={styles.toastPill} role="status"><Icon name={copiedState === 'empty' ? 'info' : 'check'} size={14} /><span>{copiedMessage}</span></div>}
+                {peekSession && <div className={styles.peekOverlay} role="dialog" aria-label={t('sessions.peekSession')}>
+                  <div className={styles.peekBar}>
+                    <span className={styles.stageIcon} role="img" aria-label={toolName(peekSession)} data-tone={sessionTone(peekSession)} data-peek-icon=""><ToolIcon toolId={peekSession.toolId} size={18} /><SessionActivityIcon tone={sessionTone(peekSession)} slot="stage" className={styles.stageIconDot} /></span>
+                    <h2 className={styles.peekTitle}>{taskTitle(peekSession) ? <SessionTitle title={taskTitle(peekSession)} /> : toolName(peekSession)}</h2>
+                    <span className={styles.peekState}>{stateLabel(peekSession, sessionTone(peekSession))}</span>
+                    <div className={styles.peekActions}>
+                      <Button size="sm" variant="primary" onClick={() => selectSession(peekSession.id)}>{t('sessions.peekOpen')}</Button>
+                      <Button size="sm" onClick={() => setPeekSessionId(null)}>{t('sessions.peekClose')}</Button>
+                    </div>
+                  </div>
+                  <div className={styles.peekBody} />
+                </div>}
               </div>
               {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
@@ -3639,7 +3690,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
           <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}><Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>{pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
-          {splitRoom && menu.besideId && sessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => setSplit([menu.besideId!, session.id])}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(sessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
+          {peekOffered && session.id !== selectedId && <button role="menuitem" onClick={() => openPeek(session.id)}><Icon name="eye" size={14} /><span>{t('sessions.peekSession')}</span></button>}
+          {splitRoom && menu.besideId && sessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => { setPeekSessionId(null); setSelectedId(session.id); setSplit([menu.besideId!, session.id]); }}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(sessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
           <span className={styles.menuDivider} role="separator" />
           {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.sendInterrupt')}</span></button>}
           <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>

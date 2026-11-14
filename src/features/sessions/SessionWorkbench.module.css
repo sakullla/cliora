@@ -943,6 +943,67 @@
 .stageAttention > :global(svg) { flex: none; }
 .stageAttention:hover:not(:disabled) { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, var(--warning-soft)); color: var(--warning); box-shadow: none; }
 .stageAttentionIcon { width: 14px; height: 14px; }
+.stagePeek {
+  flex: none;
+  height: 28px;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--term-line);
+  border-radius: var(--radius);
+  background: var(--term-raise);
+  color: var(--term-text-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+}
+.stagePeek:hover { background: var(--term-hover); color: var(--term-fg); }
+.stagePeek:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.peekOverlay {
+  position: absolute;
+  z-index: 24;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--term-bg);
+}
+.peekBar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--peek-bar, 40px);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--term-line);
+  background: var(--term-bar);
+}
+.peekTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--term-fg);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peekState { flex: none; color: var(--term-text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.peekActions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
+.peekBody { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.terminalInstance[data-peeking] {
+  position: absolute;
+  z-index: 25;
+  top: var(--peek-bar, 40px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
 .terminalActions .toolButton[data-variant]:disabled { opacity: .35; }
 .root .iconBtn[data-size] { width: var(--space-8); min-width: 0; height: var(--space-8); min-height: 0; color: var(--term-text-2); }
 .root .iconBtn[data-variant]:disabled { opacity: .35; }
@@ -1132,6 +1193,7 @@
   background: var(--term-line);
 }
 .canvas[data-split] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.canvas[data-peek] { z-index: 24; --peek-bar: 40px; }
 .terminalInstance {
   position: relative;
   display: flex;

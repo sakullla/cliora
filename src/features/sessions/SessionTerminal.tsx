@@ -315,7 +315,7 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, suspendInput = false, peeking = false, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
   toolId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
@@ -325,6 +325,10 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   /** Allow a bounded warm renderer only while the workbench is visible. */
   keepRendererWarm?: boolean;
   focused?: boolean;
+  /** The terminal stays active, but key and paste input must not reach the PTY. */
+  suspendInput?: boolean;
+  /** Show this inactive terminal over the current one. The host node stays put, and it does not become active. */
+  peeking?: boolean;
   running: boolean;
   /** A remote PTY pays a round trip for every resize, so layout storms are collapsed. */
   remote?: boolean;
@@ -368,6 +372,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   startedAtRef.current = startedAt;
   const activeRef = useRef(active);
   const focusedRef = useRef(focused);
+  const suspendInputRef = useRef(suspendInput);
   const runningRef = useRef(running);
   const remoteRef = useRef(remote);
   const imagePasteRef = useRef(onFilesPaste);
@@ -376,6 +381,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   const themeRef = useRef(theme);
   activeRef.current = active;
   focusedRef.current = focused;
+  suspendInputRef.current = suspendInput;
   runningRef.current = running;
   remoteRef.current = remote;
   imagePasteRef.current = onFilesPaste;
@@ -413,7 +419,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(node);
-    if (term.textarea) term.textarea.disabled = !activeRef.current || !runningRef.current;
+    if (term.textarea) term.textarea.disabled = !activeRef.current || !runningRef.current || suspendInputRef.current;
     webglRef.current = new TerminalWebglLifecycle(term, () => new WebglAddon());
     termRef.current = term;
     fitRef.current = fit;
@@ -556,7 +562,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     };
 
     term.attachCustomKeyEventHandler((event) => {
-      if (!activeRef.current) return false;
+      if (!activeRef.current || suspendInputRef.current) return false;
       // Every key inside an open composition belongs to the IME, whatever keyCode WebView2 reports.
       if (terminalYieldsToIme(event) || ime.composing()) return true;
       const action = terminalKeyAction(event, { hasSelection: term.hasSelection(), canSwitch: bridge.current.canSwitch(), mac: MAC });
@@ -609,7 +615,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     // Route clipboard content, not keys. Text keeps xterm's normal paste path;
     // binary files preserve their bytes and names.
     const onPaste = (event: ClipboardEvent) => {
-      if (!activeRef.current) { event.preventDefault(); event.stopPropagation(); return; }
+      if (!activeRef.current || suspendInputRef.current) { event.preventDefault(); event.stopPropagation(); return; }
       const data = event.clipboardData;
       if (!data) return;
       const text = data.getData('text/plain');
@@ -1090,16 +1096,28 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   }, [theme]);
 
   useLayoutEffect(() => {
+    if (!peeking || active) return;
+    const term = termRef.current;
+    if (!term) return;
+    // The same host was opened while hidden. Redraw that grid; fitting would resize the PTY.
+    term.refresh(0, Math.max(0, term.rows - 1));
+  }, [peeking, active]);
+
+  useLayoutEffect(() => {
     const term = termRef.current;
     if (!term) return;
     // disableStdin suppresses protocol replies as well as keyboard events.
     // A hidden live CLI must still receive DSR/DA responses from its own buffer.
     term.options.disableStdin = !running;
-    // A composition must not survive into a hidden pane or an ended session.
-    if (!active || !running) imeRef.current?.deactivate();
-    if (term.textarea) term.textarea.disabled = !active || !running;
+    // A composition must not survive into a hidden pane, a suspended one, or an ended session.
+    const inputEnabled = active && running && !suspendInput;
+    if (!inputEnabled) imeRef.current?.deactivate();
+    if (term.textarea) {
+      term.textarea.disabled = !inputEnabled;
+      if (!inputEnabled && document.activeElement === term.textarea) term.textarea.blur();
+    }
     if (active) webglRef.current?.prepareActivation();
-  }, [active, running]);
+  }, [active, running, suspendInput]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -1155,8 +1173,9 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     return () => cancelAnimationFrame(frame);
   }, [focused, active, running]);
 
-  const placement: CSSProperties | undefined = pane != null && pane >= 0 ? { gridColumn: pane + 1, gridRow: 1 } : undefined;
-  return <div className={styles.terminalInstance} hidden={!active} style={placement} data-pane-session={sessionId} data-focused={(active && focused) || undefined} data-running={running || undefined}>
+  // A temporary look shows this same node without making it active, so fit stays idle.
+  const placement: CSSProperties | undefined = pane != null && pane >= 0 && !peeking ? { gridColumn: pane + 1, gridRow: 1 } : undefined;
+  return <div className={styles.terminalInstance} hidden={!active && !peeking} style={placement} data-pane-session={sessionId} data-focused={(active && focused) || undefined} data-running={running || undefined} data-peeking={peeking || undefined}>
     {header}
     <div className={styles.terminalBody}>
       <div ref={host} className={styles.terminalHost} aria-label={label} data-blink={(cursorBlink && active && focused && running) || undefined} />

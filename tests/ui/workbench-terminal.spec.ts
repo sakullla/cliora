@@ -418,6 +418,12 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
       __exit: (exitCode: number | null, sessionId = 's1') => {
         bridge.handlers[bridge.listens['cliora:session-exit']]?.({ payload: { sessionId, exitCode } });
       },
+      __sessionState: (sessionId: string, patch: Record<string, unknown>) => {
+        const session = sessions.find((item) => item.id === sessionId);
+        if (!session) return;
+        Object.assign(session, patch);
+        bridge.handlers[bridge.listens['cliora:session-state']]?.({ payload: { ...session } });
+      },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
@@ -3865,4 +3871,338 @@ test('a failed session list keeps its error and does not show zero sessions wait
   await expect(page.getByRole('alert').filter({ hasText: '会话列表没有读出来' })).toBeVisible();
   await expect(page.getByText('0 个会话等你处理', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /个会话等你处理/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+});
+
+const resizeCount = (page: Page) => page.evaluate(() => (window as unknown as { __resizes: unknown[] }).__resizes.length);
+const launchCount = (page: Page) => page.evaluate(() => ((window as unknown as { __launches?: unknown[] }).__launches ?? []).length);
+const forbiddenPeekAction = /接受|丢弃|提交|拉取请求|供应商|聊天|关闭后继续运行|手机配对|云主机|浏览器点选|定时任务|布局脚本/;
+
+async function openClaudeSessionMenu(page: Page) {
+  await page.locator('[role="tab"][data-session-id="s2"]').hover();
+  await page.getByRole('button', { name: 'Claude Code 会话操作', exact: true }).click();
+}
+
+async function visibleCopyHits(page: Page) {
+  return page.locator('body').evaluate((body) => {
+    const expression = /临时查看|\d+ 个会话等你处理/u;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const hits: string[] = [];
+    let current = walker.nextNode();
+    while (current) {
+      const text = current.textContent ?? '';
+      const parent = current.parentElement;
+      if (parent && expression.test(text) && !parent.closest('[hidden]') && parent.getClientRects().length > 0) hits.push(text.trim());
+      current = walker.nextNode();
+    }
+    return hits;
+  });
+}
+
+test('a temporary look keeps the selected terminal scroll, selection and input suspended', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __twoSessions: true,
+      __gitContext: { branch: 'main', commit: null, worktree: null, repository: 'repo' },
+      __worktrees: [
+        { name: 'repo', branch: 'main', path: 'C:/repo', current: false },
+        { name: 'work', branch: 'feat-work', path: 'C:/work', current: true },
+      ],
+    });
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const viewport = page.locator('[data-pane-session="s1"] .xterm-scrollable-element');
+  const dialog = page.getByRole('dialog', { name: '临时查看' });
+  const find = stage.getByRole('searchbox', { name: '在终端输出中查找…' });
+  const composer = stage.getByRole('region', { name: '多行输入与提示词投递' });
+  const draft = composer.getByRole('textbox');
+
+  const review = page.getByRole('button', { name: /在工作树中新开会话/ });
+  await expect(review).toBeVisible();
+  await review.click();
+  const treeMenu = page.getByRole('menu', { name: '在工作树中新开会话' });
+  await expect(treeMenu.getByRole('menuitem', { name: '在 Twiglane 中审查', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(treeMenu).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Codex 会话操作', exact: true }).click();
+  const codexMenu = page.getByRole('menu', { name: 'Codex 会话操作', exact: true });
+  await expect(codexMenu.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+  await expect(codexMenu.getByRole('menuitem', { name: '在 Twiglane 中审查', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(codexMenu).toHaveCount(0);
+
+  await stage.getByRole('button', { name: '查找输出', exact: true }).click();
+  await find.fill('kept-query');
+  await stage.getByRole('button', { name: '快捷输入', exact: true }).click();
+  await draft.fill('keep-draft');
+  await page.evaluate(() => {
+    const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
+    (window as unknown as { __output: (text: string, id?: string) => void }).__output(`${lines}\r\n`, 's1');
+  });
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBeLessThan(3);
+  let settled = -1;
+  await expect.poll(async () => {
+    const next = await resizeCount(page);
+    const stable = next === settled;
+    settled = next;
+    return stable;
+  }, { intervals: [150] }).toBe(true);
+  const screen = page.locator('[data-pane-session="s1"] .xterm-screen');
+  const box = (await screen.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let step = 0; step < 8; step += 1) {
+    const scroll = await readScroll(viewport);
+    if (scroll.top > 0 && scroll.remaining > 0) break;
+    await page.mouse.wheel(0, scroll.top === 0 ? 120 : -120);
+  }
+  let held = { top: -1, max: -1, remaining: -1, ratio: -1 };
+  await expect.poll(async () => {
+    const next = await readScroll(viewport);
+    const stable = next.top === held.top && next.remaining === held.remaining && next.top > 0 && next.remaining > 0;
+    held = next;
+    return stable;
+  }, { intervals: [50] }).toBe(true);
+  const resizesAtPeek = await resizeCount(page);
+  const launchesAtPeek = await launchCount(page);
+  await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+  const railTone = await page.locator('[data-drag-id="s2"] [data-rail-icon]').getAttribute('data-tone');
+
+  await openClaudeSessionMenu(page);
+  const claudeMenu = page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true });
+  await expect(claudeMenu.getByRole('menuitem', { name: '在 Twiglane 中审查', exact: true })).toHaveCount(0);
+  await claudeMenu.getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await expect(dialog.getByRole('heading', { level: 2 })).toHaveText('Claude Code');
+  await expect(dialog.getByRole('img', { name: 'Claude Code' })).toBeVisible();
+  await expect(dialog.locator('[data-peek-icon]')).toHaveAttribute('data-tone', railTone ?? '');
+  await expect(dialog.locator('[data-activity-slot="stage"]')).toHaveAttribute('data-activity-icon', railTone ?? '');
+  const peeked = page.locator('[data-pane-session="s2"][data-peeking]');
+  await expect(peeked).toBeVisible();
+  await expect(peeked.locator('.xterm-accessibility-tree')).toContainText('claude-ready');
+  await expect(peeked.locator('.xterm-screen')).toBeVisible();
+  const paneBox = (await peeked.boundingBox())!;
+  const dialogBox = (await dialog.boundingBox())!;
+  expect(paneBox.y).toBeGreaterThanOrEqual(dialogBox.y + 39);
+  expect(paneBox.x).toBeGreaterThanOrEqual(dialogBox.x - 1);
+  expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  expect(paneBox.y + paneBox.height).toBeLessThanOrEqual(dialogBox.y + dialogBox.height + 1);
+  await expect(page.locator('[data-pane-session="s1"] .xterm-helper-textarea')).toBeDisabled();
+  await expect(peeked.locator('.xterm-helper-textarea')).toBeDisabled();
+  await expect(draft).toBeDisabled();
+  await page.waitForTimeout(350);
+  expect(await resizeCount(page)).toBe(resizesAtPeek);
+  expect(await launchCount(page)).toBe(launchesAtPeek);
+  expect((await dialog.getByRole('button').allTextContents()).join('\n')).not.toMatch(forbiddenPeekAction);
+  await expect(dialog.getByRole('menuitem', { name: '在 Twiglane 中审查', exact: true })).toHaveCount(0);
+
+  await dialog.getByRole('heading', { level: 2 }).click();
+  await page.keyboard.type('nope');
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  expect(await writeLog(page)).toEqual([]);
+  await expect(draft).toHaveValue('keep-draft');
+  expect(await readScroll(viewport)).toEqual(held);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await expect(find).toBeVisible();
+  await expect(find).toHaveValue('kept-query');
+  await expect(draft).toHaveValue('keep-draft');
+  expect(await readScroll(viewport)).toEqual(held);
+
+  await openClaudeSessionMenu(page);
+  await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await expect(find).toBeVisible();
+  await expect(find).toHaveValue('kept-query');
+  await expect(draft).toHaveValue('keep-draft');
+  expect(await readScroll(viewport)).toEqual(held);
+  expect(await resizeCount(page)).toBe(resizesAtPeek);
+
+  await openClaudeSessionMenu(page);
+  await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  await dialog.getByRole('button', { name: '打开此会话', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's2');
+  const claudeInput = page.locator('[data-pane-session="s2"] .xterm-helper-textarea');
+  await expect(claudeInput).toBeFocused();
+  await claudeInput.press('q');
+  await expect.poll(() => writeLog(page)).toContainEqual({ sessionId: 's2', text: 'q' });
+  expect(await launchCount(page)).toBe(launchesAtPeek);
+});
+
+test('one session does not offer a temporary look', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(page.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Codex 会话操作', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(page.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
+});
+
+test('split view and a docked rail hide the temporary look, and focus mode opens it beside the waiting button', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const root = page.locator('[data-term-theme]');
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const toolbar = stage.getByRole('toolbar', { name: '终端操作' });
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const dialog = page.getByRole('dialog', { name: '临时查看' });
+  const bell = (id: string) => page.evaluate((sessionId) => {
+    (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output('\u0007', sessionId);
+  }, id);
+
+  await openClaudeSessionMenu(page);
+  await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await toolbar.getByRole('button', { name: '分屏', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(stage.locator('[data-pane-session="s1"]')).toBeVisible();
+  await expect(stage.locator('[data-pane-session="s2"]')).toBeVisible();
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await page.getByRole('button', { name: 'Codex 会话操作', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await openClaudeSessionMenu(page);
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await toolbar.getByRole('button', { name: '分屏', exact: true }).click();
+  await expect(stage.locator('[data-split]')).toHaveCount(0);
+
+  await bell('s2');
+  await expect(rail.getByRole('button', { name: '1 个会话等你处理' })).toBeVisible();
+  await expect(toolbar.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
+  await expect(toolbar.getByRole('button', { name: /个会话等你处理/ })).toHaveCount(0);
+
+  await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
+  await expect(root).toHaveAttribute('data-focus-mode', 'true');
+  const waiting = toolbar.getByRole('button', { name: '1 个会话等你处理' });
+  const peek = toolbar.getByRole('button', { name: '临时查看', exact: true });
+  await expect(waiting).toBeVisible();
+  await expect(peek).toBeVisible();
+  expect((await peek.boundingBox())!.x).toBeGreaterThan((await waiting.boundingBox())!.x);
+  expect(await waiting.innerText()).not.toMatch(forbiddenPeekAction);
+  await peek.click();
+  await expect(dialog.getByRole('heading', { level: 2 })).toHaveText('Claude Code');
+  await expect(dialog.locator('[data-peek-icon]')).toHaveAttribute('data-tone', 'bell');
+  await expect(dialog).toContainText('待处理');
+  await expect(stage.locator('header h2')).toHaveText('Codex');
+  await waiting.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(stage.locator('header h2')).toHaveText('Claude Code');
+
+  await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
+  await expect(selected).toHaveAttribute('data-session-id', 's2');
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await bell('s2');
+  await openClaudeSessionMenu(page);
+  await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await rail.getByRole('button', { name: '1 个会话等你处理' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's2');
+});
+
+test('a temporary look reuses the ended bar, refuses a failed list, and closes when the session leaves', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  const selected = page.locator('[data-session-id][aria-selected="true"]');
+  const dialog = page.getByRole('dialog', { name: '临时查看' });
+  const alert = page.getByRole('alert').filter({ hasText: '会话列表没有读出来' });
+  const openPeek = async () => {
+    await openClaudeSessionMenu(page);
+    await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+    await expect(dialog).toBeVisible();
+  };
+
+  const peekingPane = page.locator('[data-pane-session="s2"][data-peeking]');
+  await openPeek();
+  await page.evaluate(() => (window as unknown as { __exit: (code: number, id?: string) => void }).__exit(7, 's2'));
+  await expect(peekingPane).toContainText('此会话进程已结束');
+  await expect(peekingPane).toContainText('退出码 7');
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+
+  await openPeek();
+  await page.evaluate(() => (window as unknown as { __sessionState: (id: string, patch: Record<string, unknown>) => void }).__sessionState('s2', {
+    running: false,
+    reattachable: true,
+    connectionState: 'disconnected',
+    exitCode: 255,
+  }));
+  await expect(peekingPane).toContainText('已断开，可继续会话');
+  await expect(peekingPane).not.toContainText('此会话进程已结束');
+  expect((await dialog.getByRole('button').allTextContents()).join('\n')).not.toMatch(forbiddenPeekAction);
+
+  await page.evaluate(() => { (window as unknown as { __failSessionList: boolean }).__failSessionList = true; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(alert).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await openClaudeSessionMenu(page);
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+  // Escape while a look is open clears the look, so this click is on the terminal, away from the row menu.
+  const screen = page.locator('[data-pane-session="s2"][data-peeking] .xterm-screen');
+  const box = (await screen.boundingBox())!;
+  await page.mouse.click(box.x + box.width - 28, box.y + box.height / 2);
+  await expect(page.getByRole('menu', { name: 'Claude Code 会话操作' })).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: '临时查看', exact: true })).toHaveCount(0);
+
+  await page.evaluate(() => { (window as unknown as { __failSessionList: boolean }).__failSessionList = false; });
+  await page.locator('[role="tab"][data-session-id="s2"]').hover();
+  await page.getByRole('button', { name: '移除会话：Claude Code', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(selected).toHaveAttribute('data-session-id', 's1');
+  await expect(alert).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __exit: (code: number, id?: string) => void }).__exit(0, 's1'));
+  await expect(page.getByRole('tab', { name: /Codex/ })).toContainText('已结束');
+  await page.getByRole('tab', { name: /Codex/ }).click({ button: 'middle' });
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '还没有进行中的会话' })).toHaveCount(0);
+  await expect(alert).toBeVisible();
+});
+
+test('other pages do not show the workbench waiting prompt or temporary look', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  await page.evaluate(() => (window as unknown as { __output: (text: string, id?: string) => void }).__output('\u0007', 's2'));
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '1 个会话等你处理' })).toBeVisible();
+  await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '临时查看', exact: true })).toBeVisible();
+
+  for (const name of ['首页', '工具', '资料库', '记录', '设置']) {
+    const nav = page.getByRole('navigation', { name: '页面' }).getByRole('button', { name, exact: true });
+    await nav.click();
+    await expect(nav).toHaveAttribute('aria-current', 'page');
+    expect(await visibleCopyHits(page)).toEqual([]);
+  }
+  expect(await page.evaluate(() => {
+    const root = document.querySelector('[data-term-theme]');
+    return !!root?.closest('[hidden]') && !!root.textContent?.includes('临时查看') && !!root.textContent?.includes('1 个会话等你处理');
+  })).toBe(true);
 });
