@@ -197,7 +197,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
 async function openMigration(page: Page) {
   await loadApp(page);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
 }
 
 const portableItem = (key: string, label: string, status = 'available') => ({ key, kind: 'profile', label, status, pendingFields: [], toolId: 'codex', localPreview: null, incomingPreview: '' });
@@ -222,7 +222,7 @@ test('export uses one passphrase for every item and rejects a short one', async 
   await install(page, { items: [portableItem('profile:1', '默认配置'), portableItem('library:1', '提示')] });
   await openMigration(page);
   await page.getByRole('button', { name: '导出加密配置包' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '导出加密配置包' });
   await expect(dialog.getByText('将导出全部 2 项可迁移资料。')).toBeVisible();
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
   await expect(dialog.getByText('至少勾选一项资料。')).toHaveCount(0);
@@ -243,7 +243,7 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
   await install(page, { previewItems: [portableItem('library:1', '提示', 'new'), portableItem('profile:1', '默认配置', 'conflict')] });
   await openMigration(page);
   await page.getByRole('button', { name: '从配置包恢复' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '从配置包恢复' });
   await expect(dialog.getByRole('checkbox')).toHaveCount(0);
   await expect(dialog.getByText('稍后应用')).toHaveCount(0);
   await expect(dialog.getByText('重新关联')).toHaveCount(0);
@@ -259,7 +259,7 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
 
   await page.evaluate(() => { (window as unknown as { __syncReady: { badPassword: boolean; previewCalls: number; applyCalls: number } }).__syncReady.badPassword = true; });
   await page.getByRole('button', { name: '从配置包恢复' }).click();
-  const again = page.getByRole('dialog');
+  const again = page.getByRole('region', { name: '从配置包恢复' });
   await again.getByLabel('配置包口令').fill('wrong-password');
   await again.getByRole('button', { name: '解锁并恢复' }).click();
   await expect(again.getByRole('alert')).toContainText('口令不正确');
@@ -282,7 +282,9 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
 
   // A reopened dialog starts without a file; cancelling the picker reads nothing.
   await again.getByRole('button', { name: '取消' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // The import dialog closes; the Settings modal stays open behind it.
+  await expect(page.getByRole('region', { name: '从配置包恢复' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
   await page.evaluate(() => {
     const state = (window as unknown as { __syncReady: { corrupt: boolean; cancelOpen: boolean } }).__syncReady;
     state.corrupt = false;
@@ -293,7 +295,7 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
     return { previewCalls: state.previewCalls, openCalls: state.openCalls };
   });
   await page.getByRole('button', { name: '从配置包恢复' }).click();
-  const fresh = page.getByRole('dialog');
+  const fresh = page.getByRole('region', { name: '从配置包恢复' });
   await expect(fresh.getByRole('button', { name: /选择配置包文件/ })).toBeVisible();
   await fresh.getByLabel('配置包口令').fill('123456789012');
   await fresh.getByRole('button', { name: '解锁并恢复' }).click();
@@ -308,7 +310,7 @@ test('a bundle file can be chosen first and is shown before unlocking', async ({
   await install(page, { previewItems: [portableItem('library:1', '提示', 'new')] });
   await openMigration(page);
   await page.getByRole('button', { name: '从配置包恢复' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '从配置包恢复' });
   await expect(dialog.getByRole('button', { name: '解锁并恢复' })).toBeDisabled();
   await dialog.getByRole('button', { name: /选择配置包文件/ }).click();
   await expect(dialog.getByRole('button', { name: /incoming\.cliora/ })).toBeVisible();
@@ -342,7 +344,7 @@ test('auto sync is a switch and a connection error replaces the on state', async
 
   await page.evaluate(() => { (window as unknown as { __syncReady: { lastError: string | null } }).__syncReady.lastError = 'WebDAV 无法连接：offline'; });
   await page.getByRole('tab', { name: '通用', exact: true }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await expect(webdav.getByText('连接异常', { exact: true })).toBeVisible();
   await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toHaveCount(0);
   await expect(webdav.getByRole('button', { name: '修改连接', exact: true })).toHaveCount(1);
@@ -358,7 +360,7 @@ test('an unconnected WebDAV dialog collects only the connection', async ({ page 
   await expect(webdav.getByText('上次成功')).toHaveCount(0);
   await expect(webdav.getByText('https://sync.example.com/cliora/')).toHaveCount(0);
   await webdav.getByRole('button', { name: '配置 WebDAV' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '配置 WebDAV' });
   await expect(dialog.getByLabel('WebDAV 目录地址')).toBeVisible();
   await expect(dialog.getByLabel('用户名')).toBeVisible();
   await expect(dialog.getByLabel('连接口令')).toBeVisible();
@@ -398,7 +400,7 @@ test('a connected WebDAV with nothing blocking shows sync, the last result, and 
   await expect(webdav.getByRole('button', { name: '下一步' })).toHaveCount(0);
   await expect(webdav.getByRole('button', { name: '选择目录' })).toHaveCount(0);
   await webdav.getByRole('button', { name: '修改连接', exact: true }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '修改 WebDAV' });
   await expect(dialog.getByLabel('WebDAV 目录地址')).toHaveValue('https://sync.example.com/cliora/');
   await expect(dialog.getByText('默认用连接密码解锁远端加密空间')).toBeVisible();
   await expect(dialog.getByLabel('新的独立加密口令')).toHaveCount(0);
@@ -420,7 +422,7 @@ test('pending uploads stay usable and a connection failure can be retried', asyn
     state.pending = 0;
   });
   await page.getByRole('tab', { name: '通用', exact: true }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await expect(webdav.getByText('连接失败：WebDAV 无法连接：offline')).toBeVisible();
   await expect(webdav.getByText('当前可用', { exact: true })).toBeVisible();
   await expect(webdav.getByText('https://sync.example.com/cliora/')).toHaveCount(0);
@@ -473,7 +475,7 @@ test('one missing directory, install, sign-in, or conflict leaves everything els
   await webdav.getByRole('button', { name: '重新登录', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastLogin: { id: string; expectedVersion: number; method: string } | null } }).__syncReady.lastLogin)).toEqual({ id: 'a1', expectedVersion: 4, method: 'browser' });
   await webdav.getByRole('button', { name: '选择版本', exact: true }).click();
-  const center = page.getByRole('dialog');
+  const center = page.getByRole('dialog', { name: '处理冲突' });
   await expect(center.getByRole('button', { name: '使用所选版本', exact: true })).toBeDisabled();
   await center.getByRole('radio', { name: /^本机/ }).click();
   await expect(center.getByRole('button', { name: '保留本机版本', exact: true })).toBeEnabled();
@@ -481,7 +483,8 @@ test('one missing directory, install, sign-in, or conflict leaves everything els
   await expect(webdav.getByRole('button', { name: '选择版本', exact: true })).toHaveCount(0);
   await expect(center.getByText('全部处理完成')).toBeVisible();
   await center.getByRole('button', { name: '完成', exact: true }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // The conflict center closes; the Settings modal stays open behind it.
+  await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
   await webdav.getByRole('button', { name: '选择目录', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRelink: { projectId: string; projectPath: string } | null } }).__syncReady.lastRelink)).toEqual({ projectId: 'p-missing', projectPath: 'C:/work' });
   await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(0);
@@ -613,7 +616,7 @@ test('a sync says what matched or moved instead of a zero count', async ({ page 
     (window as unknown as { __syncReady: { syncResult: unknown } }).__syncReady.syncResult = next;
   }, aligned);
   await webdav.getByRole('button', { name: '立即同步', exact: true }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('dialog', { name: /同步/ });
   await expect(dialog.getByText('已经和云端一致', { exact: true })).toBeVisible();
   await expect(dialog.getByText('比对了 12 项。没有需要上传或接收的内容。', { exact: true })).toBeVisible();
   await expect(dialog.getByText('当前可用', { exact: true })).toHaveCount(0);
@@ -636,8 +639,9 @@ test('a sync says what matched or moved instead of a zero count', async ({ page 
   await dialog.getByRole('button', { name: '知道了' }).click();
   await expect(webdav.getByText('Example', { exact: true })).toBeVisible();
   await webdav.getByRole('button', { name: '查看明细' }).click();
-  await expect(page.getByRole('dialog').getByText('已接收', { exact: true })).toBeVisible();
-  await expect(page.getByRole('dialog').getByText('已上传', { exact: true })).toBeVisible();
+  const receipt = page.getByRole('dialog', { name: '同步结果' });
+  await expect(receipt.getByText('已接收', { exact: true })).toBeVisible();
+  await expect(receipt.getByText('已上传', { exact: true })).toBeVisible();
 });
 
 // R7: a paused connection is its own state with its own next step, and the raw values that

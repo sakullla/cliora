@@ -93,11 +93,12 @@ test('settings open on General with the update card in view, and keep the chosen
   await expect(categories.getByRole('tab', { name: '通用', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#app-update')).toBeInViewport();
   await expect(page.locator('#app-update').getByRole('button', { name: '检查更新' })).toBeVisible();
-  // A category stays chosen while the page is left and revisited.
-  await categories.getByRole('tab', { name: '迁移与同步', exact: true }).click();
-  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  // A category stays chosen while the modal is closed and reopened.
+  await categories.getByRole('tab', { name: '同步与备份', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: '设置' })).toHaveCount(0);
   await nav.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(categories.getByRole('tab', { name: '迁移与同步', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(categories.getByRole('tab', { name: '同步与备份', exact: true })).toHaveAttribute('aria-selected', 'true');
 
   // Below 900px the categories become one row above the settings, without a sideways page scroll.
   await page.setViewportSize({ width: 899, height: 760 });

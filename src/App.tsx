@@ -14,7 +14,8 @@ import { EmptyState } from './components/EmptyState';
 import { Badge, Button, IconButton } from './components/ui';
 import { PageSkeleton } from './components/Skeleton';
 import { PageHeader } from './components/PageHeader';
-import { SettingsLayout, type SettingsCategory } from './features/settings/SettingsLayout';
+import { SettingsModal, type SettingsCategory } from './features/settings/SettingsLayout';
+import { buildSettingsSearchEntries, type SettingsSearchEntry, type SettingsTab } from './features/settings/settingsSearch';
 import { ShortcutHelp } from './components/ShortcutHelp';
 import { RowMenu } from './components/RowMenu';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
@@ -36,6 +37,7 @@ const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((mo
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const TerminalSettings = lazy(() => import('./features/settings/TerminalSettings').then((module) => ({ default: module.TerminalSettings })));
+const TerminalDisplaySettings = lazy(() => import('./features/settings/TerminalSettings').then((module) => ({ default: module.TerminalDisplaySettings })));
 const WorktreeSettings = lazy(() => import('./features/settings/WorktreeSettings').then((module) => ({ default: module.WorktreeSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
@@ -57,14 +59,14 @@ import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
 
-type Page = 'home' | 'sessions' | 'connections' | 'library' | 'records' | 'settings';
+type Page = 'home' | 'sessions' | 'connections' | 'library' | 'records';
+type NavItemId = Page | 'settings';
 
 /** Time-of-day greeting key for the home hero. */
 function greetingPart(): 'morning' | 'afternoon' | 'evening' | 'night' {
   const hour = new Date().getHours();
   return hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : hour < 23 ? 'evening' : 'night';
 }
-type SettingsTab = 'general' | 'tools' | 'launch' | 'worktrees' | 'hosts' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
   | { target: 'project'; id: string; token: number }
@@ -77,10 +79,14 @@ const pages: { id: Page; glyph: IconName }[] = [
   { id: 'connections', glyph: 'connections' },
   { id: 'library', glyph: 'library' },
   { id: 'records', glyph: 'records' },
+];
+
+const navItems: { id: NavItemId; glyph: IconName }[] = [
+  ...pages,
   { id: 'settings', glyph: 'settings' },
 ];
 
-const navGroups: { label: string; pages: Page[] }[] = [
+const navGroups: { label: string; pages: NavItemId[] }[] = [
   { label: 'workspace', pages: ['home', 'sessions'] },
   { label: 'tools', pages: ['connections', 'library', 'records'] },
   { label: 'settingsGroup', pages: ['settings'] },
@@ -89,7 +95,7 @@ const navGroups: { label: string; pages: Page[] }[] = [
 /** On the workbench the sidebar is for switching sessions. The expanded sidebar shows every page icon
  *  that fits in its one row and folds only the overflow into a "more" menu; the folded icon rail keeps
  *  just the workspace pages. Mod+number shortcuts keep working either way. */
-const workbenchNavPages: Page[] = ['home', 'sessions'];
+const workbenchNavPages: NavItemId[] = ['home', 'sessions'];
 /** Width of one page icon in the expanded workbench row (see shell.css). */
 const WORKBENCH_NAV_SLOT = 32;
 
@@ -138,7 +144,7 @@ export default function App() {
   const workbenchRailToggle = useRef<(() => void) | null>(null);
   const railDocked = page === 'sessions' && workbenchRail.docked;
   const navRef = useRef<HTMLElement>(null);
-  const [navRoom, setNavRoom] = useState(pages.length);
+  const [navRoom, setNavRoom] = useState(navItems.length);
   // Focus mode hides the sidebar entirely; the terminal takes the whole window.
   const focusLayout = page === 'sessions' && workbenchRail.focus;
   const sidebarCollapsed = navCollapsed[navContext] || focusLayout;
@@ -155,10 +161,10 @@ export default function App() {
     observer.observe(node);
     return () => observer.disconnect();
   }, [railDocked, sidebarCollapsed]);
-  const dockedNavPages: Page[] = sidebarCollapsed ? workbenchNavPages
-    : navRoom >= pages.length ? pages.map((item) => item.id)
-      : pages.slice(0, Math.max(workbenchNavPages.length, navRoom - 1)).map((item) => item.id);
-  const overflowNavPages = pages.filter((item) => !dockedNavPages.includes(item.id));
+  const dockedNavPages: NavItemId[] = sidebarCollapsed ? workbenchNavPages
+    : navRoom >= navItems.length ? navItems.map((item) => item.id)
+      : navItems.slice(0, Math.max(workbenchNavPages.length, navRoom - 1)).map((item) => item.id);
+  const overflowNavPages = navItems.filter((item) => !dockedNavPages.includes(item.id));
   const toggleNavCollapsed = useCallback(() => {
     const context = navContextRef.current;
     setNavCollapsed((old) => {
@@ -183,7 +189,19 @@ export default function App() {
   const [tool, setTool] = useState<string>('');
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
   const [toolIntent, setToolIntent] = useState<WorkspaceOpenIntent | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+  const [settingsAnchor, setSettingsAnchor] = useState<{ anchor?: string; token: number } | null>(null);
+  const [settingsToolQuery, setSettingsToolQuery] = useState<{ query: string; token: number } | null>(null);
+  const openSettings = useCallback((intent?: { tab?: SettingsTab; anchor?: string; toolQuery?: string }) => {
+    if (intent?.tab) setSettingsTab(intent.tab);
+    if (intent?.anchor) setSettingsAnchor({ anchor: intent.anchor, token: Date.now() });
+    else setSettingsAnchor(null);
+    if (intent?.toolQuery !== undefined) setSettingsToolQuery({ query: intent.toolQuery, token: Date.now() });
+    setSettingsOpen(true);
+  }, []);
+  const openSettingsRef = useRef(openSettings);
+  openSettingsRef.current = openSettings;
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
@@ -234,7 +252,7 @@ export default function App() {
     setWorkspaceDiscard((value) => value + 1);
     return true;
   }, [t]);
-  const section = page === 'settings' ? `${page}:${settingsTab}` : page;
+  const section = page;
   // Settings categories, in the order people reach for them: the app, the CLIs, how sessions
   // start, worktrees, remote hosts, then moving to another device.
   const settingsCategories: SettingsCategory<SettingsTab>[] = (['general', 'tools', 'launch', 'worktrees', 'hosts', 'migration'] as const).map((id) => ({
@@ -246,7 +264,12 @@ export default function App() {
   const transitionPending = useRef(false);
   const transitionRef = useRef<(next: Page, host?: string) => Promise<boolean>>(async () => false);
   useEffect(() => { setVisited((old) => old.has(section) ? old : new Set([...old, section])); }, [section]);
-  const hasVisited = (key: string) => section === key || visited.has(key);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const key = `settings:${settingsTab}`;
+    setVisited((old) => old.has(key) ? old : new Set([...old, key]));
+  }, [settingsOpen, settingsTab]);
+  const hasVisited = (key: string) => section === key || (settingsOpen && `settings:${settingsTab}` === key) || visited.has(key);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -277,13 +300,13 @@ export default function App() {
     return () => { live = false; };
   }, [bootstrap.preferences.remote_ssh_enabled, loaded, remoteTargetsRevision]);
 
-  async function openHostManagement() {
-    if (await go('settings')) setSettingsTab('hosts');
+  function openHostManagement() {
+    openSettings({ tab: 'hosts', anchor: 'settings-remote' });
   }
 
   async function changeRemoteTarget(value: string) {
     if (value === '__manage') {
-      await openHostManagement();
+      openHostManagement();
       return;
     }
     await transitionRef.current(activePage.current, value);
@@ -343,15 +366,19 @@ export default function App() {
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
       if (!active || !['home', 'connections', 'settings'].includes(event.payload.page)) return;
+      if (event.payload.page === 'settings') {
+        setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
+        openSettingsRef.current({ tab: 'launch', anchor: 'settings-terminal' });
+        return;
+      }
       // A home project repair names a local project, so it goes through the guarded move to
       // the local host; a cancelled move arms nothing.
       const host = event.payload.page === 'home' && event.payload.projectId ? 'local' : activeHost.current;
-      void transitionRef.current(event.payload.page, host).then((allowed) => {
+      void transitionRef.current(event.payload.page as Page, host).then((allowed) => {
         if (!active || !allowed) return;
         pageScroll.cancel();
         setScrollIntent(value => value + 1);
         setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
-        if (event.payload.page === 'settings') setSettingsTab('launch');
       });
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
@@ -526,20 +553,31 @@ export default function App() {
     let pendingSearch = 0;
     const onKey = (event: KeyboardEvent) => {
       cancelAnimationFrame(pendingSearch);
+      const openDialogs = [...document.querySelectorAll('dialog[open]')];
+      const anyDialogOpen = openDialogs.length > 0;
+      const onlySettingsOpen = openDialogs.length === 1 && openDialogs[0].getAttribute('data-settings-modal') === 'true';
+
       if (withMod(event) && event.key.toLowerCase() === 'k' && !event.repeat) {
-        if (document.querySelector('dialog[open]')) return;
+        if (anyDialogOpen && !onlySettingsOpen) return;
         event.preventDefault();
+        if (onlySettingsOpen) setSettingsOpen(false);
         setPaletteOpen(true);
         return;
       }
+      if (withMod(event) && !event.shiftKey && !event.altKey && (event.key === ',' || event.code === 'Comma' || event.key === '6') && !event.repeat) {
+        if (anyDialogOpen && !onlySettingsOpen) return;
+        event.preventDefault();
+        openSettingsRef.current();
+        return;
+      }
       if (withMod(event) && event.key === '\\' && !event.repeat) {
-        if (document.querySelector('dialog[open]') || isEditableTarget(event.target)) return;
+        if (anyDialogOpen || isEditableTarget(event.target)) return;
         event.preventDefault();
         toggleSidebar();
         return;
       }
       if (event.key === '?' && !withMod(event) && !event.altKey && !isEditableTarget(event.target)) {
-        if (document.querySelector('dialog[open]')) return;
+        if (anyDialogOpen && !onlySettingsOpen) return;
         event.preventDefault();
         setHelpOpen(true);
         return;
@@ -547,7 +585,7 @@ export default function App() {
       const findShortcut = withMod(event) && event.key.toLowerCase() === 'f';
       const slashShortcut = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableTarget(event.target);
       if (findShortcut || slashShortcut) {
-        if (document.querySelector('dialog[open]')) return;
+        if (anyDialogOpen) return;
         const input = [...document.querySelectorAll<HTMLInputElement>('main input[data-page-search]')].find((item) => item.getClientRects().length);
         if (input) {
           event.preventDefault();
@@ -571,15 +609,16 @@ export default function App() {
       // so this one only covers the other pages and opens the same new-session dialog there.
       if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && (event.code === 'KeyN' || event.key.toLowerCase() === 'n')) {
         const start = newSessionRef.current;
-        if (!start || activePage.current === 'sessions' || document.querySelector('dialog[open]') || isEditableTarget(event.target)) return;
+        if (!start || activePage.current === 'sessions' || anyDialogOpen || isEditableTarget(event.target)) return;
         event.preventDefault();
         start();
         return;
       }
       if (!withMod(event)) return;
       const index = Number(event.key) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= pages.length || document.querySelector('dialog[open]')) return;
+      if (!Number.isInteger(index) || index < 0 || index >= pages.length || (anyDialogOpen && !onlySettingsOpen)) return;
       event.preventDefault();
+      if (onlySettingsOpen) setSettingsOpen(false);
       goRef.current(pages[index].id);
     };
     window.addEventListener('keydown', onKey);
@@ -604,6 +643,7 @@ export default function App() {
   }
   async function transition(next: Page, host = activeHost.current) {
     if (transitionPending.current) return false;
+    setSettingsOpen(false);
     const previousPage = activePage.current;
     const previousHost = activeHost.current;
     if (next === previousPage && host === previousHost) return true;
@@ -752,6 +792,7 @@ export default function App() {
   }
 
   function reopenOnboardingGuide() {
+    setSettingsOpen(false);
     reopenOnboarding();
     setOnboardingComplete(false);
     setOnboardingVisible(true);
@@ -760,19 +801,11 @@ export default function App() {
 
   // Checklist step entries: the managed-CLI checkboxes, profile creation, and the launch area.
   function openAppUpdate() {
-    setSettingsTab('general');
-    void go('settings').then((allowed) => {
-      if (!allowed) return;
-      // The explicit locate wins over any pending scroll restore for the settings page.
-      pageScroll.cancel();
-      setScrollIntent(value => value + 1);
-      requestAnimationFrame(() => document.getElementById('app-update')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
-    });
+    openSettings({ tab: 'general', anchor: 'app-update' });
   }
 
   function openOnboardingToolSetup() {
-    setSettingsTab('tools');
-    void go('settings');
+    openSettings({ tab: 'tools', anchor: 'settings-managed' });
   }
 
   function openOnboardingConfigCreate() {
@@ -829,23 +862,35 @@ export default function App() {
     secondaryLabel: t('common.palette.hintOpenRecords'),
     onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', token: Date.now() }); void go('records'); },
   }));
-  const pageCommands: CommandItem[] = pages.map((item) => {
-    const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
-    return {
-      id: `page-${item.id}`,
+  const pageCommands: CommandItem[] = [
+    ...pages.map((item) => {
+      const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
+      return {
+        id: `page-${item.id}`,
+        group: t('common.palette.groupPages'),
+        label: t(`common.nav.${item.id}`),
+        hint: shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : undefined,
+        keywords: item.id,
+        icon: item.glyph,
+        contextBoost: page === item.id ? 2 : 5,
+        run: () => { void go(item.id); },
+      };
+    }),
+    {
+      id: 'page-settings',
       group: t('common.palette.groupPages'),
-      label: t(`common.nav.${item.id}`),
-      hint: shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : undefined,
-      keywords: item.id,
-      icon: item.glyph,
-      contextBoost: page === item.id ? 2 : 5,
-      run: () => { void go(item.id); },
-    };
-  });
+      label: t('common.nav.settings'),
+      hint: `${modLabel}+,`,
+      keywords: 'settings preferences 设置 偏好',
+      icon: 'settings',
+      contextBoost: 4,
+      run: () => { openSettings(); },
+    },
+  ];
   const settingsKeywords: Record<SettingsTab, string> = {
     general: 'general theme language update tray 外观 主题 语言 更新 托盘 引导',
     tools: 'cli tools icons 工具 图标 管理',
-    launch: 'launch terminal yolo 启动 终端 模式',
+    launch: 'launch terminal yolo font cursor sound 启动 终端 模式 字号 光标 提示音',
     worktrees: 'worktree git branch 工作树 分支 仓库 清理',
     hosts: 'remote ssh host server 远程 主机 服务器 连接',
     migration: 'migration sync webdav backup bundle export import 迁移 同步 备份 导出 恢复 云端',
@@ -858,7 +903,7 @@ export default function App() {
     keywords: settingsKeywords[category.id],
     icon: category.icon,
     searchOnly: true,
-    run: () => { void go('settings').then((allowed) => { if (allowed) setSettingsTab(category.id); }); },
+    run: () => { openSettings({ tab: category.id }); },
   }));
   const deepSectionCommands: CommandItem[] = [
     ...(remoteTargetId === 'local' ? [{
@@ -1018,8 +1063,33 @@ export default function App() {
       <div className="sidebar-primary">
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel} K</kbd></button>
       <nav ref={navRef} className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {(railDocked ? [{ label: 'workspace', pages: dockedNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => { const item = pages.find((candidate) => candidate.id === pageId)!; const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}><button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>; })}</div>)}
-        {railDocked && overflowNavPages.length > 0 && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{overflowNavPages.map((item) => { const shortcut = pages.indexOf(item); return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={`${modAria}+${shortcut + 1}`} onClick={() => { void go(item.id); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{`${modLabel}+${shortcut + 1}`}</kbd></button>; })}</RowMenu></div>}
+        {(railDocked ? [{ label: 'workspace', pages: dockedNavPages }] : navGroups).map((group) => <div className="nav-group" key={group.label} data-group={group.label}>{group.pages.map((pageId) => {
+          const item = navItems.find((candidate) => candidate.id === pageId)!;
+          const label = t(`common.nav.${item.id}`);
+          const isSettings = item.id === 'settings';
+          const shortcut = isSettings ? -1 : pages.findIndex((pageItem) => pageItem.id === item.id);
+          const shortcutLabel = isSettings ? `${modLabel}+,` : shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : '';
+          const shortcutAria = isSettings ? `${modAria}+,` : shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined;
+          const isActive = isSettings ? settingsOpen : page === item.id;
+          return <Fragment key={item.id}><button
+            type="button"
+            className={isActive ? 'active' : ''}
+            aria-label={label}
+            aria-current={!isSettings && page === item.id ? 'page' : undefined}
+            aria-haspopup={isSettings ? 'dialog' : undefined}
+            aria-expanded={isSettings ? settingsOpen : undefined}
+            aria-keyshortcuts={shortcutAria}
+            title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label}
+            onClick={() => { if (isSettings) openSettings(); else void go(item.id as Page); }}
+          ><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>;
+        })}</div>)}
+        {railDocked && overflowNavPages.length > 0 && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{overflowNavPages.map((item) => {
+          const isSettings = item.id === 'settings';
+          const shortcut = isSettings ? -1 : pages.findIndex((pageItem) => pageItem.id === item.id);
+          const shortcutLabel = isSettings ? `${modLabel}+,` : `${modLabel}+${shortcut + 1}`;
+          const shortcutAria = isSettings ? `${modAria}+,` : `${modAria}+${shortcut + 1}`;
+          return <button key={item.id} type="button" role="menuitem" aria-keyshortcuts={shortcutAria} onClick={() => { if (isSettings) openSettings(); else void go(item.id as Page); }}><Icon name={item.glyph} size={15} /><span>{t(`common.nav.${item.id}`)}</span><kbd>{shortcutLabel}</kbd></button>;
+        })}</RowMenu></div>}
       </nav>
       </div>
       <div className="sidebar-foot" data-workbench={railDocked || undefined}>
@@ -1052,40 +1122,58 @@ export default function App() {
         {page === 'home' && <div className="home-band">
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
-            <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
+            <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>
-            {visible.length ? nativeAvailable ? <ManagedTools key={remoteIdentity} visible={page === 'home'} tools={visibleDescriptors} remoteTargetId={remoteTargetId} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><Button size="sm" className="tool-row-action" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></Button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('common.goSettings')}</Button>} />}
+            {visible.length ? nativeAvailable ? <ManagedTools key={remoteIdentity} visible={page === 'home'} tools={visibleDescriptors} remoteTargetId={remoteTargetId} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><strong>{item.name}</strong></div><div className="tool-state">{t('home.preview.unchecked')}</div><Button size="sm" className="tool-row-action" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></Button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('common.goSettings')}</Button>} />}
           </section>
 
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onPickTool={openTool} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => { setSettingsTab('tools'); void go('settings'); }}>{t('common.goSettings')}</Button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} onOpenMcpLibrary={definitionId => void openMcpLibrary(definitionId)} onPickTool={openTool} /></Suspense> : <EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('common.goSettings')}</Button>} />}
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} sectionIntent={page === 'library' ? librarySectionIntent : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} tabIntent={page === 'records' ? recordsTabIntent : null} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
-        {page === 'settings' && <SettingsLayout value={settingsTab} onChange={setSettingsTab} items={settingsCategories} >
-          {(settingsTab === 'general' || settingsTab === 'tools') && <Suspense fallback={<PageSkeleton />}><GeneralSettings
-            pane={settingsTab}
-            tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
-            managed={managed}
-            preservedUnknown={catalog?.preservedUnknown ?? []}
-            icons={bootstrap.preferences.tool_icons ?? {}}
-            busy={busy}
-            theme={bootstrap.preferences.theme}
-            onThemeChange={(next) => void updateTheme(next)}
-            onManagedChange={(id, checked) => void updateManaged(id, checked)}
-            onIconChange={updateIcon}
-            onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
-            onOpenShortcutHelp={() => setHelpOpen(true)}
-            onReopenOnboarding={reopenOnboardingGuide}
-          /></Suspense>}
-          {settingsTab === 'launch' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <TerminalSettings /> : <EmptyState icon="terminal" title={t('settings.categories.nativeOnly')} />}</Suspense>}
-          {settingsTab === 'worktrees' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <WorktreeSettings /> : <EmptyState icon="gitWorktree" title={t('settings.categories.nativeOnly')} />}</Suspense>}
-          {settingsTab === 'hosts' && <Suspense fallback={<PageSkeleton />}><RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle /></Suspense>}
-          <div hidden={settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
-        </SettingsLayout>}
       </>}
     </div></main>
-  </div>{nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
+  </div>
+  <SettingsModal
+    open={settingsOpen}
+    onClose={() => setSettingsOpen(false)}
+    value={settingsTab}
+    onChange={setSettingsTab}
+    items={settingsCategories}
+    searchEntries={buildSettingsSearchEntries(t, nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools, nativeAvailable)}
+    onSelectSearchResult={(entry: SettingsSearchEntry) => {
+      openSettings({ tab: entry.category, anchor: entry.anchorId, toolQuery: entry.toolQuery ?? '' });
+    }}
+    anchorRequest={settingsAnchor}
+    error={error}
+    onDismissError={loaded ? () => setError(null) : undefined}
+    previewBanner={!nativeAvailable ? t('common.shell.previewBanner') : null}
+  >
+    {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
+      {(settingsTab === 'general' || settingsTab === 'tools') && <Suspense fallback={<PageSkeleton />}><GeneralSettings
+        pane={settingsTab}
+        tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
+        managed={managed}
+        preservedUnknown={catalog?.preservedUnknown ?? []}
+        icons={bootstrap.preferences.tool_icons ?? {}}
+        busy={busy}
+        theme={bootstrap.preferences.theme}
+        externalToolQuery={settingsTab === 'tools' ? settingsToolQuery : null}
+        onThemeChange={(next) => void updateTheme(next)}
+        onManagedChange={(id, checked) => void updateManaged(id, checked)}
+        onIconChange={updateIcon}
+        onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
+        onOpenShortcutHelp={() => setHelpOpen(true)}
+        onReopenOnboarding={reopenOnboardingGuide}
+      /></Suspense>}
+      {settingsTab === 'launch' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <TerminalSettings /> : <EmptyState icon="terminal" title={t('settings.categories.nativeOnly')} />}<TerminalDisplaySettings /></Suspense>}
+      {settingsTab === 'worktrees' && <Suspense fallback={<PageSkeleton />}>{nativeAvailable ? <WorktreeSettings /> : <EmptyState icon="gitWorktree" title={t('settings.categories.nativeOnly')} />}</Suspense>}
+      {settingsTab === 'hosts' && <Suspense fallback={<PageSkeleton />}><RemoteSshSettings enabled={bootstrap.preferences.remote_ssh_enabled} busy={busy} onChange={(enabled) => void updateRemoteSsh(enabled)} showHosts showToggle /></Suspense>}
+      <div hidden={settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={settingsOpen && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
+    </>}
+  </SettingsModal>
+  {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
 }

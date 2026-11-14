@@ -248,23 +248,24 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await expectBodyText(profileName);
 
   await nav.getByRole('button', { name: '设置' }).click();
-  await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
-  await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(8);
-  await expect(page.getByRole('main').getByRole('button', { name: '更多（8）', exact: true })).toBeVisible();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings.getByRole('radiogroup', { name: '主题' })).toBeVisible();
+  await settings.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  await expect(settings.locator('.managed-tool-row')).toHaveCount(tools.length);
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode', 'ZCode', 'Qoder CN', 'Kimi Code']) {
-    await expect(page.getByRole('checkbox', { name: new RegExp(name) })).toBeEnabled();
+    await expect(settings.getByRole('switch', { name: new RegExp(name) })).toBeEnabled();
   }
-  // Pressing '/' focuses the CLI search and finds folded CLIs without expanding first.
+  // Pressing '/' focuses the pane search and filters the unified tool rows.
   await page.keyboard.press('/');
-  const cliSearch = page.getByLabel('搜索 CLI 工具');
+  const cliSearch = settings.getByLabel('搜索 CLI 工具');
   await expect(cliSearch).toBeFocused();
   await cliSearch.fill('Kiro');
-  await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(1);
-  await expect(page.getByRole('checkbox', { name: /Kiro/ })).toBeVisible();
+  await expect(settings.locator('.managed-tool-row')).toHaveCount(1);
+  await expect(settings.getByRole('switch', { name: /Kiro/ })).toBeVisible();
   await cliSearch.press('Escape');
-  await expect(page.locator('.managed-checks input[type="checkbox"]')).toHaveCount(8);
+  await expect(settings.locator('.managed-tool-row')).toHaveCount(tools.length);
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
 
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
@@ -303,12 +304,15 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await expectNoSideScroll(page);
 
     await nav.getByRole('button', { name: '设置' }).click();
-    await page.getByRole('tab', { name: '通用', exact: true }).click();
-    await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
+    const settings = page.getByRole('dialog', { name: '设置' });
+    await settings.getByRole('tab', { name: '通用', exact: true }).click();
+    await expect(settings.getByRole('radiogroup', { name: '主题' })).toBeVisible();
     await expectNoSideScroll(page);
-    await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-    await expect(page.locator('.managed-checks input[type="checkbox"]').first()).toBeVisible();
+    await settings.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+    await expect(settings.locator('.managed-tool-row').first()).toBeVisible();
     await expectNoSideScroll(page);
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
   }
 });
 
@@ -418,11 +422,12 @@ test('shell and shared feedback keep readable ink, three layers, flat controls a
   // A failed write raises the one global notice: same shape as the environment notice, tone only.
   await page.evaluate(() => { (window as unknown as { __uiPolish: { failManaged: boolean } }).__uiPolish.failManaged = true; });
   await nav.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  const managed = page.locator('.managed-checks input[type="checkbox"]').first();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  const managed = settings.getByRole('switch').first();
   await expect(managed).toBeEnabled();
   await managed.click();
-  const error = page.locator('.error-banner');
+  const error = settings.locator('.error-banner');
   await expect(error).toBeVisible();
   await expect(error).toHaveAttribute('role', 'alert');
   const failure = await noticeShape(error);

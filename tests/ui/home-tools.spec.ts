@@ -332,7 +332,9 @@ test('the onboarding config entry routes to setup while no CLI is managed yet', 
   // Without a managed CLI there is no configuration target; the entry guides to step 1
   // instead of landing on the empty tools page.
   await card.getByRole('button', { name: '去创建', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('heading', { name: '工具', level: 1 })).toHaveCount(0);
 });
 
@@ -984,9 +986,12 @@ test('the fresh onboarding checklist checks its steps and retires once complete'
   await expect(card.locator('li[data-done]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
 
-  // Step 1: the entry reaches the managed-CLI checkboxes; checking one marks the step.
+  // Step 1: the entry opens the Settings modal on the unified CLI list; enabling one marks the step.
   await card.getByRole('button', { name: '去勾选', exact: true }).click();
-  await page.getByRole('checkbox', { name: 'Codex' }).check();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByRole('switch', { name: 'Codex' }).check();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(card.locator('li[data-done]')).toHaveCount(1);
 

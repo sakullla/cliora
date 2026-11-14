@@ -3,12 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { PortableItem } from '../../types/portable';
-import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { formatFailure } from '../../lib/feedback';
 import { Button, Card } from '../../components/ui';
 import styles from './Sync.module.css';
 import { MIN_PASSPHRASE, Notice, PassphraseField, useKindLabel } from './syncParts';
+import { SettingsSubView } from './SettingsLayout';
 import { WebdavSettings } from './WebdavSettings';
 
 function fileName(path: string) {
@@ -143,40 +143,8 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   const dialogError = error || (operation === 'export' ? listError : '');
 
   return <div className={styles.page}>
-    <div className={styles.layout}>
-      <WebdavSettings active={active} editing={operation === 'webdav'} onEdit={setWebdavEditing} revision={syncRevision} />
-      <aside className={styles.aside}>
-        <Card role="region" className={` ${styles.backup}`} aria-label={t('settings.migration.cardTitle')}>
-          <header className={styles.backupHead}>
-            <span className={styles.backupGlyph} aria-hidden="true"><Icon name="archive" size={22} /></span>
-            <div><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p></div>
-          </header>
-          {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
-          {listReady && items.length > 0 && <div className={styles.inventory}>
-            <small>{t('settings.migration.inventory', { count: items.length })}</small>
-            {inventory}
-          </div>}
-          {!dialogOpen && listError && <p className={styles.inlineError} role="alert">{listError}</p>}
-          <div className={styles.tiles}>
-            <button type="button" className={styles.tile} aria-label={t('settings.migration.export')} aria-describedby={exportDescription} onClick={() => openBundle('export')}>
-              <span className={styles.tileIcon} data-tone="accent" aria-hidden="true"><Icon name="download" size={18} /></span>
-              <span className={styles.tileBody}><strong>{t('settings.migration.export')}</strong><small id={exportDescription}>{t('settings.migration.exportTile')}</small></span>
-              <Icon name="chevronRight" size={16} />
-            </button>
-            <button type="button" className={styles.tile} aria-label={t('settings.migration.import')} aria-describedby={importDescription} onClick={() => openBundle('import')}>
-              <span className={styles.tileIcon} data-tone="info" aria-hidden="true"><Icon name="upload" size={18} /></span>
-              <span className={styles.tileBody}><strong>{t('settings.migration.import')}</strong><small id={importDescription}>{t('settings.migration.importTile')}</small></span>
-              <Icon name="chevronRight" size={16} />
-            </button>
-          </div>
-          <ul className={styles.facts}>
-            <li><Icon name="lock" size={14} />{t('settings.migration.cardNote')}</li>
-            <li><Icon name="info" size={14} />{t('settings.migration.cardLocal')}</li>
-          </ul>
-        </Card>
-      </aside>
-    </div>
-    <GuideDialog open={dialogOpen} title={operation === 'import' ? t('settings.migration.import') : t('settings.migration.export')} hint={operation === 'import' ? t('settings.migration.importHint') : t('settings.migration.exportHint')} onClose={closeBundle}>
+    {dialogOpen ? <SettingsSubView title={operation === 'import' ? t('settings.migration.import') : t('settings.migration.export')} hint={operation === 'import' ? t('settings.migration.importHint') : t('settings.migration.exportHint')}
+      onBack={closeBundle} backDisabled={busy}>
       {operation === 'export' && <div className={`sync-dialog ${styles.dialogBody}`}>
         {dialogError && <Notice tone="error">{dialogError}</Notice>}
         {listReady && !listError && !items.length && <div className={styles.emptyBox}><span aria-hidden="true"><Icon name="package" size={22} /></span><p>{t('settings.migration.exportEmpty')}</p></div>}
@@ -212,6 +180,38 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
           <Button variant="primary" data-dialog-save disabled={!nativeAvailable || busy || !importPassword} icon={<Icon name="lock" size={14} />} onClick={() => void importBundle()}>{busy ? t('settings.migration.restoring') : t('settings.migration.unlockRestore')}</Button>
         </div>
       </div>}
-    </GuideDialog>
+    </SettingsSubView> : <div className={operation === 'webdav' ? `${styles.layout} ${styles.layoutSingle}` : styles.layout}>
+      <WebdavSettings active={active} editing={operation === 'webdav'} onEdit={setWebdavEditing} revision={syncRevision} />
+      {operation !== 'webdav' && <aside className={styles.aside}>
+        <Card role="region" id="portable-bundle-section" className={` ${styles.backup}`} aria-label={t('settings.migration.cardTitle')}>
+          <header className={styles.backupHead}>
+            <span className={styles.backupGlyph} aria-hidden="true"><Icon name="archive" size={22} /></span>
+            <div><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p></div>
+          </header>
+          {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
+          {listReady && items.length > 0 && <div className={styles.inventory}>
+            <small>{t('settings.migration.inventory', { count: items.length })}</small>
+            {inventory}
+          </div>}
+          {!dialogOpen && listError && <p className={styles.inlineError} role="alert">{listError}</p>}
+          <div className={styles.tiles}>
+            <button type="button" className={styles.tile} aria-label={t('settings.migration.export')} aria-describedby={exportDescription} onClick={() => openBundle('export')}>
+              <span className={styles.tileIcon} data-tone="accent" aria-hidden="true"><Icon name="download" size={18} /></span>
+              <span className={styles.tileBody}><strong>{t('settings.migration.export')}</strong><small id={exportDescription}>{t('settings.migration.exportTile')}</small></span>
+              <Icon name="chevronRight" size={16} />
+            </button>
+            <button type="button" className={styles.tile} aria-label={t('settings.migration.import')} aria-describedby={importDescription} onClick={() => openBundle('import')}>
+              <span className={styles.tileIcon} data-tone="info" aria-hidden="true"><Icon name="upload" size={18} /></span>
+              <span className={styles.tileBody}><strong>{t('settings.migration.import')}</strong><small id={importDescription}>{t('settings.migration.importTile')}</small></span>
+              <Icon name="chevronRight" size={16} />
+            </button>
+          </div>
+          <ul className={styles.facts}>
+            <li><Icon name="lock" size={14} />{t('settings.migration.cardNote')}</li>
+            <li><Icon name="info" size={14} />{t('settings.migration.cardLocal')}</li>
+          </ul>
+        </Card>
+      </aside>}
+    </div>}
   </div>;
 }

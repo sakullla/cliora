@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
-import { native as localNative, nativeAvailable } from '../../lib/native';
+import { native as localNative, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus } from '../../types/history';
@@ -174,8 +174,10 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
   useEffect(() => {
     if (!active || !nativeAvailable || remoteTargetId !== 'local') return;
     let live = true;
-    void localNative.getLaunchSettings().then((settings) => { if (live) setResumeTarget(settings.selected === 'workbench' ? 'workbench' : 'external'); }).catch(() => {});
-    return () => { live = false; };
+    const apply = (settings: { selected: string }) => { if (live) setResumeTarget(settings.selected === 'workbench' ? 'workbench' : 'external'); };
+    void localNative.getLaunchSettings().then(apply).catch(() => {});
+    const off = onLaunchSettingsChange(apply);
+    return () => { live = false; off(); };
   }, [active, remoteTargetId]);
   const [scanning, setScanning] = useState(false);
   const [backgroundScanning, setBackgroundScanning] = useState(false);

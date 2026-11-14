@@ -627,6 +627,7 @@ test('a name-only host save keeps its connection revision and remains renamed af
   await expect(panel.getByRole('button', { name: '编辑 renamed fixture', exact: true })).toBeVisible();
   await expect(page.locator('.sidebar-host').getByRole('button', { name: '运行位置：renamed fixture' })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__remoteFixture.savedRevision)).toBe(1);
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
   await expect(panel.getByRole('button', { name: '编辑 renamed fixture', exact: true })).toBeVisible();

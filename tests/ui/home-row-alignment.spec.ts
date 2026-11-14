@@ -201,9 +201,13 @@ test('project cards keep one launch action and home never scrolls sideways', asy
     expect(paint.track).not.toBe(paint.thumb);
   };
   await expectSwitchPaint();
+  await page.keyboard.press('Escape');
   await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  // The same switch keeps its accent track in dark mode; Settings reopens on the last category.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
   await expectSwitchPaint();
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
   await expectSplitPaint();
 

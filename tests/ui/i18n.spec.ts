@@ -88,12 +88,13 @@ test('切换英文后逐页无残留硬编码中文', async ({ page }) => {
   await page.getByRole('radiogroup', { name: '界面语言' }).getByRole('radio', { name: 'English' }).click();
   await expect(page.getByRole('heading', { name: 'Interface', exact: true })).toBeVisible();
   const han = /[\u4e00-\u9fff]/;
+  await expect.poll(async () => (await page.locator('[data-settings-modal="true"]').innerText()).replaceAll('中文', '')).not.toMatch(han);
+  await page.keyboard.press('Escape');
   const pages: Array<[RegExp, RegExp]> = [
     [/^(首页|Home)$/, /Home/],
     [/^(工具|Tools)$/, /Tools/],
     [/^(资料库|Library)$/, /Library/],
     [/^(记录|Records)$/, /Records/],
-    [/^(设置|Settings)$/, /Settings/],
   ];
   for (const [button, heading] of pages) {
     await navOf(page).getByRole('button', { name: button, exact: true }).click();

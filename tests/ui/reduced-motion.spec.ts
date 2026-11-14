@@ -76,12 +76,20 @@ test('reduced motion stops dialog, page and control motion', async ({ page }) =>
   await expect(dialog).toHaveCount(0);
 
   const nav = page.getByRole('navigation', { name: '页面' });
-  for (const name of ['资料库', '记录', '设置', '工具']) {
+  for (const name of ['资料库', '记录', '工具']) {
     await nav.getByRole('button', { name, exact: true }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
     const switched = await motion(pageContainer(page));
     expect(switched.animation, `${name} ${JSON.stringify(switched)}`).toBeLessThanOrEqual(0.01);
   }
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  const settingsModal = page.getByRole('dialog', { name: '设置' });
+  await expect(settingsModal).toBeVisible();
+  const settingsMotion = await motion(settingsModal);
+  expect(settingsMotion.animation, JSON.stringify(settingsMotion)).toBeLessThanOrEqual(0.01);
+  expect(settingsMotion.transition, JSON.stringify(settingsMotion)).toBeLessThanOrEqual(0.01);
+  await page.keyboard.press('Escape');
+  await expect(settingsModal).toHaveCount(0);
   // Controls keep their hover/press states but drop the transition time.
   const button = nav.getByRole('button', { name: '首页', exact: true });
   expect((await motion(button)).transition).toBeLessThanOrEqual(0.01);

@@ -11,6 +11,7 @@ import type { Project } from '../../types/launch';
 import { Badge, Button, Card, StatusBadge, Switch } from '../../components/ui';
 import styles from './Sync.module.css';
 import { ConflictCenter } from './ConflictCenter';
+import { SettingsSubView } from './SettingsLayout';
 import { MIN_PASSPHRASE, Metric, Notice, PassphraseField, TextField, TransferList, endpointHost, relativeTime, useKindLabel } from './syncParts';
 
 const PREVIEW_LIMIT = 4;
@@ -443,7 +444,22 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     <span>{itemIssues ? t('settings.webdav.partialReady') : t('settings.webdav.readyNow')}</span>
   </span>;
 
-  return <section className={styles.column} aria-label={t('settings.webdav.title')}>
+  return <section className={styles.column} id="webdav-sync-section" aria-label={t('settings.webdav.title')}>
+    {editing ? <SettingsSubView title={status?.configured ? t('settings.webdav.editTitle') : t('settings.webdav.configure')} hint={t('settings.webdav.dialogHint')}
+      onBack={() => onEdit(false)} backDisabled={busy}>
+      <form className={`sync-dialog ${styles.dialogBody}`} onSubmit={(event) => { event.preventDefault(); if (canSave) void configure(); }}>
+        <TextField label={t('settings.webdav.endpoint')} icon="globe" type="url" value={setup.endpoint} placeholder="https://dav.example.com/cliora/" autoComplete="url" hint={t('settings.webdav.endpointHint')} autoFocus={!setup.endpoint} onChange={(event) => setSetup({ ...setup, endpoint: event.target.value })} />
+        <TextField label={t('settings.webdav.username')} icon="user" value={setup.username} autoComplete="username" autoFocus={!!setup.endpoint} onChange={(event) => setSetup({ ...setup, username: event.target.value })} />
+        <PassphraseField label={t('settings.webdav.password')} value={setup.authPassword} autoComplete="new-password" placeholder={t('settings.webdav.passwordPlaceholder')} meter
+          hint={passwordShort ? t('settings.webdav.passwordMore', { count: Math.max(0, MIN_PASSPHRASE - setup.authPassword.length) }) : t('settings.webdav.passwordOk')}
+          onChange={(value) => setSetup({ ...setup, authPassword: value, encryptionPassword: '', previousEncryptionPassword: '' })} />
+        <div className={styles.callout}><Icon name="shield" size={16} /><span>{t('settings.webdav.securityNote')}</span></div>
+        <div className={styles.dialogFoot}>
+          <Button disabled={busy} onClick={() => onEdit(false)}>{t('common.dialog.cancel')}</Button>
+          <Button type="submit" variant="primary" data-dialog-save disabled={!canSave}>{busy ? t('settings.webdav.verifying') : t('settings.webdav.save')}</Button>
+        </div>
+      </form>
+    </SettingsSubView> : <>
     {status?.configured ? <Card className={styles.hero} data-tone={tone}>
       <div className={styles.heroTop}>
         <span className={styles.glyph} data-tone={tone} aria-hidden="true"><Icon name="cloud" size={24} /><span className={styles.glyphDot} /></span>
@@ -576,6 +592,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         <p className={styles.detail}>{status.lastSuccess ? t('settings.webdav.noReceiptDetail') : t('settings.webdav.noActivityDetail')}</p>
       </div>}
     </Card>}
+    </>}
 
     <GuideDialog open={!!run?.open} title={run?.running ? t('settings.webdav.progressTitle') : t('settings.webdav.progressDoneTitle')} onClose={closeRun}>
       {run && run.running && <div className={`sync-dialog sync-activity ${styles.dialogBody}`}>
@@ -598,20 +615,6 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     </GuideDialog>
     <GuideDialog open={receiptOpen && !run?.open} title={t('settings.webdav.progressDoneTitle')} hint={receiptAt ? receiptAt.absolute : undefined} onClose={() => setReceiptOpen(false)}>
       {activitySummary && activity && resultView(activity, activitySummary.headline, activitySummary.detail, conflicts.length, activitySummary.moved, () => setReceiptOpen(false))}
-    </GuideDialog>
-    <GuideDialog open={editing} title={status?.configured ? t('settings.webdav.editTitle') : t('settings.webdav.configure')} hint={t('settings.webdav.dialogHint')} onClose={() => onEdit(false)}>
-      <form className={`sync-dialog ${styles.dialogBody}`} onSubmit={(event) => { event.preventDefault(); if (canSave) void configure(); }}>
-        <TextField label={t('settings.webdav.endpoint')} icon="globe" type="url" value={setup.endpoint} placeholder="https://dav.example.com/cliora/" autoComplete="url" hint={t('settings.webdav.endpointHint')} autoFocus={!setup.endpoint} onChange={(event) => setSetup({ ...setup, endpoint: event.target.value })} />
-        <TextField label={t('settings.webdav.username')} icon="user" value={setup.username} autoComplete="username" autoFocus={!!setup.endpoint} onChange={(event) => setSetup({ ...setup, username: event.target.value })} />
-        <PassphraseField label={t('settings.webdav.password')} value={setup.authPassword} autoComplete="new-password" placeholder={t('settings.webdav.passwordPlaceholder')} meter
-          hint={passwordShort ? t('settings.webdav.passwordMore', { count: Math.max(0, MIN_PASSPHRASE - setup.authPassword.length) }) : t('settings.webdav.passwordOk')}
-          onChange={(value) => setSetup({ ...setup, authPassword: value, encryptionPassword: '', previousEncryptionPassword: '' })} />
-        <div className={styles.callout}><Icon name="shield" size={16} /><span>{t('settings.webdav.securityNote')}</span></div>
-        <div className={styles.dialogFoot}>
-          <Button disabled={busy} onClick={() => onEdit(false)}>{t('common.dialog.cancel')}</Button>
-          <Button type="submit" variant="primary" data-dialog-save disabled={!canSave}>{busy ? t('settings.webdav.verifying') : t('settings.webdav.save')}</Button>
-        </div>
-      </form>
     </GuideDialog>
   </section>;
 }

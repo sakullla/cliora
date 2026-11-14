@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable } from '../../lib/native';
+import { native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import type { LaunchRequest, LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
@@ -203,8 +203,10 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   useEffect(() => {
     if (!nativeAvailable) return;
     let active = true;
-    void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
-    return () => { active = false; };
+    const reload = () => void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
+    reload();
+    const off = onLaunchSettingsChange(reload);
+    return () => { active = false; off(); };
   }, []);
 
   /** Reads hosts and remote projects together; a failure keeps the last good list and says so. */

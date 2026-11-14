@@ -4,8 +4,22 @@ import { listen } from '@tauri-apps/api/event';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
+import {
+  TERMINAL_FONT_SIZE_DEFAULT,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+  setTerminalCursorBlink,
+  setTerminalDensity,
+  setTerminalFontSize,
+  setTerminalSoundEnabled,
+  setTerminalThemePreference,
+  useTerminalPreferences,
+  type TerminalDensity,
+  type TerminalThemePreference,
+} from '../../lib/terminalPreferences';
 import { Icon } from '../../components/Icon';
-import { Button } from '../../components/ui';
+import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
+import { Button, Segmented, Switch } from '../../components/ui';
 import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
 import i18n from '../../i18n';
 
@@ -47,6 +61,7 @@ function loadFailure(error: unknown): string {
   return i18n.t('settings.terminal.failureTemplate', { detail: detail || fallback, next });
 }
 
+/** The launch terminal is a filterable list: system terminals, saved presets, and the custom command. */
 export function TerminalSettings() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LaunchSettings | null>(null);
@@ -81,13 +96,22 @@ export function TerminalSettings() {
     return preset ? `preset:${preset.id}` : settings.selected;
   }
 
-  function terminalChoices() {
+  function terminalOptions(): FilterSelectOption[] {
     const source = settings?.terminals?.length
       ? settings.terminals
       : [{ id: 'workbench' as TerminalId, label: t('settings.terminal.workbench'), available: true }];
     const visible = source.filter((item) => item.id !== 'custom');
     if (!visible.some((item) => item.id === 'workbench')) visible.unshift({ id: 'workbench', label: t('settings.terminal.workbench'), available: true });
-    return visible;
+    return [
+      ...visible.map((item) => ({
+        value: item.id,
+        label: item.label,
+        detail: item.available ? undefined : t('settings.terminal.unavailableNote'),
+        disabled: !item.available,
+      })),
+      ...(settings?.presets ?? []).map((item: TerminalPreset) => ({ value: `preset:${item.id}`, label: item.label, detail: item.program })),
+      { value: 'custom', label: t('settings.terminal.custom'), detail: t('settings.terminal.customDetail') },
+    ];
   }
 
   async function choose(value: string) {
@@ -146,13 +170,50 @@ export function TerminalSettings() {
     finally { setBusy(false); }
   }
 
+  const writesDisabled = !nativeAvailable || busy || !settings;
+  const modeOptions = [
+    { value: 'normal' as LaunchMode, label: t('settings.terminal.modeNormal'), disabled: writesDisabled },
+    { value: 'yolo' as LaunchMode, label: t('settings.terminal.modeYolo'), disabled: writesDisabled },
+  ];
+
   return <section className="settings-group" id="settings-terminal" aria-label={t('settings.terminal.title')}>
     <div className="setting-intro"><h2>{t('settings.terminal.title')}</h2><p>{t('settings.terminal.description')}</p>{saved && <span className="setting-saved" role="status"><Icon name="check" size={13} />{saved}</span>}</div>
-    <label className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><select aria-label={t('settings.terminal.launch')} value={selectionKey()} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void choose(event.target.value)}>{terminalChoices().map((item) => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? '' : t('settings.terminal.unavailableSuffix')}</option>)}{(settings?.presets ?? []).map((item: TerminalPreset) => <option key={item.id} value={`preset:${item.id}`}>{item.label}</option>)}<option value="custom">{t('settings.terminal.custom')}</option></select></label>
+    <div className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><FilterSelect className="setting-select" label={t('settings.terminal.launch')} value={selectionKey()} options={terminalOptions()} disabled={writesDisabled} searchable={false} onChange={(value) => void choose(value)} /></div>
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</Button><Button disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</Button></span></span></div>}
-    <label className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><select aria-label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('cli', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
-    <label className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><select aria-label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} disabled={!nativeAvailable || busy || !settings} onChange={(event) => void chooseMode('project', event.target.value as LaunchMode)}><option value="normal">{t('settings.terminal.modeNormal')}</option><option value="yolo">{t('settings.terminal.modeYolo')}</option></select></label>
+    <div className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><Segmented label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('cli', mode)} /></div>
+    <div className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><Segmented label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('project', mode)} /></div>
     {error && <p role="alert" className="setting-error">{error}</p>}
+  </section>;
+}
+
+/** Workbench display preferences write local storage through the shared store, so a
+ *  mounted workbench reacts while the settings dialog stays open — and vice versa. */
+export function TerminalDisplaySettings() {
+  const { t } = useTranslation();
+  const prefs = useTerminalPreferences();
+  const themes = [
+    { value: 'auto' as TerminalThemePreference, label: t('sessions.termThemeAuto') },
+    { value: 'dark' as TerminalThemePreference, label: t('sessions.termThemeDark') },
+    { value: 'light' as TerminalThemePreference, label: t('sessions.termThemeLight') },
+  ];
+  const densities = [
+    { value: 'compact' as TerminalDensity, label: t('sessions.lineCompact') },
+    { value: 'standard' as TerminalDensity, label: t('sessions.lineStandard') },
+    { value: 'relaxed' as TerminalDensity, label: t('sessions.lineRelaxed') },
+  ];
+  return <section className="settings-group" id="settings-terminal-display" aria-label={t('settings.terminal.display')}>
+    <div className="setting-intro"><h2>{t('settings.terminal.display')}</h2><p>{t('settings.terminal.displayHint')}</p></div>
+    <div className="setting-row"><span><strong>{t('sessions.terminalColors')}</strong><small>{t('settings.terminal.colorsHint')}</small></span><Segmented label={t('sessions.terminalColors')} value={prefs.theme} options={themes} onChange={setTerminalThemePreference} /></div>
+    <div className="setting-row"><span><strong>{t('sessions.fontSize')}</strong><small>{t('settings.terminal.fontSizeHint', { size: TERMINAL_FONT_SIZE_DEFAULT })}</small></span>
+      <span className="term-stepper" role="group" aria-label={t('sessions.fontSize')}>
+        <Button variant="ghost" size="sm" disabled={prefs.fontSize <= TERMINAL_FONT_SIZE_MIN} aria-label={t('sessions.fontSizeDown')} title={t('sessions.fontSizeDown')} onClick={() => setTerminalFontSize(prefs.fontSize - 1)} icon={<span aria-hidden="true">−</span>} />
+        <button type="button" className="term-stepper-value" aria-label={t('sessions.fontSizeReset', { size: TERMINAL_FONT_SIZE_DEFAULT })} title={t('sessions.fontSizeReset', { size: TERMINAL_FONT_SIZE_DEFAULT })} onClick={() => setTerminalFontSize(TERMINAL_FONT_SIZE_DEFAULT)}>{prefs.fontSize}<small>px</small></button>
+        <Button variant="ghost" size="sm" disabled={prefs.fontSize >= TERMINAL_FONT_SIZE_MAX} aria-label={t('sessions.fontSizeUp')} title={t('sessions.fontSizeUp')} onClick={() => setTerminalFontSize(prefs.fontSize + 1)} icon={<Icon name="plus" size={13} />} />
+      </span>
+    </div>
+    <div className="setting-row"><span><strong>{t('sessions.lineHeight')}</strong><small>{t('settings.terminal.densityHint')}</small></span><Segmented label={t('sessions.lineHeight')} value={prefs.density} options={densities} onChange={setTerminalDensity} /></div>
+    <label className="setting-row"><span><strong>{t('sessions.cursorBlink')}</strong><small>{t('settings.terminal.cursorBlinkHint')}</small></span><Switch aria-label={t('sessions.cursorBlink')} checked={prefs.cursorBlink} onChange={setTerminalCursorBlink} /></label>
+    <label className="setting-row"><span><strong>{t('sessions.sound')}</strong><small>{t('settings.terminal.soundHint')}</small></span><Switch aria-label={t('sessions.sound')} checked={prefs.soundEnabled} onChange={setTerminalSoundEnabled} /></label>
   </section>;
 }
 

@@ -1,4 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+// The launch terminal picker is a FilterSelect: a button trigger opens a listbox of options.
+function launchTrigger(page: Page, label: string) {
+  return page.getByRole('button', { name: label, exact: true });
+}
+
+async function pickTerminal(page: Page, label: string, value: string) {
+  await launchTrigger(page, label).click();
+  await page.locator(`[role="option"][data-value="${value}"]`).click();
+}
 
 for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
   const program = terminal === 'cmd' ? 'C:/Program Files/Tabby/Tabby.exe' : '/Applications/Tabby.app/Contents/MacOS/Tabby';
@@ -36,30 +46,30 @@ for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
     }, { terminal, program });
     await page.goto('/');
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-    await page.getByRole('tab', { name: '启动', exact: true }).click();
-    const select = page.getByRole('combobox', { name: '启动终端', exact: true });
-    await expect(select).toHaveValue('preset:tabby');
+    await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+    const select = launchTrigger(page, '启动终端');
+    await expect(select).toHaveAttribute('data-value', 'preset:tabby');
     const shown = terminal === 'auto' ? 'workbench' : terminal;
-    await select.selectOption(terminal);
-    await expect(select).toHaveValue(shown);
+    await pickTerminal(page, '启动终端', terminal);
+    await expect(select).toHaveAttribute('data-value', shown);
     // A saved terminal is stated in place; nothing is claimed before the backend answers.
     await expect(page.getByRole('region', { name: '终端与启动模式' }).getByRole('status')).toHaveText('终端设置已保存。');
     expect(await page.evaluate(() => {
       const { settings } = (window as any).__terminalTest;
       return { selected: settings.selected, program: settings.custom.program };
     })).toEqual({ selected: shown, program });
-    await page.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
-    await expect(select).toHaveValue(shown);
+    await page.getByRole('radiogroup', { name: 'CLI 默认启动模式' }).getByRole('radio', { name: 'YOLO 模式' }).click();
+    await expect(select).toHaveAttribute('data-value', shown);
     await page.reload();
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-    await page.getByRole('tab', { name: '启动', exact: true }).click();
-    await expect(select).toHaveValue(shown);
-    await select.selectOption('preset:tabby');
-    await expect(select).toHaveValue('preset:tabby');
+    await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+    await expect(select).toHaveAttribute('data-value', shown);
+    await pickTerminal(page, '启动终端', 'preset:tabby');
+    await expect(select).toHaveAttribute('data-value', 'preset:tabby');
     await page.evaluate(() => { (window as any).__terminalTest.failSave = true; });
-    await select.selectOption(terminal);
+    await pickTerminal(page, '启动终端', terminal);
     await expect(page.getByRole('region', { name: '终端与启动模式' }).getByRole('alert')).toContainText('终端设置保存失败');
-    await expect(select).toHaveValue('preset:tabby');
+    await expect(select).toHaveAttribute('data-value', 'preset:tabby');
   });
 }
 
@@ -80,16 +90,18 @@ test('unsaved or system default shows the workbench, and launch modes stay norma
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: '启动', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
   const region = page.getByRole('region', { name: '终端与启动模式' });
-  const select = region.getByRole('combobox', { name: '启动终端', exact: true });
-  await expect(select).toHaveValue('workbench');
-  await expect(select.locator('option', { hasText: '工作台' })).toHaveCount(1);
-  // The worktree start preference lives under Worktrees now.
-  await expect(region.getByRole('combobox')).toHaveCount(3);
+  const select = region.getByRole('button', { name: '启动终端', exact: true });
+  await expect(select).toHaveAttribute('data-value', 'workbench');
+  await select.click();
+  await expect(page.getByRole('option', { name: '工作台', exact: true })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  // The worktree start preference lives under Worktrees now; modes are segmented radios.
+  await expect(region.getByRole('radiogroup')).toHaveCount(2);
   for (const name of ['CLI 默认启动模式', '项目默认启动模式']) {
-    const mode = region.getByRole('combobox', { name });
-    await expect(mode.locator('option')).toHaveText(['普通模式', 'YOLO 模式']);
+    const mode = region.getByRole('radiogroup', { name });
+    await expect(mode.getByRole('radio')).toHaveText(['普通模式', 'YOLO 模式']);
   }
   await expect(region.getByText('打开方式')).toHaveCount(0);
 });
@@ -123,9 +135,9 @@ test('English keeps the CMD-length recovery advice by error code and falls back 
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Pages' }).getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('tab', { name: 'Launch', exact: true }).click();
-  const select = page.getByRole('combobox', { name: 'Launch terminal', exact: true });
-  await expect(select).toHaveValue('preset:tabby');
+  await page.getByRole('tab', { name: 'Terminal & launch', exact: true }).click();
+  const select = launchTrigger(page, 'Launch terminal');
+  await expect(select).toHaveAttribute('data-value', 'preset:tabby');
   const alert = page.getByRole('region', { name: 'Terminal and launch modes' }).getByRole('alert');
   const rejectWith = (rejection: { code?: string; message: string }) => page.evaluate((payload) => {
     (window as unknown as { __terminalCodeTest: { rejection: { code?: string; message: string } | null } }).__terminalCodeTest.rejection = payload;
@@ -133,20 +145,20 @@ test('English keeps the CMD-length recovery advice by error code and falls back 
 
   // Code-first recognition: the message keeps its own recovery advice, without the generic repick hint.
   await rejectWith({ code: 'terminal_command_too_long', message: '启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal' });
-  await select.selectOption('auto');
+  await pickTerminal(page, 'Launch terminal', 'auto');
   await expect(alert).toContainText('启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal');
   await expect(alert).not.toContainText('Choose the terminal again');
-  await expect(select).toHaveValue('preset:tabby');
+  await expect(select).toHaveAttribute('data-value', 'preset:tabby');
 
   // Legacy payloads without a code keep the previous text-driven presentation.
   await rejectWith({ message: '终端设置保存失败' });
-  await select.selectOption('auto');
+  await pickTerminal(page, 'Launch terminal', 'auto');
   await expect(alert).toContainText('终端设置保存失败');
   await expect(alert).toContainText('Choose the terminal again');
 
   // A message that already asks to re-pick the terminal is still recognized by text alone.
   await rejectWith({ message: '所选终端不可用，请在设置中重新选择终端' });
-  await select.selectOption('auto');
+  await pickTerminal(page, 'Launch terminal', 'auto');
   await expect(alert).toContainText('请在设置中重新选择终端');
   await expect(alert).not.toContainText('Choose the terminal again');
 });

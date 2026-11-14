@@ -96,6 +96,7 @@ export default {
     title: 'Keyboard shortcuts',
     global: 'Global',
     palette: 'Jump to a page, tool, or project',
+    openSettings: 'Open settings',
     switchPage: 'Switch page',
     toggleSidebar: 'Collapse or expand the sidebar',
     focusSearch: 'Focus the current page search',

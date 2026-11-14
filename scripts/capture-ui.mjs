@@ -734,7 +734,7 @@ for(const width of widths)for(const theme of themes){
  }
  if(process.argv.includes('--remote-hosts')){
   await nav.getByRole('button',{name:'设置',exact:true}).click();
-  await page.getByRole('button',{name:'管理主机',exact:true}).click();
+  await page.getByRole('tab',{name:'远程主机',exact:true}).click();
   await page.getByRole('button',{name:'编辑 开发环境 · 远程 SSH',exact:true}).click();
   const form=page.getByRole('form',{name:'编辑主机',exact:true});
   await capture('t5-host-editor');
@@ -824,11 +824,12 @@ for(const width of widths)for(const theme of themes){
  }
  if(pagesOnly){
   for(const name of selectedPages){
+   if(await page.getByRole('dialog',{name:'设置',exact:true}).count())await page.keyboard.press('Escape');
    if(name==='home')await nav.getByRole('button',{name:'首页',exact:true}).click();
    if(name==='tools'){await nav.getByRole('button',{name:'工具',exact:true}).click();await page.getByRole('region',{name:'工具'}).getByLabel('配置列表').waitFor();}
    if(name==='library'){await nav.getByRole('button',{name:'资料库',exact:true}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();}
    if(name==='sessions'||name==='usage'){await nav.getByRole('button',{name:'记录',exact:true}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(name==='usage')await page.getByRole('tab',{name:'用量',exact:true}).click();}
-   if(name==='settings'||name==='migration'){await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});if(name==='migration'){await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();}}
+   if(name==='settings'||name==='migration'){await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'同步与备份'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});if(name==='migration'){await page.getByRole('tab',{name:'同步与备份'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();}}
    await capture(name);
   }
   await page.close();continue;
@@ -840,8 +841,8 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
   await nav.getByRole('button',{name:'记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
   await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
-  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'迁移与同步'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});await capture('settings');
-  if(!process.argv.includes('--skip-migration')){await page.getByRole('tab',{name:'迁移与同步'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');}
+  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'同步与备份'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});await capture('settings');
+  if(!process.argv.includes('--skip-migration')){await page.getByRole('tab',{name:'同步与备份'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');}
   await page.close();continue;
  }
  await nav.getByRole('button',{name:'工具'}).click();const profiles=page.getByRole('region',{name:'工具'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
@@ -882,9 +883,9 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await captureUsageDetails(page,capture,theme,width);
  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.locator('.skeleton-page').first().waitFor({state:'detached'}).catch(()=>{});await capture('settings');
- await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
- await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
- await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:/选择配置包文件/}).click();await page.getByRole('dialog').getByRole('button',{name:/backup\.cliora/}).waitFor();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByRole('tab',{name:'同步与备份'}).click();await capture('migration');
+ await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await page.getByRole('region',{name:'导出加密配置包'}).waitFor();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('region',{name:'导出加密配置包'}).waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();const importView=page.getByRole('region',{name:'从配置包恢复'});await importView.waitFor();await importView.getByRole('button',{name:/选择配置包文件/}).click();await importView.getByRole('button',{name:/backup\.cliora/}).waitFor();await importView.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await importView.waitFor({state:'hidden'});
  await page.close();
  }catch(error){
   failures.push({type:'scenario',theme,width,after:lastCapture,message:error.message.split('\n')[0]});

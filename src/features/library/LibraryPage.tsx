@@ -4,7 +4,7 @@ import { CodeEditor } from '../../components/CodeEditor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { writeClipboard } from '../../lib/clipboard';
 import { useTranslation } from 'react-i18next';
-import { nativeAvailable } from '../../lib/native';
+import { nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { LaunchMode, LaunchSettings, Project } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
@@ -169,8 +169,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
-    void native.getLaunchSettings().then((value) => { if (live) setLaunchSettings(value); }).catch(() => {});
-    return () => { live = false; };
+    const reload = () => void native.getLaunchSettings().then((value) => { if (live) setLaunchSettings(value); }).catch(() => {});
+    reload();
+    const off = onLaunchSettingsChange(reload);
+    return () => { live = false; off(); };
   }, [active, native]);
   useEffect(() => {
     if (!copiedId) return;

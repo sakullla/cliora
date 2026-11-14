@@ -190,9 +190,9 @@ test('one state shares its badge across pages and each Toolbar or card has at mo
   await nav.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('radiogroup', { name: '主题' })).toBeVisible();
   violations.push(...await primaryViolations(page, '设置 · 通用'));
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await expect(page.locator('[data-status="sync.on"]')).toBeVisible();
-  violations.push(...await primaryViolations(page, '设置 · 迁移与同步'));
+  violations.push(...await primaryViolations(page, '设置 · 同步与备份'));
   badges.push(...(await statusBadges(page)).map((item) => ({ page: '设置', ...item })));
 
   expect(violations).toEqual([]);

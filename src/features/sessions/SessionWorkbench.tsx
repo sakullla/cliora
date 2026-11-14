@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable } from '../../lib/native';
+import { native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import type { WindowChrome } from '../../components/WindowControls';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -29,7 +29,8 @@ import { SessionTitle, stableTitle } from './SessionTitle';
 import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
-import type { TerminalTheme, TerminalThemePreference } from './terminalTheme';
+import type { TerminalTheme } from './terminalTheme';
+import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, TERMINAL_LINE_HEIGHT, getTerminalPreferences, setTerminalCursorBlink, setTerminalDensity, setTerminalFontSize, setTerminalSoundEnabled, setTerminalThemePreference, useTerminalPreferences, type TerminalDensity, type TerminalThemePreference } from '../../lib/terminalPreferences';
 import { PlaceLabel, SessionRail, type RailSession, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
@@ -38,7 +39,7 @@ import uploadStyles from './sessionUploads.module.css';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
 import { StatusBanner } from '../../components/StatusBanner';
-import { DENSITY_LINE_HEIGHT, TerminalAppearance, type TerminalDensity } from './TerminalAppearance';
+import { TerminalAppearance } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
 import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, rememberedRemoteDir, remoteBaseName, remoteStartPath, useRemoteFolderPicker } from '../remote/remoteLaunch';
@@ -136,18 +137,7 @@ const SHORT_STAGE_TITLE = 10;
 const DEFAULT_RAIL_WIDTH = 272;
 const MIN_RAIL_WIDTH = 232;
 const MAX_RAIL_WIDTH = 392;
-const DEFAULT_FONT_SIZE = 14;
-const MIN_FONT_SIZE = 12;
-const MAX_FONT_SIZE = 20;
 const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
-
-function readStoredFontSize(): number {
-  try {
-    const raw = Number(localStorage.getItem('cliora:workbench-font-size'));
-    if (Number.isInteger(raw) && raw >= MIN_FONT_SIZE && raw <= MAX_FONT_SIZE) return raw;
-  } catch { /* Storage is optional. */ }
-  return DEFAULT_FONT_SIZE;
-}
 
 function readStoredRailWidth(): number {
   try {
@@ -155,32 +145,6 @@ function readStoredRailWidth(): number {
     if (Number.isFinite(raw) && raw >= MIN_RAIL_WIDTH && raw <= MAX_RAIL_WIDTH) return Math.round(raw);
   } catch { /* Storage is optional. */ }
   return DEFAULT_RAIL_WIDTH;
-}
-
-function readStoredSoundEnabled(): boolean {
-  try { return localStorage.getItem('cliora:workbench-sound') !== 'false'; }
-  catch { return true; }
-}
-
-function readStoredTerminalTheme(): TerminalThemePreference {
-  try {
-    const raw = localStorage.getItem('cliora:workbench-terminal-theme');
-    if (raw === 'dark' || raw === 'light' || raw === 'auto') return raw;
-  } catch { /* Storage is optional. */ }
-  return 'auto';
-}
-
-function readStoredCursorBlink(): boolean {
-  try { return localStorage.getItem('cliora:workbench-cursor-blink') !== 'false'; }
-  catch { return true; }
-}
-
-function readStoredDensity(): TerminalDensity {
-  try {
-    const raw = localStorage.getItem('cliora:workbench-density');
-    if (raw === 'compact' || raw === 'standard' || raw === 'relaxed') return raw;
-  } catch { /* Storage is optional. */ }
-  return 'standard';
 }
 
 function readStoredEndedCollapsed(): boolean {
@@ -491,12 +455,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [endedCollapsed, setEndedCollapsed] = useState<boolean>(readStoredEndedCollapsed);
   const [railSearch, setRailSearch] = useState('');
   const [arrangement, setArrangement] = useState<RailArrangement>(readRailArrangement);
-  const [fontSize, setFontSize] = useState<number>(readStoredFontSize);
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(readStoredSoundEnabled);
-  const [themePreference, setThemePreference] = useState<TerminalThemePreference>(readStoredTerminalTheme);
+  const terminalPrefs = useTerminalPreferences();
+  const { fontSize, soundEnabled, cursorBlink, density } = terminalPrefs;
+  const themePreference = terminalPrefs.theme;
   const [appTheme, setAppTheme] = useState<TerminalTheme>(currentAppTheme);
-  const [cursorBlink, setCursorBlink] = useState<boolean>(readStoredCursorBlink);
-  const [density, setDensity] = useState<TerminalDensity>(readStoredDensity);
   const [split, setSplit] = useState<[string, string] | null>(null);
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => new Set());
   const [gitContexts, setGitContexts] = useState<Map<string, WorkbenchGitContext | null>>(() => new Map());
@@ -1397,11 +1359,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     copyTimerRef.current = window.setTimeout(() => setCopiedState(null), 1800);
   }
 
-  const updateFontSize = useCallback((nextSize: number) => {
-    const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, nextSize));
-    setFontSize(clamped);
-    try { localStorage.setItem('cliora:workbench-font-size', String(clamped)); } catch { /* Storage is optional. */ }
-  }, []);
+  const updateFontSize = useCallback((nextSize: number) => setTerminalFontSize(nextSize), []);
 
   function openFind() {
     setAppearanceOpen(false);
@@ -1470,7 +1428,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       else if (action === 'rail') toggleRail();
       else if (action === 'zoomIn') updateFontSize(fontSize + 1);
       else if (action === 'zoomOut') updateFontSize(fontSize - 1);
-      else if (action === 'zoomReset') updateFontSize(DEFAULT_FONT_SIZE);
+      else if (action === 'zoomReset') updateFontSize(TERMINAL_FONT_SIZE_DEFAULT);
       else if (action === 'newSession') { if (terminalTools.length) openNewSessionDialog(); }
       else stepSession(action === 'nextSession' ? 1 : -1);
     },
@@ -1614,6 +1572,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     void native.getLaunchSettings().then((settings) => {
       if (alive && settings) setLaunchSettings(settings);
     }).catch(() => {});
+    // The Settings modal edits launch preferences while the workbench stays mounted.
+    const offLaunchSettings = onLaunchSettingsChange((settings) => {
+      if (alive && settings) setLaunchSettings(settings);
+    });
     void native.listWorktreeLedger().then((rows) => {
       if (alive) setLedger(Array.isArray(rows) ? rows : []);
     }).catch(() => {});
@@ -1669,7 +1631,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (requests.length) void Promise.allSettled(requests).then(() => native.listWorkbenchSessions()).then((sessions) => { if (alive && Array.isArray(sessions)) applyListedSessions(sessions); }).catch(() => {});
       }
     }).catch(() => { /* Session list failures are reported by the attachment above. */ });
-    return () => { alive = false; };
+    return () => { alive = false; offLaunchSettings(); };
   }, [active, focusToken, focusSessionId, reload, remoteSshEnabled, t]);
 
   useEffect(() => {
@@ -1721,10 +1683,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (other && selectedIdRef.current === id) setSelectedId(other);
   }
 
-  const updateDensity = useCallback((next: TerminalDensity) => {
-    setDensity(next);
-    try { localStorage.setItem('cliora:workbench-density', next); } catch { /* Storage is optional. */ }
-  }, []);
+  const updateDensity = useCallback((next: TerminalDensity) => setTerminalDensity(next), []);
 
   const toggleEndedCollapsed = useCallback(() => {
     setEndedCollapsed((current) => {
@@ -1743,26 +1702,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   if (railToggleRef) railToggleRef.current = active ? toggleRail : null;
 
   const toggleSound = useCallback(() => {
-    setSoundEnabled((current) => {
-      const next = !current;
-      try { localStorage.setItem('cliora:workbench-sound', String(next)); } catch { /* Storage is optional. */ }
-      if (next) playWorkbenchChime('bell');
-      return next;
-    });
+    const next = !getTerminalPreferences().soundEnabled;
+    setTerminalSoundEnabled(next);
+    if (next) playWorkbenchChime('bell');
   }, []);
 
   const toggleCursorBlink = useCallback(() => {
-    setCursorBlink((current) => {
-      const next = !current;
-      try { localStorage.setItem('cliora:workbench-cursor-blink', String(next)); } catch { /* Storage is optional. */ }
-      return next;
-    });
+    setTerminalCursorBlink(!getTerminalPreferences().cursorBlink);
   }, []);
 
-  const setTerminalTheme = useCallback((next: TerminalThemePreference) => {
-    setThemePreference(next);
-    try { localStorage.setItem('cliora:workbench-terminal-theme', next); } catch { /* Storage is optional. */ }
-  }, []);
+  const setTerminalTheme = useCallback((next: TerminalThemePreference) => setTerminalThemePreference(next), []);
 
   const updateRailWidth = useCallback((nextWidth: number) => {
     const clamped = Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, Math.round(nextWidth)));
@@ -3508,7 +3457,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={DENSITY_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -3642,7 +3591,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
                 <span className={styles.statusTools}>
-                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={DEFAULT_FONT_SIZE} minFontSize={MIN_FONT_SIZE} maxFontSize={MAX_FONT_SIZE} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((value) => !value); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
+                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT} minFontSize={TERMINAL_FONT_SIZE_MIN} maxFontSize={TERMINAL_FONT_SIZE_MAX} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((value) => !value); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
                   <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((value) => !value); }} onClose={closeShortcuts} />
                 </span>
               </footer>}

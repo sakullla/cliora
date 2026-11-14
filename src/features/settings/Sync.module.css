@@ -2,6 +2,7 @@
 
 .page { display: grid; gap: var(--space-4); container-type: inline-size; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: var(--space-5); align-items: start; }
+.layoutSingle { grid-template-columns: minmax(0, 1fr); }
 .column { display: grid; gap: var(--space-4); min-width: 0; }
 .aside { display: grid; gap: var(--space-4); min-width: 0; position: sticky; top: 0; }
 

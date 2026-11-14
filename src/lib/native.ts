@@ -21,6 +21,17 @@ import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
 
+export const LAUNCH_SETTINGS_EVENT = 'cliora:launch-settings-changed';
+function notifyLaunchSettings(settings: LaunchSettings) {
+  window.dispatchEvent(new CustomEvent<LaunchSettings>(LAUNCH_SETTINGS_EVENT, { detail: settings }));
+}
+/** Launch settings edited in the Settings modal stay valid for pages that remain mounted underneath. */
+export function onLaunchSettingsChange(listener: (settings: LaunchSettings) => void) {
+  const handler = (event: Event) => listener((event as CustomEvent<LaunchSettings>).detail);
+  window.addEventListener(LAUNCH_SETTINGS_EVENT, handler);
+  return () => window.removeEventListener(LAUNCH_SETTINGS_EVENT, handler);
+}
+
 function readError(error: unknown): RemoteApiError {
   if (typeof error === 'string') {
     return { code: 'native_error', message: error.trim() ? error : i18n.t('common.nativeError.operationFailed'), action: i18n.t('common.nativeError.checkAndRetry') };
@@ -355,10 +366,10 @@ export const native = {
   setProjectTool: (projectId: string, toolId: string | null) => command<Project>('set_project_tool', { projectId, toolId }),
   setProjectModelOverride: (projectId: string, toolId: string, model: string | null) => command<Project>('set_project_model_override', { projectId, toolId, model }),
   getLaunchSettings: () => command<LaunchSettings>('get_launch_settings'),
-  setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
-  setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }),
-  setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
-  setWorktreeLaunch: (mode: 'direct' | 'worktree') => command<LaunchSettings>('set_worktree_launch', { mode }),
+  setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }).then((next) => { notifyLaunchSettings(next); return next; }),
+  setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }).then((next) => { notifyLaunchSettings(next); return next; }),
+  setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }).then((next) => { notifyLaunchSettings(next); return next; }),
+  setWorktreeLaunch: (mode: 'direct' | 'worktree') => command<LaunchSettings>('set_worktree_launch', { mode }).then((next) => { notifyLaunchSettings(next); return next; }),
   launchCli: async (request: LaunchRequest, options?: RemoteOperationOptions) => {
     let result: LaunchResult;
     if (request.projectId?.startsWith('remote:')) {

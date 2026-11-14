@@ -91,7 +91,7 @@ test('settings group preferences by task, confirm each save, and confirm the qui
 
   // Settings are one category at a time, chosen from a list of six; General opens first.
   const categories = page.getByRole('tablist', { name: '设置分类' });
-  expect(await categories.getByRole('tab').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('aria-label')))).toEqual(['通用', 'CLI 工具', '启动', '工作树', '远程主机', '迁移与同步']);
+  expect(await categories.getByRole('tab').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('aria-label')))).toEqual(['通用', 'CLI 工具', '终端与启动', '工作树', '远程主机', '同步与备份']);
   await expect(categories.getByRole('tab', { name: '通用', exact: true })).toHaveAttribute('aria-selected', 'true');
   const panel = page.getByRole('tabpanel', { name: '通用' });
   await expect(panel.getByRole('radiogroup', { name: '主题' })).toBeVisible();
@@ -126,10 +126,10 @@ test('settings group preferences by task, confirm each save, and confirm the qui
   await expect(categories.getByRole('tab', { name: 'CLI 工具', exact: true })).toBeFocused();
   await expect(categories.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
   // The same for a managed CLI: the confirmation names the tool it changed.
-  await page.locator('#settings-managed').getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
+  await page.locator('#settings-managed').getByRole('switch', { name: 'Codex', exact: true }).uncheck();
   await expect(page.locator('#settings-managed').getByRole('status')).toHaveText('已保存「Codex」的显示设置。');
-  await categories.getByRole('tab', { name: '启动', exact: true }).click();
-  await expect(page.getByRole('tabpanel', { name: '启动' }).getByRole('combobox', { name: '启动终端', exact: true })).toBeVisible();
+  await categories.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  await expect(page.getByRole('tabpanel', { name: '终端与启动' }).getByRole('button', { name: '启动终端', exact: true })).toBeVisible();
 
   // 640 keeps the categories in one scrolling row without a sideways page scroll.
   await page.setViewportSize({ width: 640, height: 800 });

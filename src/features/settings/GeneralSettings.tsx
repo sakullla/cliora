@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Button, Segmented } from '../../components/ui';
+import { Badge, Button, Segmented, Switch } from '../../components/ui';
 import { getVersion } from '@tauri-apps/api/app';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
@@ -9,8 +9,9 @@ import type { IconName } from '../../components/Icon';
 import { SearchField } from '../../components/SearchField';
 import { ToolIcon } from '../../components/ToolIcon';
 import { ToastStack } from '../../components/Toast';
-import { ToolIconSettings } from './ToolIconSettings';
+import { ToolIconActions } from './ToolIconSettings';
 import { TraySettings } from './TerminalSettings';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import { native, nativeAvailable } from '../../lib/native';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { useToasts } from '../../lib/toast';
@@ -27,15 +28,6 @@ type ToolItem = { id: string; name: string };
 type PendingSave =
   | { kind: 'theme'; value: Theme; target: string; text: string }
   | { kind: 'managed'; id: string; value: boolean; target: string; text: string };
-
-const MANAGED_PREVIEW = 8;
-
-function orderedManagedTools(tools: ToolItem[], managed: string[]) {
-  return [
-    ...tools.filter((item) => managed.includes(item.id)),
-    ...tools.filter((item) => !managed.includes(item.id)),
-  ];
-}
 
 const themeGlyphs: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
 const themeOrder: Theme[] = ['system', 'light', 'dark'];
@@ -95,7 +87,6 @@ function UpdateSettings({ busy }: { busy: boolean }) {
     try {
       let update = offer?.update ?? null;
       if (!update) {
-        // 自动检查只带回版本信息，安装前重新取回更新句柄。
         setStage('checking');
         update = await check();
         if (!update) {
@@ -108,7 +99,6 @@ function UpdateSettings({ busy }: { busy: boolean }) {
       }
       setProgress({ downloaded: 0, total: null });
       setStage('downloading');
-      // 插件在写入前强制验签；验签/下载/安装失败都会抛错，当前版本保持可用（ADR-4）。
       await update.download((event) => {
         if (event.event === 'Started') {
           setProgress({ downloaded: 0, total: event.data.contentLength ?? null });
@@ -116,14 +106,12 @@ function UpdateSettings({ busy }: { busy: boolean }) {
           setProgress((current) => ({ ...current, downloaded: current.downloaded + event.data.chunkLength }));
         }
       });
-      // Windows installs exit the process directly, bypassing ExitRequested.
-      // Checkpoint after the download, immediately before invoking the installer.
       await native.checkpointWorkbenchSessions();
       await update.install();
       setStage('installed');
       try {
         await relaunch();
-      } catch { /* 重启失败时保留“已安装”提示，用户手动重新打开即可。 */ }
+      } catch { /* Keep "installed" notice if automatic relaunch fails. */ }
     } catch (error) {
       setFailure(error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error));
       setStage('failed');
@@ -141,11 +129,18 @@ function UpdateSettings({ busy }: { busy: boolean }) {
     : stage === 'installed' ? t('settings.update.installed')
     : stage === 'failed' ? `${t('settings.update.failed')}${failure}`
     : t('settings.update.description');
+
   return <section className="settings-group" id="app-update">
     <div className={styles.update} data-tone={tone}>
-      <span className={styles.updateMark}><img src={brandIcon} alt="" />{tone && <span className={styles.updateBadge} aria-hidden="true"><Icon name={tone === 'new' ? 'download' : tone === 'error' ? 'alert' : 'check'} size={11} strokeWidth={2.8} /></span>}</span>
+      <span className={styles.updateMark}>
+        <img src={brandIcon} alt="" />
+        {tone && <span className={styles.updateBadge} aria-hidden="true"><Icon name={tone === 'new' ? 'download' : tone === 'error' ? 'alert' : 'check'} size={11} strokeWidth={2.8} /></span>}
+      </span>
       <span className={styles.updateText}>
-        <h2>{t('settings.update.title')}{version && <Badge className={styles.updateVersion} title={t('settings.update.current')}>{t('settings.update.currentShort', { version })}</Badge>}</h2>
+        <h2>
+          {t('settings.update.title')}
+          {version && <Badge className={styles.updateVersion} title={t('settings.update.current')}>{t('settings.update.currentShort', { version })}</Badge>}
+        </h2>
         <small role={stage === 'failed' ? 'alert' : 'status'} className={stage === 'failed' ? styles.updateError : undefined}>{statusText}</small>
         {checkedAt && stage === 'latest' && <small className={styles.updateMeta}>{t('settings.update.checkedAt', { time: checkedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</small>}
       </span>
@@ -173,31 +168,65 @@ function UpdateSettings({ busy }: { busy: boolean }) {
 
 function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: boolean; onChange: (theme: Theme) => void }) {
   const { t } = useTranslation();
-  return <Segmented label={t('settings.theme.label')} value={value} onChange={onChange}
-    options={themeOrder.map((id) => ({ value: id, disabled, label: <><Icon name={themeGlyphs[id]} size={16} />{t(`settings.theme.${id}`)}</> }))} />;
+  return <div role="radiogroup" aria-label={t('settings.theme.label')} className={styles.themeGrid} onKeyDown={navigateChoices}>
+    {themeOrder.map((id) => {
+      const checked = value === id;
+      const label = t(`settings.theme.${id}`);
+      return <button
+        key={id}
+        type="button"
+        role="radio"
+        aria-checked={checked}
+        aria-label={label}
+        tabIndex={checked ? 0 : -1}
+        disabled={disabled}
+        className={styles.themeCard}
+        data-theme-mode={id}
+        onClick={() => { if (id !== value) onChange(id); }}
+      >
+        <span className={styles.themePreview} data-preview={id} aria-hidden="true">
+          <span className={styles.previewRail}><i /><i /><i /></span>
+          <span className={styles.previewMain}><b /><s /><s /></span>
+        </span>
+        <span className={styles.themeMeta}>
+          <span className={styles.themeLabelRow}>
+            <Icon name={themeGlyphs[id]} size={15} />
+            <strong>{label}</strong>
+            {checked && <span className={styles.themeCheck} aria-hidden="true"><Icon name="check" size={11} strokeWidth={2.8} /></span>}
+          </span>
+          <small>{t(`settings.theme.${id}Hint`)}</small>
+        </span>
+      </button>;
+    })}
+  </div>;
 }
 
 function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boolean }) {
   const { t } = useTranslation();
-  return <Segmented label={t('settings.language.label')} value={value} onChange={(language) => { if (language !== value) setLanguage(language); }}
-    options={supportedLanguages.map((id) => ({ value: id, disabled, label: t(`common.language.${id}`) }))} />;
+  return <Segmented
+    label={t('settings.language.label')}
+    value={value}
+    onChange={(language) => { if (language !== value) setLanguage(language); }}
+    options={supportedLanguages.map((id) => ({ value: id, disabled, label: t(`common.language.${id}`) }))}
+  />;
 }
 
 export function RemoteSshSettings({ enabled, busy, onChange, showHosts = true, showToggle = true, onOpenHosts }: { enabled: boolean; busy: boolean; onChange: (enabled: boolean) => void; showHosts?: boolean; showToggle?: boolean; onOpenHosts?: () => void }) {
   const { t } = useTranslation();
-  // Host management on its own (settings tab, workbench dialog): just the host list.
   if (showHosts && !showToggle) return enabled ? <RemoteHosts /> : null;
   const toggle = <section className="settings-group" id={showHosts ? 'settings-remote' : 'remote-ssh-settings'}>
     <div className="setting-intro"><h2>{t('settings.remoteSsh.title')}</h2><p>{t('settings.remoteSsh.description')}</p></div>
-    {showToggle && <label className="setting-row"><span><strong>{t('settings.remoteSsh.enable')}</strong><small>{t('settings.remoteSsh.enableHint')}</small></span><input type="checkbox" role="switch" checked={enabled} disabled={busy} onChange={(event) => onChange(event.target.checked)} /></label>}
+    {showToggle && <div className="setting-row">
+      <span><strong>{t('settings.remoteSsh.enable')}</strong><small>{t('settings.remoteSsh.enableHint')}</small></span>
+      <Switch aria-label={t('settings.remoteSsh.enable')} checked={enabled} disabled={busy} onChange={onChange} />
+    </div>}
     {enabled && !showHosts && <div className="setting-row"><span><strong>{t('settings.remoteSsh.manageHosts')}</strong><small>{t('settings.remoteSsh.manageHostsHint')}</small></span><Button icon={<Icon name="server" size={14} />} onClick={onOpenHosts}>{t('settings.remoteSsh.openHosts')}</Button></div>}
   </section>;
-  // The host list is its own panel below the switch, never a card nested inside it.
   return showHosts ? <div className={styles.stack}>{toggle}{enabled && <RemoteHosts />}</div> : toggle;
 }
 
 /** Settings → General (appearance, updates, tray, help) or Settings → CLI tools, by `pane`. */
-export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenShortcutHelp, onReopenOnboarding }: {
+export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons, busy, theme, externalToolQuery, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenShortcutHelp, onReopenOnboarding }: {
   pane: 'general' | 'tools';
   tools: ToolItem[];
   managed: string[];
@@ -205,6 +234,7 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
   icons: Record<string, string>;
   busy: boolean;
   theme: Theme;
+  externalToolQuery?: { query: string; token: number } | null;
   onThemeChange: (theme: Theme) => void;
   onManagedChange: (id: string, checked: boolean) => void;
   onIconChange: (toolId: string, dataUrl: string | null) => Promise<void>;
@@ -217,32 +247,32 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
   const language: AppLanguage = i18n.language === 'en' ? 'en' : 'zh';
   const catalogKey = tools.map((item) => item.id).join('\0');
   const managedKey = managed.join('\0');
-  const [managedExpanded, setManagedExpanded] = useState(false);
   const [toolQuery, setToolQuery] = useState('');
-  const [managedPreview, setManagedPreview] = useState(() => orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
-  // Refresh the collapsed set when the catalog changes or the list is folded again, so a toggle does not move the chip just clicked.
+  const [iconFailure, setIconFailure] = useState('');
+
   useEffect(() => {
-    if (!managedExpanded) setManagedPreview(orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
-  }, [catalogKey, managedExpanded]);
-  const managedById = new Map(tools.map((item) => [item.id, item]));
+    if (!externalToolQuery) return;
+    setToolQuery(externalToolQuery.query);
+  }, [externalToolQuery]);
+
   const toolNeedle = toolQuery.trim().toLowerCase();
   const managedShown = toolNeedle
-    ? orderedManagedTools(tools, managed).filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(toolNeedle))
-    : managedExpanded || tools.length <= MANAGED_PREVIEW
-      ? orderedManagedTools(tools, managed)
-      : managedPreview.flatMap((id) => {
-        const item = managedById.get(id);
-        return item ? [item] : [];
-      });
-  const managedHidden = tools.length - managedShown.length;
+    ? tools.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(toolNeedle))
+    : tools;
+
   async function handleIconChange(toolId: string, dataUrl: string | null) {
+    setIconFailure('');
     try {
       await onIconChange(toolId, dataUrl);
       toasts.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
-    } catch { /* 失败原因由页面顶部错误条展示。 */ }
+    } catch { /* Page error banner presents native rejection detail. */ }
   }
-  // A write is confirmed only when the preference handed back by bootstrap matches
-  // what was requested; a rejected write leaves the old value and the page error bar.
+
+  function handleIconValidationError(message: string) {
+    setIconFailure(message);
+    onIconError(message);
+  }
+
   const pendingSave = useRef<PendingSave | null>(null);
   const [saved, setSaved] = useState<{ target: string; text: string } | null>(null);
   useEffect(() => {
@@ -256,54 +286,135 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
       pendingSave.current = null;
     }
   }, [theme, catalogKey, managedKey, busy]);
+
   useEffect(() => {
     if (!saved) return;
     const timer = window.setTimeout(() => setSaved(null), 4000);
     return () => window.clearTimeout(timer);
   }, [saved]);
+
   function chooseTheme(next: Theme) {
     if (next === theme) return;
-    // Browser preview has no native store; it may switch the view, never claim a write.
     if (!nativeAvailable) { setSaved(null); onThemeChange(next); return; }
     pendingSave.current = { kind: 'theme', value: next, target: 'settings-interface', text: t('settings.saved.theme') };
     setSaved(null);
     onThemeChange(next);
   }
+
   function chooseManaged(id: string, checked: boolean) {
     const item = tools.find((candidate) => candidate.id === id);
     pendingSave.current = { kind: 'managed', id, value: checked, target: 'settings-managed', text: t('settings.saved.managed', { name: item?.name ?? id }) };
     setSaved(null);
     onManagedChange(id, checked);
   }
+
   const ack = (target: string) => saved?.target === target
     ? <span className={styles.saved} role="status"><Icon name="check" size={13} />{saved.text}</span>
     : null;
+
   if (pane === 'tools') return <div className={styles.stack}>
     <section className="settings-group" id="settings-managed">
-      <div className="setting-intro"><h2>{t('settings.managed.title')}{tools.length > 0 && <Badge className="heading-count">{t('settings.managed.enabledCount', { enabled: tools.filter((item) => managed.includes(item.id)).length, total: tools.length })}</Badge>}</h2><p>{t('settings.managed.description')}</p>{ack('settings-managed')}</div>
-      {(tools.length > MANAGED_PREVIEW || !!toolNeedle) && <div className="managed-search"><SearchField type="search" pageSearch title={searchShortcutHint()} label={t('settings.managed.searchLabel')} placeholder={t('settings.managed.searchPlaceholder')} value={toolQuery} onChange={setToolQuery} /></div>}
-      {managedShown.length > 0 ? <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => chooseManaged(item.id, event.target.checked)} /></label>)}</div>
-        : !!toolNeedle && <div className="managed-empty"><p>{t('settings.managed.noMatch', { query: toolQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setToolQuery('')}>{t('common.search.clear')}</Button></div>}
-      {!toolNeedle && tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
-      <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
-      {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
+      <div className="setting-intro">
+        <div className={styles.introBar}>
+          <div>
+            <h2>
+              {t('settings.managed.title')}
+              {tools.length > 0 && <Badge className="heading-count">{t('settings.managed.enabledCount', { enabled: tools.filter((item) => managed.includes(item.id)).length, total: tools.length })}</Badge>}
+            </h2>
+            <p>{t('settings.managed.description')} {t('settings.icons.description')}</p>
+          </div>
+          {tools.length > 0 && <div className="managed-search">
+            <SearchField
+              type="search"
+              pageSearch
+              title={searchShortcutHint()}
+              label={t('settings.managed.searchLabel')}
+              placeholder={t('settings.managed.searchPlaceholder')}
+              value={toolQuery}
+              onChange={setToolQuery}
+            />
+          </div>}
+        </div>
+        {ack('settings-managed')}
+      </div>
+      {iconFailure && <p className={styles.iconAlert} role="alert"><Icon name="alert" size={14} /><span>{iconFailure}</span></p>}
+      {managedShown.length > 0 ? <ul className="managed-tool-list" aria-label={t('settings.managed.title')}>
+        {managedShown.map((item) => {
+          const enabled = managed.includes(item.id);
+          const hasCustomIcon = Boolean(icons[item.id]);
+          return <li key={item.id} className="managed-tool-row" data-enabled={enabled || undefined}>
+            <span className="managed-tool-main">
+              <ToolIcon toolId={item.id} size={28} />
+              <span className="managed-tool-copy">
+                <strong title={item.name}>{item.name}</strong>
+                {hasCustomIcon && <Badge tone="accent">{t('settings.icons.customBadge')}</Badge>}
+              </span>
+            </span>
+            <ToolIconActions
+              toolId={item.id}
+              toolName={item.name}
+              hasCustomIcon={hasCustomIcon}
+              disabled={!nativeAvailable || busy}
+              onChange={handleIconChange}
+              onError={handleIconValidationError}
+            />
+            <Switch
+              aria-label={item.name}
+              checked={enabled}
+              disabled={!nativeAvailable || busy}
+              onChange={(checked) => chooseManaged(item.id, checked)}
+            />
+          </li>;
+        })}
+      </ul> : !!toolNeedle && <div className="managed-empty">
+        <p>{t('settings.managed.noMatch', { query: toolQuery.trim() })}</p>
+        <Button size="sm" variant="ghost" onClick={() => setToolQuery('')}>{t('common.search.clear')}</Button>
+      </div>}
+      {preservedUnknown.map((item) => <div className="setting-row" key={item.id}>
+        <span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span>
+      </div>)}
     </section>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </div>;
+
   return <div className={styles.stack}>
     <section className="settings-group" id="settings-interface">
-      <div className="setting-intro"><h2>{t('settings.interface.title')}</h2><p>{t('settings.interface.description')}</p>{ack('settings-interface')}</div>
-      <div className="setting-row"><span><strong>{t('settings.theme.label')}</strong><small>{t('settings.theme.hint')}</small></span><ThemeChoice value={theme} disabled={busy} onChange={chooseTheme} /></div>
-      <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
+      <div className="setting-intro">
+        <h2>{t('settings.interface.title')}</h2>
+        <p>{t('settings.interface.description')}</p>
+        {ack('settings-interface')}
+      </div>
+      <div className="setting-row-block">
+        <div className={styles.themeHead}>
+          <strong>{t('settings.theme.label')}</strong>
+          <small>{t('settings.theme.hint')}</small>
+        </div>
+        <ThemeChoice value={theme} disabled={busy} onChange={chooseTheme} />
+      </div>
+      <div className="setting-row">
+        <span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span>
+        <LanguageChoice value={language} disabled={busy} />
+      </div>
     </section>
     {nativeAvailable && <UpdateSettings busy={busy} />}
     {nativeAvailable && <TraySettings />}
     <section className="settings-group" id="settings-other">
       <div className="setting-intro"><h2>{t('settings.sections.other')}</h2></div>
-      <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><Button aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</Button></div>
-      <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button></div>
+      <div className="setting-row">
+        <span className={styles.helperCopy}>
+          <span className={styles.helperGlyph} aria-hidden="true"><Icon name="command" size={16} /></span>
+          <span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span>
+        </span>
+        <Button aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</Button>
+      </div>
+      <div className="setting-row">
+        <span className={styles.helperCopy}>
+          <span className={styles.helperGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span>
+          <span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span>
+        </span>
+        <Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button>
+      </div>
     </section>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </div>;
 }
-

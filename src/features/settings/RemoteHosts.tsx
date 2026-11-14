@@ -6,8 +6,8 @@ import { confirmAction } from '../../lib/confirm';
 import { native, nativeAvailable } from '../../lib/native';
 import type { RemoteTarget } from '../../types/remote';
 import { Badge, Button, IconButton, Segmented } from '../../components/ui';
-import { GuideDialog } from '../../components/GuideDialog';
 import { StatusBanner } from '../../components/StatusBanner';
+import { SettingsSubView } from './SettingsLayout';
 import styles from './RemoteHosts.module.css';
 
 type AuthMethod = RemoteTarget['authMethod'];
@@ -41,6 +41,7 @@ export function RemoteHosts() {
   const [loaded, setLoaded] = useState(!nativeAvailable);
   const [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);
+  const [editorBusy, setEditorBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [tests, setTests] = useState<Record<string, TestState>>({});
   const testRequests = useRef(new Map<string, AbortController>());
@@ -115,6 +116,17 @@ export function RemoteHosts() {
   }
 
   const adding = editing !== null && !editing.id;
+  if (editing) {
+    return <section className={styles.panel} id="remote-ssh-settings" aria-label={t('settings.remoteSsh.hostsTitle')}>
+      <SettingsSubView title={editing.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} hint={t('settings.remoteSsh.hostDialogHint')}
+        onBack={() => setEditing(null)} backDisabled={editorBusy}>
+        <HostEditor draft={editing} passwordSaved={editing.id ? saved.has(editing.id) : false}
+          onCancel={() => setEditing(null)}
+          onSaved={(target, passwordSaved) => { onSaved(target, passwordSaved); setNotice(t('settings.remoteSsh.saved')); }}
+          onBusyChange={setEditorBusy} />
+      </SettingsSubView>
+    </section>;
+  }
   return <section className={styles.panel} id="remote-ssh-settings" aria-labelledby="remote-hosts-title">
     <header className={styles.head}>
       <div>
@@ -165,17 +177,10 @@ export function RemoteHosts() {
         </li>;
       })}
     </ul>}
-    <GuideDialog wide open={editing !== null}
-      title={editing ? (editing.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')) : t('settings.remoteSsh.newHost')}
-      hint={t('settings.remoteSsh.hostDialogHint')} onClose={() => setEditing(null)}>
-      {editing && <HostEditor draft={editing} passwordSaved={editing.id ? saved.has(editing.id) : false}
-        onCancel={() => setEditing(null)}
-        onSaved={(target, passwordSaved) => { onSaved(target, passwordSaved); setNotice(t('settings.remoteSsh.saved')); }} />}
-    </GuideDialog>
   </section>;
 }
 
-function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draft: Draft; passwordSaved: boolean; onCancel: () => void; onSaved: (target: RemoteTarget, passwordSaved: boolean) => void }) {
+function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved, onBusyChange }: { draft: Draft; passwordSaved: boolean; onCancel: () => void; onSaved: (target: RemoteTarget, passwordSaved: boolean) => void; onBusyChange?: (busy: boolean) => void }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(initial);
   const [showPassword, setShowPassword] = useState(false);
@@ -192,6 +197,10 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
   function cancelTest() { testRequest.current?.abort(); testRequest.current = null; setBusy(''); setResult(null); }
   function close() { if (busy === 'save') return; testRequest.current?.abort(); onCancel(); }
   useEffect(() => { hostRef.current?.focus(); }, []);
+  useEffect(() => {
+    onBusyChange?.(busy === 'save');
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
 
   const port = Number(draft.port);
   const errors = {
@@ -256,7 +265,7 @@ function HostEditor({ draft: initial, passwordSaved, onCancel, onSaved }: { draf
   const field = (name: keyof typeof errors) => submitted && errors[name] ? errors[name] : '';
   const previewHost = draft.host.trim();
   const preview = previewHost ? address({ user: draft.user.trim() || '…', host: previewHost, port }) : '';
-  return <form className={styles.editor} aria-label={draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} onSubmit={(event) => void save(event)} noValidate onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); close(); } }}>
+  return <form className={styles.editor} aria-label={draft.id ? t('settings.remoteSsh.editHost') : t('settings.remoteSsh.newHost')} onSubmit={(event) => void save(event)} noValidate>
     <fieldset className={styles.fields} disabled={busy === 'save'}>
     <div className={styles.grid}>
       <label className={styles.field} data-span="host">

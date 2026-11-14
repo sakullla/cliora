@@ -58,7 +58,7 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
           return saved;
         }
         if (command === 'list_portable_items') {
-          if (control.portableFails) throw { message: '迁移列表读取失败', action: '可先离开再回到迁移与同步重新读取。' };
+          if (control.portableFails) throw { message: '迁移列表读取失败', action: '可先离开再回到同步与备份重新读取。' };
           if (control.withPortableItem) return [{ key: 'profile:1', kind: 'profile', label: '默认配置', status: 'available', pendingFields: [] }];
           return [];
         }
@@ -126,9 +126,9 @@ test('empty export says nothing can be taken and points at existing pages', asyn
   await install(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await page.getByRole('button', { name: '导出加密配置包' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '导出加密配置包' });
   await expect(dialog.getByText('当前没有可带走的资料。请先在首页、工具或资料库中产生配置或资料。')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '首页' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '工具' })).toHaveCount(0);
@@ -140,10 +140,11 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '启动', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
   await expect(page.getByLabel('启动终端')).toBeEnabled();
   await page.evaluate(() => { (window as unknown as { __statusCopy: { terminalFails: boolean } }).__statusCopy.terminalFails = true; });
-  await page.getByLabel('启动终端').selectOption('windows_terminal');
+  await page.getByRole('button', { name: '启动终端', exact: true }).click();
+  await page.locator('[role="option"][data-value="windows_terminal"]').click();
   const alert = page.getByRole('region', { name: '终端与启动模式' }).getByRole('alert');
   await expect(alert).toContainText('终端不可用');
   await expect(alert).toContainText('可以重新选择终端');
@@ -153,9 +154,15 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   const light = await dangerColor(alert);
   expect(light.same).toBe(true);
   expect(light.fixed).toBe(false);
-  // The sidebar theme switch stays reachable while the error sits under Launch.
-  await page.getByRole('group', { name: '切换主题' }).getByRole('button', { name: '深色主题', exact: true }).click();
+  // Dark theme is one radio away inside the same Settings modal. Switching panes remounts
+  // the terminal editor, so the same rejected choice is made again in dark.
+  await page.getByRole('tab', { name: '通用', exact: true }).click();
+  await page.getByRole('radio', { name: '深色', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  await page.getByRole('button', { name: '启动终端', exact: true }).click();
+  await page.locator('[role="option"][data-value="windows_terminal"]').click();
+  await expect(alert).toContainText('终端不可用');
   await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const dark = await dangerColor(alert);
   expect(dark.same).toBe(true);
@@ -249,11 +256,11 @@ test('export list failure stays in the dialog and is not an empty list', async (
   await page.goto('/');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { portableFails: boolean } }).__statusCopy.portableFails = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await page.getByRole('button', { name: '导出加密配置包' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '导出加密配置包' });
   await expect(dialog.getByRole('alert')).toContainText('迁移列表读取失败');
-  await expect(dialog.getByRole('alert')).toContainText('可先离开再回到迁移与同步重新读取');
+  await expect(dialog.getByRole('alert')).toContainText('可先离开再回到同步与备份重新读取');
   await expect(dialog.getByText('当前没有可带走的资料')).toHaveCount(0);
 });
 
@@ -262,13 +269,13 @@ test('terminal load failure does not ask to reselect a disabled terminal', async
   await page.goto('/');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { settingsLoadFails: boolean } }).__statusCopy.settingsLoadFails = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '启动', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
   const terminal = page.getByRole('region', { name: '终端与启动模式' });
   await expect(terminal.getByLabel('启动终端')).toBeDisabled();
   const alert = terminal.getByRole('alert');
   await expect(alert).toContainText('无法读取终端设置');
-  await expect(alert).toContainText('迁移与同步');
-  await expect(alert).toContainText('「启动」');
+  await expect(alert).toContainText('同步与备份');
+  await expect(alert).toContainText('「终端与启动」');
   await expect(alert).not.toContainText('重新选择终端');
 });
 
@@ -462,9 +469,9 @@ test('export password can be revealed and explains what is still missing', async
   await install(page, { withPortableItem: true });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await page.getByRole('tab', { name: '同步与备份' }).click();
   await page.getByRole('button', { name: '导出加密配置包' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('region', { name: '导出加密配置包' });
   const password = dialog.getByRole('textbox', { name: '配置包口令' }).or(dialog.getByLabel('配置包口令'));
   await expect(password).toHaveAttribute('type', 'password');
   await dialog.getByRole('button', { name: '显示口令' }).click();

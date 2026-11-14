@@ -3,12 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { modLabel } from '../../lib/shortcut';
-import type { TerminalThemePreference } from './terminalTheme';
+import type { TerminalDensity, TerminalThemePreference } from '../../lib/terminalPreferences';
 import styles from './SessionWorkbench.module.css';
-
-export type TerminalDensity = 'compact' | 'standard' | 'relaxed';
-
-export const DENSITY_LINE_HEIGHT: Record<TerminalDensity, number> = { compact: 1.2, standard: 1.35, relaxed: 1.5 };
 
 export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, minFontSize, maxFontSize, density, cursorBlink, soundEnabled, onToggle, onClose, onTheme, onFontSize, onDensity, onCursorBlink, onSound }: {
   open: boolean;

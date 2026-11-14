@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-const pageNames = ['首页', '工作台', '工具', '资料库', '记录', '设置'] as const;
+const pageNames = ['首页', '工作台', '工具', '资料库', '记录'] as const;
 
 async function expectPageLanded(page: Page, name: (typeof pageNames)[number]) {
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
@@ -101,15 +101,21 @@ test('full pages are navigable and browser mode never implies native data', asyn
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' })).toBeFocused();
   await expect(page.locator('.brandmark')).toBeVisible();
   await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
-  for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) {
+  for (const name of ['首页', '工作台', '工具', '资料库', '记录']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
     await expectPageLanded(page, name);
     // The window title names the page the sidebar marks as current.
     await expect.poll(() => page.title()).toBe(`${name} · Cliora`);
   }
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  await expect(page.getByRole('checkbox').first()).toBeDisabled();
-  await expect(page.locator('dialog')).toHaveCount(0);
+  // Settings opens as a centered dialog over the current page; the title stays with that page.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings).toBeVisible();
+  await expect.poll(() => page.title()).toBe('记录 · Cliora');
+  await settings.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  await expect(settings.getByRole('switch').first()).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
   await page.setViewportSize({ width: 640, height: 760 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -149,22 +155,25 @@ test('native settings result drives the home list and empty management stays rec
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode']) {
-    await page.getByRole('checkbox', { name: new RegExp(name) }).uncheck();
+    await settings.getByRole('switch', { name: new RegExp(name) }).uncheck();
   }
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByText('尚未管理工具')).toBeVisible();
   // With nothing managed, 前往设置 lands on CLI tools directly.
   await page.getByRole('button', { name: '前往设置' }).click();
-  await expect(page.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('checkbox', { name: /Codex/ }).check();
-  await page.getByRole('tab', { name: '通用', exact: true }).click();
-  const themes = page.getByRole('radiogroup', { name: '主题' });
+  await expect(settings.getByRole('tab', { name: 'CLI 工具', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await settings.getByRole('switch', { name: /Codex/ }).check();
+  await settings.getByRole('tab', { name: '通用', exact: true }).click();
+  const themes = settings.getByRole('radiogroup', { name: '主题' });
   await themes.getByRole('radio', { name: '浅色' }).focus();
   await page.keyboard.press('ArrowRight');
   await expect(themes.getByRole('radio', { name: '深色' })).toBeFocused();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(page.getByRole('button', { name: '去安装 →' })).toHaveCount(1);
   await expect(page.locator('[aria-label="受管理工具"]')).toContainText('Codex');
@@ -205,9 +214,11 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await page.getByRole('tab', { name: '启动', exact: true }).click();
-  await page.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
-  await page.getByRole('combobox', { name: '项目默认启动模式' }).selectOption('yolo');
+  const settingsDialog = page.getByRole('dialog', { name: '设置' });
+  await settingsDialog.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  await settingsDialog.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
+  await settingsDialog.getByRole('combobox', { name: '项目默认启动模式' }).selectOption('yolo');
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
@@ -286,12 +297,13 @@ test('storage failure preserves an actionable page and retry loads repaired data
   await expect(page.getByText('暂时无法读取本机资料')).toBeVisible();
   await expect(page.locator('.tool-row')).toHaveCount(0);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  const broken = page.getByRole('dialog', { name: '设置' });
+  await expect(broken.getByRole('alert')).toBeVisible();
   await page.evaluate(() => { (window as any).__storageRepaired = true; });
-  await page.getByRole('button', { name: '重试读取' }).click();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: /Codex/ })).toBeVisible();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await broken.getByRole('button', { name: '重试读取' }).click();
+  await broken.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  await expect(broken.getByRole('switch', { name: /Codex/ })).toBeVisible();
+  await expect(broken.getByRole('alert')).toHaveCount(0);
 });
 
 
@@ -328,23 +340,25 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await page.getByRole('button', { name: '启动', exact: true }).click();
   expect((await page.evaluate(() => (window as any).__iconCalls)).find((call: any) => call.command === 'launch_cli').args.request).toMatchObject({ mode: 'normal', sessionId: null, projectId: null, directory: 'C:/chosen project' });
   await nav.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  await page.getByText('自定义工具图标', { exact: true }).click();
+  const settingsModal = page.getByRole('dialog', { name: '设置' });
+  await settingsModal.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=';
-  await page.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
-  await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
-  await page.getByRole('tab', { name: '通用', exact: true }).click();
-  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
+  const codexRow = settingsModal.locator('.managed-tool-row').filter({ hasText: 'Codex' });
+  await codexRow.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
+  await expect(codexRow.locator('img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await settingsModal.getByRole('tab', { name: '通用', exact: true }).click();
+  await settingsModal.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
+  await page.keyboard.press('Escape');
   await nav.getByRole('button', { name: '工具' }).click();
   await expect(page.locator('[data-workspace-chrome] h2 img').first()).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.reload();
   await expect(logo).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await nav.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
-  await page.getByText('自定义工具图标', { exact: true }).click();
-  await page.getByRole('button', { name: '恢复默认', exact: true }).click();
+  await settingsModal.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
+  await expect(settingsModal.getByRole('switch', { name: 'Codex', exact: true })).toBeChecked();
+  await settingsModal.locator('.managed-tool-row').filter({ hasText: 'Codex' }).getByRole('button', { name: '恢复默认', exact: true }).click();
+  await page.keyboard.press('Escape');
   await nav.getByRole('button', { name: '首页' }).click();
   await expect(logo).toHaveAttribute('src', defaultSource!);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -414,6 +428,11 @@ test('browser preview keeps every page reachable at 640 and does not scroll side
       await expectPageLanded(page, name);
       await expectNoHorizontalScroll(page);
     }
+    await nav.getByRole('button', { name: '设置' }).click();
+    await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: '设置' })).toHaveCount(0);
   }
 });
 
@@ -427,8 +446,11 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   await expect(status).toHaveText('本机资料 · 仅存于此设备');
   const nav = page.getByRole('navigation', { name: '页面' });
   await nav.getByRole('button', { name: '设置' }).click();
-  await expectFullyInFirstScreen(page, page.getByRole('tablist', { name: '设置分类' }));
-  await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '界面', exact: true }));
+  const settingsModal = page.getByRole('dialog', { name: '设置' });
+  await expect(settingsModal.getByRole('tablist', { name: '设置分类' })).toBeVisible();
+  await expect(settingsModal.getByRole('heading', { name: '界面', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(settingsModal).toHaveCount(0);
   await nav.getByRole('button', { name: '资料库' }).click();
   await expectFullyInFirstScreen(page, page.getByRole('button', { name: '新建提示词', exact: true }));
   await nav.getByRole('button', { name: '记录' }).click();
@@ -523,7 +545,8 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
   // The matched part of each label is marked, so the reason for a hit is visible.
   await expect(dialog.getByRole('option', { name: '设置' }).locator('mark')).toHaveText('设置');
   await dialog.getByRole('option', { name: '设置' }).click();
-  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.locator('dialog')).toHaveCount(0);
 
   await page.keyboard.press('Control+K');
@@ -544,12 +567,16 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
   await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
 
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: '键盘快捷键', exact: true }).click();
+  const settingsModal = page.getByRole('dialog', { name: '设置' });
+  await expect(settingsModal).toBeVisible();
+  await settingsModal.getByRole('button', { name: '键盘快捷键', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('快速前往');
-  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText(/\+1…6/);
+  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText(/\+1…5/);
+  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText(/\+,/);
   await expect(page.getByRole('dialog', { name: '键盘快捷键' })).not.toContainText('侧栏工具列表');
   await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(settingsModal).toHaveCount(0);
 
   await page.keyboard.press('Control+Backslash');
   await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toBeVisible();
@@ -1078,7 +1105,11 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
     // Stay until the tools workspace paints. Leaving earlier skips the probe render.
     if (name === '工具') await expect(page.getByText('安装与更新', { exact: true }).first()).toBeVisible();
   };
-  for (const name of ['首页', '工作台', '工具', '资料库', '记录', '设置']) await openPage(name);
+  for (const name of ['首页', '工作台', '工具', '资料库', '记录']) await openPage(name);
+  // Settings is a modal over the page, not a destination itself.
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await openPage('工作台');
   await expect(codex).toContainText('已结束');
   await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(0);
@@ -1329,15 +1360,16 @@ test('command palette surfaces live workbench sessions and searches deep setting
   // Active workbench sessions appear at rest; deep settings sections stay hidden until searched.
   await expect(dialog.locator('.command-group', { hasText: '进行中会话' })).toBeVisible();
   await expect(dialog.getByRole('option', { name: /alpha-service/ })).toBeVisible();
-  await expect(dialog.getByRole('option', { name: /迁移与同步/ })).toHaveCount(0);
+  await expect(dialog.getByRole('option', { name: /同步与备份/ })).toHaveCount(0);
 
-  // Searching "webdav" jumps directly to Settings -> Migration & sync.
+  // Searching "webdav" jumps directly to the Settings modal -> Sync & backup.
   const input = dialog.getByRole('combobox', { name: '搜索页面、工具或项目' });
   await input.fill('webdav');
-  await expect(dialog.getByRole('option', { name: /迁移与同步/ })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: /同步与备份/ })).toBeVisible();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
-  await expect(page.getByRole('tab', { name: '迁移与同步', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const settingsModal = page.getByRole('dialog', { name: '设置' });
+  await expect(settingsModal).toBeVisible();
+  await expect(settingsModal.getByRole('tab', { name: '同步与备份', exact: true })).toHaveAttribute('aria-selected', 'true');
 
   // Searching "token" jumps directly to Records -> Usage.
   await page.keyboard.press('Control+K');

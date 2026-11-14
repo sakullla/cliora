@@ -1,5 +1,5 @@
 /* One settings category: its groups stacked. */
-.stack { display: grid; gap: var(--space-5); min-width: 0; }
+.stack { display: grid; gap: var(--space-4); min-width: 0; }
 .stack > :global(.settings-group) { margin-bottom: 0; }
 
 /* "Saved" only appears after the preference handed back matches what was requested. */
@@ -8,7 +8,7 @@
   align-items: center;
   gap: var(--space-1_5);
   margin-top: var(--space-2);
-  padding: var(--space-0_5) var(--space-2);
+  padding: var(--space-0_5) var(--space-2_5);
   border: 1px solid var(--success-line);
   border-radius: var(--radius-pill);
   background: var(--success-soft);
@@ -16,6 +16,228 @@
   font-size: var(--fs-caption);
   font-weight: var(--fw-medium);
   animation: reveal 200ms var(--ease);
+}
+
+.introBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+}
+.introBar > div:first-child {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.iconAlert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) var(--space-5) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-control);
+}
+.iconAlert > svg {
+  flex: none;
+}
+
+/* ---------- Visual theme preview cards ---------- */
+.themeHead {
+  display: grid;
+  gap: var(--space-0_5);
+  margin-bottom: var(--space-3);
+}
+.themeHead strong {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+.themeHead small {
+  color: var(--text-2);
+  font-size: var(--fs-control);
+  line-height: 1.5;
+}
+
+.themeGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.themeCard {
+  position: relative;
+  display: grid;
+  gap: var(--space-2_5);
+  min-width: 0;
+  height: auto;
+  padding: var(--space-2_5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface-2);
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease);
+}
+.themeCard:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+.themeCard[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.themeCard:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.themePreview {
+  display: grid;
+  grid-template-columns: 30% minmax(0, 1fr);
+  height: 54px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.previewRail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-right: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.previewRail > i {
+  display: block;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+}
+.previewRail > i:first-child {
+  width: 75%;
+  background: var(--accent);
+}
+.previewMain {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1_5);
+  padding: var(--space-2) var(--space-2_5);
+}
+.previewMain > b {
+  display: block;
+  width: 48%;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--text-2);
+}
+.previewMain > s {
+  display: block;
+  width: 82%;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  text-decoration: none;
+}
+.previewMain > s:last-child {
+  width: 64%;
+}
+
+/* Distinct surface cues for Light, Dark, and System cards using semantic tokens only */
+.themePreview[data-preview='light'] {
+  background: var(--surface);
+}
+.themePreview[data-preview='dark'] {
+  background: color-mix(in srgb, var(--text) 86%, var(--surface));
+}
+.themePreview[data-preview='dark'] .previewRail {
+  background: color-mix(in srgb, var(--text) 92%, var(--surface));
+  border-right-color: color-mix(in srgb, var(--surface) 16%, transparent);
+}
+.themePreview[data-preview='dark'] .previewMain > b {
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+}
+.themePreview[data-preview='dark'] .previewMain > s,
+.themePreview[data-preview='dark'] .previewRail > i:not(:first-child) {
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+}
+.themePreview[data-preview='system'] .previewRail {
+  background: color-mix(in srgb, var(--text) 88%, var(--surface));
+}
+.themePreview[data-preview='system'] .previewRail > i:not(:first-child) {
+  background: color-mix(in srgb, var(--surface) 32%, transparent);
+}
+
+.themeMeta {
+  display: grid;
+  gap: var(--space-0_5);
+  min-width: 0;
+  padding: 0 var(--space-0_5);
+}
+.themeLabelRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1_5);
+  min-width: 0;
+}
+.themeLabelRow > svg {
+  flex: none;
+  color: var(--text-2);
+}
+.themeCard[aria-checked='true'] .themeLabelRow > svg {
+  color: var(--accent);
+}
+.themeLabelRow strong {
+  font-size: var(--fs-control);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+.themeCheck {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.themeMeta small {
+  color: var(--text-3);
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+}
+.themeCard[aria-checked='true'] .themeMeta small {
+  color: var(--text-2);
+}
+
+/* Helper rows */
+.helperCopy {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.helperGlyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 
 /* ---------- App update card ---------- */
@@ -57,6 +279,7 @@
 }
 
 @media (max-width: 760px) {
+  .themeGrid { grid-template-columns: minmax(0, 1fr); }
   .update { flex-wrap: wrap; padding: var(--space-4); }
   .updateActions { width: 100%; }
   .updateProgressRow { padding: 0 var(--space-4) var(--space-4); }

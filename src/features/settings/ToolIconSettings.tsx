@@ -1,20 +1,67 @@
 import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ToolIcon } from '../../components/ToolIcon';
 import { Button } from '../../components/ui';
 
-export function ToolIconSettings({ tools, icons, busy, onChange, onError }: { tools: { id: string; name: string }[]; icons: Record<string, string>; busy: boolean; onChange: (id: string, data: string | null) => Promise<void>; onError: (message: string) => void }) {
+/**
+ * Inline custom icon actions embedded inside each unified CLI tool row.
+ * Validates PNG/JPEG/WebP <= 128 KB; "Restore default" only appears when a custom icon is set.
+ */
+export function ToolIconActions({
+  toolId,
+  toolName,
+  hasCustomIcon,
+  disabled,
+  onChange,
+  onError,
+}: {
+  toolId: string;
+  toolName: string;
+  hasCustomIcon: boolean;
+  disabled: boolean;
+  onChange: (id: string, data: string | null) => Promise<void>;
+  onError: (message: string) => void;
+}) {
   const { t } = useTranslation();
-  async function pick(id: string, event: ChangeEvent<HTMLInputElement>) {
+
+  async function pick(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 128 * 1024) { onError(t('settings.icons.invalid')); return; }
-    const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); }).catch(() => null);
-    if (!data) { onError(t('settings.icons.readFailed')); return; }
-    await onChange(id, data);
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 128 * 1024) {
+      onError(t('settings.icons.invalid'));
+      return;
+    }
+    const data = await new Promise<string | null>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+    if (!data) {
+      onError(t('settings.icons.readFailed'));
+      return;
+    }
+    await onChange(toolId, data);
   }
-  return <details className="icon-settings"><summary>{t('settings.icons.title')}</summary><p>{t('settings.icons.description')}</p>
-    {tools.map((tool) => <div className="icon-setting-row" key={tool.id}><span className="tool-identity"><ToolIcon toolId={tool.id} size={26} />{tool.name}</span><label className="icon-file">{t('settings.icons.pick')}<input aria-label={t('settings.icons.pickAria', { name: tool.name })} type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => void pick(tool.id, event)} /></label><Button variant="ghost" size="sm" disabled={busy || !icons[tool.id]} onClick={() => void onChange(tool.id, null)}>{t('common.field.restoreDefault')}</Button></div>)}
-  </details>;
+
+  return <span className="managed-tool-icon-actions">
+    <label className="icon-file">
+      {t('settings.icons.pick')}
+      <input
+        aria-label={t('settings.icons.pickAria', { name: toolName })}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        disabled={disabled}
+        onChange={(event) => void pick(event)}
+      />
+    </label>
+    {hasCustomIcon && <Button
+      variant="ghost"
+      size="sm"
+      disabled={disabled}
+      onClick={() => void onChange(toolId, null)}
+    >
+      {t('common.field.restoreDefault')}
+    </Button>}
+  </span>;
 }

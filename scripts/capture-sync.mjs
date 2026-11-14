@@ -113,7 +113,7 @@ const shots = [];
 const failures = [];
 async function openSync(page, language) {
   await page.getByRole('navigation', { name: language === 'en' ? 'Pages' : '页面' }).getByRole('button', { name: language === 'en' ? 'Settings' : '设置', exact: true }).click();
-  await page.getByRole('tab', { name: language === 'en' ? 'Migration & sync' : '迁移与同步' }).click();
+  await page.getByRole('tab', { name: language === 'en' ? 'Sync & backup' : '同步与备份' }).click();
 }
 // Run-level failures (preview not ready, browser launch) are recorded as failures instead of
 // crashing, so the gallery, manifest and README are always written and the exit code is 1.
@@ -146,20 +146,23 @@ for (const theme of themes) for (const width of widths) for (const language of l
       if (width === 1360 || width === 640) {
         if (name === 'unconnected') {
           await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV' }).first().click();
-          await page.getByRole('dialog').last().waitFor(); await shot('connect-dialog');
+          await page.getByRole('region', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV', exact: true }).waitFor(); await shot('connect-dialog');
           await page.keyboard.press('Escape');
+          await page.getByRole('region', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV', exact: true }).waitFor({ state: 'hidden' });
           await page.getByRole('button', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包' }).first().click();
-          await page.getByRole('dialog').last().waitFor(); await shot('export-dialog');
+          await page.getByRole('region', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包' }).waitFor(); await shot('export-dialog');
           await page.keyboard.press('Escape');
+          await page.getByRole('region', { name: language === 'en' ? 'Export encrypted bundle' : '导出加密配置包' }).waitFor({ state: 'hidden' });
           await page.getByRole('button', { name: language === 'en' ? 'Restore from a bundle' : '从配置包恢复' }).first().click();
-          await page.getByRole('dialog').last().waitFor(); await shot('import-dialog');
+          await page.getByRole('region', { name: language === 'en' ? 'Restore from a bundle' : '从配置包恢复' }).waitFor(); await shot('import-dialog');
           await page.keyboard.press('Escape');
+          await page.getByRole('region', { name: language === 'en' ? 'Restore from a bundle' : '从配置包恢复' }).waitFor({ state: 'hidden' });
         }
         if (name === 'attention') {
           const choose = page.getByRole('button', { name: language === 'en' ? 'Choose version' : '选择版本' });
           if (await choose.count()) {
             await choose.first().click(); await page.getByRole('dialog').last().waitFor(); await shot('conflict-center');
-            await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'hidden' });
+            await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: language === 'en' ? 'Resolve conflicts' : '处理冲突' }).waitFor({ state: 'hidden' });
           }
         }
         if (name === 'healthy') {
@@ -197,9 +200,9 @@ for (const theme of themes) for (const width of widths) for (const language of l
       };
       await page.goto(previewUrl);
       await page.getByRole('navigation', { name: language === 'en' ? 'Pages' : '页面' }).getByRole('button', { name: language === 'en' ? 'Settings' : '设置', exact: true }).click();
-      await page.locator('#settings-managed').waitFor();
+      await page.locator('#settings-interface').waitFor();
       await shot('settings-general');
-      const hostsTab = page.getByRole('tab', { name: language === 'en' ? 'Host management' : '主机管理' });
+      const hostsTab = page.getByRole('tab', { name: language === 'en' ? 'Remote hosts' : '远程主机' });
       if (await hostsTab.count()) {
         await hostsTab.click();
         await settleCapture(page);

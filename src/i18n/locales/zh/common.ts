@@ -96,6 +96,7 @@ export default {
     title: '键盘快捷键',
     global: '全局',
     palette: '快速前往页面、工具或项目',
+    openSettings: '打开设置',
     switchPage: '切换页面',
     toggleSidebar: '折叠或展开侧栏',
     focusSearch: '聚焦当前页搜索',

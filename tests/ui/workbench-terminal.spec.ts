@@ -2855,6 +2855,40 @@ test('find can match case, line spacing persists, shortcuts are listed, and the 
   expect(await writes(page)).toEqual([]);
 });
 
+test('terminal display preferences sync both ways between settings and a live workbench', async ({ page }) => {
+  await openWorkbench(page);
+  const nav = page.getByRole('navigation', { name: '页面' });
+  // Settings writes reach the still-mounted workbench behind the modal.
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  const display = page.getByRole('region', { name: '终端显示' });
+  await display.getByRole('button', { name: '增大终端字号' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-font-size'))).toBe('15');
+  await display.getByRole('radio', { name: '深色终端', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-terminal-theme'))).toBe('dark');
+  await expect(page.locator('[data-term-theme]')).toHaveAttribute('data-term-theme', 'dark');
+  await display.getByRole('switch', { name: '提示音' }).uncheck();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cliora:workbench-sound'))).toBe('false');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: '设置', exact: true })).toHaveCount(0);
+  // The workbench panel reads the shared store, not a stale snapshot.
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '终端显示', exact: true }).click();
+  const appearance = page.getByRole('dialog', { name: '终端显示' });
+  await expect(appearance.getByRole('button', { name: '重置默认字号（14px）' })).toHaveText('15px');
+  await expect(appearance.getByRole('button', { name: '深色终端', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(appearance.getByRole('switch', { name: /提示音/ })).toHaveAttribute('aria-checked', 'false');
+  await appearance.getByRole('radio', { name: '宽松', exact: true }).click();
+  await page.keyboard.press('Escape');
+  // Workbench writes reach settings on reopen.
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  const reopened = page.getByRole('region', { name: '终端显示' });
+  await expect(reopened.getByRole('radio', { name: '宽松', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(reopened.getByRole('button', { name: '重置默认字号（14px）' })).toHaveText('15px');
+  expect(await writes(page)).toEqual([]);
+});
+
 test('double-clicks and Mod+Shift+B toggle the rail and focus mode; middle-click removes an ended session', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -2953,7 +2987,7 @@ test('the workbench shares one sidebar: sessions on top, page icons in one row b
   await expect(more).toBeVisible();
   const shown = await nav.locator('button[aria-current], button:not([aria-haspopup])').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
   await more.click();
-  const folded = (await moreMenu.getByRole('menuitem').allTextContents()).map((text) => text.replace(/Ctrl\+\d$/, ''));
+  const folded = (await moreMenu.getByRole('menuitem').allTextContents()).map((text) => text.replace(/Ctrl\+.$/, ''));
   expect([...shown, ...folded]).toEqual(['首页', '工作台', '工具', '资料库', '记录', '设置']);
   expect(folded.length).toBeGreaterThan(0);
   await page.keyboard.press('Escape');
@@ -3021,6 +3055,7 @@ test('the new-session dialog follows the start preference saved in Settings', as
   await setting.getByRole('radio', { name: /^新建工作树/ }).click();
   await expect(setting.getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByRole('status').filter({ hasText: '启动位置已保存。' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   await expect(dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /^新建工作树/ })).toHaveAttribute('aria-checked', 'true');
@@ -3124,6 +3159,8 @@ for (const removal of ['single', 'clear'] as const) {
     await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(0);
     // A fresh list must not resurrect an event-delivered session from the pending cache.
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible();
+    await page.keyboard.press('Escape');
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: /Claude Code/ })).toHaveCount(1);
@@ -3166,6 +3203,7 @@ test('an unrecognized worktree preference is shown and is not rewritten', async 
   const setting = page.getByRole('radiogroup', { name: '启动偏好' });
   await expect(setting.getByRole('radio', { checked: true })).toHaveCount(0);
   await expect(page.locator('#settings-worktree-launch').getByRole('alert')).toContainText('格式无法识别');
+  await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   const place = page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('radiogroup', { name: '启动位置' });
@@ -4195,12 +4233,21 @@ test('other pages do not show the workbench waiting prompt or temporary look', a
   await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '1 个会话等你处理' })).toBeVisible();
   await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '临时查看', exact: true })).toBeVisible();
 
-  for (const name of ['首页', '工具', '资料库', '记录', '设置']) {
+  for (const name of ['首页', '工具', '资料库', '记录']) {
     const nav = page.getByRole('navigation', { name: '页面' }).getByRole('button', { name, exact: true });
     await nav.click();
     await expect(nav).toHaveAttribute('aria-current', 'page');
     expect(await visibleCopyHits(page)).toEqual([]);
   }
+  // Settings is a modal over the current page, not a destination: the prompt copy stays hidden.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings).toBeVisible();
+  await expect(settings).not.toContainText('等你处理');
+  await expect(settings).not.toContainText('临时查看');
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  expect(await visibleCopyHits(page)).toEqual([]);
   expect(await page.evaluate(() => {
     const root = document.querySelector('[data-term-theme]');
     return !!root?.closest('[hidden]') && !!root.textContent?.includes('临时查看') && !!root.textContent?.includes('1 个会话等你处理');

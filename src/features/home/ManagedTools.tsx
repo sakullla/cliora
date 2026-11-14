@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { nativeAvailable } from '../../lib/native';
+import { nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace, ToolProbe } from '../../types/native';
@@ -225,9 +225,11 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
   useEffect(() => {
     if (!nativeAvailable) return;
     let active = true;
-    void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
-    return () => { active = false; };
-  }, []);
+    const reload = () => void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
+    reload();
+    const off = onLaunchSettingsChange(reload);
+    return () => { active = false; off(); };
+  }, [native]);
 
   useEffect(() => {
     if (!nativeAvailable || remoteTargetId !== 'local') return;
