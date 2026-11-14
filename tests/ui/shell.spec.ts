@@ -216,8 +216,8 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   const settingsDialog = page.getByRole('dialog', { name: '设置' });
   await settingsDialog.getByRole('tab', { name: '终端与启动', exact: true }).click();
-  await settingsDialog.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
-  await settingsDialog.getByRole('combobox', { name: '项目默认启动模式' }).selectOption('yolo');
+  await settingsDialog.getByRole('radiogroup', { name: 'CLI 默认启动模式' }).getByRole('radio', { name: 'YOLO 模式' }).click();
+  await settingsDialog.getByRole('radiogroup', { name: '项目默认启动模式' }).getByRole('radio', { name: 'YOLO 模式' }).click();
   await page.keyboard.press('Escape');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页' }).click();
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
