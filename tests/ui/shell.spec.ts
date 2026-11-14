@@ -1321,6 +1321,8 @@ test('command palette surfaces live workbench sessions and searches deep setting
     });
   });
   await page.goto('/');
+  // Keys pressed before the shell mounts never reach the shortcut listener.
+  await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
   await expect(dialog).toBeVisible();
