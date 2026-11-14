@@ -358,6 +358,7 @@ export default {
     clearFilter: 'Clear filters',
     compatSummary: 'Compatibility & loading notes',
     compatVersion: 'Verified against version {{version}} · {{detail}}',
+    remoteSourceLabel: 'Remote host resource',
   },
   agents: {
     toolbar: 'Agent toolbar',
@@ -416,6 +417,10 @@ export default {
     emptyTitle: 'No agent definitions in this scope yet',
     empty: 'Create one, or import an existing native file.',
     compatSummary: 'Native format & loading notes',
+    remoteSourceLabel: 'Remote host',
+  },
+  memory: {
+    remoteSourceLabel: 'Remote host resource',
   },
   mcp: {
     rowOpen: 'View {{name}}',

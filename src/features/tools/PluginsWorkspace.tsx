@@ -147,7 +147,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     // again before applying a mutation.
     if (cached) setSnapshot(cached.snapshot);
     let completed = false;
-    const readRemote = () => native.getRemoteResourceStore(remoteTargetId!, toolId, 'plugins').then(value => (value as { snapshot?: PluginSnapshot }).snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' });
+    const readRemote = () => native.getRemoteResourceStore(remoteTargetId!, toolId, 'plugins').then(value => (value as { snapshot?: PluginSnapshot }).snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: i18n.t('tools.plugins.remoteSourceLabel') }, entries: [], baseline: 'remote', detail: '' });
     if (!remoteTargetId && !cached) void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
     void (remoteTargetId ? readRemote() : scanOnce(target)).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setStale(true); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
@@ -218,7 +218,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     setBusy(true); setError('');
     try {
       const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'plugins', { fresh }) as { snapshot?: PluginSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: '远程主机资源' }, entries: [], baseline: 'remote', detail: '' })
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'plugins', { fresh }) as { snapshot?: PluginSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', sources: '', actions: [], project: false, detail: i18n.t('tools.plugins.remoteSourceLabel') }, entries: [], baseline: 'remote', detail: '' })
         : await native.scanNativePlugins(target);
       if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); setStale(false); setContents({}); }
     } catch (value) {

@@ -431,7 +431,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     try {
       if (remoteTargetId) {
         const remote = await readRemoteMemoryStore(true);
-        const saved: MemoryDocument = { id: target.id, path: target.target.storeDirectory ? `${target.target.storeDirectory}/${target.id}` : target.id, text, fingerprint: `remote:${Date.now()}`, enabled: aggregate?.entries.find(item => storeKey(item.target) === storeKey(target.target) && item.id === target.id)?.enabled ?? true, inUse: true, detail: '远程主机资源' };
+        const saved: MemoryDocument = { id: target.id, path: target.target.storeDirectory ? `${target.target.storeDirectory}/${target.id}` : target.id, text, fingerprint: `remote:${Date.now()}`, enabled: aggregate?.entries.find(item => storeKey(item.target) === storeKey(target.target) && item.id === target.id)?.enabled ?? true, inUse: true, detail: t('tools.memory.remoteSourceLabel') };
         const nextAggregate = remote.aggregate ?? aggregate ?? { toolId, entries: [], failedSources: [], stores: [], switchShared: false, nativeFileNames: false };
         const nextEntries = nextAggregate.entries.map(entry => entry.id === target.id && storeKey(entry.target) === storeKey(target.target) ? { ...entry, path: saved.path, fingerprint: saved.fingerprint, previewText: text, readError: undefined } : entry);
         const next = { ...nextAggregate, entries: nextEntries };
@@ -523,8 +523,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         const target = destination.target;
         const path = target.storeDirectory ? `${target.storeDirectory}/${id}` : `$HOME/.cliora/memory/${id}`;
         const fingerprint = `remote:${Date.now()}`;
-        const entry: MemoryStoreEntry = { id, path, enabled: true, fingerprint, sourceLabel: path, target, inUse: true, detail: '远程主机资源', previewText: text };
-        const saved: MemoryDocument = { id, path, text, fingerprint, enabled: true, inUse: true, detail: '远程主机资源' };
+        const entry: MemoryStoreEntry = { id, path, enabled: true, fingerprint, sourceLabel: path, target, inUse: true, detail: t('tools.memory.remoteSourceLabel'), previewText: text };
+        const saved: MemoryDocument = { id, path, text, fingerprint, enabled: true, inUse: true, detail: t('tools.memory.remoteSourceLabel') };
         const next = { ...nextAggregate, entries: [...nextAggregate.entries, entry] };
         const key = `${storeKey(target)}:${id}`;
         const documents = { ...remote.documents, [key]: saved };

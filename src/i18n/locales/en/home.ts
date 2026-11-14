@@ -192,6 +192,7 @@ export default {
     statusProbeFailed: 'Version check failed',
     statusNotFound: 'No installation found',
     loadingConfig: 'Loading configuration',
+    nativeOnly: 'Profile switching is only available in the desktop app.',
     switchProfileLabel: 'Switch {{name}} profile',
     newProfile: 'New profile',
     favorite: 'Star {{name}}',

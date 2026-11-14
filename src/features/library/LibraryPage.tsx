@@ -687,7 +687,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}>{!listStale && <RemoteReadStatus state={remoteReads} />}<ToastScope toasts={toasts}>
     <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
-        {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
+        {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" id={`library-${id}-tab`} aria-controls={`library-${id}-panel`} className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
           <span className={styles.tabIcon} aria-hidden="true"><Icon name={icon} size={15} /></span>
           <span>{label}</span>
           {countBadge(id)}
@@ -695,9 +695,9 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       </div>
     </Toolbar>
     <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span></div>
-    {section === 'mcp' && <LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} />}
-    {section === 'skill' && <LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} />}
-    {(section === 'prompt' || section === 'rule') && <>
+    {section === 'mcp' && <div id="library-mcp-panel" role="tabpanel" aria-labelledby="library-mcp-tab" className={styles.tabPanel}><LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} /></div>}
+    {section === 'skill' && <div id="library-skill-panel" role="tabpanel" aria-labelledby="library-skill-tab" className={styles.tabPanel}><LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} /></div>}
+    {(section === 'prompt' || section === 'rule') && <div id={`library-${section}-panel`} role="tabpanel" aria-labelledby={`library-${section}-tab`} className={styles.tabPanel}>
     {section === 'rule' && bindingFeedback()}
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
@@ -809,6 +809,6 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </div>;
       })()}
     </GuideDialog>
-    </>}
+    </div>}
   </ToastScope></section>;
 }

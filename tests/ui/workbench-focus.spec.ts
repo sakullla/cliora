@@ -250,3 +250,73 @@ test('a late restore does not change the session the workbench keeps across page
   await expect(earlier).toHaveAttribute('aria-selected', 'true');
   await expect(late).toBeVisible();
 });
+
+/** The row actions are not pointer-only: Tab reveals them and Enter opens the session menu. */
+test('tabbing through the session rail reaches the row menu and remove buttons', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions = [
+      { id: 's1', toolId: 'codex', projectId: null, directory: 'C:/home', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
+      { id: 's2', toolId: 'claude_code', projectId: null, directory: 'C:/work', mode: 'normal', running: false, exitCode: 0, startedAt: Date.now() - 120_000 },
+    ];
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'workbench_git_context') return null;
+          if (command === 'git_worktrees') return [];
+          if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
+          if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('tablist', { name: '会话列表' });
+
+  // Tab from a running row's tab reaches its menu button; the focused row reveals the actions.
+  const runningTab = rail.getByRole('tab', { name: /Codex/ });
+  await runningTab.focus();
+  await page.keyboard.press('Tab');
+  const runningMenu = rail.getByRole('button', { name: 'Codex 会话操作', exact: true });
+  await expect(runningMenu).toBeVisible();
+  await expect(runningMenu).toBeFocused();
+  await expect.poll(() => runningMenu.evaluate((node) => getComputedStyle(node.parentElement!).opacity)).toBe('1');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menu', { name: 'Codex 会话操作' })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // An ended row carries the same menu button, then its remove button as the next Tab stop.
+  const endedTab = rail.getByRole('tab', { name: /Claude Code/ });
+  await endedTab.focus();
+  await page.keyboard.press('Tab');
+  const endedMenu = rail.getByRole('button', { name: 'Claude Code 会话操作', exact: true });
+  await expect(endedMenu).toBeVisible();
+  await expect(endedMenu).toBeFocused();
+  await expect.poll(() => endedMenu.evaluate((node) => getComputedStyle(node.parentElement!).opacity)).toBe('1');
+  await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu', { name: 'Claude Code 会话操作' });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem').first()).toBeFocused();
+  await page.keyboard.press('Escape');
+  // Closing the menu hands focus back to the row's tab, so one more Tab passes the menu button.
+  await expect(endedTab).toBeFocused();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  const remove = rail.getByRole('button', { name: '移除会话：Claude Code', exact: true });
+  await expect(remove).toBeVisible();
+  await expect(remove).toBeFocused();
+  await expect.poll(() => remove.evaluate((node) => getComputedStyle(node.parentElement!).opacity)).toBe('1');
+});

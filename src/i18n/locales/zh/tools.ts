@@ -358,6 +358,7 @@ export default {
     clearFilter: '清除筛选',
     compatSummary: '兼容性与加载说明',
     compatVersion: '参考核验版本 {{version}} · {{detail}}',
+    remoteSourceLabel: '远程主机资源',
   },
   agents: {
     toolbar: 'Agent 工具栏',
@@ -416,6 +417,10 @@ export default {
     emptyTitle: '当前作用域还没有 Agent 定义',
     empty: '创建一个，或导入已有的原生文件。',
     compatSummary: '原生格式与加载说明',
+    remoteSourceLabel: '远程主机',
+  },
+  memory: {
+    remoteSourceLabel: '远程主机资源',
   },
   mcp: {
     rowOpen: '查看 {{name}}',

@@ -1550,7 +1550,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   box-shadow: none !important;
   outline: none !important;
   font-family: var(--font-mono);
-  font-size: 13px !important;
+  font-size: var(--term-font-size, 14px) !important;
   line-height: 1.55;
   resize: none;
 }

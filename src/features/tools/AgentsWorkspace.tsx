@@ -2,6 +2,7 @@ import { uiAdapterFor } from '../../adapters';
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { confirmAction } from '../../lib/confirm';
 import { CodeEditor } from '../../components/CodeEditor';
 import type { Scope } from '../../types/native';
@@ -63,7 +64,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     const id = ++generation.current;
     setBusy(true); setSnapshot(null); setError(''); setMode('read'); setCreating(false); setSelected(null); setLast(null);
     void (remoteTargetId
-      ? native.getRemoteResourceStore(remoteTargetId, toolId, 'agents').then(value => (value as { snapshot?: AgentSnapshot }).snapshot ?? { target, capability: { version: 'remote', supported: false, format: 'text' as const, detail: '远程主机资源' , template: '' }, entries: [], baseline: 'remote', detail: '' })
+      ? native.getRemoteResourceStore(remoteTargetId, toolId, 'agents').then(value => (value as { snapshot?: AgentSnapshot }).snapshot ?? { target, capability: { version: 'remote', supported: false, format: 'text' as const, detail: i18n.t('tools.agents.remoteSourceLabel'), template: '' }, entries: [], baseline: 'remote', detail: '' })
       : native.scanNativeAgents(target)).then(value => { if (generation.current === id) setSnapshot(value); }).catch(value => { if (generation.current === id) setError(message(value)); }).finally(() => { if (generation.current === id) setBusy(false); });
     return () => { generation.current += 1; };
   }, [target, remoteTargetId]);
@@ -102,7 +103,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setBusy(true); setError('');
     try {
       const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents', { fresh: true }) as { snapshot?: AgentSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', supported: false, format: 'text' as const, detail: '远程主机资源', template: '' }, entries: [], baseline: 'remote', detail: '' })
+        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'agents', { fresh: true }) as { snapshot?: AgentSnapshot }).snapshot ?? snapshot ?? { target, capability: { version: 'remote', supported: false, format: 'text' as const, detail: i18n.t('tools.agents.remoteSourceLabel'), template: '' }, entries: [], baseline: 'remote', detail: '' })
         : await native.scanNativeAgents(target);
       if (id !== generation.current) return;
       remoteReads.bindWriteDraft(null); // Explicit rescan rebuilds this editor from the actual new snapshot.
@@ -177,7 +178,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
           if (!name.trim() || entries.some(item => item.name === name.trim())) throw new Error(t('tools.config.nameRequired'));
           const format = current.capability.format === 'toml' ? 'toml' : 'markdown';
           const path = remoteAgentPath(toolId, scope, projectPath, name.trim(), format);
-          entries.push({ id, name: name.trim(), description: '', path, format, content, enabled: true, readOnly: false, builtin: false, owner: 'remote', detail: '远程主机' });
+          entries.push({ id, name: name.trim(), description: '', path, format, content, enabled: true, readOnly: false, builtin: false, owner: 'remote', detail: t('tools.agents.remoteSourceLabel') });
         } else if (action === 'delete' && selectedId) entries = entries.filter(item => item.id !== selectedId);
         else if ((action === 'save' || action === 'enable' || action === 'disable') && selectedId) entries = entries.map(item => item.id === selectedId ? { ...item, content: action === 'save' ? content : item.content, enabled: action === 'enable' ? true : action === 'disable' ? false : item.enabled } : item);
         const next = { ...current, entries, baseline: 'remote' };

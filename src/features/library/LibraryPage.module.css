@@ -1,4 +1,7 @@
 .page { display: grid; gap: var(--space-4); min-width: 0; container-type: inline-size; }
+/* A section panel takes over .page's spacing for its own rows while the tabpanel wrapper
+   replaces the fragment; no container-type, so @container rules keep measuring .page. */
+.tabPanel { display: grid; gap: var(--space-4); min-width: 0; }
 
 /* Section tabs (shared .tabs look) with the single primary action at the far end. */
 .libraryBar { justify-content: space-between; }

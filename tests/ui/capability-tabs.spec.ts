@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openCli } from './cli-switcher';
 
 // R2: the capability tabs come from each CLI's registry descriptor (`management`), so two CLIs with
@@ -65,4 +65,53 @@ test('two CLIs with different management descriptors show different capability t
     .filter((call) => /^scan_native_(skills|agents|plugins)$|^preview_native_plugins$/.test(call.command) && (call.args?.target?.toolId === 'beta' || call.args?.toolId === 'beta'))
     .map((call) => call.command));
   expect(betaScans).toEqual([]);
+});
+
+// Tab semantics follow RecordsPage's records-*-tab/-panel pattern: the tab names its panel via
+// aria-controls and the panel labels itself back via aria-labelledby. Panels render lazily per
+// tab, so each tab is activated in turn before its link is checked; while a tab is active its
+// panel is the only tabpanel the accessibility tree exposes.
+async function expectLinkedPanel(page: Page, tab: Locator) {
+  const tabId = await tab.getAttribute('id');
+  const panelId = await tab.getAttribute('aria-controls');
+  expect(tabId, 'tab carries an id for the panel to point back at').toBeTruthy();
+  expect(panelId, 'tab names its panel via aria-controls').toBeTruthy();
+  const panel = page.locator(`#${panelId}`);
+  await expect(panel).toHaveCount(1);
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('role', 'tabpanel');
+  await expect(panel).toHaveAttribute('aria-labelledby', tabId as string);
+  await expect(page.getByRole('tabpanel')).toHaveCount(1);
+}
+
+test('every capability tab points at its own panel, which labels the tab back', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await install(page);
+  await page.goto('/');
+  for (const tool of catalog) {
+    await openCli(page, tool.name);
+    await expect(page.getByRole('heading', { name: tool.name, level: 2 })).toBeVisible();
+    const tabs = page.getByRole('tablist', { name: '当前任务' }).getByRole('tab');
+    const total = await tabs.count();
+    expect(total).toBe(tabsFor(tool.management).length);
+    for (let index = 0; index < total; index++) {
+      const tab = tabs.nth(index);
+      await tab.click();
+      await expectLinkedPanel(page, tab);
+    }
+  }
+});
+
+test('every library section tab points at its own panel, which labels the tab back', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await install(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const tabs = page.getByRole('tablist', { name: '资料类型' }).getByRole('tab');
+  await expect(tabs).toHaveCount(4);
+  for (let index = 0; index < 4; index++) {
+    const tab = tabs.nth(index);
+    await tab.click();
+    await expectLinkedPanel(page, tab);
+  }
 });

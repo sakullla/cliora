@@ -117,7 +117,17 @@
   animation: reveal var(--medium) var(--ease);
 }
 .note[data-tone="ok"] { background: var(--success-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--success); }
-.note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
+/* Failure notices carry the native reason, so they wrap and clamp at two lines — the full
+   cause stays readable without a hover; ok/pending notices stay one quiet line. */
+.note[data-tone="error"] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  background: var(--danger-soft);
+  color: var(--danger);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
 /* Fold toggle for the tools outside daily use. */

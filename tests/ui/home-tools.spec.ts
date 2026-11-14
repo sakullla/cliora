@@ -48,9 +48,9 @@ async function installHome(page: Page, detect = false) {
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'get_registered_tool_workspace') {
-          const state = window as unknown as { __probeMode: string; __probeCalls: unknown[] };
+          const state = window as unknown as { __probeMode: string; __probeCalls: unknown[]; __probeError?: string };
           state.__probeCalls.push(args);
-          if (state.__probeMode === 'error') throw { message: '找不到 Codex 可执行文件' };
+          if (state.__probeMode === 'error') throw { message: state.__probeError ?? '找不到 Codex 可执行文件' };
           const result = workspace();
           if (state.__probeMode === 'failed' || state.__probeMode === 'absent') return { ...result, probe: { ...result.probe, selectedPath: null, nativeWrites: { state: 'unknown', reason: '未确认 CLI 身份' }, installations: state.__probeMode === 'absent' ? [] : [{ path: 'C:/codex.cmd', version: null, status: 'probe_failed', detail: '版本命令超时' }] } };
           return result;
@@ -101,6 +101,27 @@ async function oneLine(note: Locator) {
     return range.getClientRects().length === 1 && style.whiteSpace === 'nowrap' && el.scrollWidth <= el.clientWidth + 1;
   });
   expect(shown).toBe(true);
+}
+
+/** Failure notices wrap to at most two lines: a short detail stays fully visible, a long one clamps there. */
+async function readableError(note: Locator, clamped = false) {
+  await expect(note).toBeVisible();
+  const shown = await note.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    // Mid-word wrapping (overflow-wrap: anywhere) fragments one visual line into several
+    // client rects, so count distinct line tops inside the clamped box, not raw rects.
+    const lines = new Set([...range.getClientRects()].filter((rect) => rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1).map((rect) => Math.round(rect.top))).size;
+    return { lines, wrap: style.whiteSpace, clamp: style.webkitLineClamp, fits: el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1 };
+  });
+  expect(shown.wrap).toBe('normal');
+  expect(shown.clamp).toBe('2');
+  expect(shown.lines).toBeGreaterThanOrEqual(1);
+  expect(shown.lines).toBeLessThanOrEqual(2);
+  if (clamped) expect(shown.lines).toBe(2);
+  else expect(shown.fits).toBe(true);
 }
 
 test('launch names the tool, blocks a second click, and ignores a cancelled directory', async ({ page }) => {
@@ -252,7 +273,7 @@ test('applying a profile reports the native write, and failure keeps the previou
   await expect(alert).toContainText('Codex');
   await expect(alert).toContainText('未切换');
   await expect(alert).toContainText('写入被拒绝');
-  await oneLine(alert);
+  await readableError(alert);
   await expect(tools.getByRole('status')).toHaveCount(0);
   await expect(tools).not.toContainText('已写入原生文件');
   await expect(work).toHaveAttribute('aria-checked', 'true');
@@ -464,6 +485,8 @@ async function installSplitLaunch(page: Page, options: { remote?: boolean } = {}
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'yolo' };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        // A stored language without one in bootstrap is synced through this command at startup.
+        if (command === 'set_language') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'light', remote_ssh_enabled: remote, language: args.language }, tools: ids.map((id) => ({ id, name: names[id] })) };
         if (command === 'set_project_tool') {
           calls.push([command, args]);
           if (state.failSave) throw { message: '项目文件被占用' };
@@ -562,6 +585,18 @@ test('a remote project launches another tool from the menu without saving it', a
   ]);
 });
 
+test('an English remote tool row carries the adapter reason on the switch column', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
+  await installSplitLaunch(page, { remote: true });
+  await page.goto('/');
+  const tools = page.getByLabel('Managed tools');
+  const row = tools.locator('[data-tool-row]').filter({ hasText: 'Codex' });
+  // Profile switching does not run over SSH; the quiet placeholder carries the reason on hover.
+  const unconfigured = row.getByText('Not configured');
+  await expect(unconfigured).toBeVisible();
+  await expect(unconfigured).toHaveAttribute('title', 'Remote configuration writes are provided by the matching CLI adapter.');
+});
+
 test('detection failure names the tool and points at edit or reread', async ({ page }) => {
   await installHome(page, true);
   await page.setViewportSize({ width: 1360, height: 768 });
@@ -572,7 +607,7 @@ test('detection failure names the tool and points at edit or reread', async ({ p
   await expect(tools.getByRole('status')).toHaveCount(0);
   await expect(tools).not.toContainText('操作失败，请重试');
   await expect(tools.getByRole('button', { name: '编辑配置 →' })).toBeEnabled();
-  await oneLine(alert);
+  await readableError(alert);
   const color = await alert.evaluate((el) => {
     const probe = document.createElement('span');
     probe.style.color = 'var(--danger)';
@@ -582,6 +617,22 @@ test('detection failure names the tool and points at edit or reread', async ({ p
     return match;
   });
   expect(color).toBe(true);
+});
+
+test('a long failure detail wraps onto two clamped lines instead of one clipped line', async ({ page }) => {
+  await installHome(page, true);
+  await page.addInitScript(() => {
+    // A native failure can carry a long unbroken path; the note must wrap it, not clip to one line.
+    (window as unknown as { __probeError?: string }).__probeError = `找不到 Codex 可执行文件：C:/Users/dev/.codex/sessions/${'x'.repeat(360)}`;
+  });
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  const tools = page.getByLabel('受管理工具');
+  const alert = tools.getByRole('alert');
+  await expect(alert).toContainText('Codex 检测失败');
+  await expect(alert).toContainText('找不到 Codex 可执行文件');
+  await readableError(alert, true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
 });
 
 test('many profiles stay in one searchable menu', async ({ page }) => {

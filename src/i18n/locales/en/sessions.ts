@@ -71,6 +71,7 @@ export default {
   unpinSession: 'Unpin',
   kbReorder: 'Move up/down in the session list (or drag it)',
   removeSession: 'Remove session',
+  removeSessionLabel: 'Remove session: {{name}}',
   summary: '{{running}} running · {{ended}} ended',
   quickTools: 'Start a CLI',
   quickPickTools: 'Frequently used CLIs',

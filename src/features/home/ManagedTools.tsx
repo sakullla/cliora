@@ -74,14 +74,14 @@ function settle(previous: Loaded, next: Notice | null): Loaded {
   return { ...previous, busy: false, activity: null, error: null, notice: next };
 }
 
-function remoteWorkspace(tool: AdapterDescriptor, probe: RemoteCliProbe): RegisteredToolWorkspace {
+function remoteWorkspace(tool: AdapterDescriptor, probe: RemoteCliProbe, reason: string): RegisteredToolWorkspace {
   const toolProbe: ToolProbe = {
     latestVersionSupported: true,
     tool: tool.id as ToolProbe['tool'],
     installations: probe.installed ? [{ path: probe.executable, version: probe.version ?? null, source: 'native', status: 'available', detail: null }] : [],
     selectedPath: probe.installed ? probe.executable : null,
     nativeFiles: [],
-    nativeWrites: { state: 'unsupported', reason: '远程配置写入由对应 CLI 适配器提供。', evidence: 'ssh' },
+    nativeWrites: { state: 'unsupported', reason, evidence: 'ssh' },
     interfaceFormats: tool.interfaceFormats,
     installUrl: '', upgradeHint: '', installCommand: probe.installed ? null : 'remote', upgradeCommand: probe.installed ? 'remote' : null,
     majorUpgrade: null, nativeInstallCommand: null, npmInstallCommand: null, providerPresets: [],
@@ -302,7 +302,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       setRemoteStates(Object.fromEntries(results.map((result) => [result.toolId, result])));
       setStates((current) => {
         const next = { ...current };
-        for (const result of results) next[result.toolId] = { workspace: remoteWorkspace(tools.find((item) => item.id === result.toolId) ?? tools[0], result), error: result.detail ?? null, busy: current[result.toolId]?.busy ?? false, activity: current[result.toolId]?.activity ?? null, notice: current[result.toolId]?.notice ?? null };
+        for (const result of results) next[result.toolId] = { workspace: remoteWorkspace(tools.find((item) => item.id === result.toolId) ?? tools[0], result, t('tools.workspace.remoteWritesReason')), error: result.detail ?? null, busy: current[result.toolId]?.busy ?? false, activity: current[result.toolId]?.activity ?? null, notice: current[result.toolId]?.notice ?? null };
         return next;
       });
       setRemoteChecking(new Set());
@@ -530,10 +530,10 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
         <div className={styles.name}><ToolIcon toolId={tool.id} size={24} /><strong title={tool.name}>{tool.name}</strong>{status}</div>
         <div className={styles.switch}>
           {loaded?.error ? null
-            : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
+            : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : <span className={styles.unset}>{t('home.tools.nativeOnly')}</span>)
             : profiles.length > 4 ? <ProfileMenu label={t('home.tools.switchProfileLabel', { name: tool.name })} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}</button>)}</div>
-            : <span className={styles.unset}>{t('home.tools.unconfigured')}</span>}
+            : <span className={styles.unset} title={!writable ? switchTitle : undefined}>{t('home.tools.unconfigured')}</span>}
         </div>
         <div className={styles.rowActions}>
           <button type="button" className={styles.favorite} aria-pressed={favorites.includes(tool.id)} aria-label={t('home.tools.favorite', { name: tool.name })} title={favorites.includes(tool.id) ? t('home.tools.unfavoriteTitle') : t('home.tools.favoriteTitle')} onClick={() => toggleFavorite(tool.id)}><Icon name="star" size={14} /></button>

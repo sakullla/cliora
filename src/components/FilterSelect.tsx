@@ -145,6 +145,9 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }
 
   function onPanelKey(event: KeyboardEvent<HTMLElement>) {
+    // Tab leaves the listbox: return focus to the trigger before closing so the browser's
+    // default tab order continues from the trigger instead of dropping to <body> with the panel unmounted.
+    if (event.key === 'Tab') { buttonRef.current?.focus(); setOpen(false); setQuery(''); return; }
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 1, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => { const next = Math.max(index - 1, 0); revealIndex.current = next; return next; }); return; }
     if (event.key === 'PageDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 5, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }

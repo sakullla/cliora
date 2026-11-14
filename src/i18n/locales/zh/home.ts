@@ -192,6 +192,7 @@ export default {
     statusProbeFailed: '版本检测失败',
     statusNotFound: '未发现安装',
     loadingConfig: '正在读取配置',
+    nativeOnly: '配置切换仅在桌面应用中可用。',
     switchProfileLabel: '切换{{name}}的配置',
     newProfile: '新建配置',
     favorite: '收藏 {{name}}',

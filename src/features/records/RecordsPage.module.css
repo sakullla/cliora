@@ -244,7 +244,8 @@
 .detailSkeleton[data-size="block"] { width: 100%; height: 120px; margin-top: var(--space-2); border-radius: var(--radius); }
 .empty { display: grid; justify-items: center; align-content: center; gap: var(--space-2); padding: var(--space-10) var(--space-6); color: var(--text-2); text-align: center; }
 .empty h2 { margin: 0 0 var(--space-1_5); color: var(--text); font-size: var(--fs-title); }
-.empty h3 { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+/* The list/detail empty titles share the shared EmptyState heading spec (17px, 600). */
+.empty h3 { color: var(--text); font-size: var(--fs-heading); font-weight: var(--fw-semibold); }
 .empty p { max-width: 340px; margin: 0; font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.65; }
 .empty :global(.empty-symbol) { margin-bottom: var(--space-0_5); }
 .detail > .empty { min-height: 240px; margin: auto; }

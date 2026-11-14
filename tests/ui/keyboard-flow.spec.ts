@@ -78,6 +78,13 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await page.keyboard.press('ArrowDown');
   const options = page.getByRole('listbox', { name: /，切换 CLI$/ }).getByRole('option');
   await expect(options.first()).toHaveAttribute('data-active', 'true');
+  // Tab out of the open panel closes it: the trigger reports aria-expanded=false and the panel node is gone.
+  await page.keyboard.press('Tab');
+  await expect(picker).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('listbox', { name: /，切换 CLI$/ })).toHaveCount(0);
+  await picker.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(options.first()).toHaveAttribute('data-active', 'true');
   await page.keyboard.press('ArrowDown');
   await expect(options.filter({ hasText: 'Grok' })).toHaveAttribute('data-active', 'true');
   await page.keyboard.press('Enter');

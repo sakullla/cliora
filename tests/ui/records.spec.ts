@@ -382,6 +382,52 @@ test('records count never shows more hits than the total when a filtered batch o
   await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
 });
 
+test('the empty session list shares the empty state heading spec and localizes unindexed tool notes', async ({ page }) => {
+  await page.addInitScript((report) => {
+    const stored = () => sessionStorage.getItem('test.records-language');
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex', 'qoder_cn'], theme: 'system', language: stored() }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'qoder_cn', name: 'Qoder CN' }] });
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return bootstrap();
+        if (command === 'set_language') { sessionStorage.setItem('test.records-language', String(args.language)); return bootstrap(); }
+        if (command === 'list_cli_adapters') return { registered: [
+          { id: 'codex', name: 'Codex', history: { state: 'available', reason: '' } },
+          { id: 'qoder_cn', name: 'Qoder CN', history: { state: 'unsupported', reason: 'native session history not provided' } },
+        ], managedIds: ['codex', 'qoder_cn'], preservedUnknown: [] };
+        if (['list_projects', 'list_history_prices', 'list_history_scans', 'refresh_history', 'list_history_sessions'].includes(command)) return [];
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, emptyReport());
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const heading = page.getByRole('heading', { name: '从第一段会话开始' });
+  await expect(heading).toBeVisible();
+  // The local list empty title follows the shared EmptyState spec: 17px heading, weight 600.
+  const headingSpec = await heading.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const root = getComputedStyle(document.documentElement);
+    return { fontSize: style.fontSize, fontWeight: style.fontWeight, fsHeading: root.getPropertyValue('--fs-heading').trim(), fwSemibold: root.getPropertyValue('--fw-semibold').trim() };
+  });
+  expect(headingSpec).toEqual({ fontSize: '17px', fontWeight: '600', fsHeading: '17px', fwSemibold: '600' });
+  // The note under the empty title interpolates through i18n; zh separates tool and reason with a full-width colon.
+  const list = page.getByLabel('会话列表');
+  await expect(list.getByText('Qoder CN：native session history not provided')).toBeVisible();
+  // Switching the interface to English re-renders the same note with a half-width colon.
+  await page.evaluate(() => { localStorage.setItem('cliora:language', 'en'); });
+  await page.reload();
+  await page.getByRole('navigation', { name: /页面|Pages/ }).getByRole('button', { name: /^(记录|Records)$/ }).click();
+  await expect(page.getByRole('heading', { name: 'Start with your first session' })).toBeVisible();
+  const englishList = page.getByLabel(/会话列表|Session list/);
+  await expect(englishList.getByText('Qoder CN: native session history not provided')).toBeVisible();
+  await expect(englishList.getByText('Qoder CN：native session history not provided')).toHaveCount(0);
+});
+
 test('usage dashboard splits tokens, follows rows into filters and opens heavy sessions', async ({ page }) => {
   await page.addInitScript((report) => {
     const records = [

@@ -269,11 +269,11 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         </span>
       </button>
       <div className={styles.rowActions}>
-        <IconButton size="sm" tabIndex={-1} className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {
+        <IconButton size="sm" className={styles.rowMenuBtn} aria-label={t('sessions.sessionMenu', { name: item.name })} title={t('sessions.moreActions')} icon={<Icon name="more" size={16} />} onClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
           onOpenMenu(session, rect.left, rect.bottom + 5);
         }} />
-        {!session.running && <IconButton size="sm" tabIndex={-1} className={styles.rowRemove} aria-label={t('sessions.removeSession') + '：' + item.name} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)} icon={<Icon name="close" size={12} />} />}
+        {!session.running && <IconButton size="sm" className={styles.rowRemove} aria-label={t('sessions.removeSessionLabel', { name: item.name })} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)} icon={<Icon name="close" size={12} />} />}
       </div>
     </div>;
   };
