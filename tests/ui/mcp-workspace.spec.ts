@@ -125,14 +125,28 @@ test('a draft survives the read/edit switch and leaving asks once, and cancel ke
   await detail.getByRole('button', { name: '编辑', exact: true }).click();
   const name = detail.getByRole('textbox', { name: '名称' });
   await name.fill('server-one-edited');
+  await detail.getByRole('textbox', { name: '参数，每行一项 第 1 行' }).fill('server-one@2.0.0');
   await expect(page.getByText('有未保存的更改')).toBeVisible();
 
-  // Switching to reading keeps the draft and does not ask.
+  // Switching to reading keeps the draft and shows the edited values instead of the saved ones.
   await detail.getByRole('button', { name: '阅读', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(detail.getByRole('region', { name: 'MCP 详情' })).toBeVisible();
+  const draftRegion = detail.getByRole('region', { name: 'MCP 详情' });
+  await expect(draftRegion).toBeVisible();
+  await expect(draftRegion.getByText('server-one-edited', { exact: true })).toBeVisible();
+  await expect(draftRegion).toContainText('server-one@2.0.0');
+  await expect(draftRegion).not.toContainText('-y');
   await expect(page.getByText('有未保存的更改')).toBeVisible();
   await detail.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(name).toHaveValue('server-one-edited');
+  await expect(detail.getByRole('textbox', { name: '参数，每行一项 第 1 行' })).toHaveValue('server-one@2.0.0');
+
+  // Closing the same draft asks once as well; cancelling keeps the document and its draft.
+  await detail.getByRole('button', { name: '关闭详情' }).click();
+  const closeConfirm = page.getByRole('dialog', { name: '放弃未保存修改？' });
+  await expect(closeConfirm).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(closeConfirm).toHaveCount(0);
   await expect(name).toHaveValue('server-one-edited');
 
   // Switching entries asks exactly once; Escape cancels and restores the same entry with its draft.

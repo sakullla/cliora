@@ -191,6 +191,13 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary: linkedInLibrary || syncLibrary,
       env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
   }
+  /** Reading shows the working copy while it differs from the entry it was loaded from, so an edit is visible before it is written. */
+  function shownEntryOf(item: NativeMcpEntry): NativeMcpEntry {
+    if (!dirty) return { ...item, enabled };
+    const next = normalizedDraft();
+    return { name: next.name || item.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url,
+      env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: item.protectedValues };
+  }
   async function save() {
     if (!opened) return;
     if (scope === 'project' && !project) { setError(t('tools.mcp.pickProject')); return; }
@@ -415,7 +422,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         />
         {errorStrip}
         {review ?? (mode === 'read'
-          ? <div className={doc.body}><div className={doc.readColumn}><section aria-label={t('tools.mcp.detailsLabel')}><McpDetails key={selected.name} statusInHeader item={{ ...selected, enabled }} /></section></div></div>
+          ? <div className={doc.body}><div className={doc.readColumn}><section aria-label={t('tools.mcp.detailsLabel')}><McpDetails key={selected.name} statusInHeader item={shownEntryOf(selected)} /></section></div></div>
           : editor)}
         {foot}
       </article>
