@@ -26,7 +26,7 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
             upgradeHint: '',
             installCommand: bunScenario === 'missing' ? 'bun add -g @oh-my-pi/pi-coding-agent' : null,
             upgradeCommand: bunScenario === 'installed' ? 'bun update -g @oh-my-pi/pi-coding-agent' : null,
-            nativeInstallCommand: null, npmInstallCommand: null, majorUpgrade: null,
+            nativeInstallCommand: 'irm https://omp.sh/install.ps1 | iex', npmInstallCommand: null, majorUpgrade: null,
           } : { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update', majorUpgrade }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
@@ -158,6 +158,7 @@ test('a Bun source is named as Bun and its update action keeps that channel', as
 test('an uninstalled Bun CLI shows a Bun install entry and the runtime requirement', async ({ page }) => {
   await setup(page, true, '18.20.2', '18.20.3', null, 'missing');
   await expect(page.getByRole('button', { name: '用 Bun 安装' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '安装原生' })).toBeVisible();
   await expect(page.getByText('Bun 缺失')).toBeVisible();
   await expect(page.getByRole('link', { name: '安装 ↗' })).toBeVisible();
 });

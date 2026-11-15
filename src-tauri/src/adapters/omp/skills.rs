@@ -14,9 +14,25 @@ use crate::native::adapter::Scope;
 
 pub(crate) const UNAVAILABLE_REASON: &str =
     "OMP Skills 与规则资源（原生根、外部来源只读、禁用覆盖）尚未交付";
+pub(crate) const AVAILABLE_REASON: &str =
+    "可管理 OMP 自有 Skills 与规则；扩展、插件与内置来源保持只读";
 
 pub(crate) fn supported() -> bool {
     false
+}
+
+pub(crate) fn facet() -> crate::adapters::Facet {
+    if supported() {
+        crate::adapters::Facet {
+            state: "available",
+            reason: AVAILABLE_REASON,
+        }
+    } else {
+        crate::adapters::Facet {
+            state: "planned",
+            reason: UNAVAILABLE_REASON,
+        }
+    }
 }
 
 pub(crate) fn root(_scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {

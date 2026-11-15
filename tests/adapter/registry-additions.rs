@@ -1412,7 +1412,15 @@ fn omp_registers_default_off_with_verified_lifecycle_only() {
         omp.install_command().as_deref(),
         Some("bun add -g @oh-my-pi/pi-coding-agent")
     );
-    assert!(omp.native_install_command().is_none());
+    assert_eq!(
+        omp.source_install_command(Some("native")).is_some(),
+        cfg!(windows)
+    );
+    assert_eq!(
+        omp.native_install_command().is_some(),
+        cfg!(windows),
+        "官方预编译安装入口按平台核实"
+    );
     assert!(omp.npm_install_command().is_none());
     assert_eq!(
         omp.source_upgrade_command("bun", Some("18.20.2")).as_deref(),

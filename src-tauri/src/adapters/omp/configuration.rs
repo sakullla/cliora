@@ -22,9 +22,31 @@ use crate::native::profile::{Connection, RegisteredProfile};
 
 pub(crate) const UNAVAILABLE_REASON: &str =
     "OMP 的 YAML 配置、Profile 隔离与模型角色编辑尚未交付；启用偏好不会读取或写入 ~/.omp 文件";
+pub(crate) const AVAILABLE_REASON: &str =
+    "可编辑 OMP 自有的 config.yml/config.yaml 与 models.yml/models.yaml，保留未编辑字段";
 
 pub(crate) fn port() -> Option<&'static dyn ConfigurationAdapter> {
     None
+}
+
+/// Native configuration facet. The configuration task flips this by publishing
+/// its port; the descriptor only reads this function.
+pub(crate) fn facet() -> crate::adapters::Facet {
+    match port() {
+        Some(_) => crate::adapters::Facet {
+            state: "available",
+            reason: AVAILABLE_REASON,
+        },
+        None => crate::adapters::Facet {
+            state: "planned",
+            reason: UNAVAILABLE_REASON,
+        },
+    }
+}
+
+/// Project-level model override policy. Owned by the configuration capability.
+pub(crate) fn project_model_override() -> bool {
+    false
 }
 
 pub(crate) fn interface_formats() -> &'static [&'static str] {

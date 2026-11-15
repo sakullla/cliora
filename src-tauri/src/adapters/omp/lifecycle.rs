@@ -41,9 +41,10 @@ pub(crate) const RESUME_REASON: &str =
 pub(crate) const BUN_INSTALL_COMMAND: &str = "bun add -g @oh-my-pi/pi-coding-agent";
 pub(crate) const BUN_UPDATE_COMMAND: &str = "bun update -g @oh-my-pi/pi-coding-agent";
 pub(crate) const BUN_UNINSTALL_COMMAND: &str = "bun remove -g @oh-my-pi/pi-coding-agent";
-/// Verified by `omp update` exiting 0 with "Already up to date" in the isolated
-/// Bun installation on 2026-11-15.
+/// Verified by the official Windows installer: precompiled omp 18.20.2 in an
+/// isolated LOCALAPPDATA, `omp --version` and `omp update` both exit 0.
 pub(crate) const NATIVE_UPDATE_COMMAND: &str = "omp update";
+pub(crate) const NATIVE_INSTALL_COMMAND: &str = "irm https://omp.sh/install.ps1 | iex";
 pub(crate) const BUN_HELP_URL: &str = "https://bun.sh/docs/installation";
 pub(crate) const MISSING_BUN_REASON: &str =
     "未找到 Bun 可执行文件；OMP 由 Bun 运行（官方要求 Bun 1.4.4 或更新），缺少 Bun 时不会改用其他安装来源";
@@ -64,6 +65,20 @@ pub(crate) fn policy_with_exclusions(excluded: &'static [&'static str]) -> Versi
     VersionPolicy {
         requirements: vec![">=0.0.0".into()],
         excluded,
+    }
+}
+
+pub(crate) fn launch_facet() -> crate::adapters::Facet {
+    crate::adapters::Facet {
+        state: "available",
+        reason: LAUNCH_REASON,
+    }
+}
+
+pub(crate) fn resume_facet() -> crate::adapters::Facet {
+    crate::adapters::Facet {
+        state: "available",
+        reason: RESUME_REASON,
     }
 }
 
@@ -111,9 +126,24 @@ fn configured_bun_root() -> Option<PathBuf> {
 
 /// Extra discovery directories. Bun's global bin directory is a documented
 /// installation location and is not always on PATH; no OMP-owned directory is
-/// guessed.
+/// guessed. The Windows precompiled installer's verified target is added too.
 pub(crate) fn binary_directories(home: &Path) -> Vec<PathBuf> {
-    bun_bin_directories(home, configured_bun_root().as_deref())
+    let mut directories = bun_bin_directories(home, configured_bun_root().as_deref());
+    directories.extend(precompiled_directories(
+        env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()).map(PathBuf::from).as_deref(),
+    ));
+    directories
+}
+
+/// Official Windows precompiled target (`%LOCALAPPDATA%\omp`, verified with the
+/// official installer). Other platforms have no verified target.
+pub(crate) fn precompiled_directories(local_app_data: Option<&Path>) -> Vec<PathBuf> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    local_app_data
+        .map(|root| vec![root.join("omp")])
+        .unwrap_or_default()
 }
 
 fn components(path: &Path) -> Vec<String> {
@@ -339,6 +369,7 @@ pub(crate) fn install_command() -> Option<String> {
 pub(crate) fn source_install_command(source: Option<&str>) -> Option<String> {
     match source {
         None | Some("bun") => Some(BUN_INSTALL_COMMAND.to_owned()),
+        Some("native") => native_install_command(),
         _ => None,
     }
 }
@@ -359,7 +390,10 @@ pub(crate) fn source_uninstall_command(source: &str, _version: Option<&str>) -> 
 }
 
 pub(crate) fn native_install_command() -> Option<String> {
-    None
+    // Verified on Windows with the official installer in an isolated
+    // LOCALAPPDATA. The script is the documented official entry; no download
+    // URL or command is guessed for other platforms.
+    cfg!(windows).then(|| NATIVE_INSTALL_COMMAND.to_owned())
 }
 
 pub(crate) fn npm_install_command() -> Option<String> {
@@ -493,6 +527,10 @@ mod tests {
         let names: BTreeSet<PathBuf> = binary_directories(&home).into_iter().collect();
         assert!(names.contains(&home.join(".bun/bin")));
         assert_eq!(
+            precompiled_directories(Some(Path::new("C:/Users/me/AppData/Local"))),
+            if cfg!(windows) { vec![PathBuf::from("C:/Users/me/AppData/Local/omp")] } else { Vec::new() }
+        );
+        assert_eq!(
             find_bun(Vec::new()),
             None,
             "空目录列表不会把其他可执行文件当作 Bun"
@@ -522,11 +560,10 @@ mod tests {
     }
 
     #[test]
-    fn verified_commands_cover_bun_and_native_but_never_guess_the_precompiled_installer() {
+    fn verified_commands_cover_bun_and_windows_precompiled_install() {
         assert_eq!(install_command().unwrap(), BUN_INSTALL_COMMAND);
         assert_eq!(source_install_command(None).unwrap(), BUN_INSTALL_COMMAND);
         assert_eq!(source_install_command(Some("bun")).unwrap(), BUN_INSTALL_COMMAND);
-        assert!(source_install_command(Some("native")).is_none());
         assert!(source_install_command(Some("npm_shim")).is_none());
         assert_eq!(
             source_upgrade_command("bun", Some("18.20.2")).unwrap(),
@@ -542,7 +579,22 @@ mod tests {
             BUN_UNINSTALL_COMMAND
         );
         assert!(source_uninstall_command("native", Some("18.20.2")).is_none());
-        assert!(native_install_command().is_none(), "预编译下载地址未核实，不得猜测");
+        assert_eq!(
+            source_install_command(Some("native")).is_some(),
+            cfg!(windows),
+            "仅 Windows 官方预编译安装脚本已核实"
+        );
+        assert_eq!(
+            native_install_command().is_some(),
+            cfg!(windows),
+            "预编译安装入口按平台核实"
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                native_install_command().as_deref(),
+                Some("irm https://omp.sh/install.ps1 | iex")
+            );
+        }
         assert!(npm_install_command().is_none());
         assert!(upgrade_command("npm_shim").is_none());
         assert!(install_guidance().1.contains("不会"));

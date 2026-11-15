@@ -214,6 +214,13 @@ export async function resolveBun(explicit) {
   return executableOnPath(process.platform === 'win32' ? ['bun.exe', 'bun.cmd'] : ['bun']);
 }
 
+/** A precompiled OMP prepared by the official installer in an isolated root. */
+export async function resolveNativeOmp(explicit) {
+  const candidate = explicit ?? process.env.CLIORA_OMP_NATIVE;
+  if (!candidate) return null;
+  return fs.access(candidate).then(() => candidate, () => null);
+}
+
 async function resolveOmp() {
   return executableOnPath(process.platform === 'win32' ? ['omp.exe', 'omp.cmd'] : ['omp']);
 }
@@ -322,7 +329,7 @@ async function fakeIdentity(binary, temporary, environment) {
   return { ...observationOf(probed, candidate), installations: (probed.installations ?? []).map(item => ({ path: item.path, version: item.version, source: item.source, status: item.status, detail: item.detail })) };
 }
 
-export async function verifyOmpNative({ output, offline = false, bun, strict = false } = {}) {
+export async function verifyOmpNative({ output, offline = false, bun, nativePath } = {}) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'cliora-omp-native-'));
   const home = path.join(temporary, 'home');
   const project = path.join(temporary, 'project');
@@ -380,6 +387,7 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
     resumeContract: { state: 'unverified', reason: '未运行交互式 TUI，仅核对 CLI 帮助文本与启动参数' },
     upgrade: { state: 'source-aware', reason: '按检测来源选择命令：Bun 用 bun update，原生用 omp update；未知来源不执行也不切换' },
     hostOmp: null,
+    precompiled: null,
     fakeIdentity: null,
   };
 
@@ -462,7 +470,7 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
           path: standalonePath,
           versionCommand: { exitCode: standaloneRun.exitCode, stdout: standaloneRun.stdout.trim(), stderr: standaloneRun.stderr.trim() },
           probe: null,
-          reason: '同一 omp 二进制无法脱离 Bun 安装目录运行，预编译来源未验证',
+          reason: 'Bun 安装中的 omp 复制件无法脱离 Bun 安装树运行；不构成预编译证据，预编译渠道由 --native 提供',
         };
       }
 
@@ -518,6 +526,41 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
     };
   }
 
+  // Real precompiled channel, prepared outside this script with the official
+  // installer in an isolated root. The script never downloads or edits PATH; it
+  // only verifies the product adapter and the source-preserving update.
+  const precompiledPath = await resolveNativeOmp(nativePath);
+  if (precompiledPath) {
+    const version = await run(precompiledPath, ['--version'], { env: { ...process.env, ...environment }, timeout: 120_000 });
+    const observation = observationOf(await probe(binary, environment, home, precompiledPath), precompiledPath);
+    const update = await run(precompiledPath, ['update'], { env: { ...process.env, ...environment }, timeout: 180_000 });
+    const afterUpdate = observationOf(await probe(binary, environment, home, precompiledPath), precompiledPath);
+    native.precompiled = {
+      path: precompiledPath,
+      versionCommand: { exitCode: version.exitCode, stdout: version.stdout.trim(), stderr: version.stderr.trim() },
+      probe: observation,
+      sourceLabel: {
+        expected: 'native',
+        actual: observation.source,
+        passed: observation.source === 'native',
+      },
+      update: {
+        command: 'omp update',
+        exitCode: update.exitCode,
+        timedOut: update.timedOut,
+        stdout: update.stdout.trim().slice(-2000),
+        stderr: update.stderr.trim().slice(-2000),
+      },
+      afterUpdate,
+      updateKeptNative: afterUpdate.source === 'native',
+    };
+  } else {
+    native.precompiled = {
+      state: 'unverified',
+      reason: '未提供隔离预编译安装路径（--native 或 CLIORA_OMP_NATIVE）；native 来源未验证',
+    };
+  }
+
   const fake = await fakeIdentity(binary, temporary, environment);
   native.fakeIdentity = {
     status: fake.status,
@@ -529,11 +572,16 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
   const after = await fingerprint();
   const sourceStable = before.sha256 === after.sha256;
   const failed = cases.filter(item => item.result === 'failed');
-  const nativeVerified = native.install.state === 'succeeded' || Boolean(native.hostOmp?.probe?.status === 'available');
+  const nativeVerified = native.install.state === 'succeeded'
+    || native.precompiled?.probe?.status === 'available'
+    || Boolean(native.hostOmp?.probe?.status === 'available');
   const unresolved = [];
   if (!nativeVerified) unresolved.push(native.install.reason ?? '没有可用的真实 omp 观察');
   if (native.sourceLabel && !native.sourceLabel.passed) unresolved.push(native.sourceLabel.reason);
-  if (native.standalone?.state === 'unverified') unresolved.push(native.standalone.reason);
+  if (native.precompiled?.state === 'unverified') unresolved.push(native.precompiled.reason);
+  if (native.precompiled && native.precompiled.sourceLabel?.passed === false) unresolved.push('真实预编译 omp 未被标为 native');
+  if (native.precompiled && native.precompiled.updateKeptNative === false) unresolved.push('omp update 后来源不再是 native');
+  if (native.standalone?.state === 'unverified' && native.precompiled?.sourceLabel?.passed !== true) unresolved.push(native.standalone.reason);
   if (native.standalone?.state === 'failed') unresolved.push(native.standalone.reason);
   if (native.bunUpdate && native.bunUpdate.exitCode !== 0) unresolved.push('Bun 更新未成功，已记录真实命令输出');
   if (native.ompUpdate && native.ompUpdate.exitCode !== 0) unresolved.push('omp update 未成功，已记录真实命令输出');
@@ -554,17 +602,20 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
     unresolved,
     result: !sourceStable || failed.length || !native.fakeIdentity.rejected
       || native.sourceLabel?.passed === false
+      || native.precompiled?.sourceLabel?.passed === false
+      || native.precompiled?.updateKeptNative === false
       || native.standalone?.state === 'failed'
       ? 'failed'
       : 'completed_with_unverified',
     limits: [
-      '真实 OMP 只在临时 home 与隔离 BUN_INSTALL 中准备；用户 ~/.bun、~/.omp 与全局安装不被读写。',
+      '真实 OMP 只在临时 home 与隔离 BUN_INSTALL / 独立预编译目录中准备；用户 ~/.bun、~/.omp 与全局安装不被读写。',
       'fixture 只是声明；没有真实 omp 时报告 completed_with_unverified，不以 fixture 冒充原生证据。',
-      '未核实官方预编译下载地址与升级命令，因此这些动作不执行并保留原因，也不在来源之间切换。',
+      '预编译安装由外部官方脚本在隔离目录准备后通过 --native 传入；脚本自身不下载安装包、不改用户 PATH。',
       '18.20.2 仅为展示基线；更新的普通版本默认接受，未逐版验证。',
       '交互式 TUI 恢复、macOS/Linux 与账号提供方未在本机执行。',
       'Bun install 需要包来源网络；失败时保留真实 stdout/stderr 尾部。',
-      '复制同一 omp 二进制到独立目录验证 native 来源；若其无法脱离 Bun 安装树运行，记录为未验证而不是假定。',
+      'Bun 安装中的 omp 复制件无法脱离 Bun 安装树运行，只作为观察保留；真实 native 证据由 --native 的官方预编译安装提供。',
+      'exit 0 目前不可达：T1 生命周期仍保留交互式 TUI 未执行这一 unverified 项；exit 1=产品断言失败/源码变化，exit 2=证据未完整。',
     ],
   };
   const outputPath = output ? path.resolve(output) : path.join(temporary, 'result.json');
@@ -576,7 +627,10 @@ export async function verifyOmpNative({ output, offline = false, bun, strict = f
   return {
     report,
     outputPath,
-    exitCode: report.result === 'failed' ? 1 : strict && report.result !== 'passed' ? 2 : report.result === 'completed_with_unverified' ? 2 : 0,
+    // T1 has no reachable fully-passed state: interactive TUI restore stays
+    // unverified. Exit 1 = product assertion/source instability; 2 = evidence
+    // incomplete; 0 is reserved for a future run with zero unresolved items.
+    exitCode: report.result === 'failed' ? 1 : 2,
   };
 }
 
@@ -584,15 +638,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const args = process.argv.slice(2);
   const outputIndex = args.indexOf('--output');
   const bunIndex = args.indexOf('--bun');
+  const nativeIndex = args.indexOf('--native');
   if (args.includes('--help')) {
-    console.log('node scripts/verify-omp-native.mjs [--output report.json] [--bun /path/to/bun] [--offline]\nBuilds the product offline, runs declared fixture cases against the real adapter, then prepares a real OMP only inside a temporary home/BUN_INSTALL. Exit 1: product assertion failed or source changed; exit 2: real OMP evidence unverified.');
+    console.log('node scripts/verify-omp-native.mjs [--output report.json] [--bun /path/to/bun] [--native /path/to/precompiled/omp] [--offline]\nBuilds the product offline, runs declared fixture cases against the real adapter, prepares a real OMP only inside a temporary home/BUN_INSTALL, and verifies an externally prepared isolated precompiled OMP passed by --native. Exit 1: product assertion failed or source changed; exit 2: real OMP evidence incomplete (including interactive TUI restore); exit 0 is reserved for a future zero-unresolved run.');
   } else {
     try {
       if (outputIndex >= 0 && !args[outputIndex + 1]) throw new Error('--output requires a path');
       if (bunIndex >= 0 && !args[bunIndex + 1]) throw new Error('--bun requires a path');
+      if (nativeIndex >= 0 && !args[nativeIndex + 1]) throw new Error('--native requires a path');
       const result = await verifyOmpNative({
         output: outputIndex >= 0 ? args[outputIndex + 1] : undefined,
         bun: bunIndex >= 0 ? args[bunIndex + 1] : undefined,
+        nativePath: nativeIndex >= 0 ? args[nativeIndex + 1] : undefined,
         offline: args.includes('--offline'),
       });
       process.exitCode = result.exitCode;

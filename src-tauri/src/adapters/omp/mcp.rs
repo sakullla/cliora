@@ -14,9 +14,25 @@ use crate::native::adapter::Scope;
 
 pub(crate) const UNAVAILABLE_REASON: &str =
     "OMP 原生 MCP（用户/项目 mcp.json、stdio/http/sse、外部来源启停覆盖）尚未交付";
+pub(crate) const AVAILABLE_REASON: &str =
+    "可管理 OMP 自有 MCP 与外部来源启停覆盖；第三方文件保持只读";
 
 pub(crate) fn supported() -> bool {
     false
+}
+
+pub(crate) fn facet() -> crate::adapters::Facet {
+    if supported() {
+        crate::adapters::Facet {
+            state: "available",
+            reason: AVAILABLE_REASON,
+        }
+    } else {
+        crate::adapters::Facet {
+            state: "planned",
+            reason: UNAVAILABLE_REASON,
+        }
+    }
 }
 
 pub(crate) fn location(

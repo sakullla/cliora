@@ -14,9 +14,35 @@ use crate::native::adapter::Scope;
 
 pub(crate) const UNVERIFIED_REASON: &str =
     "OMP 记忆后端（local Markdown、Hindsight 远程 bank、Mnemopi SQLite、outbox）根目录尚未核实：不猜测路径、不把非文件后端当作 Markdown 编辑";
+pub(crate) const AVAILABLE_REASON: &str =
+    "可管理已核实的 OMP 记忆后端；非文件后端保留原生边界";
 
 pub(crate) fn port() -> Option<&'static dyn MemoryAdapter> {
     Some(&MEMORY)
+}
+
+/// Descriptor-side reason published only while no memory entry is available.
+/// The memory task owns this by publishing a complete declaration.
+pub(crate) fn management_reason() -> &'static str {
+    if crate::adapters::memory::publish(&MEMORY.declaration()).is_some() {
+        ""
+    } else {
+        UNVERIFIED_REASON
+    }
+}
+
+pub(crate) fn facet() -> crate::adapters::Facet {
+    if management_reason().is_empty() {
+        crate::adapters::Facet {
+            state: "available",
+            reason: AVAILABLE_REASON,
+        }
+    } else {
+        crate::adapters::Facet {
+            state: "planned",
+            reason: UNVERIFIED_REASON,
+        }
+    }
 }
 
 pub(crate) static MEMORY: Memory = Memory;

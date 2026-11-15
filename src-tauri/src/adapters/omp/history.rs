@@ -11,9 +11,25 @@ use crate::history::{HistorySource, ParsedSession};
 
 pub(crate) const UNAVAILABLE_REASON: &str =
     "OMP session v3（256 字节标题槽、树形条目、model_usage）尚未交付；不读取 Pi 格式代替";
+pub(crate) const AVAILABLE_REASON: &str =
+    "可只读索引 OMP session v3 标题与本地用量，并用 --resume 恢复指定会话";
 
 pub(crate) fn supported() -> bool {
     false
+}
+
+pub(crate) fn facet() -> crate::adapters::Facet {
+    if supported() {
+        crate::adapters::Facet {
+            state: "available",
+            reason: AVAILABLE_REASON,
+        }
+    } else {
+        crate::adapters::Facet {
+            state: "planned",
+            reason: UNAVAILABLE_REASON,
+        }
+    }
 }
 
 pub(crate) fn sources(_home: &Path) -> Result<Vec<HistorySource>, String> {

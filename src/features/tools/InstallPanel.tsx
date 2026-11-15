@@ -101,7 +101,13 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
   const alternates = available.filter(item => item.path !== selected?.path);
   const hasNpm = available.some(item => item.source === 'npm_shim');
   const hasNative = available.some(item => isNative(item.source));
-  const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
+  const nativeChannel = Boolean(probe.nativeInstallCommand);
+  const npmChannel = Boolean(probe.npmInstallCommand);
+  // A native entry is distinct when the adapter's default install command is a
+  // different channel (for example Bun). Where the default already is native,
+  // the npm entry is the second choice, exactly as before.
+  const nativeDistinct = nativeChannel && probe.installCommand !== probe.nativeInstallCommand;
+  const multiple = Boolean(nativeChannel && npmChannel) || nativeDistinct;
   const preferNative = probe.installCommand === probe.nativeInstallCommand;
   const problems = probe.dependencies.filter(item => item.status !== 'found');
   const selectedVersion = selected?.version?.trim() ?? '';
@@ -184,7 +190,9 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
         <div className={styles.installActions}>
           {!selected && multiple && <>
             <Button variant={preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>
-            <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</Button>
+            {npmChannel
+              ? <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</Button>
+              : <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{isBunCommand(probe.installCommand) ? t('tools.install.installBun') : t('tools.install.install')}</Button>}
           </>}
           {selected && multiple && !hasNative && <Button disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>}
           {!selected && !multiple && probe.installCommand && <Button variant="primary" disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{isBunCommand(probe.installCommand) ? t('tools.install.installBun') : t('tools.install.install')}</Button>}

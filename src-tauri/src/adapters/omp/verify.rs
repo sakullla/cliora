@@ -106,6 +106,12 @@ impl CaseContext {
 /// Capability states for the script's catalogue. Reasons are the same strings
 /// the UI would show, so an unavailable capability is never a silent gap.
 pub fn catalog() -> Value {
+    let configuration = super::configuration::facet();
+    let accounts = super::accounts::facet();
+    let resources = super::resources_facet();
+    let plugins = super::plugins::facet();
+    let memory = super::memory::facet();
+    let history = super::history::facet();
     json!({
         "adapter": super::ID,
         "command": super::COMMAND,
@@ -120,14 +126,12 @@ pub fn catalog() -> Value {
         ],
         "capabilities": [
             { "capability": "lifecycle", "state": "available", "reason": "" },
-            { "capability": "configuration", "state": "unavailable", "reason": super::configuration::UNAVAILABLE_REASON },
-            { "capability": "accounts", "state": "unavailable", "reason": super::accounts::UNAVAILABLE_REASON },
-            { "capability": "resources-mcp", "state": "unavailable", "reason": super::mcp::UNAVAILABLE_REASON },
-            { "capability": "resources-skills", "state": "unavailable", "reason": super::skills::UNAVAILABLE_REASON },
-            { "capability": "agents", "state": "unavailable", "reason": super::agents::UNAVAILABLE_REASON },
-            { "capability": "plugins", "state": "unavailable", "reason": super::plugins::UNAVAILABLE_REASON },
-            { "capability": "memory", "state": "unavailable", "reason": super::memory::UNVERIFIED_REASON },
-            { "capability": "history", "state": "unavailable", "reason": super::history::UNAVAILABLE_REASON },
+            { "capability": "configuration", "state": configuration.state, "reason": configuration.reason },
+            { "capability": "accounts", "state": accounts.state, "reason": accounts.reason },
+            { "capability": "resources", "state": resources.state, "reason": resources.reason },
+            { "capability": "plugins", "state": plugins.state, "reason": plugins.reason },
+            { "capability": "memory", "state": memory.state, "reason": memory.reason },
+            { "capability": "history", "state": history.state, "reason": history.reason },
         ],
         "commands": {
             "install": super::lifecycle::install_command(),
@@ -145,9 +149,17 @@ pub fn run_case(capability: &str, case: &Value, context: &CaseContext) -> Result
         "lifecycle" => lifecycle_case(case, context),
         "configuration" => super::configuration::verify_case(case, context),
         "accounts" => super::accounts::verify_case(case, context),
-        "resources-mcp" => super::mcp::verify_case(case, context),
-        "resources-skills" => super::skills::verify_case(case, context),
-        "agents" => super::agents::verify_case(case, context),
+        "resources" => match case.get("kind").and_then(Value::as_str) {
+            Some("mcp") => super::mcp::verify_case(case, context),
+            Some("skills") | Some("rules") => super::skills::verify_case(case, context),
+            Some("agents") => super::agents::verify_case(case, context),
+            Some(other) => Err(CaseError::Failed(format!(
+                "未知的 OMP resources 用例 kind：{other}；应为 mcp/skills/rules/agents"
+            ))),
+            None => Err(CaseError::Failed(
+                "resources 用例缺少 kind（mcp/skills/rules/agents）".into(),
+            )),
+        },
         "plugins" => super::plugins::verify_case(case, context),
         "memory" => super::memory::verify_case(case, context),
         "history" => super::history::verify_case(case, context),
@@ -324,11 +336,19 @@ fn lifecycle_case(case: &Value, context: &CaseContext) -> Result<Value, CaseErro
                 );
                 entries.push(item);
             }
-            if expected_null("nativeInstallNull") {
+            if expected_null("nativeInstallNull") && !cfg!(windows) {
                 entries.push((
-                    "预编译安装命令未声明".into(),
+                    "非 Windows 预编译安装命令未声明".into(),
                     super::lifecycle::native_install_command().is_none(),
-                    "未核实下载地址，不得猜测".into(),
+                    "仅 Windows 官方安装脚本已核实".into(),
+                ));
+            }
+            if let Some(expected) = expected_text("nativeInstallWindows") {
+                let actual = super::lifecycle::native_install_command();
+                entries.push((
+                    "Windows 预编译安装命令".into(),
+                    cfg!(windows) && actual.as_deref() == Some(expected),
+                    format!("实际 {actual:?}"),
                 ));
             }
             if expected_null("npmInstallNull") {
@@ -372,4 +392,74 @@ fn lifecycle_case(case: &Value, context: &CaseContext) -> Result<Value, CaseErro
     }
     let result = checks(entries);
     Ok(json!({ "kind": kind, "result": result }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> CaseContext {
+        CaseContext {
+            home: std::path::PathBuf::from("/tmp/omp-home"),
+            project: std::path::PathBuf::from("/tmp/omp-project"),
+            executable: None,
+            environment: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn catalog_resources_follow_the_module_facets_without_per_task_capability_names() {
+        let catalog = catalog();
+        let capabilities = catalog["capabilities"].as_array().unwrap();
+        let names: Vec<&str> = capabilities
+            .iter()
+            .filter_map(|item| item["capability"].as_str())
+            .collect();
+        assert!(names.contains(&"resources"), "{names:?}");
+        assert!(!names.contains(&"resources-mcp"));
+        assert!(!names.contains(&"resources-skills"));
+        assert!(!names.contains(&"agents"), "Agents 通过 resources 用例表达");
+        let resources = capabilities
+            .iter()
+            .find(|item| item["capability"] == "resources")
+            .unwrap();
+        assert_eq!(resources["state"], super::super::resources_facet().state);
+        assert_eq!(resources["reason"], super::super::resources_facet().reason);
+        let configuration = capabilities
+            .iter()
+            .find(|item| item["capability"] == "configuration")
+            .unwrap();
+        assert_eq!(
+            configuration["reason"],
+            super::super::configuration::facet().reason
+        );
+        let history = capabilities
+            .iter()
+            .find(|item| item["capability"] == "history")
+            .unwrap();
+        assert_eq!(history["state"], super::super::history::facet().state);
+    }
+
+    #[test]
+    fn resources_cases_dispatch_by_kind_to_the_owning_module() {
+        for kind in ["mcp", "skills", "rules", "agents"] {
+            let outcome = run_case(
+                "resources",
+                &serde_json::json!({ "kind": kind }),
+                &context(),
+            );
+            assert!(
+                matches!(outcome, Err(CaseError::Unverified(_))),
+                "{kind} 应分派到尚未交付的模块并返回 unverified"
+            );
+        }
+        assert!(matches!(
+            run_case("resources", &serde_json::json!({ "kind": "unknown" }), &context()),
+            Err(CaseError::Failed(_))
+        ));
+        assert!(matches!(
+            run_case("resources", &serde_json::json!({}), &context()),
+            Err(CaseError::Failed(_))
+        ));
+    }
 }

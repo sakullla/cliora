@@ -50,6 +50,45 @@ pub(crate) const ID: &str = "omp";
 pub(crate) const NAME: &str = "oh-my-pi (OMP)";
 pub(crate) const COMMAND: &str = "omp";
 
+/// Resource facets are composed here from the owning modules only. A resource
+/// task publishes an available facet in its own file and this composition
+/// follows without editing the capability state.
+pub(crate) fn resources_facet() -> Facet {
+    let facets = [mcp::facet(), skills::facet(), agents::facet()];
+    if facets.iter().any(|facet| facet.state == "available") {
+        Facet {
+            state: "available",
+            reason: resources_reason(true),
+        }
+    } else {
+        Facet {
+            state: "planned",
+            reason: resources_reason(false),
+        }
+    }
+}
+
+fn resources_reason(available: bool) -> &'static str {
+    static AVAILABLE_REASON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static PLANNED_REASON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if available {
+        AVAILABLE_REASON
+            .get_or_init(|| "部分资源能力已由模块发布；未交付模块保留各自不可用原因".to_owned())
+            .as_str()
+    } else {
+        PLANNED_REASON
+            .get_or_init(|| {
+                format!(
+                    "MCP：{}；Skills 与规则：{}；Agents：{}",
+                    mcp::UNAVAILABLE_REASON,
+                    skills::UNAVAILABLE_REASON,
+                    agents::UNAVAILABLE_REASON
+                )
+            })
+            .as_str()
+    }
+}
+
 pub struct Omp;
 
 impl CliAdapter for Omp {
@@ -483,50 +522,40 @@ impl CliAdapter for Omp {
         lifecycle::npm_uninstall_command()
     }
 
+    fn login_args(&self) -> Option<Vec<String>> {
+        accounts::login_args()
+    }
+
+    fn login_hint(&self) -> &'static str {
+        accounts::login_hint()
+    }
+
     fn descriptor(&self) -> AdapterDescriptor {
+        let plugins = self.plugins();
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             id: ID,
             name: NAME,
             interface_formats: self.interface_formats(),
-            project_model_override: false,
-            yolo_available: false,
+            project_model_override: configuration::project_model_override(),
+            yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             launch_form: LaunchForm::Terminal,
-            native_config: Facet {
-                state: "planned",
-                reason: configuration::UNAVAILABLE_REASON,
-            },
-            launch: Facet {
-                state: "available",
-                reason: lifecycle::LAUNCH_REASON,
-            },
-            resume: Facet {
-                state: "available",
-                reason: lifecycle::RESUME_REASON,
-            },
-            resources: Facet {
-                state: "planned",
-                reason: "OMP MCP、Skills、规则与 Agents 尚未交付；不显示为可用能力",
-            },
-            history: Facet {
-                state: "planned",
-                reason: history::UNAVAILABLE_REASON,
-            },
-            login: None,
+            native_config: configuration::facet(),
+            launch: lifecycle::launch_facet(),
+            resume: lifecycle::resume_facet(),
+            resources: resources_facet(),
+            history: history::facet(),
+            login: accounts::login_capability(),
             management: super::ManagementCapabilities {
-                accounts: false,
+                accounts: accounts::management_visible(self.accounts()),
                 mcp: self.supports_mcp(),
                 skills: self.supports_skills(),
-                agents: self
-                    .agents()
-                    .is_some_and(|adapter| adapter.capability().supported),
-                plugins: self
-                    .plugins()
-                    .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
-                project_plugins: false,
+                agents: agents::management_visible(self.agents()),
+                plugins: plugins::management_visible(plugins),
+                project_plugins: plugins::project_visible(plugins),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
-                memory_reason: memory::UNVERIFIED_REASON,
+                memory_reason: memory::management_reason(),
             },
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
         }
@@ -587,12 +616,54 @@ mod tests {
     fn omp_declares_only_verified_lifecycle_and_explicit_absence() {
         let adapter = &super::Omp;
         let descriptor = adapter.descriptor();
+        // Every published state comes from its owning module or port, never a
+        // literal stored in the composition root.
+        assert_eq!(descriptor.native_config.state, configuration::facet().state);
+        assert_eq!(descriptor.native_config.reason, configuration::facet().reason);
+        assert_eq!(descriptor.launch.state, lifecycle::launch_facet().state);
+        assert_eq!(descriptor.launch.reason, lifecycle::launch_facet().reason);
+        assert_eq!(descriptor.resume.state, lifecycle::resume_facet().state);
+        assert_eq!(descriptor.resume.reason, lifecycle::resume_facet().reason);
+        assert_eq!(descriptor.resources.state, resources_facet().state);
+        assert_eq!(descriptor.resources.reason, resources_facet().reason);
+        assert_eq!(descriptor.history.state, history::facet().state);
+        assert_eq!(descriptor.history.reason, history::facet().reason);
+        assert_eq!(
+            descriptor.login.is_some(),
+            accounts::login_capability().is_some()
+        );
+        assert_eq!(
+            descriptor.management.accounts,
+            accounts::management_visible(adapter.accounts())
+        );
+        assert_eq!(
+            descriptor.management.plugins,
+            plugins::management_visible(adapter.plugins())
+        );
+        assert_eq!(
+            descriptor.management.project_plugins,
+            plugins::project_visible(adapter.plugins())
+        );
+        assert_eq!(
+            descriptor.management.memory_reason,
+            memory::management_reason()
+        );
+        assert_eq!(
+            descriptor.project_model_override,
+            configuration::project_model_override()
+        );
         assert_eq!(descriptor.launch.state, "available");
         assert_eq!(descriptor.resume.state, "available");
         assert_eq!(descriptor.native_config.state, "planned");
         assert!(!descriptor.native_config.reason.trim().is_empty());
         assert_eq!(descriptor.resources.state, "planned");
-        assert!(!descriptor.resources.reason.trim().is_empty());
+        for reason in [
+            mcp::UNAVAILABLE_REASON,
+            skills::UNAVAILABLE_REASON,
+            agents::UNAVAILABLE_REASON,
+        ] {
+            assert!(descriptor.resources.reason.contains(reason), "资源原因应由模块组合");
+        }
         assert_eq!(descriptor.history.state, "planned");
         assert!(!descriptor.history.reason.trim().is_empty());
         assert!(descriptor.login.is_none());
@@ -661,7 +732,11 @@ mod tests {
             adapter.install_command().as_deref(),
             Some("bun add -g @oh-my-pi/pi-coding-agent")
         );
-        assert!(adapter.native_install_command().is_none());
+        assert_eq!(
+            adapter.native_install_command().is_some(),
+            cfg!(windows),
+            "预编译安装入口按平台核实"
+        );
         assert!(adapter.npm_install_command().is_none());
         assert_eq!(
             adapter.source_upgrade_command("bun", Some("18.20.2")).as_deref(),

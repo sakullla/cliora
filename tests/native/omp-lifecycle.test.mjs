@@ -55,6 +55,7 @@ test('source and maintenance fixtures name Bun while the precompiled installer s
   assert.equal(maintenance.upgradeBun, 'bun update -g @oh-my-pi/pi-coding-agent');
   assert.equal(maintenance.upgradeNative, 'omp update');
   assert.equal(maintenance.uninstallBun, 'bun remove -g @oh-my-pi/pi-coding-agent');
+  assert.equal(maintenance.nativeInstallWindows, 'irm https://omp.sh/install.ps1 | iex');
   assert.equal(maintenance.nativeInstallNull, true);
   assert.equal(maintenance.npmInstallNull, true);
 });
@@ -106,6 +107,19 @@ test('shared services never dispatch on the OMP id', async () => {
     assert.doesNotMatch(source, /(?:===?|!==?)\s*['"]omp['"]/, relative);
     assert.doesNotMatch(source, /['"]omp['"]\s*=>/, relative);
   }
+});
+
+test('resource fixtures use the resources capability and kind dispatch', async () => {
+  const verifySource = await readFile(path.join(repository, 'src-tauri/src/adapters/omp/verify.rs'), 'utf8');
+  const verify = verifySource.split('#[cfg(test)]')[0];
+  assert.match(verify, /"resources" => match case\.get\("kind"\)/);
+  for (const kind of ['mcp', 'skills', 'rules', 'agents']) {
+    assert.ok(verify.includes(`Some("${kind}")`), `缺少 ${kind} 分派`);
+  }
+  assert.ok(!verify.includes('"resources-mcp"'), '不得保留 T4 无法落盘的 capability 名');
+  assert.ok(!verify.includes('"resources-skills"'), '不得保留 T4 无法落盘的 capability 名');
+  const readme = await readFile(path.join(repository, 'tests/fixtures/omp/lifecycle/README.md'), 'utf8');
+  assert.match(readme, /resources\/.*mcp.*skills.*rules.*agents/s);
 });
 
 test('OMP copy exists in both languages while capabilities stay explicit', async () => {

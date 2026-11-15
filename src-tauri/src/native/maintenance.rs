@@ -504,7 +504,13 @@ mod tests {
         assert_eq!(install, "bun add -g @oh-my-pi/pi-coding-agent");
         assert_eq!(expected, None, "首次安装由适配器选择通道，验证任一已识别来源");
         assert!(script(omp, "install", "bun", None).is_ok());
-        assert!(script(omp, "install_native", "native", None).is_err(), "预编译安装地址未核实，不得猜测");
+        let native_install = script(omp, "install_native", "native", None);
+        assert_eq!(native_install.is_ok(), cfg!(windows), "预编译安装入口仅 Windows 已核实");
+        if cfg!(windows) {
+            let (command, expected) = native_install.unwrap();
+            assert_eq!(command, "irm https://omp.sh/install.ps1 | iex");
+            assert_eq!(expected.as_deref(), Some("native"), "安装后必须按 native 来源验证");
+        }
         let (upgrade_bun, expected) = script(omp, "upgrade", "bun", Some("18.20.2")).unwrap();
         assert_eq!(upgrade_bun, "bun update -g @oh-my-pi/pi-coding-agent");
         assert_eq!(expected.as_deref(), Some("bun"), "升级后必须按 Bun 来源验证");
