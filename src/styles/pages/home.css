@@ -2,18 +2,18 @@
 .home-band { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
 .home-band > * { min-width: 0; }
 .home-tools { min-width: 0; container-type: inline-size; }
-.home-section-hint { margin: calc(var(--space-2) * -1) 0 var(--space-3); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
+.home-section-hint { display: none; }
 .home-secondary { display: flex; flex-direction: column; align-self: stretch; }
-.home-secondary .subtle-panel { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: 168px; padding: var(--space-6) var(--space-5); text-align: center; }
+.home-secondary .subtle-panel { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: 168px; padding: var(--space-6) var(--space-5); text-align: center; box-shadow: var(--shadow-card); }
 .home-secondary .subtle-panel .empty-symbol { margin-bottom: var(--space-0_5); }
 .home-secondary .subtle-panel strong { font-size: var(--fs-title); font-weight: var(--fw-semibold); color: var(--text); }
 .home-secondary .subtle-panel p { max-width: 32ch; margin-top: 0; }
-.subtle-panel { padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.subtle-panel { padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .subtle-panel strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
 .subtle-panel p { margin-top: var(--space-1); color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; }
 
 /* First-run checklist stays inline and ahead of all other home tasks. */
-.onboarding-card { position: relative; margin-bottom: var(--space-6); padding: var(--space-4) var(--space-5); border: 1px solid var(--accent-line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); background: var(--surface); }
+.onboarding-card { position: relative; margin-bottom: var(--space-6); padding: var(--space-4) var(--space-5); border: 1px solid var(--accent-line); border-left: 3px solid var(--accent); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .onboarding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .onboarding-head h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); color: var(--text); }
 .onboarding-head p { max-width: 64ch; margin: var(--space-0_5) 0 0; font-size: var(--fs-body); color: var(--text-2); }

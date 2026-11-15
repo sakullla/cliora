@@ -367,7 +367,7 @@ function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, r
   </div>;
 }
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef, windowChrome = null, captionSlotRef }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, onLiveCountChange, railToggleRef, windowChrome = null, captionSlotRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
   /** The native window frame; set, the session title bar is also the window's title bar. */
   windowChrome?: WindowChrome | null;
@@ -379,6 +379,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   railSlim?: boolean;
   onToggleRailSlim?: () => void;
   onRailLayout?: (layout: WorkbenchRailLayout) => void;
+  onLiveCountChange?: (count: number) => void;
   /** The shell's sidebar toggle calls this so focus mode is left before the sidebar folds. */
   railToggleRef?: MutableRefObject<(() => void) | null>;
   active: boolean;
@@ -3234,6 +3235,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const railDocked = !!railHost;
   const showRail = !focusMode && !(showEmpty && !listError);
   const railShown = railDocked && showRail;
+  const liveScopedCount = useMemo(() => scopedSessions.filter((item) => item.running).length, [scopedSessions]);
+  useEffect(() => {
+    onLiveCountChange?.(liveScopedCount);
+  }, [onLiveCountChange, liveScopedCount]);
   useEffect(() => {
     onRailLayout?.({ docked: railShown, focus: railDocked && focusMode });
   }, [onRailLayout, railShown, railDocked, focusMode]);

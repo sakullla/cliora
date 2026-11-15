@@ -25,6 +25,7 @@
 }
 .modal::backdrop {
   background: var(--overlay);
+  backdrop-filter: blur(4px);
   animation: fade-in var(--medium) var(--ease);
 }
 @media (prefers-reduced-motion: reduce) {
@@ -213,9 +214,9 @@
   outline-offset: -2px;
 }
 .item[aria-selected='true'] {
-  background: var(--surface);
+  background: var(--sidebar-active);
   color: var(--text);
-  box-shadow: 0 0 0 1px var(--line);
+  box-shadow: var(--sidebar-active-ring);
 }
 .glyph {
   display: grid;

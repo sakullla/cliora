@@ -1,147 +1,165 @@
-/* Quiet Studio tokens: mineral neutrals, ink typography, emerald identity.
+/* Modern Studio tokens: crisp slate/obsidian neutrals, high-contrast ink typography,
+   emerald identity, tactile card elevation and luminous data-viz colors.
    Semantic names stay stable so feature modules consume one visual language. */
 
 :root {
   color-scheme: light;
-  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   font-size: var(--fs-body);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 
-  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", "SFMono-Regular", Menlo, monospace;
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Warm mineral canvas, paper surfaces and deep ink. Layers differ in value,
-     not in glass, glow or elevation. */
-  --bg: #f5f6f3;
-  --sidebar: #eff1ed;
-  --surface: #fdfdfc;
-  --surface-2: #f1f3ef;
-  --surface-3: #e6e9e4;
-  --overlay: rgb(25 30 26 / 36%);
-  --wash-a: rgb(8 122 85 / 5%);
-  --wash-b: rgb(8 122 85 / 3%);
-  --surface-glass: var(--surface);
+  /* Crisp studio slate frame, soft alabaster canvas and pure paper cards. */
+  --bg: #f8fafc;
+  --sidebar: #f1f4f9;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --overlay: rgb(15 23 42 / 42%);
+  --wash-a: rgb(5 122 85 / 6%);
+  --wash-b: rgb(5 122 85 / 3%);
+  --surface-glass: rgb(255 255 255 / 92%);
   --surface-raised: var(--surface);
   --aurora-1: transparent;
   --aurora-2: transparent;
   --aurora-3: transparent;
   --frame: var(--sidebar);
   --canvas-glow: none;
-  /* Sidebar inks: a soft well for search, a raised paper chip for the current item. */
-  --sidebar-edge: color-mix(in srgb, #1d221f 8%, transparent);
-  --sidebar-divider: color-mix(in srgb, #1d221f 7%, transparent);
-  --sidebar-well: color-mix(in srgb, #1d221f 5%, transparent);
-  --sidebar-well-hover: color-mix(in srgb, #1d221f 3%, #ffffff);
-  --sidebar-kbd: color-mix(in srgb, #1d221f 6%, transparent);
+  /* Sidebar inks: a soft slate well for search, a crisp raised paper pill for the current item. */
+  --sidebar-edge: color-mix(in srgb, #0f172a 7%, transparent);
+  --sidebar-divider: color-mix(in srgb, #0f172a 7%, transparent);
+  --sidebar-well: color-mix(in srgb, #0f172a 4.5%, transparent);
+  --sidebar-well-hover: #ffffff;
+  --sidebar-kbd: color-mix(in srgb, #0f172a 6%, transparent);
   --sidebar-active: #ffffff;
-  --sidebar-active-ring: 0 0 0 1px rgb(29 34 31 / 7%), 0 1px 2px rgb(29 34 31 / 6%);
+  --sidebar-active-ring: 0 0 0 1px rgb(15 23 42 / 8%), 0 2px 5px -1px rgb(15 23 42 / 6%);
 
-  --text: #1d221f;
-  --text-2: #434a45;
-  --text-3: #5c645e;
+  --text: #0f172a;
+  --text-2: #334155;
+  --text-3: #526075;
 
-  --line: #e0e3de;
-  --line-strong: #c6cbc4;
-  --control-line: #d0d4cd;
-  --control-line-hover: #a6aea5;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --control-line: #cbd5e1;
+  --control-line-hover: #94a3b8;
 
-  --surface-hover: color-mix(in srgb, var(--text) 4%, var(--surface));
-  --surface-pressed: color-mix(in srgb, var(--text) 7%, var(--surface));
-  --row-hover: color-mix(in srgb, var(--text) 5%, transparent);
+  --surface-hover: color-mix(in srgb, var(--text) 3.5%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 6.5%, var(--surface));
+  --row-hover: color-mix(in srgb, var(--text) 4.5%, transparent);
 
-  /* Emerald is reserved for identity, current context, focus and primary work. */
-  --accent: #087a55;
-  --accent-hover: #066849;
-  --accent-bright: #159a6d;
+  /* Crisp emerald is reserved for identity, current context, focus and primary work. */
+  --accent: #057a55;
+  --accent-hover: #046345;
+  --accent-bright: #10b981;
   --on-accent: #ffffff;
-  --accent-soft: #e3efe8;
-  --accent-line: #b7d1c3;
-  --accent-ring: rgb(8 122 85 / 16%);
-  --selection: #d3e7dc;
+  --accent-soft: #ecfdf5;
+  --accent-line: #a7f3d0;
+  --accent-ring: rgb(5 122 85 / 16%);
+  --selection: #d1fae5;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
   --brand-gradient: var(--accent);
 
-  --danger: #a53630;
-  --danger-soft: #f8e9e6;
-  --danger-line: #e4c1bb;
+  --danger: #be123c;
+  --danger-soft: #fff1f2;
+  --danger-line: #fecdd3;
   --on-danger: #ffffff;
-  --warning: #79520b;
-  --warning-soft: #f7efdd;
-  --warning-line: #dfcda4;
-  --success: #116b50;
-  --success-soft: #e3efe8;
-  --success-line: #b7d1c3;
-  --info: #356589;
-  --info-soft: #e8eff3;
-  --info-line: #c1d2df;
+  --warning: #92400e;
+  --warning-soft: #fffbeb;
+  --warning-line: #fde68a;
+  --success: #047857;
+  --success-soft: #ecfdf5;
+  --success-line: #a7f3d0;
+  --info: #1d4ed8;
+  --info-soft: #eff6ff;
+  --info-line: #bfdbfe;
 
   --switch-thumb: #ffffff;
   /* The Windows caption close button keeps the system red in both themes. */
   --caption-close: #c42b1c;
   --on-caption-close: #ffffff;
   --on-brand: #ffffff;
-  --tool-logo-pale: #f4f5f0;
+  --tool-logo-pale: #f8fafc;
 
-  /* Whole-pixel steps keep Chinese glyphs crisp on Windows. */
+  /* Whole-pixel steps keep Chinese glyphs crisp on desktop displays. */
   --fs-micro: 11px;
   --fs-caption: 12px;
   --fs-control: 13px;
   --fs-body: 14px;
   --fs-title: 15px;
   --fs-heading: 17px;
-  --fs-page: 26px;
+  --fs-page: 24px;
 
   --fw-regular: 400;
   --fw-medium: 500;
   --fw-semibold: 600;
   --fw-bold: 700;
 
-  --chart-input: #527b9b;
-  --chart-output: #3f805e;
-  --chart-read: #a2782f;
-  --chart-write: #806b99;
+  /* Modern luminous data-visualization palette (Cobalt / Indigo / Violet / Emerald, >= 3:1 on surface). */
+  --chart-input: #2563eb;
+  --chart-output: #059669;
+  --chart-read: #4f46e5;
+  --chart-write: #9333ea;
 
-  /* A restrained radius scale: controls, content groups and overlays. */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-2xl: 16px;
+  /* Modern balanced radius scale: controls, content cards and overlays. */
+  --radius-2xs: 3px;
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius: 9px;
+  --radius-lg: 11px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
   --radius-pill: 999px;
   --radius-logo: 24%;
-  --canvas-gap: 0px;
-  --canvas-radius: 0px;
+  --canvas-gap: 6px;
+  --canvas-radius: 14px;
 
-  /* Ordinary content is flat. Elevation belongs to menus, dialogs and toasts. */
+  /* Resting secondary controls stay quiet; cards, primary actions and overlays carry crisp depth. */
   --shadow-xs: none;
-  --shadow-sm: none;
-  --shadow-md: 0 12px 30px -18px rgb(25 35 29 / 32%);
-  --shadow-lg: 0 24px 64px -28px rgb(20 28 23 / 42%), 0 8px 24px -16px rgb(20 28 23 / 20%);
-  --shadow-accent: none;
-  --inner-highlight: none;
-  --shadow-canvas: none;
-  --shadow-card: none;
-  --shadow-card-hover: none;
-  --shadow-well: none;
-  --shadow-well-soft: none;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 5%);
+  --shadow-pill-active: 0 1px 2px rgb(15 23 42 / 5%), 0 0 0 1px rgb(15 23 42 / 5%);
+  --shadow-logo: 0 1px 2px rgb(15 23 42 / 4%);
+  --shadow-md: 0 12px 28px -12px rgb(15 23 42 / 18%), 0 4px 10px -4px rgb(15 23 42 / 8%);
+  --shadow-lg: 0 24px 64px -20px rgb(15 23 42 / 26%), 0 8px 24px -10px rgb(15 23 42 / 12%);
+  --shadow-accent: 0 1px 2px rgb(5 122 85 / 22%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 18%);
+  --shadow-canvas: 0 1px 3px rgb(15 23 42 / 4%);
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 4%), 0 2px 6px -2px rgb(15 23 42 / 3%);
+  --shadow-card-hover: 0 6px 18px -6px rgb(15 23 42 / 10%), 0 2px 6px -2px rgb(15 23 42 / 5%);
+  --shadow-well: inset 0 1px 2px rgb(15 23 42 / 6%);
+  --shadow-well-soft: inset 0 1px 1px rgb(15 23 42 / 4%);
   --glow-accent: none;
-  --shadow-brandmark: none;
-  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 18%);
+  --shadow-brandmark: 0 1px 2px rgb(15 23 42 / 10%);
+  --shadow-thumb: 0 1px 3px rgb(15 23 42 / 22%);
   --focus-ring: 2px solid var(--accent);
+
+  --theme-preview-light-bg: #f8fafc;
+  --theme-preview-light-rail: #f1f4f9;
+  --theme-preview-light-line: #dbe2ed;
+  --theme-preview-light-ink: #334155;
+  --theme-preview-light-muted: #cbd5e1;
+  --theme-preview-dark-bg: #11151f;
+  --theme-preview-dark-rail: #0c0f16;
+  --theme-preview-dark-line: #293246;
+  --theme-preview-dark-ink: #cbd5e1;
+  --theme-preview-dark-muted: #334155;
 
   --space-0_5: 2px;
   --space-0_75: 3px;
   --space-1: 4px;
+  --space-1_25: 5px;
   --space-1_5: 6px;
+  --space-1_75: 7px;
   --space-2: 8px;
   --space-2_5: 10px;
   --space-3: 12px;
+  --space-3_5: 14px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
@@ -159,87 +177,97 @@
   --control-h-sm: 32px;
   --row-h: 40px;
   --row-h-compact: 32px;
-  --ease: cubic-bezier(.2, .65, .3, 1);
-  --spring: var(--ease);
-  --fast: 120ms;
-  --medium: 180ms;
-  --slow: 220ms;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  --spring: cubic-bezier(.2, .8, .2, 1);
+  --fast: 130ms;
+  --medium: 190ms;
+  --slow: 240ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23434a45' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235c645e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23334155' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23526075' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #171a18;
-  --sidebar: #111412;
-  --surface: #1e221f;
-  --surface-2: #262b27;
-  --surface-3: #303631;
-  --overlay: rgb(0 0 0 / 58%);
-  --wash-a: rgb(98 201 154 / 5%);
-  --wash-b: rgb(98 201 154 / 3%);
-  --surface-glass: var(--surface);
+  --bg: #11151f;
+  --sidebar: #0c0f16;
+  --surface: #171c28;
+  --surface-2: #1f2636;
+  --surface-3: #293246;
+  --overlay: rgb(2 6 14 / 66%);
+  --wash-a: rgb(52 211 153 / 7%);
+  --wash-b: rgb(52 211 153 / 4%);
+  --surface-glass: rgb(23 28 40 / 92%);
   --surface-raised: var(--surface);
   --frame: var(--sidebar);
   --canvas-glow: none;
-  --sidebar-edge: rgb(255 255 255 / 6%);
-  --sidebar-divider: rgb(255 255 255 / 6%);
-  --sidebar-well: rgb(255 255 255 / 5%);
-  --sidebar-well-hover: rgb(255 255 255 / 7%);
-  --sidebar-kbd: rgb(255 255 255 / 7%);
-  --sidebar-active: #232725;
-  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 6%);
+  --sidebar-edge: rgb(255 255 255 / 6.5%);
+  --sidebar-divider: rgb(255 255 255 / 6.5%);
+  --sidebar-well: rgb(255 255 255 / 4.5%);
+  --sidebar-well-hover: rgb(255 255 255 / 7.5%);
+  --sidebar-kbd: rgb(255 255 255 / 7.5%);
+  --sidebar-active: #1b2232;
+  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 8%), 0 2px 6px -1px rgb(0 0 0 / 35%);
 
-  --text: #eceee9;
-  --text-2: #c4cac1;
-  --text-3: #acb4ab;
+  --text: #f1f5f9;
+  --text-2: #cbd5e1;
+  --text-3: #9cb0c9;
 
-  --line: #313733;
-  --line-strong: #4a524c;
-  --control-line: #3f4741;
-  --control-line-hover: #636e65;
+  --line: #242c3d;
+  --line-strong: #37435c;
+  --control-line: #2e384d;
+  --control-line-hover: #4c5c7a;
 
-  --surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
-  --surface-pressed: color-mix(in srgb, var(--text) 10%, var(--surface));
-  --row-hover: color-mix(in srgb, var(--text) 7%, transparent);
+  --surface-hover: color-mix(in srgb, var(--text) 5.5%, var(--surface));
+  --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
+  --row-hover: color-mix(in srgb, var(--text) 6%, transparent);
 
-  --accent: #69cea0;
-  --accent-hover: #8addb5;
-  --accent-bright: #a5e7c6;
-  --on-accent: #0b2116;
-  --accent-soft: #203b2d;
-  --accent-line: #3d6650;
-  --accent-ring: rgb(105 206 160 / 22%);
-  --selection: #294b39;
+  --accent: #34d399;
+  --accent-hover: #6ee7b7;
+  --accent-bright: #a7f3d0;
+  --on-accent: #042016;
+  --accent-soft: #102a25;
+  --accent-line: #1d5444;
+  --accent-ring: rgb(52 211 153 / 22%);
+  --selection: #163e32;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
   --brand-gradient: var(--accent);
 
-  --danger: #f0b7ae;
-  --danger-soft: #422825;
-  --danger-line: #71443e;
-  --on-danger: #2b1512;
-  --warning: #e5c27e;
-  --warning-soft: #3c321f;
-  --warning-line: #665532;
-  --success: #a1dfbf;
-  --success-soft: #203b2d;
-  --success-line: #3d6650;
-  --info: #b4d2e7;
-  --info-soft: #233441;
-  --info-line: #3f5b70;
+  --danger: #fda4af;
+  --danger-soft: #311722;
+  --danger-line: #68273c;
+  --on-danger: #260b12;
+  --warning: #fcd34d;
+  --warning-soft: #2e2414;
+  --warning-line: #63491c;
+  --success: #6ee7b7;
+  --success-soft: #102a25;
+  --success-line: #1d5444;
+  --info: #93c5fd;
+  --info-soft: #14243b;
+  --info-line: #264875;
 
-  --chart-input: #8bb4d2;
-  --chart-output: #94c6a7;
-  --chart-read: #d7b778;
-  --chart-write: #bdabd2;
+  --chart-input: #60a5fa;
+  --chart-output: #34d399;
+  --chart-read: #818cf8;
+  --chart-write: #c084fc;
 
-  --shadow-md: 0 14px 32px -18px rgb(0 0 0 / 70%);
-  --shadow-lg: 0 28px 68px -28px rgb(0 0 0 / 82%), 0 8px 24px -14px rgb(0 0 0 / 56%);
-  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 32%);
+  --shadow-pill-active: 0 1px 2px rgb(0 0 0 / 32%), 0 0 0 1px rgb(255 255 255 / 7%);
+  --shadow-logo: 0 1px 2px rgb(0 0 0 / 24%);
+  --shadow-md: 0 14px 32px -14px rgb(0 0 0 / 68%), 0 4px 12px -4px rgb(0 0 0 / 40%);
+  --shadow-lg: 0 28px 68px -24px rgb(0 0 0 / 82%), 0 8px 24px -12px rgb(0 0 0 / 56%);
+  --shadow-accent: 0 1px 3px rgb(0 0 0 / 40%);
+  --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 22%);
+  --shadow-canvas: 0 1px 4px rgb(0 0 0 / 30%);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 2.5%);
+  --shadow-card-hover: 0 8px 24px -8px rgb(0 0 0 / 52%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --shadow-well: inset 0 1px 2px rgb(0 0 0 / 32%);
+  --shadow-well-soft: inset 0 1px 1px rgb(0 0 0 / 22%);
+  --shadow-thumb: 0 1px 3px rgb(0 0 0 / 48%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c4cac1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23acb4ab' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239cb0c9' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }

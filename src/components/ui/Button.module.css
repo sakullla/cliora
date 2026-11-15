@@ -22,8 +22,8 @@
 .button:disabled { cursor: not-allowed; opacity: .5; }
 .button[aria-busy="true"] { cursor: progress; }
 
-.button[data-variant="primary"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: var(--fw-semibold); }
-.button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-ring); }
+.button[data-variant="primary"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: var(--fw-semibold); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.button[data-variant="primary"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-ring), var(--inner-highlight); }
 .button[data-variant="primary"]:active:not(:disabled) { background: var(--accent-hover); box-shadow: none; }
 
 .button[data-variant="ghost"] { border-color: transparent; background: transparent; color: var(--text-2); }
