@@ -41,7 +41,7 @@ async function setup(page: Page, inherited = false) {
         return structuredClone(harness.impacts[args.id] ?? { accountId: account.id, accountVersion: account.version, toolId: 'codex', currentContextId: account.context?.id ?? null, profiles: [], scopes: [], usageReferences: [], contexts: [] });
       }
       if (command === 'discover_native_logins') { if (harness.nativeFailure) throw { message: harness.nativeFailure }; return structuredClone(harness.nativeSnapshot); }
-      if (command === 'account_capabilities') return [{ toolId: 'codex', provider: 'openai', version: '0.160.0', browserLink: (harness as any).browserLink ?? false, managedLogin: true, importNative: true, methods: ['browser', 'device'], reason: '使用原生登录，在独立目录完成身份核验。', identitySource: 'mock', refreshOwner: 'native_cli', acceptance: 'mock only' }];
+      if (command === 'account_capabilities') return [{ toolId: 'codex', provider: 'openai', version: '0.160.0', browserLink: (harness as any).browserLink ?? false, managedLogin: (harness as any).managedLogin ?? true, importNative: true, methods: (harness as any).managedLogin === false ? [] : ['browser', 'device'], reason: (harness as any).reason ?? '使用原生登录，在独立目录完成身份核验。', identitySource: 'mock', refreshOwner: 'native_cli', acceptance: 'mock only' }];
       if (command === 'create_account') { const value = { ...account('new', args.label), state: 'signed_out', identity: null, context: null }; harness.accounts.push(value as any); return value; }
       if (command === 'reapply_account_profile') {
         if (harness.applyFailure) throw { message: harness.applyFailure };
@@ -94,7 +94,7 @@ test('account panel distinguishes pending, cancel, reauthentication, logout and 
   await work.getByRole('button', { name: '重新认证' }).click(); await expect(work.getByText('等待原生登录完成')).toBeVisible();
   await work.getByRole('button', { name: '取消登录' }).click();
   const personal = page.getByRole('listitem').filter({ has: page.getByText('个人账号', { exact: true }) }); await personal.getByText('管理与关联', { exact: true }).click(); await expect(personal.getByText('已登录', { exact: true })).toBeVisible();
-  await personal.getByText('更多账号操作', { exact: true }).click(); // 退出此账号移入次级"更多账号操作"折叠区，需先展开
+  // 退出此账号 与 删除账号 同属管理区内的危险操作，不需要再展开第二层折叠。
   await personal.getByRole('button', { name: '退出此账号' }).click(); await page.getByRole('dialog').getByRole('button', { name: '退出此账号' }).click(); await expect(personal.getByText('已退出')).toBeVisible();
   await page.getByLabel('账号名称').fill('既有账号'); await page.getByRole('button', { name: '纳入现有原生账号' }).click();
   await expect(page.getByText('已将现有原生账号纳入管理；继续使用原目录，未复制令牌。')).toBeVisible();
@@ -103,11 +103,118 @@ test('account panel distinguishes pending, cancel, reauthentication, logout and 
   await page.screenshot({ path: 'test-results/oauth-accounts.png', fullPage: true });
 });
 
+test('native sign-in stays a read-only snapshot beside managed accounts', async ({ page }) => {
+  await setup(page); await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const native = page.getByLabel('CLI 原生登录');
+  const nativeRow = native.locator('[data-native-login]');
+  await expect(nativeRow).toHaveCount(1);
+  await expect(native.getByText('只读快照', { exact: true })).toBeVisible();
+  await expect(nativeRow.getByText('native@example.test', { exact: true })).toBeVisible();
+  await expect(nativeRow.getByText('可在 CLI 默认配置中使用 · 未纳入独立账号管理')).toBeVisible();
+  // A native snapshot owns no management or sign-out entry at all.
+  await expect(nativeRow.getByRole('button')).toHaveCount(0);
+  // The managed record keeps its own identity, state and current action.
+  const work = page.getByRole('listitem').filter({ has: page.getByText('工作账号', { exact: true }) });
+  await expect(work.getByText('a@example.test · Plus')).toBeVisible();
+  await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
+  await expect(work.getByRole('button', { name: '重新认证' })).toBeVisible();
+  await expect(work.getByRole('button', { name: '检查状态' })).toBeVisible();
+  await expect(work.getByRole('button', { name: '重命名' })).toBeVisible();
+  await expect(work.getByRole('button', { name: '退出此账号' })).toHaveCount(0);
+  const commands = await page.evaluate(() => (window as any).oauthHarness.calls.map((call: any) => call.command));
+  expect(commands.filter((command: string) => ['create_account', 'adopt_native_account', 'start_account_login', 'logout_account', 'delete_account'].includes(command))).toEqual([]);
+});
+
+test('pending sign-in shows its waiting state and allowed actions, then the real result', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).oauthHarness.browserLink = true; });
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const work = page.getByRole('listitem').filter({ has: page.getByText('工作账号', { exact: true }) });
+  await work.getByRole('button', { name: '重新认证' }).click();
+  await expect(work.locator('[data-state="pending"]')).toHaveText('等待原生登录完成');
+  await expect(work.getByRole('status').filter({ hasText: '等待原生操作完成' })).toBeVisible();
+  const authorize = work.getByRole('button', { name: '打开授权页面' });
+  await expect(work.getByRole('button', { name: '取消登录' })).toBeEnabled();
+  await expect(authorize).toBeEnabled();
+  await authorize.click();
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'open_account_login_link'))).toHaveLength(1);
+  // Identity and state only change once the native result actually arrives.
+  await page.evaluate(() => {
+    const account = (window as any).oauthHarness.accounts.find((item: any) => item.id === 'a');
+    account.state = 'signed_in'; account.version++; account.pendingLogin = null;
+    account.identity = { subject: 'a', email: 'verified@example.test', plan: 'Plus', source: 'mock' };
+  });
+  await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录', { timeout: 10_000 });
+  await expect(work.getByText('verified@example.test · Plus')).toBeVisible({ timeout: 10_000 });
+  await expect(work.getByRole('button', { name: '取消登录' })).toHaveCount(0);
+  await expect(work.getByRole('button', { name: '打开授权页面' })).toHaveCount(0);
+});
+
+test('unsupported managed sign-in keeps the real reason and offers no pseudo sign-in', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { const harness = (window as any).oauthHarness; harness.managedLogin = false; harness.reason = '当前平台不支持受管登录'; });
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  await expect(page.getByText('当前平台不支持受管登录').filter({ visible: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加账号', exact: true })).toHaveCount(0);
+  const work = page.getByRole('listitem').filter({ has: page.getByText('工作账号', { exact: true }) });
+  await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
+  await expect(work.getByRole('button', { name: '重新认证' })).toHaveCount(0);
+  await expect(work.getByRole('button', { name: '登录', exact: true })).toHaveCount(0);
+  await work.getByRole('button', { name: '检查状态' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'check_account').length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'start_account_login'))).toEqual([]);
+});
+
+test('sign-out and deletion list the real links first and a cancel changes nothing', async ({ page }) => {
+  await setup(page); const work = await addImpactFixture(page);
+  await work.getByText('管理与关联', { exact: true }).click();
+  const impacts = work.getByLabel('工作账号的关联');
+  await expect(impacts.getByText('关联工作配置 · 全局', { exact: true })).toBeVisible();
+  const danger = work.getByRole('region', { name: '危险操作' });
+  await expect(danger.getByText('当前关联：1 个配置 · 2 个使用范围 · 1 个额度查询', { exact: true })).toBeVisible();
+  await danger.getByRole('button', { name: '退出此账号' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('关联工作配置');
+  await expect(dialog).toContainText('全局（正在使用）');
+  await expect(dialog).toContainText('历史项目（历史绑定）');
+  await expect(dialog).toContainText('关联工作额度');
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'logout_account'))).toEqual([]);
+  await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
+  await danger.getByRole('button', { name: '删除账号', exact: true }).click();
+  await expect(dialog).toContainText('不会退出或撤销授权');
+  await expect(dialog).toContainText('关联工作额度');
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'delete_account').length)).toBe(0);
+  await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
+});
+
+test('a failed link read never reads as no links and stops sign-out until it succeeds', async ({ page }) => {
+  await setup(page); const work = await addImpactFixture(page);
+  await page.evaluate(() => { (window as any).oauthHarness.impactFailure = '引用数据库暂时不可用'; });
+  await work.getByText('管理与关联', { exact: true }).click();
+  const impacts = work.getByLabel('工作账号的关联');
+  await expect(impacts.getByRole('alert')).toHaveText('引用数据库暂时不可用');
+  const danger = work.getByRole('region', { name: '危险操作' });
+  await expect(danger.getByText('关联影响尚未读取成功；退出或删除前会重新读取，读取失败时不会执行。', { exact: true })).toBeVisible();
+  await expect(danger.getByText(/^当前关联：/)).toHaveCount(0);
+  await danger.getByRole('button', { name: '退出此账号' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '引用数据库暂时不可用' }).first()).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'logout_account'))).toEqual([]);
+  await page.evaluate(() => { (window as any).oauthHarness.impactFailure = ''; });
+  await impacts.getByRole('button', { name: '刷新关联' }).click();
+  await expect(danger.getByText('当前关联：1 个配置 · 2 个使用范围 · 1 个额度查询', { exact: true })).toBeVisible();
+  await danger.getByRole('button', { name: '退出此账号' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '退出此账号' }).click();
+  await expect(work.locator('[data-state="signed_out"]')).toHaveText('已退出');
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'logout_account'))).toHaveLength(1);
+});
+
 test('account deletion confirms its scope, cancel makes no call and pending login cannot delete', async ({ page }) => {
   await setup(page); await page.getByRole('tab', { name: '账号', exact: true }).click();
   const work = page.getByRole('listitem').filter({ has: page.getByText('工作账号', { exact: true }) });
   await work.getByText('管理与关联', { exact: true }).click();
-  await work.getByText('更多账号操作', { exact: true }).click(); // 删除账号移入次级"更多账号操作"折叠区，需先展开
   await work.getByRole('button', { name: '删除账号', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('原生登录文件、插件和历史记录会保留');
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
@@ -406,7 +513,9 @@ async function addImpactFixture(page: Page, official = false) {
 
 test('account impacts are loaded on demand with real configuration, scope and quota recovery links', async ({ page }) => {
   await setup(page); const work = await addImpactFixture(page);
-  await expect(work.getByRole('button', { name: '重新认证' })).not.toBeVisible();
+  // 常用操作直接出现在账号行；关联与危险操作仍按需读取，未展开前不发起引用查询。
+  await expect(work.getByRole('button', { name: '重新认证' })).toBeVisible();
+  await expect(work.getByRole('button', { name: '管理与关联', exact: true })).toHaveAttribute('aria-expanded', 'false');
   expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'account_impact'))).toEqual([]);
   await work.getByText('管理与关联', { exact: true }).click();
   const impacts = work.getByLabel('工作账号的关联');
@@ -460,7 +569,6 @@ test('account impact failure has retry and destructive operations explain refere
   await page.evaluate(() => { (window as any).oauthHarness.impactFailure = ''; });
   await impacts.getByRole('button', { name: '刷新关联' }).click();
   await expect(impacts.getByText('关联工作配置 · 全局', { exact: true })).toBeVisible();
-  await work.getByText('更多账号操作', { exact: true }).click(); // 退出此账号/删除账号在次级折叠区，需先展开
   await work.getByRole('button', { name: '退出此账号' }).click();
   await expect(page.getByRole('dialog')).toContainText('关联工作配置');
   await expect(page.getByRole('dialog')).toContainText('关联工作额度');

@@ -7,6 +7,7 @@
   .addForm > button:first-of-type { grid-column: auto; grid-row: 4; justify-self: stretch; }
   .addForm > button:last-of-type:not(:first-of-type) { grid-column: auto; grid-row: 5; justify-self: stretch; }
 }
+/* The native snapshot is read-only: one tinted well, no row actions, one shared re-read. */
 .nativeLogin { border: 0; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); display: grid; gap: var(--space-3); min-width: 0; }
 .nativeRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-2) var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .nativeLoading :global(.skeleton-page) { gap: 0; }
@@ -44,17 +45,37 @@
 .nativeIdentity > span { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .nativeRow > details { grid-column: 1 / -1; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .nativeRow summary { cursor: pointer; }
-.management { display: grid; gap: var(--space-3); }
-.management summary { cursor: pointer; width: fit-content; }
-.management[open] { padding-top: var(--space-2); border-top: 1px solid var(--line); }
-.management > .impact { margin: var(--space-3) 0; }
-.accountActions { display: grid; gap: var(--space-2_5); }
-.moreActions { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
-.moreActions summary { cursor: pointer; width: fit-content; }
-.actionHint,
-.accountActions > .actionHint { margin: 0; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
+.readOnlyTag { flex: none; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-micro); line-height: 18px; white-space: nowrap; }
+/* A managed row leads with identity and state, keeps its current action beside them, and
+   opens one continuous management region instead of stacked disclosures. */
+.accountHead { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-width: 0; }
+.accountIdentity { display: grid; gap: var(--space-1); flex: 1 1 220px; min-width: 0; }
+.accountIdentity > strong { overflow-wrap: anywhere; }
+.accountIdentity > p { margin: 0; color: var(--text-2); font-size: var(--fs-control); overflow-wrap: anywhere; }
+.accountState { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.rowActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.waiting { display: grid; gap: var(--space-2); }
+.waiting > span { font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
+.management { display: grid; gap: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.management > p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.6; overflow-wrap: anywhere; }
+.renameForm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.renameForm > label { display: grid; gap: var(--space-1_5); flex: 1 1 180px; min-width: 0; color: var(--text); font-size: var(--fs-body); }
+.renameForm input { width: 100%; }
 .impact { display: grid; gap: var(--space-2_5); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .impact ul { display: grid; gap: var(--space-2); list-style: none; padding: 0; margin: 0; }
 .impact li { display: grid; gap: var(--space-1_5); }
-.impactHeader { display: flex; justify-content: space-between; gap: var(--space-2_5); align-items: center; }
+.impactHeader { display: flex; justify-content: space-between; gap: var(--space-2_5); align-items: center; flex-wrap: wrap; }
 .contextSummary { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
+.danger { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius); background: color-mix(in srgb, var(--danger-soft) 45%, var(--surface)); min-width: 0; }
+.danger > h4 { margin: 0; color: var(--danger); font-size: var(--fs-body); }
+.danger > p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.6; overflow-wrap: anywhere; }
+.dangerActions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.danger > .actionHint { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+@media (max-width: 760px) {
+  .nativeLogin { padding: var(--space-3); }
+  .nativeRow { grid-template-columns: minmax(0, 1fr); }
+  .readOnlyTag { white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .management, .rowActions { transition: none; }
+}
