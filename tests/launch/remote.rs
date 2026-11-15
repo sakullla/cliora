@@ -262,6 +262,11 @@ screen() {{
     case "$1" in
         -ls)
             case "$scenario" in
+                native_screen_format|screen_empty_crlf) printf 'No Sockets found in /run/screen/S-fixture.\n\r\n'; return 1 ;;
+                screen_padded_absent) printf '\n\r\nNo Sockets found in /run/screen/S-fixture.\r\n\r\n'; return 1 ;;
+                screen_mixed_crlf) printf 'No Sockets found in /run/screen/S-fixture.\r\npermission denied\r\n'; return 1 ;;
+                screen_embedded_cr) printf 'No Sock\rets found in /run/screen/S-fixture.\n'; return 1 ;;
+                screen_wrong_status_crlf) printf 'No Sockets found in /run/screen/S-fixture.\n\r\n'; return 127 ;;
                 screen_loader) echo 'No Sockets found in controlled dependency error' >&2; return 127 ;;
                 screen_misleading) echo 'permission denied: No Sockets found' >&2; return 1 ;;
                 screen_mixed_diagnostic) printf 'No Sockets found in /run/screen/S-fixture.\npermission denied\n' >&2; return 1 ;;
@@ -287,6 +292,7 @@ sleep() {{ [ "$1" = 1 ] || return 95; printf 'WAIT\n' >&3; }}
 #[cfg_attr(windows, ignore = "requires WSL POSIX shell; opt in with --include-ignored")]
 fn remote_end_recovers_read_only_unknown_within_original_budget_without_repeating_kill() {
     for (scenario, exit, reads, waits, kills) in [
+        ("native_screen_format", 0, 2, 0, 1),
         ("transient", 0, 3, 1, 1), ("screen_transient", 0, 3, 1, 1),
         ("unknown", 46, 6, 5, 1), ("screen_unknown", 46, 6, 5, 1),
         ("post_loader", 46, 6, 5, 1),
@@ -311,6 +317,8 @@ fn remote_end_requires_expected_status_and_specific_absence_diagnostics() {
     for (scenario, exit) in [
         ("loader", 46), ("misleading", 46), ("wrong_status", 46), ("mixed_diagnostic", 46),
         ("screen_loader", 46), ("screen_misleading", 46), ("screen_presence_error", 46), ("screen_mixed_diagnostic", 46),
+        ("screen_empty_crlf", 0), ("screen_padded_absent", 0),
+        ("screen_mixed_crlf", 46), ("screen_embedded_cr", 46), ("screen_wrong_status_crlf", 46),
         ("missing_socket", 0), ("no_server", 0), ("no_sessions", 0),
     ] {
         let output = run_remote_end_shell(scenario);
