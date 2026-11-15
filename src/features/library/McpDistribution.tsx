@@ -60,6 +60,8 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const [enabled, setEnabled] = useState(() => initialPlaced.length === 0 || initialPlaced.some((item) => item.enabled));
   const [previewState, setPreview] = useState<{ epoch: number; draft: McpDraft; items: McpTargetResult[] } | null>(null);
   const [results, setResults] = useState<McpTargetResult[] | null>(null);
+  /** The form changed after the last commit, so its rows belong to an older draft. */
+  const [resultsStale, setResultsStale] = useState(false);
   const [error, setError] = useState('');
   const activePath = scope === 'project' ? projectPath : null;
   const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
@@ -76,11 +78,12 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   useEffect(() => {
     if (stampRef.current === formStamp) return;
     stampRef.current = formStamp;
-    if (!previewState) return;
+    // An edited form no longer describes the last run: its preview is dropped and
+    // the committed rows are marked as belonging to the previous submission.
     setPreview(null);
-    setResults(null);
+    setResultsStale(true);
     onConfirmationChange('none');
-  }, [formStamp, previewState, onConfirmationChange]);
+  }, [formStamp, onConfirmationChange]);
 
   const initialized = useRef(new Set<string>());
   useEffect(() => {
@@ -147,6 +150,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   }
   async function finish(saved: McpDefinition, committed: McpTargetResult[]): Promise<McpDistributeOutcome> {
     setResults(committed);
+    setResultsStale(false);
     // Only a returned write/removal counts as finished; a target still carrying
     // its preview status has no write evidence and stays unfinished.
     const unfinished = committed.filter((item) => {
@@ -309,6 +313,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       {results && <section className={styles.results} data-tone={resultIncomplete ? 'warning' : undefined} role="status" aria-label={t('library.distribute.resultAria')}>
         <div className={styles.resultHead}><Icon name={resultIncomplete ? 'alert' : 'check'} size={16} /><span>{t(resultIncomplete ? 'library.distribute.resultIncomplete' : 'library.distribute.resultDone', { total: resultRows.length, ok: resultCount(['written', 'removed']), unchanged: resultCount(['unchanged']), unfinished: resultCount(['failed', 'unsupported', 'unconfirmed']) })}</span></div>
         <ul className={styles.resultList}>{resultRows.map((row) => <li key={JSON.stringify([row.item.toolId, row.item.scope, row.item.projectPath, row.item.contextId])} data-state={row.state}><Icon name={row.state === 'written' || row.state === 'unchanged' || row.state === 'removed' ? 'check' : 'alert'} size={14} /><span className={styles.resultState}>{t('library.distribute.resultEntry', { tool: placeLabel(row.item.toolId, row.item.scope, row.item.projectPath), result: resultLabel(row.item, row.state) })}</span></li>)}</ul>
+        {resultsStale && <p className={styles.summary} data-stale>{t('library.distribute.resultStale')}</p>}
         {resultIncomplete && onRetry && <div className={styles.resultFoot}><Button size="sm" onClick={() => onRetry()}>{t('library.distribute.resultRetry')}</Button></div>}
       </section>}
       {error && <p className={styles.error} role="alert">{error}</p>}

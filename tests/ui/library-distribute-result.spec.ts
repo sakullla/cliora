@@ -19,6 +19,10 @@ type Config = {
   seeded?: boolean;
   /** With `seeded`, leaves the package uninstalled so its marks can install. */
   uninstalled?: boolean;
+  /** Reported install locations of the seeded package; the default is Codex global. */
+  placement?: Array<{ toolId: string; scope?: 'global' | 'project'; projectPath?: string | null; state?: string }>;
+  /** Projects the scope picker can switch to. */
+  projects?: Array<{ id: string; name: string; path: string }>;
 };
 
 async function mockLibrary(page: Page, config: Config = {}) {
@@ -36,26 +40,37 @@ async function mockLibrary(page: Page, config: Config = {}) {
       isTauri: true,
       __distWrites: writes,
       __skillReads: reads,
+      /** While true, install_skill answers only after a test releases it. */
+      __skillDeferInstall: false,
+      __skillInstallWaiters: [] as Array<() => void>,
+      /** While true, install-location reads stay unresolved. */
+      __skillDeferWorkspace: false,
+      __skillWorkspaceWaiters: [] as Array<() => void>,
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map((tool) => tool.id), theme: 'system' }, tools: tools.map((tool) => ({ id: tool.id, name: tool.name, installation: 'not_checked', configuration: 'not_checked' })) };
           if (command === 'list_cli_adapters') return { registered: tools.map(descriptor), managedIds: tools.map((tool) => tool.id), preservedUnknown: [] };
-          if (command === 'list_projects' || command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_mcp_placements') return [];
+          if (command === 'list_projects') return (config.projects ?? []).map((project) => ({ ...project, available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }));
+          if (command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_mcp_placements') return [];
           if (command === 'list_library_items') return [];
           if (command === 'list_accounts') return [];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'get_registered_tool_workspace') return {
-            probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
-            profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
-          };
+          if (command === 'get_registered_tool_workspace') {
+            if ((window as any).__skillDeferWorkspace) await new Promise<void>((resolve) => { (window as any).__skillWorkspaceWaiters.push(resolve); });
+            return {
+              probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
+              profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
+            };
+          }
           if (command === 'list_skill_packages') {
             if (reads.packagesFail) throw { message: 'skill package fixture denied' };
             return packages;
           }
           if (command === 'list_skill_installations') {
             if (reads.installsFail) throw { message: 'skill install fixture denied' };
-            return args.packageId === 'pkg-seed' && !config.uninstalled ? [{ packageId: 'pkg-seed', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/codex/skills/seeded-skill', state: 'current', digest: 'seed' }] : [];
+            if (args.packageId !== 'pkg-seed' || config.uninstalled) return [];
+            return (config.placement ?? [{ toolId: 'codex' }]).map((place) => ({ packageId: 'pkg-seed', toolId: place.toolId, scope: place.scope ?? 'global', projectPath: place.projectPath ?? null, contextId: null, targetPath: `/tmp/${place.toolId}/skills/seeded-skill`, state: place.state ?? 'current', digest: 'seed' }));
           }
           if (command === 'list_skill_zip_entries') return [''];
           if (command === 'preview_skill_https_zip') return { name: 'alpha', source: args.source, digest: 'new-digest', existingDigest: null, fileCount: 2, changes: [], compatibility: null };
@@ -71,6 +86,7 @@ async function mockLibrary(page: Page, config: Config = {}) {
           }
           if (command === 'install_skill') {
             writes.push({ command, args });
+            if ((window as any).__skillDeferInstall) await new Promise<void>((resolve) => { (window as any).__skillInstallWaiters.push(resolve); });
             // Tests flip `window.__skillInstallMode` to change a target between runs.
             const overrides = (window as any).__skillInstallMode ?? {};
             const result = overrides[String(args.toolId)] ?? config.installs?.[String(args.toolId)] ?? 'installed';
@@ -136,7 +152,7 @@ test('a conflicted target is a skipped result row, not a silent success', async 
   const panel = resultPanel(page);
   await expect(panel).toBeVisible();
   await expect(panel).toHaveAttribute('data-tone', 'warning');
-  await expect(panel).toContainText('1 个目标：0 个成功，0 个失败，1 个冲突未写入');
+  await expect(panel).toContainText('1 个目标：0 个成功，0 个未变化，0 个失败，1 个冲突未写入');
   const row = panel.getByRole('listitem');
   await expect(row).toHaveCount(1);
   await expect(row).toHaveAttribute('data-state', 'conflict');
@@ -248,6 +264,19 @@ test('an import reports a target that was already current as unchanged next to t
   await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'ok');
 });
 
+test('a conflicted Skill import still counts the target that was already current', async ({ page }) => {
+  await mockLibrary(page, { installs: { codex: 'already_current' }, previews: { claude_code: 'conflict' } });
+  await page.goto('/');
+  await openSkills(page);
+  await importSkill(page, ['Codex', 'Claude Code']);
+  const panel = resultPanel(page);
+  await expect(panel).toHaveAttribute('data-tone', 'warning');
+  // Every attempted target is in the count, so the numbers still add up to the total.
+  await expect(panel).toContainText('2 个目标：0 个成功，1 个未变化，0 个失败，1 个冲突未写入');
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Codex' })).toHaveAttribute('data-state', 'unchanged');
+});
+
 test('a failed Skill removal inside the dialog reports the native reason without a retry that would install', async ({ page }) => {
   await mockLibrary(page, { seeded: true, removes: { codex: 'failed' } });
   await page.goto('/');
@@ -278,6 +307,141 @@ test('a failed Skill removal keeps the installation with its native reason', asy
   await expect(page.getByRole('status').filter({ hasText: '已从' })).toHaveCount(0);
   await expect(library.locator('[data-skill-id="pkg-seed"]').getByRole('button', { name: 'Codex · 已生效' })).toHaveAttribute('aria-pressed', 'true');
 });
+
+/* Skill dialog runs: every row keeps the range it was written in, and a retry only
+   touches the targets that failed in that same range. */
+const skillPanel = (dialog: Locator) => dialog.getByRole('status', { name: 'Skill 写入结果' });
+const skillWrites = (page: Page) => page.evaluate(() => ((window as any).__distWrites as Array<{ command: string; args: Record<string, unknown> }>)
+  .filter((entry) => entry.command === 'install_skill')
+  .map((entry) => ({ toolId: entry.args.toolId, scope: entry.args.scope, projectPath: entry.args.projectPath, allowTakeover: entry.args.allowTakeover })));
+
+async function openSkillEditor(page: Page) {
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '修改 Skill', exact: true }) });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+test('retrying a failed Skill target keeps the target that already succeeded', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, placement: [{ toolId: 'codex' }, { toolId: 'claude_code' }] });
+  await page.goto('/');
+  await openSkills(page);
+  const dialog = await openSkillEditor(page);
+  await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toBeChecked();
+  await page.evaluate(() => { (window as any).__skillInstallMode = { claude_code: 'failed' }; });
+  await dialog.getByRole('button', { name: '安装到所选 CLI', exact: true }).click();
+  const panel = skillPanel(dialog);
+  await expect(panel).toHaveAttribute('data-tone', 'warning');
+  await expect(panel).toContainText('2 个目标：1 个成功，0 个未变化，1 个失败，0 个冲突未写入。');
+  await page.evaluate(() => { (window as any).__skillInstallMode = { claude_code: 'installed' }; });
+  await panel.getByRole('button', { name: '重试未完成的目标', exact: true }).click();
+  // The row that already worked survives the retry, and the count still covers both targets.
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Codex' })).toHaveAttribute('data-state', 'ok');
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'ok');
+  await expect(panel).toContainText('2 个目标已完成。');
+  await expect(panel.getByRole('button', { name: '重试未完成的目标', exact: true })).toHaveCount(0);
+  expect(await skillWrites(page)).toEqual([
+    { toolId: 'codex', scope: 'global', projectPath: null, allowTakeover: false },
+    { toolId: 'claude_code', scope: 'global', projectPath: null, allowTakeover: false },
+    { toolId: 'claude_code', scope: 'global', projectPath: null, allowTakeover: false },
+  ]);
+});
+
+test('a failed Skill run is neither retried nor re-pointed at a scope selected afterwards', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, placement: [{ toolId: 'codex' }, { toolId: 'claude_code' }], projects: [{ id: 'second', name: 'Second project', path: '/tmp/second-project' }] });
+  await page.goto('/');
+  await openSkills(page);
+  const dialog = await openSkillEditor(page);
+  await page.evaluate(() => { (window as any).__skillInstallMode = { claude_code: 'failed' }; });
+  await dialog.getByRole('button', { name: '安装到所选 CLI', exact: true }).click();
+  const panel = skillPanel(dialog);
+  await expect(panel.getByRole('button', { name: '重试未完成的目标', exact: true })).toBeVisible();
+  // Switching scope clears the rows of the global run, including its retry entry.
+  await dialog.getByRole('button', { name: '分发范围' }).click();
+  await dialog.getByRole('option', { name: 'Second project' }).click();
+  await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).not.toBeChecked();
+  await expect(skillPanel(dialog)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '重试未完成的目标', exact: true })).toHaveCount(0);
+  // The failed global target was never written into the project range.
+  expect(await skillWrites(page)).toEqual([
+    { toolId: 'codex', scope: 'global', projectPath: null, allowTakeover: false },
+    { toolId: 'claude_code', scope: 'global', projectPath: null, allowTakeover: false },
+  ]);
+});
+
+test('a Skill write that answers after a scope switch is dropped instead of credited to the new range', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, placement: [{ toolId: 'codex' }, { toolId: 'claude_code' }], projects: [{ id: 'second', name: 'Second project', path: '/tmp/second-project' }] });
+  await page.goto('/');
+  await openSkills(page);
+  const dialog = await openSkillEditor(page);
+  await page.evaluate(() => { (window as any).__skillDeferInstall = true; });
+  await dialog.getByRole('button', { name: '安装到所选 CLI', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__skillInstallWaiters.length)).toBe(1);
+  await dialog.getByRole('button', { name: '分发范围' }).click();
+  await dialog.getByRole('option', { name: 'Second project' }).click();
+  await page.evaluate(() => {
+    const state = window as any;
+    state.__skillDeferInstall = false;
+    for (const resume of state.__skillInstallWaiters) resume();
+    state.__skillInstallWaiters.length = 0;
+  });
+  // The late answer belongs to the old range: no panel, no row, and no second target.
+  await expect(skillPanel(dialog)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '重试未完成的目标', exact: true })).toHaveCount(0);
+  expect(await skillWrites(page)).toEqual([{ toolId: 'codex', scope: 'global', projectPath: null, allowTakeover: false }]);
+});
+
+test('a conflict waiting for confirmation survives retrying another Skill target', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, placement: [{ toolId: 'codex' }, { toolId: 'claude_code' }], previews: { claude_code: 'conflict' } });
+  await page.goto('/');
+  await openSkills(page);
+  const dialog = await openSkillEditor(page);
+  await page.evaluate(() => { (window as any).__skillInstallMode = { codex: 'failed' }; });
+  await dialog.getByRole('button', { name: '安装到所选 CLI', exact: true }).click();
+  const panel = skillPanel(dialog);
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'conflict');
+  await expect(dialog.getByRole('button', { name: '确认替换并安装' })).toBeVisible();
+  await page.evaluate(() => { (window as any).__skillInstallMode = {}; });
+  await panel.getByRole('button', { name: '重试未完成的目标', exact: true }).click();
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Codex' })).toHaveAttribute('data-state', 'ok');
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'conflict');
+  await expect(panel).toContainText('2 个目标：1 个成功，0 个未变化，0 个失败，1 个冲突未写入。');
+  // The replacement is still authorized from the same dialog, and only then written.
+  await expect(dialog.getByRole('button', { name: '确认替换并安装' })).toBeVisible();
+  await dialog.getByRole('button', { name: '确认替换并安装' }).click();
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'ok');
+  expect((await skillWrites(page)).at(-1)).toEqual({ toolId: 'claude_code', scope: 'global', projectPath: null, allowTakeover: true });
+});
+
+test('the pre-submit summary does not call a disabled or relocated Skill current', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, placement: [{ toolId: 'codex', state: 'disabled' }, { toolId: 'claude_code', state: 'unavailable' }] });
+  await page.goto('/');
+  await openSkills(page);
+  const dialog = await openSkillEditor(page);
+  const summary = dialog.locator('[data-skill-summary]');
+  await expect(summary).toContainText('Codex 已停用，安装会重新写入');
+  await expect(summary).toContainText('Claude Code 的安装目录已不在原位，安装会按当前位置重新写入');
+  await expect(summary).not.toContainText('已是最新');
+  // The promise holds: submitting does write both targets.
+  await dialog.getByRole('button', { name: '安装到所选 CLI', exact: true }).click();
+  await expect.poll(async () => (await skillWrites(page)).length).toBe(2);
+});
+
+test('the pre-submit summary says the install location is unknown instead of claiming nothing is checked', async ({ page }) => {
+  await mockLibrary(page, { seeded: true });
+  await page.goto('/');
+  await openSkills(page);
+  await page.evaluate(() => { (window as any).__skillDeferWorkspace = true; });
+  const dialog = await openSkillEditor(page);
+  const summary = dialog.locator('[data-skill-summary]');
+  await expect(summary).toContainText('安装位置还在读取，现在无法确认会写入');
+  await expect(summary).not.toContainText('没有勾选 CLI');
+});
+
 
 /* MCP: the library save, the pre-submit target set and each committed target are separate claims. */
 type McpConfig = {
@@ -455,6 +619,26 @@ test('an MCP target already matching the file is unchanged, not written', async 
   const toast = page.getByRole('status').filter({ hasText: 'Codex 已是最新，没有重复写入。' });
   await expect(toast).toBeVisible();
   await expect(toast).not.toContainText('已写入');
+});
+
+test('editing the MCP form after a run marks its rows as a previous submission', async ({ page }) => {
+  await mockMcp(page, { placements: [{ toolId: 'codex' }], commits: { claude_code: 'failed' } });
+  await page.goto('/');
+  await openMcp(page);
+  await page.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('checkbox', { name: 'Claude Code', exact: true }).check();
+  await dialog.locator('[data-dialog-save]').click();
+  await dialog.locator('[data-dialog-save]').click();
+  const panel = mcpPanel(dialog);
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  // The rows belong to the submission that just ran, not to an older draft.
+  await expect(panel.locator('[data-stale]')).toHaveCount(0);
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('node');
+  // Editing invalidates the run: the rows stay readable but say which submission they describe.
+  await expect(panel.locator('[data-stale]')).toContainText('表单已修改，这些结果来自上一次提交');
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(dialog.getByRole('group', { name: 'MCP 写入预览' })).toHaveCount(0);
 });
 
 /* Long-term rules: the body save, the list refresh and each target's update are reported apart. */const ruleTools = [

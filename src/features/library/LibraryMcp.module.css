@@ -126,6 +126,7 @@
 .choiceText small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.4; }
 .summary { margin: 0; padding: var(--space-2) var(--space-2_5); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-medium); line-height: 1.5; }
 .summary[data-quiet] { padding: 0; background: none; color: var(--text-3); font-weight: var(--fw-regular); }
+.summary[data-stale] { border: 1px solid var(--warning-line); background: var(--warning-soft); color: var(--text); font-weight: var(--fw-regular); }
 .notes { display: grid; flex: none; gap: var(--space-1); }
 .notes p { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .notes[data-tone='warning'] p { color: var(--warning); }
