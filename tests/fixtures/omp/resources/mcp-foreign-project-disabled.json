@@ -1,0 +1,25 @@
+{
+  "capability": "resources",
+  "name": "mcp.enableProjectConfig=false excludes every project source",
+  "case": {
+    "kind": "mcp",
+    "action": "foreign",
+    "base": "project-disabled",
+    "files": [
+      {
+        "scope": "home",
+        "path": ".omp/agent/config.yml",
+        "content": "enabledProviders:\n  - claude\nmcp:\n  enableProjectConfig: false\n"
+      },
+      {
+        "scope": "project",
+        "path": ".claude/mcp.json",
+        "content": "{\"mcpServers\":{\"project-only\":{\"command\":\"npx\"}}}"
+      }
+    ],
+    "expectAbsent": ["project-only"],
+    "expectIssues": [
+      { "path": "config.yml", "message": "enableProjectConfig=false" }
+    ]
+  }
+}

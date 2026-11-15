@@ -48,7 +48,12 @@ export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & {
   detail?: string | null;
   /** Per-entry parse or schema problem; the rest of the list stays usable. */
   issue?: string | null;
+  /** The CLI has its own enable/disable override for this read-only entry. */
+  switchable?: boolean;
 };
+/** One unreadable or malformed foreign MCP source. */
+export type NativeMcpIssue = { kind: string; source: string; path: string; message: string };
+export type NativeMcpStore = { entries: NativeMcpEntry[]; issues: NativeMcpIssue[] };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
 export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | string; enabled: boolean; writable: boolean; detail: string; text: string; fingerprint: string };
@@ -73,7 +78,7 @@ export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: str
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 // digest is null for document-only inventory (unmanaged/read-only directories),
 // as well as failed package reads. Use state to determine readability.
-export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[] };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[]; switchable?: boolean; enabled?: boolean };
 export type NativeSkillDocument = { name: string; path: string; content: string };
 /** Attachment beside SKILL.md; `path` is relative to the skill directory with `/` separators. */
 export type SkillFileEntry = { path: string; size: number | null; readable: boolean; detail: string };

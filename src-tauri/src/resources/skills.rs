@@ -78,6 +78,14 @@ pub struct NativeSkillEntry {
     pub plugin_enabled: Option<bool>,
     /// Specification issue codes; empty when SKILL.md is absent or unreadable.
     pub issues: Vec<String>,
+    /// A read-only observation can still be switched through the CLI's own
+    /// native override (for example OMP `disabledExtensions`).
+    #[serde(default)]
+    pub switchable: bool,
+    /// Effective native override for a switchable observation; absent when the
+    /// CLI has no override or the entry is writable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1590,9 +1598,20 @@ pub fn scan_native(
     } else {
         None
     };
+    let external_switch = external_switch_state(adapter, scope, home, project.as_deref());
     let mut entries = Vec::new();
     if root.exists() {
-        scan_skill_children(db, tool, &scope_key, root, None, require_manifest, &mut entries)?;
+        scan_skill_children(
+            db,
+            tool,
+            &scope_key,
+            root,
+            None,
+            require_manifest,
+            None,
+            adapter,
+            &mut entries,
+        )?;
     }
     for observation in adapter.skill_observations(scope, home, project.as_deref()) {
         if observation.root.exists() {
@@ -1603,6 +1622,8 @@ pub fn scan_native(
                 &observation.root,
                 Some(observation.detail),
                 require_manifest,
+                external_switch.as_ref(),
+                adapter,
                 &mut entries,
             )?;
         }
@@ -1622,6 +1643,8 @@ pub fn scan_native(
             plugin_name: Some(skill.plugin_name),
             plugin_enabled: skill.plugin_enabled,
             issues: skill.issues,
+            switchable: false,
+            enabled: None,
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1835,6 +1858,28 @@ fn has_skill_manifest(path: &Path) -> bool {
     fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file() && !meta.file_type().is_symlink())
 }
 
+/// Parsed CLI-owned switch document for read-only Skills observations.
+struct ExternalSwitchState {
+    current: serde_json::Value,
+}
+
+fn external_switch_state(
+    adapter: &dyn crate::adapters::CliAdapter,
+    scope: Scope,
+    home: &Path,
+    project: Option<&Path>,
+) -> Option<ExternalSwitchState> {
+    let location = adapter.skill_switch_location(scope, home, project, "")?;
+    let text = transaction::read_native(&location.path).ok()?;
+    let root = crate::native::format::parse(location.kind, &text).ok()?;
+    let current = root
+        .pointer(&switch_pointer(&location.field))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Some(ExternalSwitchState { current })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn scan_skill_children(
     db: &Database,
     tool: &str,
@@ -1842,6 +1887,8 @@ fn scan_skill_children(
     root: &Path,
     read_only_detail: Option<&str>,
     require_manifest: bool,
+    external_switch: Option<&ExternalSwitchState>,
+    adapter: &dyn crate::adapters::CliAdapter,
     entries: &mut Vec<NativeSkillEntry>,
 ) -> Result<(), String> {
     for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
@@ -1858,6 +1905,13 @@ fn scan_skill_children(
             continue;
         }
         let read_only = read_only_detail.is_some();
+        let switchable = read_only && external_switch.is_some();
+        let enabled = switchable.then(|| {
+            adapter.skill_switch_enabled(
+                &external_switch.expect("switchable implies a state").current,
+                &path,
+            )
+        });
         let package_id: Option<String> = if read_only {
             None
         } else {
@@ -1906,6 +1960,8 @@ fn scan_skill_children(
             plugin_name: None,
             plugin_enabled: None,
             issues,
+            switchable,
+            enabled,
         });
     }
     Ok(())
@@ -2146,6 +2202,67 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
         let result=operate(db,registry,home,package_id,tool,scope,project_path,true,None,false,true);
         if result.status=="failed" {Err(result.detail)} else {Ok(())}
     }
+}
+/// Switch a read-only Skill observation through the CLI's own native override.
+/// The observation directory is only validated as the source; it is never the
+/// write target.
+#[allow(clippy::too_many_arguments)]
+pub fn set_observed_enabled(
+    db: &Database,
+    credentials: &dyn crate::credentials::CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    name: &str,
+    path: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let adapter = registry.get(tool).ok_or("未注册的 CLI")?;
+    let project = if scope == Scope::Project {
+        Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?)
+    } else {
+        None
+    };
+    let requested = PathBuf::from(path);
+    let belongs = adapter
+        .skill_observations(scope, home, project.as_deref())
+        .iter()
+        .any(|observation| observation.root.join(name) == requested);
+    if !belongs || requested.file_name().and_then(|value| value.to_str()) != Some(name) {
+        return Err("只能启停当前工具只读来源中的 Skill".into());
+    }
+    let location = adapter
+        .skill_switch_location(scope, home, project.as_deref(), name)
+        .ok_or_else(|| format!("{} 没有可用的 Skill 启停覆盖", adapter.name()))?;
+    let baseline = crate::native::transaction::read_native(&location.path)?;
+    let root = crate::native::format::parse(location.kind, &baseline)?;
+    let pointer = switch_pointer(&location.field);
+    let current = root.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null);
+    let desired = adapter.skill_switch_value_at(&location, &current, enabled, &requested);
+    let contents = crate::native::format::set_path(
+        location.kind,
+        &baseline,
+        &location.field,
+        Some(&desired),
+    )?;
+    if contents == baseline {
+        return Ok(());
+    }
+    crate::native::transaction::apply_text(
+        db,
+        credentials,
+        &[crate::native::transaction::TextPatch {
+            path: location.path,
+            baseline,
+            contents,
+            sensitive: true,
+        }],
+        |_| Ok(()),
+    )?;
+    Ok(())
 }
 fn enable_archived(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<(),String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
@@ -2419,6 +2536,62 @@ fn operate(
         Err(error) => result.detail = error,
     }
     result
+}
+
+#[cfg(test)]
+mod observed_switch_tests {
+    use super::*;
+
+    struct WorkingStore;
+    impl CredentialStore for WorkingStore {
+        fn put(&self, _id: &str, _secret: &str) -> Result<(), String> { Ok(()) }
+        fn get(&self, _id: &str) -> Result<String, String> { Ok("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()) }
+        fn delete(&self, _id: &str) -> Result<(), String> { Ok(()) }
+    }
+
+    #[test]
+    fn read_only_skill_toggle_writes_only_the_cli_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let home = temp.path().join("home");
+        let skill = home.join(".claude/skills/foreign-skill");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\ndescription: Foreign\n---\n").unwrap();
+        let config = home.join(".omp/agent/config.yml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "disabledExtensions:\n  - skill:keep\n  - skill:foreign-skill\n").unwrap();
+
+        let entries = scan_native(&db, &registry, &home, "omp", Scope::Global, None).unwrap();
+        let foreign = entries.iter().find(|entry| entry.name == "foreign-skill").unwrap();
+        assert_eq!(foreign.state, "read_only");
+        assert!(foreign.switchable);
+        assert_eq!(foreign.enabled, Some(false));
+
+        let source = fs::read_to_string(skill.join("SKILL.md")).unwrap();
+        set_observed_enabled(
+            &db,
+            &WorkingStore,
+            &registry,
+            &home,
+            "omp",
+            Scope::Global,
+            None,
+            "foreign-skill",
+            foreign.path.as_str(),
+            true,
+        )
+        .unwrap();
+        let config_text = fs::read_to_string(&config).unwrap();
+        assert!(config_text.contains("skill:keep"));
+        assert!(!config_text.contains("skill:foreign-skill"));
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), source);
+        let entries = scan_native(&db, &registry, &home, "omp", Scope::Global, None).unwrap();
+        assert_eq!(
+            entries.iter().find(|entry| entry.name == "foreign-skill").unwrap().enabled,
+            Some(true)
+        );
+    }
 }
 
 #[cfg(test)]

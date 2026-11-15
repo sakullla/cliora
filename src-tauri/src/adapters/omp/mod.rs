@@ -299,19 +299,64 @@ impl CliAdapter for Omp {
         scope: Scope,
         home: &Path,
         project: Option<&Path>,
-    ) -> Result<Vec<crate::adapters::McpObservation>, String> {
+    ) -> Result<crate::adapters::McpObservations, String> {
         let _ = scope;
-        Ok(mcp::observations(home, project)
-            .into_iter()
-            .map(|observation| crate::adapters::McpObservation {
-                name: observation.name,
-                entry: observation.entry,
-                source: observation.source,
-                path: observation.path,
-                enabled: observation.source_enabled,
-                detail: "OMP 从其他工具发现的只读配置；启停只写 OMP 自有覆盖",
-            })
-            .collect())
+        let found = mcp::observations(home, project)?;
+        Ok(crate::adapters::McpObservations {
+            servers: found
+                .observations
+                .into_iter()
+                .map(|observation| crate::adapters::McpObservation {
+                    name: observation.name,
+                    entry: observation.entry,
+                    source: observation.source,
+                    path: observation.path,
+                    enabled: observation.source_enabled,
+                    detail: "OMP 从其他工具发现的只读配置；启停只写 OMP 自有覆盖",
+                })
+                .collect(),
+            issues: found
+                .issues
+                .into_iter()
+                .map(|issue| crate::adapters::McpObservationIssue {
+                    source: issue.source,
+                    path: issue.path,
+                    message: issue.message,
+                })
+                .collect(),
+        })
+    }
+
+    fn mcp_external_switch(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<crate::adapters::McpExternalSwitch> {
+        mcp::external_switch(scope, home, project)
+    }
+
+    fn mcp_external_changes(
+        &self,
+        parsed: &Value,
+        name: &str,
+        enabled: bool,
+        source_enabled: bool,
+    ) -> Option<Vec<crate::native::transaction::FieldChange>> {
+        Some(mcp::external_changes(
+            parsed,
+            name,
+            enabled,
+            source_enabled,
+        ))
+    }
+
+    fn mcp_project_scope_effective(&self, home: &Path) -> Result<bool, String> {
+        mcp::project_scope_effective(home)
+    }
+
+    fn mcp_redacts_secrets(&self) -> bool {
+        true
     }
 
     fn mcp_document(

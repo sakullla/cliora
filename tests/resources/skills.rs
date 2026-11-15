@@ -45,7 +45,7 @@ fn native_inventory_reads_documents_without_packaging_attachments() {
     assert!(preview_local(&db, path.to_str().unwrap()).is_err(), "imports still validate the complete package");
 
     let mut observed = Vec::new();
-    scan_skill_children(&db, "claude_code", "global", path.parent().unwrap(), Some("Bundled"), false, &mut observed).unwrap();
+    scan_skill_children(&db, "claude_code", "global", path.parent().unwrap(), Some("Bundled"), false, None, registry.get("claude_code").unwrap(), &mut observed).unwrap();
     assert_eq!(observed[0].state, "read_only");
     assert_eq!(observed[0].detail, "Bundled · Local document");
     assert!(observed[0].digest.is_none());

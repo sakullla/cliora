@@ -606,6 +606,7 @@ fn operate_inner(
     let mut changes = Vec::new();
     let outcome;
     let restore_path;
+    let mut toggle_restore: Option<PathBuf> = None;
     if request.action == "restore" {
         let path = PathBuf::from(request.id.as_deref().ok_or("缺少恢复路径")?);
         let allowed = |p: &Path| {
@@ -759,6 +760,7 @@ fn operate_inner(
                             let next = adapter.toggle_value(&current, &entry.name, enabled);
                             let contents =
                                 format::set_path(location.kind, &text, &location.field, next.as_ref())?;
+                            toggle_restore = Some(location.path.clone());
                             changes.push(FileMutation {
                                 path: location.path,
                                 baseline,
@@ -847,7 +849,7 @@ fn operate_inner(
                 }
             }
         }
-        restore_path = path.display().to_string();
+        restore_path = toggle_restore.unwrap_or(path).display().to_string();
         outcome = transaction::apply_files(db, credentials, &changes, |_| Ok(()))?;
     }
     let snapshot = snapshot_inner(home, target, plugins, version).map_err(|error| {
@@ -856,7 +858,7 @@ fn operate_inner(
             outcome.transaction_id
         )
     })?;
-    Ok(AgentResult {transaction_id:outcome.transaction_id,changed_paths:outcome.changed_files,restore_path,snapshot,detail:"已修改原生定义。请按能力说明重新加载；现有会话状态未验证。删除和启停可恢复整个操作，任一文件外改将阻止恢复。".into()})
+    Ok(AgentResult {transaction_id:outcome.transaction_id,changed_paths:outcome.changed_files,restore_path,snapshot,detail:"已修改原生定义。请按能力说明重新加载；现有会话状态未验证。创建、修改、删除和启停都记录在同一原生事务中，可预览并恢复；任一文件外改会阻止恢复。".into()})
 }
 
 #[cfg(test)]

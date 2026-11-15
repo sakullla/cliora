@@ -1594,6 +1594,33 @@ for (const state of ['external', 'read_only'] as const) {
   });
 }
 
+test('a read-only OMP Skill is switched through disabledExtensions, not its source file', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__resourceNativeSkills.push({ name: 'foreign-skill', path: '/tmp/skills/foreign-skill', digest: null, state: 'read_only', detail: 'Claude Code Skills，只读', packageId: null, source: 'read_only', switchable: true, enabled: false });
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'read_native_skill') return { name: 'foreign-skill', path: args.directory, content: '# Foreign skill' };
+      if (command === 'set_observed_skill_enabled') {
+        win.__resourceNativeSkills[0].enabled = args.enabled;
+        win.__observedToggle = args;
+        return null;
+      }
+      return original(command, args);
+    };
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button', { name: /foreign-skill/ }).click();
+  const toggle = page.getByRole('article').getByRole('switch', { name: '启用 Skill' });
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__observedToggle)).toMatchObject({ name: 'foreign-skill', path: '/tmp/skills/foreign-skill', enabled: true });
+  await expect(page.getByRole('article').getByRole('switch', { name: '启用 Skill' })).toBeChecked();
+});
+
 test('Skill workspace shows skeleton rows on first load and embeds the add entry in the empty state', async ({ page }) => {
   await mockResources(page);
   await page.addInitScript(() => {

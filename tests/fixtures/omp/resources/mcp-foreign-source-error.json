@@ -1,0 +1,28 @@
+{
+  "capability": "resources",
+  "name": "A malformed foreign file is an issue while valid sources stay visible",
+  "case": {
+    "kind": "mcp",
+    "action": "foreign",
+    "base": "source-error",
+    "files": [
+      {
+        "scope": "home",
+        "path": ".omp/agent/config.yml",
+        "content": "enabledProviders:\n  - claude\n"
+      },
+      { "scope": "home", "path": ".claude.json", "content": "{ broken" },
+      {
+        "scope": "home",
+        "path": ".cursor/mcp.json",
+        "content": "{\"mcpServers\":{\"cursor-only\":{\"command\":\"uvx\"}}}"
+      }
+    ],
+    "expect": [
+      { "name": "cursor-only", "source": "Cursor", "enabled": true }
+    ],
+    "expectIssues": [
+      { "path": ".claude.json", "message": "无法解析" }
+    ]
+  }
+}

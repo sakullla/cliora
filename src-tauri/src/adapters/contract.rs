@@ -310,6 +310,30 @@ pub struct McpObservation {
     pub detail: &'static str,
 }
 
+/// One foreign MCP source file that could not be read or parsed. Valid entries
+/// from other files stay visible next to this error.
+#[derive(Clone, Debug)]
+pub struct McpObservationIssue {
+    pub source: &'static str,
+    pub path: PathBuf,
+    pub message: String,
+}
+
+/// Foreign servers plus the per-source read errors of one discovery pass.
+#[derive(Clone, Debug, Default)]
+pub struct McpObservations {
+    pub servers: Vec<McpObservation>,
+    pub issues: Vec<McpObservationIssue>,
+}
+
+/// A CLI-owned file where an imported server is enabled or disabled. The
+/// source file is never the target.
+#[derive(Clone, Debug)]
+pub struct McpExternalSwitch {
+    pub path: PathBuf,
+    pub kind: FileKind,
+}
+
 /// Adapter-owned remote resource mappings. Absence is an unsupported capability;
 /// shared transports never substitute another CLI's native directory.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -1281,13 +1305,40 @@ pub trait CliAdapter: Sync {
     /// Read-only servers this CLI also discovers from other tools or packages.
     /// The shared MCP view appends them with their source and never writes the
     /// source file. Adapters that do not translate foreign configs return empty.
+    /// An unreadable or malformed foreign file is reported in `issues`; it does
+    /// not turn the whole discovery into an empty list.
     fn mcp_observations(
         &self,
         _scope: Scope,
         _home: &Path,
         _project: Option<&Path>,
-    ) -> Result<Vec<McpObservation>, String> {
-        Ok(Vec::new())
+    ) -> Result<McpObservations, String> {
+        Ok(McpObservations::default())
+    }
+    /// CLI-owned override file for an imported server. `None` means this CLI
+    /// has no verified external enable/disable path.
+    fn mcp_external_switch(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Option<McpExternalSwitch> {
+        None
+    }
+    /// Field changes for one imported server in the parsed override document.
+    /// The adapter owns the native list shape; shared services own the write.
+    fn mcp_external_changes(
+        &self,
+        _parsed: &Value,
+        _name: &str,
+        _enabled: bool,
+        _source_enabled: bool,
+    ) -> Option<Vec<crate::native::transaction::FieldChange>> {
+        None
+    }
+    /// Whether this CLI currently loads project-scoped MCP sources.
+    fn mcp_project_scope_effective(&self, _home: &Path) -> Result<bool, String> {
+        Ok(true)
     }
     /// Normalize an entry for display, including its native enabled/disabled state.
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }

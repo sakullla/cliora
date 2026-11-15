@@ -13,6 +13,11 @@ observation is separate native evidence, not implied by a passing fixture.
 | `mcp-layout.json` | user/project `mcp.json` paths and the `mcpServers` table |
 | `mcp-documents.json` | stdio/http/sse documents keep type, enabled and transport fields |
 | `mcp-overlay.json` | external enable/disable only changes OMP's `disabledServers`/`enabledServers` |
+| `mcp-foreign-vscode.json` | VS Code project `.vscode/mcp.json` `mcp.servers` |
+| `mcp-foreign-vscode-native.json` | VS Code native top-level `servers` |
+| `mcp-foreign-priority.json` | same-name duplicates follow OMP provider priority (Claude → OpenCode → Cursor/VS Code) |
+| `mcp-foreign-source-error.json` | malformed foreign file is an issue; valid sources stay visible |
+| `mcp-foreign-project-disabled.json` | `mcp.enableProjectConfig=false` excludes project sources |
 | `mcp-validation.json` | unknown type, missing command/url and command+url stay per-entry visible |
 | `skills-layout.json` | user/project `skills` roots and `AGENTS.md` rule files |
 | `skills-switch.json` | `disabledExtensions` adds/removes only `skill:<name>` |

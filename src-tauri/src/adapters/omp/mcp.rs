@@ -147,54 +147,86 @@ impl Observation {
         }
     }
 }
-fn string_map(root: Option<&Value>, table: &str, nested: &[&str]) -> Map<String, Value> {
-    let mut value = root.and_then(|root| root.get(table));
+/// One foreign source file that could not be read or parsed.
+#[derive(Clone, Debug)]
+pub(crate) struct ObservationIssue {
+    pub source: &'static str,
+    pub path: PathBuf,
+    pub message: String,
+}
+
+/// Resolved foreign servers and the per-source errors of one pass.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ObservationSet {
+    pub observations: Vec<Observation>,
+    pub issues: Vec<ObservationIssue>,
+}
+
+fn string_map(root: Option<&Value>, table: &str, nested: &[&str]) -> Result<Map<String, Value>, String> {
+    let Some(mut value) = root.and_then(|root| root.get(table)) else {
+        return Ok(Map::new());
+    };
     for part in nested {
-        value = value.and_then(|value| value.get(*part));
+        let Some(child) = value.get(*part) else {
+            return Ok(Map::new());
+        };
+        value = child;
     }
     value
-        .and_then(Value::as_object)
+        .as_object()
         .cloned()
-        .unwrap_or_default()
+        .ok_or_else(|| format!("{table} 不是对象，无法读取 MCP 条目"))
 }
-fn read_document(path: &Path, kind: FileKind) -> Option<Value> {
-    let text = std::fs::read_to_string(path).ok()?;
-    crate::native::format::parse(kind, &text).ok()
+
+fn read_document(path: &Path, kind: FileKind) -> Result<Option<Value>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("无法读取：{error}")),
+    };
+    crate::native::format::parse(kind, &text)
+        .map(Some)
+        .map_err(|error| format!("{} 无法解析：{error}", path.display()))
 }
+/// One table shape a foreign file may use: table name plus optional nested keys.
+/// A file may declare MCP entries under more than one documented shape.
+type ForeignShape = (&'static str, &'static [&'static str]);
 /// One foreign MCP source file.
 type ForeignFile = (
     &'static str,
     PathBuf,
     FileKind,
-    &'static str,
-    Vec<&'static str>,
+    &'static [ForeignShape],
     bool,
 );
+const MCP_SERVERS: &[ForeignShape] = &[("mcpServers", &[])];
+const OPENCODE_SERVERS: &[ForeignShape] = &[("mcp", &[])];
+/// VS Code's documented project file uses `mcp.servers`; native VS Code
+/// files use a top-level `servers` table.
+const VSCODE_SERVERS: &[ForeignShape] = &[("mcp", &["servers"]), ("servers", &[])];
 /// Third-party native files OMP translates, in OMP's discovery priority order.
-/// A file that does not exist or cannot be parsed contributes nothing; the
-/// source file itself is never rewritten.
+/// A file that does not exist contributes nothing; an unreadable or malformed
+/// file becomes a per-source issue. The source file itself is never rewritten.
 fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
     let mut files: Vec<ForeignFile> = Vec::new();
     // Project entries precede same-named user entries for these providers,
     // matching OMP's discovery order. Cross-provider priority follows the
-    // documentation: Claude, Codex, Gemini, Cursor/Windsurf, VS Code,
-    // OpenCode and finally the portable project fallbacks.
+    // documentation: Claude, Codex, Gemini, OpenCode, Cursor/Windsurf, VS Code
+    // and finally the portable project fallbacks.
     if let Some(project) = project {
         files.extend([
             (
                 "Claude Code",
-                project.join(".claude").join("mcp.json"),
+                project.join(".claude").join(".mcp.json"),
                 FileKind::Json,
-                "mcpServers",
-                Vec::new(),
+                MCP_SERVERS,
                 false,
             ),
             (
                 "Claude Code",
-                project.join(".claude").join(".mcp.json"),
+                project.join(".claude").join("mcp.json"),
                 FileKind::Json,
-                "mcpServers",
-                Vec::new(),
+                MCP_SERVERS,
                 false,
             ),
         ]);
@@ -204,16 +236,14 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
             "Claude Code",
             home.join(".claude.json"),
             FileKind::Json,
-            "mcpServers",
-            Vec::new(),
+            MCP_SERVERS,
             true,
         ),
         (
             "Claude Code",
             home.join(".claude").join("mcp.json"),
             FileKind::Json,
-            "mcpServers",
-            Vec::new(),
+            MCP_SERVERS,
             true,
         ),
     ]);
@@ -222,8 +252,7 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
             "Codex",
             project.join(".codex").join("config.toml"),
             FileKind::Toml,
-            "mcp_servers",
-            Vec::new(),
+            &[("mcp_servers", &[])],
             false,
         ));
     }
@@ -231,8 +260,7 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
         "Codex",
         home.join(".codex").join("config.toml"),
         FileKind::Toml,
-        "mcp_servers",
-        Vec::new(),
+        &[("mcp_servers", &[])],
         true,
     ));
     if let Some(project) = project {
@@ -240,8 +268,7 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
             "Gemini CLI",
             project.join(".gemini").join("settings.json"),
             FileKind::Json,
-            "mcpServers",
-            Vec::new(),
+            MCP_SERVERS,
             false,
         ));
     }
@@ -249,17 +276,68 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
         "Gemini CLI",
         home.join(".gemini").join("settings.json"),
         FileKind::Json,
-        "mcpServers",
-        Vec::new(),
+        MCP_SERVERS,
         true,
     ));
+    // OpenCode deep-merges layers: `.opencode/` overrides the project root and
+    // `.jsonc` overrides `.json` within a directory. The first same-named
+    // entry seen therefore has to be the highest-precedence one.
+    if let Some(project) = project {
+        files.extend([
+            (
+                "OpenCode",
+                project.join(".opencode").join("opencode.jsonc"),
+                FileKind::Jsonc,
+                OPENCODE_SERVERS,
+                false,
+            ),
+            (
+                "OpenCode",
+                project.join(".opencode").join("opencode.json"),
+                FileKind::Json,
+                OPENCODE_SERVERS,
+                false,
+            ),
+            (
+                "OpenCode",
+                project.join("opencode.jsonc"),
+                FileKind::Jsonc,
+                OPENCODE_SERVERS,
+                false,
+            ),
+            (
+                "OpenCode",
+                project.join("opencode.json"),
+                FileKind::Json,
+                OPENCODE_SERVERS,
+                false,
+            ),
+        ]);
+    }
+    files.extend([
+        (
+            "OpenCode",
+            home.join(".config")
+                .join("opencode")
+                .join("opencode.jsonc"),
+            FileKind::Jsonc,
+            OPENCODE_SERVERS,
+            true,
+        ),
+        (
+            "OpenCode",
+            home.join(".config").join("opencode").join("opencode.json"),
+            FileKind::Json,
+            OPENCODE_SERVERS,
+            true,
+        ),
+    ]);
     if let Some(project) = project {
         files.push((
             "Cursor",
             project.join(".cursor").join("mcp.json"),
             FileKind::Json,
-            "mcpServers",
-            Vec::new(),
+            MCP_SERVERS,
             false,
         ));
     }
@@ -267,8 +345,7 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
         "Cursor",
         home.join(".cursor").join("mcp.json"),
         FileKind::Json,
-        "mcpServers",
-        Vec::new(),
+        MCP_SERVERS,
         true,
     ));
     if let Some(project) = project {
@@ -276,8 +353,7 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
             "Windsurf",
             project.join(".windsurf").join("mcp_config.json"),
             FileKind::Json,
-            "mcpServers",
-            Vec::new(),
+            MCP_SERVERS,
             false,
         ));
     }
@@ -287,46 +363,18 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
             .join("windsurf")
             .join("mcp_config.json"),
         FileKind::Json,
-        "mcpServers",
-        Vec::new(),
+        MCP_SERVERS,
         true,
     ));
     if let Some(project) = project {
-        files.extend([
-            (
-                "VS Code",
-                project.join(".vscode").join("mcp.json"),
-                FileKind::Json,
-                "servers",
-                vec!["mcp"],
-                false,
-            ),
-            (
-                "OpenCode",
-                project.join(".opencode").join("opencode.json"),
-                FileKind::Json,
-                "mcp",
-                Vec::new(),
-                false,
-            ),
-            (
-                "OpenCode",
-                project.join("opencode.json"),
-                FileKind::Json,
-                "mcp",
-                Vec::new(),
-                false,
-            ),
-        ]);
+        files.push((
+            "VS Code",
+            project.join(".vscode").join("mcp.json"),
+            FileKind::Json,
+            VSCODE_SERVERS,
+            false,
+        ));
     }
-    files.push((
-        "OpenCode",
-        home.join(".config").join("opencode").join("opencode.json"),
-        FileKind::Json,
-        "mcp",
-        Vec::new(),
-        true,
-    ));
     if let Some(project) = project {
         // OMP also reads these portable fallbacks, but does not own them.
         files.extend([
@@ -334,16 +382,14 @@ fn foreign_files(home: &Path, project: Option<&Path>) -> Vec<ForeignFile> {
                 "项目 fallback",
                 project.join("mcp.json"),
                 FileKind::Json,
-                "mcpServers",
-                Vec::new(),
+                MCP_SERVERS,
                 false,
             ),
             (
                 "项目 fallback",
                 project.join(".mcp.json"),
                 FileKind::Json,
-                "mcpServers",
-                Vec::new(),
+                MCP_SERVERS,
                 false,
             ),
         ]);
@@ -354,17 +400,21 @@ fn read_foreign(
     source: &'static str,
     path: PathBuf,
     kind: FileKind,
-    table: &str,
-    nested: &[&str],
-) -> Vec<Observation> {
-    let Some(value) = read_document(&path, kind) else {
-        return Vec::new();
+    shapes: &[ForeignShape],
+) -> Result<Vec<Observation>, String> {
+    let Some(value) = read_document(&path, kind)? else {
+        return Ok(Vec::new());
     };
-    let entries = string_map(Some(&value), table, nested);
-    entries
-        .into_iter()
-        .map(|(name, entry)| Observation::new(name, entry, source, path.clone()))
-        .collect()
+    for (table, nested) in shapes {
+        let entries = string_map(Some(&value), table, nested)?;
+        if !entries.is_empty() {
+            return Ok(entries
+                .into_iter()
+                .map(|(name, entry)| Observation::new(name, entry, source, path.clone()))
+                .collect());
+        }
+    }
+    Ok(Vec::new())
 }
 fn provider_id(source: &str) -> Option<&'static str> {
     match source {
@@ -379,21 +429,38 @@ fn provider_id(source: &str) -> Option<&'static str> {
     }
 }
 /// Foreign user-level sources are opt-in for OMP. Project files load by
-/// default. A missing or unparsable settings file therefore keeps only the
-/// always-on sources and project files.
-fn user_sources(home: &Path) -> (Vec<String>, Vec<String>) {
-    let config = user_agent_directory(home).join("config.yml");
-    let config = if config.is_file() {
-        config
+/// default unless `mcp.enableProjectConfig` is false. A missing settings file
+/// keeps the documented defaults; an unreadable or malformed one is reported
+/// instead of silently behaving as if every source were off.
+struct UserSources {
+    enabled: Vec<String>,
+    disabled: Vec<String>,
+    project_enabled: bool,
+    config: PathBuf,
+}
+
+fn user_sources(home: &Path) -> Result<UserSources, (PathBuf, String)> {
+    let agent = user_agent_directory(home);
+    let yml = agent.join("config.yml");
+    let config = if yml.is_file() {
+        yml
     } else {
-        user_agent_directory(home).join("config.yaml")
+        agent.join("config.yaml")
     };
-    let Ok(text) = std::fs::read_to_string(config) else {
-        return (Vec::new(), Vec::new());
+    let text = match std::fs::read_to_string(&config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UserSources {
+                enabled: Vec::new(),
+                disabled: Vec::new(),
+                project_enabled: true,
+                config,
+            })
+        }
+        Err(error) => return Err((config, format!("无法读取：{error}"))),
     };
-    let Ok(value) = serde_yaml::from_str::<Value>(&text) else {
-        return (Vec::new(), Vec::new());
-    };
+    let value = serde_yaml::from_str::<Value>(&text)
+        .map_err(|error| (config.clone(), format!("YAML 无法解析：{error}")))?;
     let list = |field: &str| -> Vec<String> {
         value
             .get(field)
@@ -407,7 +474,16 @@ fn user_sources(home: &Path) -> (Vec<String>, Vec<String>) {
             })
             .unwrap_or_default()
     };
-    (list("enabledProviders"), list("disabledProviders"))
+    let project_enabled = value
+        .pointer("/mcp/enableProjectConfig")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    Ok(UserSources {
+        enabled: list("enabledProviders"),
+        disabled: list("disabledProviders"),
+        project_enabled,
+        config,
+    })
 }
 fn user_source_enabled(source: &str, enabled: &[String], disabled: &[String]) -> bool {
     let Some(id) = provider_id(source) else {
@@ -427,25 +503,82 @@ fn user_source_enabled(source: &str, enabled: &[String], disabled: &[String]) ->
         .iter()
         .any(|item| item == id || item == "*" || item == "all")
 }
-pub(crate) fn observations(home: &Path, project: Option<&Path>) -> Vec<Observation> {
+pub(crate) fn observations(
+    home: &Path,
+    project: Option<&Path>,
+) -> Result<ObservationSet, String> {
     let mut found: Vec<Observation> = Vec::new();
+    let mut issues: Vec<ObservationIssue> = Vec::new();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let (enabled_providers, disabled_providers) = user_sources(home);
-    for (source, path, kind, table, nested, user_level) in foreign_files(home, project) {
+    let (enabled_providers, disabled_providers, project_enabled, config) = match user_sources(home) {
+        Ok(sources) => (
+            sources.enabled,
+            sources.disabled,
+            sources.project_enabled,
+            sources.config,
+        ),
+        Err((path, message)) => {
+            issues.push(ObservationIssue {
+                source: "OMP 配置",
+                path,
+                message: format!("{message}；用户级外部来源按未启用处理"),
+            });
+            (Vec::new(), Vec::new(), true, user_agent_directory(home).join("config.yml"))
+        }
+    };
+    if project.is_some() && !project_enabled {
+        issues.push(ObservationIssue {
+            source: "OMP 项目 MCP",
+            path: config,
+            message: "OMP 配置 mcp.enableProjectConfig=false；项目来源未加载，项目条目不会生效".into(),
+        });
+    }
+    for (source, path, kind, shapes, user_level) in foreign_files(home, project) {
+        if !user_level && !project_enabled {
+            continue;
+        }
         if user_level && !user_source_enabled(source, &enabled_providers, &disabled_providers) {
             continue;
         }
-        for observation in read_foreign(source, path, kind, table, &nested) {
-            if seen.insert(observation.name.clone()) {
-                found.push(observation);
+        match read_foreign(source, path.clone(), kind, shapes) {
+            Ok(observations) => {
+                for observation in observations {
+                    if seen.insert(observation.name.clone()) {
+                        found.push(observation);
+                    }
+                }
             }
+            Err(message) => issues.push(ObservationIssue {
+                source,
+                path,
+                message,
+            }),
         }
     }
     // OMP's own user overlays also decide whether a foreign entry loads.
-    let overlay = std::fs::read_to_string(user_mcp_path(home))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .unwrap_or_else(|| json!({}));
+    let overlay_path = user_mcp_path(home);
+    let overlay = match std::fs::read_to_string(&overlay_path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) => value,
+            Err(error) => {
+                issues.push(ObservationIssue {
+                    source: "OMP 覆盖配置",
+                    path: overlay_path,
+                    message: format!("JSON 无法解析：{error}；本次启停覆盖按空处理"),
+                });
+                json!({})
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => {
+            issues.push(ObservationIssue {
+                source: "OMP 覆盖配置",
+                path: overlay_path,
+                message: format!("无法读取：{error}；本次启停覆盖按空处理"),
+            });
+            json!({})
+        }
+    };
     let disabled: Vec<&str> = overlay
         .get("disabledServers")
         .and_then(Value::as_array)
@@ -465,7 +598,48 @@ pub(crate) fn observations(home: &Path, project: Option<&Path>) -> Vec<Observati
             observation.source_enabled
         };
     }
-    found
+    Ok(ObservationSet {
+        observations: found,
+        issues,
+    })
+}
+/// Whether project-scoped MCP sources are loaded by the current OMP settings.
+pub(crate) fn project_scope_effective(home: &Path) -> Result<bool, String> {
+    user_sources(home)
+        .map(|sources| sources.project_enabled)
+        .map_err(|(_, message)| message)
+}
+/// Imported servers are switched through the active profile's own user file;
+/// OMP has no project-level cross-source override.
+pub(crate) fn external_switch(
+    _scope: Scope,
+    home: &Path,
+    _project: Option<&Path>,
+) -> Option<crate::adapters::McpExternalSwitch> {
+    Some(crate::adapters::McpExternalSwitch {
+        path: user_mcp_path(home),
+        kind: FileKind::Json,
+    })
+}
+/// OMP-owned field changes for one imported server. `overlay_lists` keeps every
+/// unrelated entry and never mentions a source file.
+pub(crate) fn external_changes(
+    parsed: &Value,
+    name: &str,
+    enabled: bool,
+    source_enabled: bool,
+) -> Vec<crate::native::transaction::FieldChange> {
+    let (disabled, allow) = overlay_lists(parsed, name, enabled, source_enabled);
+    vec![
+        crate::native::transaction::FieldChange {
+            path: vec!["disabledServers".into()],
+            value: (!disabled.is_empty()).then(|| json!(disabled)),
+        },
+        crate::native::transaction::FieldChange {
+            path: vec!["enabledServers".into()],
+            value: (!allow.is_empty()).then(|| json!(allow)),
+        },
+    ]
 }
 fn malformed_entry(entry: &Value) -> Option<&'static str> {
     let Some(object) = entry.as_object() else {
@@ -822,6 +996,110 @@ pub(crate) fn verify_case(
                 ));
             }
         }
+        "foreign" => {
+            let home = context.home.join(
+                case.get("base")
+                    .and_then(Value::as_str)
+                    .unwrap_or("foreign")
+                    .to_owned()
+                    + "/home",
+            );
+            let project = context.project.join(
+                case.get("base")
+                    .and_then(Value::as_str)
+                    .unwrap_or("foreign")
+                    .to_owned()
+                    + "/project",
+            );
+            for directory in [&home, &project] {
+                std::fs::create_dir_all(directory)
+                    .map_err(|error| super::verify::CaseError::Failed(error.to_string()))?;
+            }
+            for file in case
+                .get("files")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let root = match file.get("scope").and_then(Value::as_str) {
+                    Some("project") => &project,
+                    _ => &home,
+                };
+                let relative = file
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| super::verify::CaseError::Failed("foreign 用例缺少 path".into()))?;
+                let path = root.join(relative);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|error| super::verify::CaseError::Failed(error.to_string()))?;
+                }
+                let content = file.get("content").and_then(Value::as_str).unwrap_or("");
+                std::fs::write(&path, content)
+                    .map_err(|error| super::verify::CaseError::Failed(error.to_string()))?;
+            }
+            let found = observations(&home, Some(&project)).map_err(super::verify::CaseError::Failed)?;
+            for expected in case
+                .get("expect")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let name = expected.get("name").and_then(Value::as_str).unwrap_or("server");
+                let actual = found.observations.iter().find(|item| item.name == name);
+                let source_ok = expected
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .is_none_or(|source| actual.is_some_and(|item| item.source == source));
+                let enabled_ok = expected
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .is_none_or(|enabled| actual.is_some_and(|item| item.source_enabled == enabled));
+                entries.push((
+                    format!("{name} 来源"),
+                    actual.is_some() && source_ok,
+                    format!("{:?}", actual.map(|item| item.source)),
+                ));
+                entries.push((
+                    format!("{name} 生效"),
+                    actual.is_some() && enabled_ok,
+                    format!("{:?}", actual.map(|item| item.source_enabled)),
+                ));
+            }
+            for expected in case
+                .get("expectIssues")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let message = expected.get("message").and_then(Value::as_str).unwrap_or("");
+                let path = expected.get("path").and_then(Value::as_str).unwrap_or("");
+                entries.push((
+                    format!("来源错误 {path}"),
+                    found.issues.iter().any(|issue| {
+                        issue.path.display().to_string().replace('\\', "/").contains(path)
+                            && issue.message.contains(message)
+                    }),
+                    format!("{:?}", found.issues.iter().map(|issue| &issue.message).collect::<Vec<_>>()),
+                ));
+            }
+            for name in case
+                .get("expectAbsent")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                entries.push((
+                    format!("{name} 不应加载"),
+                    !found.observations.iter().any(|item| item.name == name),
+                    format!(
+                        "{:?}",
+                        found.observations.iter().map(|item| &item.name).collect::<Vec<_>>()
+                    ),
+                ));
+            }
+        }
         "entry-validation" => {
             let items = case.get("cases").and_then(Value::as_array).ok_or_else(|| {
                 super::verify::CaseError::Failed("entry-validation 用例缺少 cases".into())
@@ -953,7 +1231,9 @@ mod tests {
         );
         write(".omp/agent/mcp.json", r#"{"disabledServers":["github"]}"#);
         write(".omp/agent/config.yml", "enabledProviders:\n  - claude\n");
-        let found = observations(home, None);
+        let found = observations(home, None).unwrap();
+        assert!(found.issues.is_empty());
+        let found = found.observations;
         let github = found.iter().find(|item| item.name == "github").unwrap();
         assert_eq!(github.source, "Claude Code");
         assert!(
@@ -1018,5 +1298,108 @@ mod tests {
             .unwrap();
         assert_eq!(sse["type"], json!("sse"));
         assert_eq!(sse["url"], json!("https://example.test/mcp"));
+    }
+
+    #[test]
+    fn vscode_project_shapes_and_cross_provider_priority_are_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let project = temp.path().join("project");
+        let write = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            &project.join(".vscode/mcp.json"),
+            r#"{"mcp":{"servers":{"shared":{"type":"http","url":"https://vscode.test/mcp"}}}}"#,
+        );
+        write(
+            &project.join(".opencode/opencode.json"),
+            r#"{"mcp":{"shared":{"type":"local","command":["npx","opencode"]}}}"#,
+        );
+        write(
+            &project.join(".cursor/mcp.json"),
+            r#"{"mcpServers":{"shared":{"command":"cursor"}}}"#,
+        );
+        let found = observations(&home, Some(&project)).unwrap();
+        assert!(found.issues.is_empty(), "{:?}", found.issues);
+        let shared = found
+            .observations
+            .iter()
+            .find(|item| item.name == "shared")
+            .unwrap();
+        assert_eq!(shared.source, "OpenCode", "OpenCode outranks Cursor/VS Code");
+        let vs = found
+            .observations
+            .iter()
+            .find(|item| item.name == "shared")
+            .unwrap();
+        // The VS Code entry is shadowed by the higher-priority OpenCode one.
+        assert_eq!(vs.path, project.join(".opencode/opencode.json"));
+
+        let other = temp.path().join("native-top");
+        write(
+            &other.join(".vscode/mcp.json"),
+            r#"{"servers":{"top":{"command":"npx"}}}"#,
+        );
+        let found = observations(&home, Some(&other)).unwrap();
+        let top = found
+            .observations
+            .iter()
+            .find(|item| item.name == "top")
+            .unwrap();
+        assert_eq!(top.source, "VS Code");
+    }
+
+    #[test]
+    fn unreadable_foreign_files_keep_valid_sources_and_expose_the_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let write = |relative: &str, text: &str| {
+            let path = home.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(".claude.json", "{ not json");
+        write(".omp/agent/config.yml", "enabledProviders:\n  - claude\n");
+        write(
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"cursor-only":{"command":"uvx"}}}"#,
+        );
+        let found = observations(home, None).unwrap();
+        assert_eq!(found.observations.len(), 1);
+        assert_eq!(found.observations[0].name, "cursor-only");
+        assert!(found
+            .issues
+            .iter()
+            .any(|issue| issue.path == home.join(".claude.json")
+                && issue.message.contains("无法解析")));
+    }
+
+    #[test]
+    fn disabled_project_config_skips_project_sources_with_an_issue() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let project = temp.path().join("project");
+        for (path, text) in [
+            (
+                home.join(".omp/agent/config.yml"),
+                "mcp:\n  enableProjectConfig: false\n",
+            ),
+            (
+                project.join(".claude/mcp.json"),
+                r#"{"mcpServers":{"project-only":{"command":"npx"}}}"#,
+            ),
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let found = observations(&home, Some(&project)).unwrap();
+        assert!(found.observations.is_empty());
+        assert!(found
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("enableProjectConfig=false")));
+        assert!(!project_scope_effective(&home).unwrap());
     }
 }

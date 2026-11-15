@@ -18,7 +18,7 @@ import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatch
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import i18n from '../../i18n';
-import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
+import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, Toggle, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import styles from './McpWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -109,9 +109,11 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         setRemoteIssues(store.issues ?? []);
       } else {
         const value = await native.listNativeMcp(readTarget);
+        // Older test doubles may still return the former bare array.
+        const store = Array.isArray(value) ? { entries: value, issues: [] } : value;
         if (!mounted.current || request !== loadSequence.current) return;
-        setEntries(value);
-        setRemoteIssues([]);
+        setEntries(store.entries);
+        setRemoteIssues(store.issues ?? []);
       }
       if (!mounted.current || request !== loadSequence.current) return;
       setLoadError(''); setStale(false);
@@ -316,6 +318,20 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
     } catch (value) { setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
+  async function toggleExternal(next: boolean) {
+    if (!selected?.readOnly || !selected.switchable) return;
+    remoteReads.beginWriteAction();
+    setBusy(true); setError('');
+    try {
+      await native.setExternalMcpEnabled({ ...readTarget }, selected.name, next);
+      setEnabled(next);
+      setSelected(current => current ? { ...current, enabled: next } : current);
+      await refreshNative();
+      if (!mounted.current) return;
+      setNotice(t('tools.mcp.written'));
+    } catch (value) { setError(errorText(value)); }
+    finally { if (mounted.current) setBusy(false); }
+  }
   function onKey(event: KeyboardEvent<HTMLElement>) {
     if (!withMod(event) || event.key.toLowerCase() !== 's') return;
     event.preventDefault();
@@ -430,6 +446,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
             {selected.protectedValues && <Badge><Icon name="lock" size={10} />{t('tools.mcp.detailProtected')}</Badge>}
           </>}
           tools={<>
+            {!remoteTargetId && !preview && selected.readOnly && selected.switchable && <Toggle checked={enabled} label={t('tools.mcp.enabledLabel')} text={enabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')} disabled={busy || !!preview} onChange={value => void toggleExternal(value)} />}
             {!preview && !selected.readOnly && <ModeSwitch mode={mode} editable disabled={busy} onChange={setMode} />}
             {openedLibrary && onOpenLibrary && <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.mcp.openLibrary')} title={t('tools.mcp.openLibrary')} onClick={() => onOpenLibrary(openedLibrary.id)} icon={<Icon name="library" size={15} />} />}
             {!selected.readOnly && <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.mcp.removeFromTool')} title={t('tools.mcp.removeFromTool')} disabled={busy} onClick={() => void removeNative(selected)} icon={<Icon name="trash" size={15} />} />}
