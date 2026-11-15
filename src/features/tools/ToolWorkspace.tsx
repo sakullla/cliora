@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable } from '../../lib/native';
-import { configurationApplicationState, configurationLiveState, type ConfigurationLiveState } from '../../lib/configurationDraft';
+import { configurationAppliedFileState, configurationApplicationState, configurationLiveState, configurationRowState, type ConfigurationLiveState, type ConfigurationNativeFileState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -82,6 +82,9 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const native = remoteReads.native;
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
+  // Whether the applied profile's native file still holds what it wrote. Read with the board,
+  // because a binding alone cannot tell an unchanged file from one edited outside Cliora.
+  const [nativeFile, setNativeFile] = useState<{ key: string; state: ConfigurationNativeFileState } | null>(null);
   const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
   const [loading, setLoading] = useState(true);
   // Action results float as toasts; persistent problems stay inline below.
@@ -220,6 +223,16 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
     const key = JSON.stringify([nextTool, nextScope, nextProject]);
+    // Only a read-only comparison of the applied content against the current native files can
+    // distinguish an unchanged file from an external edit; the binding record never carries it.
+    // Rows and the strip stay on the binding's own statement when there is nothing to compare.
+    const appliedFile = async (value: RegisteredToolWorkspace): Promise<ConfigurationNativeFileState> => {
+      const profile = value.binding ? value.profiles.find(item => item.id === value.binding!.profileId) : null;
+      if (!profile || !configurationApplicationState(profile, value.binding, value.common).applied) return 'unchecked';
+      if (!value.probe.nativeFiles.some(file => !file.sensitive)) return 'unchecked';
+      try { return configurationAppliedFileState((await native.compareRegisteredApplication(profile.id, nextScope, nextProject))?.files ?? []); }
+      catch { return 'unknown'; }
+    };
     let completed = false;
     // Resource pages need the binding, not CLI version processes. A full
     // workspace result remains authoritative if it finishes first.
@@ -236,8 +249,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     try {
       const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, fresh);
       if (!alive.current || request !== loadSequence.current) return null;
+      const file = await appliedFile(value);
+      if (!alive.current || request !== loadSequence.current) return null;
       rememberWorkspace(key, value);
-      setWorkspace(value); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
+      setWorkspace(value); setNativeFile({ key, state: file }); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
   }, [remoteTargetId, descriptor, toolId, native]);
@@ -501,16 +516,26 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError(t('tools.workspace.quotaChanged')); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
+  // A remote target reads its own files through its own store; only this machine's read-only
+  // comparison speaks for a local native file.
+  const fileState: ConfigurationNativeFileState = isRemote || nativeFile?.key !== context ? 'unchecked' : nativeFile.state;
   // One statement about this exact scope, judged from the same binding the rows read.
-  const live = configurationLiveState(workspace?.binding, workspace?.profiles ?? [], workspace?.common, scope, isRemote);
+  const live = configurationLiveState(workspace?.binding, workspace?.profiles ?? [], workspace?.common, scope, isRemote, fileState);
+  // An application record that cannot be read is "unconfirmed" for the row, and the strip that
+  // summarises it must not turn the same unknown into a definite "no longer in effect".
+  const recordUnreadable = !!live.profile && !!workspace && !configurationApplicationState(live.profile, workspace.binding, workspace.common).trusted;
+  const liveState: ConfigurationLiveState = live.state === 'invalid' && recordUnreadable ? 'unconfirmed' : live.state;
+  const liveTone = liveState === 'unconfirmed' ? 'unknown' : live.tone;
   const liveCopy: Record<ConfigurationLiveState, { label: string; value: string; title: string; note?: string }> = {
     applied: { label: t('tools.workspace.liveNow'), value: live.profile?.name ?? '', title: t('tools.workspace.liveHint') },
     invalid: { label: t('tools.workspace.liveInvalid'), value: live.profile?.name ?? t('tools.workspace.liveInvalidMissing'), title: t('tools.workspace.liveInvalidHint'), note: t('tools.workspace.liveInvalidNote') },
-    unconfirmed: { label: t('tools.workspace.liveUnconfirmed'), value: t('tools.workspace.liveUnconfirmedValue'), title: t('tools.workspace.liveUnconfirmedHint') },
+    // The applied record is readable; the file it wrote is not what is there any more.
+    external: { label: t('tools.workspace.liveExternal'), value: live.profile?.name ?? '', title: t('tools.workspace.liveExternalHint'), note: t('tools.workspace.liveExternalNote') },
+    unconfirmed: isRemote ? { label: t('tools.workspace.liveUnconfirmed'), value: t('tools.workspace.liveUnconfirmedValue'), title: t('tools.workspace.liveUnconfirmedHint') } : { label: t('tools.workspace.liveUnconfirmed'), value: t('tools.workspace.liveUnconfirmedLocalValue'), title: t('tools.workspace.liveUnconfirmedLocalHint') },
     unapplied: { label: t('tools.workspace.liveUnapplied'), value: '', title: t('tools.workspace.liveUnappliedHint') },
     project_unbound: { label: t('tools.workspace.liveProjectUnbound'), value: '', title: t('tools.workspace.liveProjectUnboundHint') },
   };
-  const liveText = liveCopy[live.state];
+  const liveText = liveCopy[liveState];
   const modelOf = (profile: RegisteredProfile) => workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
   const query = filter.trim().toLocaleLowerCase();
   const longProfileList = (workspace?.profiles.length ?? 0) > 6;
@@ -521,12 +546,14 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     .map(group => ({ ...group, visible: group.profiles.filter(matches) })).filter(group => group.visible.length);
   function row(profile: RegisteredProfile) {
     const binding = workspace?.binding;
-    const { same, commonPending, trusted, applied } = configurationApplicationState(profile, binding, workspace?.common);
+    const { same, commonPending, trusted } = configurationApplicationState(profile, binding, workspace?.common);
     const model = modelOf(profile);
-    // Four row states: in effect, saved and pending apply, saved only, and a binding that points
-    // here but can no longer be confirmed (external edit, missing record, other revision).
-    // The last one is never shown as in effect and never reads as a plain pending apply.
-    const state = applied ? 'active' : !same ? 'saved' : trusted ? 'pending' : 'invalid';
+    // Five row states: in effect, saved and pending apply, saved only, an applied file that was
+    // changed outside Cliora, and a record that can no longer be confirmed. The last two are never
+    // shown as in effect and never read as a plain pending apply.
+    const state = configurationRowState(profile, binding, workspace?.common, fileState);
+    // An external change or an unconfirmed record keeps its one fix: apply this configuration again.
+    const reapply = state === 'external' || state === 'unconfirmed';
     const frozen = same && trusted ? binding?.appliedSummary : null;
     const frozenSource = frozen?.authentication.kind === 'oauth' ? t('tools.workspace.sourceManaged') : frozen?.authentication.kind === 'api_key' ? t('tools.workspace.sourceApiKey') : t('tools.workspace.sourceCli');
     const authentication = profile.authentication;
@@ -534,14 +561,14 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const versionNote = same && (binding!.profileVersion !== profile.version || commonPending) ? `${t('tools.workspace.versions', { used: binding!.profileVersion, saved: profile.version })}${commonPending ? t('tools.workspace.commonPending') : ''}` : '';
     const usedSummary = frozen ? [frozenSource, frozen.providerId, host(frozen.baseUrl ?? undefined), frozen.model].filter(Boolean).join(' · ') : '';
     const usedNote = usedSummary ? t('tools.workspace.lastUsed', { summary: usedSummary }) : '';
-    return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-profile-state={state} data-active={applied || undefined} key={profile.id}>
+    return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-profile-state={state} data-active={state === 'active' || undefined} key={profile.id}>
       <div className={styles.profileHead} data-tools-row-head>
         <span className={styles.profileMain}>
-          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button>{state === 'invalid' ? <Badge className={styles.profileState} tone="warning" dot>{t('tools.workspace.stateInvalid')}</Badge> : <StatusBadge className={styles.profileState} domain="profile" state={state} dot={applied} />}</span>
-          <span className={styles.profileMeta}>{model && <Badge className={styles.profileModel} title={model}>{model}</Badge>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{state === 'invalid' && <span data-tone="warn" title={t('tools.workspace.liveInvalidHint')}>{t('tools.workspace.rowBindingInvalid')}</span>}</span>
+          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button>{state === 'active' || state === 'pending' || state === 'saved' ? <StatusBadge className={styles.profileState} domain="profile" state={state} dot={state === 'active'} /> : <Badge className={styles.profileState} tone="warning" dot={state === 'external'}>{t(state === 'external' ? 'tools.workspace.stateExternal' : 'tools.workspace.stateUnconfirmed')}</Badge>}</span>
+          <span className={styles.profileMeta}>{model && <Badge className={styles.profileModel} title={model}>{model}</Badge>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{state === 'external' && <span data-tone="warn" title={t('tools.workspace.liveExternalHint')}>{t('tools.workspace.rowExternalChanged')}</span>}{state === 'unconfirmed' && <span data-tone="warn" title={trusted ? t('tools.workspace.liveUnconfirmedLocalHint') : t('tools.workspace.liveUnconfirmedRecordHint')}>{t('tools.workspace.rowUnconfirmed')}</span>}</span>
           {(versionNote || usedNote) && <details className={styles.profileDetails}><summary>{t('tools.workspace.detailsSummary')}</summary><span className={styles.profileHistory}>{versionNote && <span title={versionNote}>{versionNote}</span>}{usedNote && <span title={usedNote}>{usedNote}</span>}</span></details>}
         </span>
-        <span className={styles.profileActions} data-tools-row-actions>{!applied && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : state === 'invalid' ? t('tools.workspace.liveReapply') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
+        <span className={styles.profileActions} data-tools-row-actions>{state !== 'active' && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : reapply ? t('tools.workspace.liveReapply') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
       </div>
       {!isRemote && <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />}
     </div>;
@@ -584,13 +611,13 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       : <div ref={configBoard} className={styles.profileList} data-tools-board aria-label={t('tools.workspace.listAria')}>
         <Toolbar className={styles.listHeading} title={t('tools.workspace.profilesTitle')} titleAs="h3" count={workspace.profiles.length > 0 ? workspace.profiles.length : undefined} actions={<><Button variant="ghost" size="sm" icon={<Icon name="play" size={14} />} title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}>{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</Button><Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}>{t('tools.workspace.common')}</Button></>} primary={<Button variant="primary" size="sm" icon={<Icon name="plus" size={14} />} onClick={() => void createProfile()}>{t('tools.workspace.frameNew')}</Button>} />
         <div className={styles.boardBody}>
-        <div className={styles.liveStrip} data-tools-live data-live-state={live.state} data-live-tone={live.tone} data-live-profile={live.profile?.id ?? ''} title={liveText.title}>
+        <div className={styles.liveStrip} data-tools-live data-live-state={liveState} data-live-tone={liveTone} data-live-profile={live.profile?.id ?? ''} title={liveText.title}>
           <span className={styles.liveDot} aria-hidden="true" />
           <span className={styles.liveLabel}>{liveText.label}</span>
           {liveText.value && <strong title={liveText.value}>{liveText.value}</strong>}
           {liveText.note && <span className={styles.liveNote}>{liveText.note}</span>}
-          {/* The strip names the problem, so it also carries the one fix: re-apply the same configuration. */}
-          {live.state === 'invalid' && live.profile && workspace.probe.nativeWrites.state === 'supported' && <Button size="sm" className={styles.liveAction} disabled={busy || !!applying} onClick={() => void apply(live.profile!)}>{applying === live.profile.id ? t('tools.workspace.applying') : t('tools.workspace.liveReapply')}</Button>}
+          {/* The strip names the problem, so it also carries the one fix: apply the same configuration again. */}
+          {(liveState === 'invalid' || liveState === 'external' || liveState === 'unconfirmed') && !isRemote && live.profile && workspace.probe.nativeWrites.state === 'supported' && <Button size="sm" className={styles.liveAction} disabled={busy || !!applying} onClick={() => void apply(live.profile!)}>{applying === live.profile.id ? t('tools.workspace.applying') : t('tools.workspace.liveReapply')}</Button>}
         </div>
         {workspace.probe.nativeWrites.state !== 'supported' && <p className={styles.boardNote}><Icon name="lock" size={14} />{t('tools.workspace.applyBlocked')}{workspace.probe.nativeWrites.reason ? ` · ${workspace.probe.nativeWrites.reason}` : ''}</p>}
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><Button variant="ghost" size="sm" onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</Button></div>}

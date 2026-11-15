@@ -371,6 +371,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
       }),
     };
   });
+  expect(hit.escapes).toBe(true);
   expect(hit.covered).toBe(false);
   await menu.getByRole('menuitem', { name: '复制配置' }).click();
   await expect(page.getByRole('dialog', { name: /^复制配置 · / })).toBeVisible();
@@ -1137,8 +1138,8 @@ test('native field units and merged origin distinguish inherited and explicit va
 
 for (const [variant, expected] of [
   ['revision', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
-  ['no_snapshot', { state: 'invalid', badge: '绑定已失效', action: '重新应用' }],
-  ['no_summary', { state: 'invalid', badge: '绑定已失效', action: '重新应用' }],
+  ['no_snapshot', { state: 'unconfirmed', badge: '状态未确认', action: '重新应用' }],
+  ['no_summary', { state: 'unconfirmed', badge: '状态未确认', action: '重新应用' }],
   ['common_revision', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
   ['common_unknown', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
 ] as const) {
@@ -1158,11 +1159,92 @@ for (const [variant, expected] of [
     await expect(row.getByRole('button', { name: expected.action, exact: true })).toBeVisible();
     await expect(row.getByText('正在使用', { exact: true })).toHaveCount(0);
     await expect(row.getByText(expected.badge, { exact: true })).toBeVisible();
-    // An unconfirmed binding says what it is instead of reading as a plain pending apply.
-    await expect(row.getByText('绑定记录与当前配置不一致，需要重新应用', { exact: true })).toHaveCount(expected.state === 'invalid' ? 1 : 0);
+    // An unreadable application record says the state is unknown instead of claiming a definite mismatch.
+    await expect(row.getByText('应用记录或原生文件无法确认，需要重新应用', { exact: true })).toHaveCount(expected.state === 'unconfirmed' ? 1 : 0);
+    await expect(row.getByText('绑定已失效', { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply_')))).toEqual([]);
   });
 }
+
+test('a native file changed outside Cliora is never reported as in effect and can be applied again', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const live = page.locator('[data-tools-live]');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  // The read-only comparison is what separates an unchanged file from an external edit.
+  const checked = await comparisons();
+  // Extra fields Cliora does not own are not this profile's content, so they are not a change.
+  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { current: '{"model":"one","nativeOnly":true}', proposed: '{"model":"one"}' }; window.dispatchEvent(new Event('focus')); });
+  await expect.poll(comparisons).toBeGreaterThan(checked);
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  // Formatting and comments Cliora does not own are not a change either.
+  const afterExtras = await comparisons();
+  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model="one" # 本机手感\n', proposed: 'model = "one"\n' }; window.dispatchEvent(new Event('focus')); });
+  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  // Now the file no longer holds the applied value, while the applied record itself is untouched.
+  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { current: '{"model":"edited-outside"}', proposed: '{"model":"one"}' }; window.dispatchEvent(new Event('focus')); });
+  await expect(row).toHaveAttribute('data-profile-state', 'external');
+  await expect(row.getByText('原生文件已外部修改', { exact: true })).toBeVisible();
+  await expect(row.getByText('原生文件被外部修改，需要重新应用', { exact: true })).toBeVisible();
+  await expect(row.getByText('正在使用', { exact: true })).toHaveCount(0);
+  await expect(row).not.toHaveAttribute('data-active', 'true');
+  await expect(live).toHaveAttribute('data-live-state', 'external');
+  await expect(live).toHaveAttribute('data-live-tone', 'warning');
+  await expect(live).toContainText('外部修改');
+  await expect(live).toContainText('工作配置');
+  await expect(live).toContainText('原生文件已被外部修改，需要重新应用');
+  await expect(live).not.toContainText('当前生效');
+  // The one fix stays reachable from both the strip and the row.
+  await expect(row.getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
+  // The longer state copy still fits a narrow window without pushing the row actions out.
+  await page.setViewportSize({ width: 640, height: 900 });
+  const actions = await row.locator('[data-tools-row-actions]').boundingBox();
+  expect(actions!.x + actions!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await live.getByRole('button', { name: '重新应用', exact: true }).click();
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'apply_registered_native_profile').length)).toBe(1);
+});
+
+test('a comparison that cannot be read is unconfirmed instead of applied or invalid', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const live = page.locator('[data-tools-live]');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  const checked = await comparisons();
+  await page.evaluate(() => { (window as any).workspaceFixture.comparisonFailure = '原生文件读取失败：没有权限'; window.dispatchEvent(new Event('focus')); });
+  await expect.poll(comparisons).toBeGreaterThan(checked);
+  await expect(row).toHaveAttribute('data-profile-state', 'unconfirmed');
+  await expect(row.getByText('状态未确认', { exact: true })).toBeVisible();
+  await expect(row.getByText('应用记录或原生文件无法确认，需要重新应用', { exact: true })).toBeVisible();
+  await expect(row.getByText('正在使用', { exact: true })).toHaveCount(0);
+  await expect(row.getByText('绑定已失效', { exact: true })).toHaveCount(0);
+  await expect(live).toHaveAttribute('data-live-state', 'unconfirmed');
+  await expect(live).toHaveAttribute('data-live-tone', 'unknown');
+  await expect(live).toContainText('无法确认');
+  await expect(live).not.toContainText('当前生效');
+  await expect(live).not.toContainText('已失效');
+  await expect(row.getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
+});
+
+test('a scope with no applied binding is not compared and keeps its saved state', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.evaluate(() => { const fixture = (window as any).workspaceFixture; fixture.binding = null; fixture.calls.length = 0; window.dispatchEvent(new Event('focus')); });
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'saved');
+  await expect(row.getByText('已保存', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-tools-live]')).toHaveAttribute('data-live-state', 'unapplied');
+  // Nothing is applied here, so nothing claims a comparison result.
+  expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application'))).toEqual([]);
+});
 
 test('saving a new version of the applied profile separates saved and applied, then applies on request', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
@@ -1428,9 +1510,10 @@ test('unknown old applied context retains saved configurations and explicit reco
   });
   await expect(page.getByRole('alert').filter({ hasText: '旧应用身份未知' })).toBeVisible();
   await expect(page.getByRole('button', { name: '正在使用的文件', exact: true })).toHaveCount(0);
-  // The applied record is unknown, so the row says the binding cannot be confirmed and asks to apply again.
-  await expect(page.locator('[data-profile-id="existing"]')).toHaveAttribute('data-profile-state', 'invalid');
-  await expect(page.locator('[data-profile-id="existing"]').getByText('绑定已失效', { exact: true })).toBeVisible();
+  // The applied record is unknown, so the row says the state cannot be confirmed and asks to apply again.
+  await expect(page.locator('[data-profile-id="existing"]')).toHaveAttribute('data-profile-state', 'unconfirmed');
+  await expect(page.locator('[data-profile-id="existing"]').getByText('状态未确认', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-profile-id="existing"]').getByText('绑定已失效', { exact: true })).toHaveCount(0);
   await expect(page.locator('[data-profile-id="existing"]').getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
   await page.locator('[data-profile-id="existing"]').getByRole('button', { name: '修改', exact: true }).click();
   await expect(page.getByRole('dialog').getByLabel('配置名称')).toHaveValue('工作配置');

@@ -16,12 +16,102 @@ export function configurationApplicationState(profile: RegisteredProfile, bindin
 
 /** The four tones the board's live strip may use; only a trusted binding is green. */
 export type ConfigurationLiveTone = 'success' | 'warning' | 'unknown' | 'neutral';
-export type ConfigurationLiveState = 'applied' | 'invalid' | 'unconfirmed' | 'unapplied' | 'project_unbound';
+export type ConfigurationLiveState = 'applied' | 'invalid' | 'external' | 'unconfirmed' | 'unapplied' | 'project_unbound';
+
+/**
+ * What a read-only comparison of an applied binding against the current native files said.
+ * `unchecked` is not a fact about the files: nothing comparable was read, so nothing is claimed.
+ */
+export type ConfigurationNativeFileState = 'unchecked' | 'unchanged' | 'changed' | 'unknown';
+
+/** Name and copy for one configuration row; `external` and `unconfirmed` never read as in effect. */
+export type ConfigurationRowState = 'active' | 'pending' | 'saved' | 'external' | 'unconfirmed';
+
+/**
+ * The rows and the board's strip share this judgement, so they cannot disagree about the
+ * same record. A file that is no longer what the profile wrote is an external change, and a
+ * comparison that could not be read is unconfirmed; neither may be reported as in effect.
+ */
+export function configurationRowState(
+  profile: RegisteredProfile,
+  binding: AppliedBinding | null | undefined,
+  common: RegisteredCommon | null | undefined,
+  file: ConfigurationNativeFileState = 'unchecked',
+): ConfigurationRowState {
+  const { same, trusted, applied } = configurationApplicationState(profile, binding, common);
+  if (applied) {
+    if (file === 'changed') return 'external';
+    if (file === 'unknown') return 'unconfirmed';
+    return 'active';
+  }
+  // Another saved profile is applied here: this row only has a saved version.
+  if (!same) return 'saved';
+  // The binding points here but its application record is unreadable, so nothing is confirmed.
+  return trusted ? 'pending' : 'unconfirmed';
+}
+
+/**
+ * Does the current native file still hold what this profile would write? Native files are not
+ * written from our renderer, so a byte comparison would report formatting as an external change.
+ * Compare documents instead: every value the profile would write must still be present, and keys
+ * it does not own (the CLI's own fields) are not this profile's content.
+ */
+export function configurationAppliedFileState(files: readonly { format: string; current: string; proposedText: string }[]): 'unchanged' | 'changed' {
+  return files.every(file => sameDocument(file.format, file.current, file.proposedText)) ? 'unchanged' : 'changed';
+}
+
+function sameDocument(format: string, current: string, proposed: string) {
+  if (current === proposed) return true;
+  if (format === 'json' || format === 'jsonc') {
+    const left = parseJson(current);
+    const right = parseJson(proposed);
+    if (left.ok && right.ok) return holdsDocument(left.value, right.value);
+  }
+  // TOML and YAML have no parser here; compare statements with spacing and comments removed.
+  const left = documentLines(current);
+  const right = documentLines(proposed);
+  return left.length === right.length && left.every((line, index) => line === right[index]);
+}
+
+function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  try { return { ok: true, value: text.trim() ? JSON.parse(text) : {} }; } catch { return { ok: false }; }
+}
+
+function holdsDocument(current: unknown, proposed: unknown): boolean {
+  if (Array.isArray(proposed)) {
+    return Array.isArray(current) && current.length === proposed.length && proposed.every((item, index) => holdsDocument(current[index], item));
+  }
+  if (proposed && typeof proposed === 'object') {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return false;
+    return Object.entries(proposed).every(([key, value]) => Object.hasOwn(current, key) && holdsDocument((current as Record<string, unknown>)[key], value));
+  }
+  return current === proposed;
+}
+
+function documentLines(text: string) {
+  return text.split('\n').map(documentLine).filter(Boolean).sort();
+}
+
+/** One statement without its indentation, spacing and trailing comment. */
+function documentLine(line: string) {
+  let shown = '';
+  let quote = '';
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) { shown += char; if (char === quote) quote = ''; continue; }
+    if (char === '"' || char === "'") { quote = char; shown += char; continue; }
+    if (char === '#' || (char === '/' && line[index + 1] === '/')) break;
+    if (char === ' ' || char === '\t' || char === '\r') continue;
+    shown += char;
+  }
+  return shown;
+}
 
 /**
  * What the board may state about this exact scope. It reuses the row judgement so the
  * strip and the rows cannot disagree, and it never claims more than the facts support:
- * a remote target carries no binding, and a stale binding is "no longer in effect".
+ * a remote target carries no binding, a stale binding is "no longer in effect", and an
+ * applied profile whose native file changed outside Cliora is never shown as in effect.
  */
 export function configurationLiveState(
   binding: AppliedBinding | null | undefined,
@@ -29,6 +119,7 @@ export function configurationLiveState(
   common: RegisteredCommon | null | undefined,
   scope: 'global' | 'project',
   remote: boolean,
+  file: ConfigurationNativeFileState = 'unchecked',
 ): { tone: ConfigurationLiveTone; state: ConfigurationLiveState; profile: RegisteredProfile | null } {
   // A remote target's tool store has no binding, so nothing here is readable as a fact.
   if (remote) return { tone: 'unknown', state: 'unconfirmed', profile: null };
@@ -39,6 +130,9 @@ export function configurationLiveState(
   };
   const profile = profiles.find(item => item.id === binding.profileId) ?? null;
   if (profile && configurationApplicationState(profile, binding, common).applied) {
+    if (file === 'changed') return { tone: 'warning', state: 'external', profile };
+    // A comparison that failed says nothing about the files; it does not read as broken either.
+    if (file === 'unknown') return { tone: 'unknown', state: 'unconfirmed', profile };
     return { tone: 'success', state: 'applied', profile };
   }
   return { tone: 'warning', state: 'invalid', profile };
