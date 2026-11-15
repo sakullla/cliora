@@ -1,0 +1,694 @@
+//! oh-my-pi (OMP) adapter composition root.
+//!
+//! OMP is an independent CLI, not a Pi variant: `omp`, package
+//! `@oh-my-pi/pi-coding-agent`, YAML configuration, `agent.db` authentication
+//! and `--resume`/`--continue` session arguments all differ from Pi. This module
+//! only assembles identity, lifecycle and capability forwarding. Each capability
+//! module owns its evidence and turns itself on (or keeps an explicit reason)
+//! without editing this file again.
+//!
+//! Registered with a non-enumerated stable id, so OMP stays default-off through
+//! the existing unknown-managed-tool channel and never enters `CliId::ALL`.
+
+pub(crate) mod accounts;
+pub(crate) mod agents;
+pub(crate) mod configuration;
+pub(crate) mod history;
+pub(crate) mod lifecycle;
+pub(crate) mod mcp;
+pub(crate) mod memory;
+pub(crate) mod plugins;
+pub(crate) mod skills;
+pub mod verify;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use super::{
+    AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchForm, LaunchMode, McpLocation,
+    NativeCredentialRefs, NativeCredentialTarget, PendingSecrets, RuleFileSpec, RuleSupport,
+    SkillObservation, SkillSwitchLocation,
+};
+use crate::adapters::accounts::AccountAdapter;
+use crate::adapters::agents::AgentAdapter;
+use crate::adapters::configuration::{ConfigurationAdapter, PortableFieldKind};
+use crate::adapters::memory::MemoryAdapter;
+use crate::adapters::plugins::PluginAdapter;
+use crate::adapters::RemoteNativeDocument;
+use crate::adapters::RemoteResourceLayout;
+use crate::credentials::CredentialStore;
+use crate::native::adapter::{ConnectionPolicy, NativeFile, Scope};
+use crate::native::apply::NativeSecrets;
+use crate::native::format::FileKind;
+use crate::native::intake::NativeInspection;
+use crate::native::profile::{Connection, RegisteredProfile};
+use crate::resources::mcp::McpDefinition;
+
+pub(crate) const ID: &str = "omp";
+pub(crate) const NAME: &str = "oh-my-pi (OMP)";
+pub(crate) const COMMAND: &str = "omp";
+
+pub struct Omp;
+
+impl CliAdapter for Omp {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn command(&self) -> &'static str {
+        COMMAND
+    }
+
+    fn npm_package(&self) -> &'static str {
+        lifecycle::PACKAGE
+    }
+
+    fn version_identity(&self, basename: &str, output: &str) -> bool {
+        let lowered = output.to_ascii_lowercase();
+        let tokens = lowered
+            .split(|character: char| {
+                !(character.is_ascii_alphanumeric() || character == '-' || character == '_')
+            })
+            .filter(|token| !token.is_empty());
+        let named = tokens
+            .into_iter()
+            .any(|token| matches!(token, "omp" | "oh-my-pi"));
+        // A bare version is only OMP when the probed executable is `omp`; Pi's
+        // `pi --version` therefore never passes this identity check.
+        named
+            || (basename.eq_ignore_ascii_case(COMMAND)
+                && (lowered.starts_with('v')
+                    || lowered
+                        .chars()
+                        .next()
+                        .is_some_and(|character| character.is_ascii_digit())))
+    }
+
+    fn configuration(&self) -> Option<&dyn ConfigurationAdapter> {
+        configuration::port()
+    }
+
+    fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
+        configuration::portable_field_kind(path)
+    }
+
+    fn native_files(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        known: bool,
+    ) -> Vec<NativeFile> {
+        configuration::native_files(scope, home, project, known)
+    }
+
+    fn interface_formats(&self) -> &'static [&'static str] {
+        configuration::interface_formats()
+    }
+
+    fn file_kind(&self, role: &str) -> Result<FileKind, String> {
+        configuration::file_kind(role)
+    }
+
+    fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
+        configuration::portable_root_fields(role)
+    }
+
+    fn connection_policy(&self, scope: Scope) -> ConnectionPolicy {
+        configuration::connection_policy(scope)
+    }
+
+    fn connection_documents(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        configuration::connection_documents(connection, scope)
+    }
+
+    fn connection_documents_for_existing(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        existing: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        configuration::connection_documents_for_existing(connection, scope, existing)
+    }
+
+    fn preserve_native_fields(
+        &self,
+        role: &str,
+        original: &Value,
+        fields: &mut BTreeMap<String, Value>,
+        profile: &RegisteredProfile,
+    ) -> Result<(), String> {
+        configuration::preserve_native_fields(role, original, fields, profile)
+    }
+
+    fn write_connection_secret(
+        &self,
+        profile: &RegisteredProfile,
+        scope: Scope,
+        credentials: &dyn CredentialStore,
+        secrets: &mut NativeSecrets,
+    ) -> Result<(), String> {
+        configuration::write_connection_secret(profile, scope, credentials, secrets)
+    }
+
+    fn has_native_secret(&self, role: &str, root: &Value) -> bool {
+        configuration::has_native_secret(role, root)
+    }
+
+    fn inspect_values(
+        &self,
+        settings: &Value,
+        local_settings: &Value,
+        models: &Value,
+    ) -> InspectionFields {
+        configuration::inspect_values(settings, local_settings, models)
+    }
+
+    fn import_literal_secrets(
+        &self,
+        files: &mut BTreeMap<String, String>,
+        found: &mut NativeInspection,
+        pending: &mut PendingSecrets,
+        native_refs: &mut NativeCredentialRefs,
+    ) -> Result<(), String> {
+        configuration::import_literal_secrets(files, found, pending, native_refs)
+    }
+
+    fn validate_draft(&self, role: &str, parsed: &Value) -> Result<(), String> {
+        configuration::validate_draft(role, parsed)
+    }
+
+    fn connection_roles(&self) -> &'static [&'static str] {
+        configuration::connection_roles()
+    }
+
+    fn empty_entry_collections(&self, role: &str) -> &'static [&'static str] {
+        configuration::empty_entry_collections(role)
+    }
+
+    fn validate_role_scope(&self, role: &str, scope: Scope) -> Result<(), String> {
+        configuration::validate_role_scope(role, scope)
+    }
+
+    fn native_credential_target(&self, scope: Scope) -> Option<NativeCredentialTarget> {
+        accounts::native_credential_target(scope)
+    }
+
+    fn accounts(&self) -> Option<&dyn AccountAdapter> {
+        accounts::port()
+    }
+
+    fn agents(&self) -> Option<&dyn AgentAdapter> {
+        agents::port()
+    }
+
+    fn plugins(&self) -> Option<&dyn PluginAdapter> {
+        plugins::port()
+    }
+
+    fn memory(&self) -> Option<&dyn MemoryAdapter> {
+        memory::port()
+    }
+
+    fn supports_mcp(&self) -> bool {
+        mcp::supported()
+    }
+
+    fn mcp_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        mcp::location(scope, home, project)
+    }
+
+    fn mcp_entries(
+        &self,
+        parsed: &Value,
+        location: &McpLocation,
+    ) -> Result<serde_json::Map<String, Value>, String> {
+        mcp::entries(parsed, location)
+    }
+
+    fn mcp_entry_view(&self, entry: &Value) -> Value {
+        mcp::entry_view(entry)
+    }
+
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        mcp::document(definition, enabled, existing)
+    }
+
+    fn mcp_disabled_description(&self) -> Option<&'static str> {
+        mcp::disabled_description()
+    }
+
+    fn mcp_supports_cwd(&self) -> bool {
+        mcp::supports_cwd()
+    }
+
+    fn mcp_supports_sse(&self) -> bool {
+        mcp::supports_sse()
+    }
+
+    fn supports_skills(&self) -> bool {
+        skills::supported()
+    }
+
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        skills::root(scope, home, project)
+    }
+
+    fn skill_requires_manifest(&self) -> bool {
+        skills::requires_manifest()
+    }
+
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        skills::observations(scope, home, project)
+    }
+
+    fn skill_switch_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        name: &str,
+    ) -> Option<SkillSwitchLocation> {
+        skills::switch_location(scope, home, project, name)
+    }
+
+    fn skill_switch_requires_version(&self) -> bool {
+        skills::switch_requires_version()
+    }
+
+    fn skill_switch_value(&self, current: &Value, enabled: bool, skill_path: &Path) -> Value {
+        skills::switch_value(current, enabled, skill_path)
+    }
+
+    fn skill_switch_enabled(&self, current: &Value, skill_path: &Path) -> bool {
+        skills::switch_enabled(current, skill_path)
+    }
+
+    fn skill_switch_snapshot(&self, current: &Value, skill_path: &Path) -> Option<Value> {
+        skills::switch_snapshot(current, skill_path)
+    }
+
+    fn skill_switch_restore(
+        &self,
+        current: &Value,
+        previous: Option<&Value>,
+        skill_path: &Path,
+    ) -> Option<Value> {
+        skills::switch_restore(current, previous, skill_path)
+    }
+
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        skills::rule_path(scope, home, project)
+    }
+
+    fn rule_support(&self) -> RuleSupport {
+        skills::rule_support()
+    }
+
+    fn uses_rule_catalog(&self, scope: Scope) -> bool {
+        skills::uses_rule_catalog(scope)
+    }
+
+    fn rule_file_specs(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<Vec<RuleFileSpec>, String> {
+        skills::rule_file_specs(scope, home, project)
+    }
+
+    fn rule_create_path(&self, project: &Path, name: &str) -> Result<PathBuf, String> {
+        skills::rule_create_path(project, name)
+    }
+
+    fn rule_relocate(&self, project: &Path, path: &Path, enabled: bool) -> Result<PathBuf, String> {
+        skills::rule_relocate(project, path, enabled)
+    }
+
+    fn rule_unavailable_reason(&self, scope: Scope) -> Option<&'static str> {
+        skills::rule_unavailable_reason(scope)
+    }
+
+    fn remote_resource_layout(&self) -> RemoteResourceLayout {
+        mcp::remote_layout()
+    }
+
+    fn remote_native_documents(&self) -> &'static [RemoteNativeDocument] {
+        mcp::remote_native_documents()
+    }
+
+    fn history_sources(
+        &self,
+        home: &Path,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources(home)
+    }
+
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        history::parse(source)
+    }
+
+    fn history_supported(&self) -> bool {
+        history::supported()
+    }
+
+    fn history_resume_version_supported(&self, version: &str) -> bool {
+        lifecycle::version_policy().accepts(version)
+    }
+
+    fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
+        lifecycle::launch_args(session, mode)
+    }
+
+    fn resume_latest_args(&self, mode: LaunchMode) -> Result<Vec<String>, String> {
+        lifecycle::resume_latest_args(mode)
+    }
+
+    fn explicitly_incompatible_launch_version(&self, version: &str) -> bool {
+        !lifecycle::version_policy().accepts(version)
+    }
+
+    fn install_guidance(&self) -> (&'static str, &'static str) {
+        lifecycle::install_guidance()
+    }
+
+    fn node_required_when_missing(&self) -> bool {
+        // OMP runs on Bun; the shared Node/npm dependency panel must not claim a
+        // Node requirement it has not verified.
+        false
+    }
+
+    fn minimum_node_version(&self) -> Option<(u32, u32, u32)> {
+        None
+    }
+
+    fn requires_windows_bash(&self) -> bool {
+        false
+    }
+
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        lifecycle::binary_directories(home)
+    }
+
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        lifecycle::is_standalone_binary(path)
+    }
+
+    fn installation_source(&self, path: &Path) -> Option<&'static str> {
+        lifecycle::source_label(path)
+    }
+
+    fn npm_packages(&self) -> Vec<&'static str> {
+        // No verified npm channel: naming the package here would let a Bun
+        // symlink be reported as npm before the adapter-owned Bun label.
+        Vec::new()
+    }
+
+    fn runtime_dependencies(&self, source: &str, installed: bool, home: &Path) -> Vec<crate::native::adapter::Dependency> {
+        lifecycle::runtime_dependencies(source, installed, home)
+    }
+
+    fn source_install_command(&self, source: Option<&str>) -> Option<String> {
+        lifecycle::source_install_command(source)
+    }
+
+    fn source_upgrade_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        lifecycle::source_upgrade_command(source, version)
+    }
+
+    fn source_uninstall_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        lifecycle::source_uninstall_command(source, version)
+    }
+
+    fn install_command(&self) -> Option<String> {
+        lifecycle::install_command()
+    }
+
+    fn native_install_command(&self) -> Option<String> {
+        lifecycle::native_install_command()
+    }
+
+    fn npm_install_command(&self) -> Option<String> {
+        lifecycle::npm_install_command()
+    }
+
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        lifecycle::upgrade_command(source)
+    }
+
+    fn uninstall_command(&self) -> Option<String> {
+        lifecycle::uninstall_command()
+    }
+
+    fn npm_uninstall_command(&self) -> Option<String> {
+        lifecycle::npm_uninstall_command()
+    }
+
+    fn descriptor(&self) -> AdapterDescriptor {
+        AdapterDescriptor {
+            remote: self.remote_capabilities(),
+            id: ID,
+            name: NAME,
+            interface_formats: self.interface_formats(),
+            project_model_override: false,
+            yolo_available: false,
+            launch_form: LaunchForm::Terminal,
+            native_config: Facet {
+                state: "planned",
+                reason: configuration::UNAVAILABLE_REASON,
+            },
+            launch: Facet {
+                state: "available",
+                reason: lifecycle::LAUNCH_REASON,
+            },
+            resume: Facet {
+                state: "available",
+                reason: lifecycle::RESUME_REASON,
+            },
+            resources: Facet {
+                state: "planned",
+                reason: "OMP MCP、Skills、规则与 Agents 尚未交付；不显示为可用能力",
+            },
+            history: Facet {
+                state: "planned",
+                reason: history::UNAVAILABLE_REASON,
+            },
+            login: None,
+            management: super::ManagementCapabilities {
+                accounts: false,
+                mcp: self.supports_mcp(),
+                skills: self.supports_skills(),
+                agents: self
+                    .agents()
+                    .is_some_and(|adapter| adapter.capability().supported),
+                plugins: self
+                    .plugins()
+                    .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
+                project_plugins: false,
+                rules: self.rule_support(),
+                memory: self.published_memory(),
+                memory_reason: memory::UNVERIFIED_REASON,
+            },
+            configuration: self.configuration().map(|port| port.describe(Scope::Global)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::Registry;
+    use crate::domain::{CliId, Preferences};
+
+    #[test]
+    fn omp_registers_as_a_non_enumerated_default_off_tool() {
+        let registry = Registry::builtins();
+        let adapter = registry.get(ID).expect("OMP 应注册进内置注册表");
+        assert_eq!(adapter.id(), "omp");
+        assert_eq!(adapter.command(), "omp");
+        assert_eq!(adapter.npm_package(), "@oh-my-pi/pi-coding-agent");
+        assert_ne!(adapter.id(), "pi");
+        assert_ne!(adapter.command(), "pi");
+        assert!(CliId::from_stable_id("omp").is_none());
+        assert_eq!(
+            registry
+                .descriptors()
+                .iter()
+                .filter(|item| item.id == "omp")
+                .count(),
+            1
+        );
+        let defaults = Preferences::default();
+        assert_eq!(defaults.managed_tools, CliId::ALL.to_vec());
+        assert!(!defaults.managed_tool_ids().iter().any(|id| id == "omp"));
+        // A stored selection reaches OMP through the unknown-id channel only.
+        let mut preferences = Preferences::default();
+        let registered = |id: &str| registry.get(id).is_some();
+        let mut ids: Vec<String> = CliId::ALL
+            .iter()
+            .map(|tool| tool.stable_id().to_owned())
+            .collect();
+        ids.push("omp".into());
+        preferences.set_registered_managed(&ids, registered).unwrap();
+        assert_eq!(preferences.unknown_managed_tools(), &["omp".to_string()]);
+    }
+
+    #[test]
+    fn omp_identity_never_accepts_pis_version_output() {
+        let adapter = &super::Omp;
+        assert!(adapter.version_identity("omp", "omp 18.20.2"));
+        assert!(adapter.version_identity("omp", "oh-my-pi 18.20.2"));
+        assert!(adapter.version_identity("omp", "v18.20.2"));
+        assert!(!adapter.version_identity("pi", "pi 1.0.0"));
+        assert!(!adapter.version_identity("omp", "prompt 18.20.2"));
+        assert!(!adapter.version_identity("other", "something 18.20.2"));
+    }
+
+    #[test]
+    fn omp_declares_only_verified_lifecycle_and_explicit_absence() {
+        let adapter = &super::Omp;
+        let descriptor = adapter.descriptor();
+        assert_eq!(descriptor.launch.state, "available");
+        assert_eq!(descriptor.resume.state, "available");
+        assert_eq!(descriptor.native_config.state, "planned");
+        assert!(!descriptor.native_config.reason.trim().is_empty());
+        assert_eq!(descriptor.resources.state, "planned");
+        assert!(!descriptor.resources.reason.trim().is_empty());
+        assert_eq!(descriptor.history.state, "planned");
+        assert!(!descriptor.history.reason.trim().is_empty());
+        assert!(descriptor.login.is_none());
+        assert!(!descriptor.yolo_available);
+        assert!(descriptor.configuration.is_none());
+        assert!(!descriptor.management.accounts);
+        assert!(!descriptor.management.mcp);
+        assert!(!descriptor.management.skills);
+        assert!(!descriptor.management.agents);
+        assert!(!descriptor.management.plugins);
+        assert!(!descriptor.management.project_plugins);
+        assert!(descriptor.management.memory.is_none());
+        assert!(!descriptor.management.memory_reason.trim().is_empty());
+        assert!(!descriptor.management.rules.global);
+        assert!(!descriptor.management.rules.project);
+        assert!(adapter.configuration().is_none());
+        assert!(adapter.accounts().is_none());
+        assert!(adapter.agents().is_none());
+        assert!(adapter.plugins().is_none());
+        assert!(adapter.memory().is_some(), "登记三态结论的记忆端口必须存在");
+        assert!(!adapter.history_supported());
+        assert!(adapter.native_files(Scope::Global, Path::new("/home/e"), None, true).is_empty());
+        assert!(adapter.interface_formats().is_empty());
+        assert!(!adapter.supports_mcp());
+        assert!(!adapter.supports_skills());
+        let policy = adapter.connection_policy(Scope::Global);
+        assert_eq!(policy.api_key.state, "unsupported");
+        assert_eq!(policy.provider_address.state, "unsupported");
+        assert!(!policy.api_key.reason.trim().is_empty());
+        assert!(adapter
+            .connection_documents(
+                &Connection {
+                    provider_id: "official".into(),
+                    interface_format: "openai_responses".into(),
+                    base_url: "https://example.test/v1".into(),
+                    model: "fixture".into(),
+                    secret_ref: None,
+                    auth_env_var: None,
+                    model_records: Vec::new(),
+                },
+                Scope::Global,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn omp_resume_rejects_unverified_versions_and_never_uses_pi_flag() {
+        let adapter = &super::Omp;
+        assert!(!adapter.explicitly_incompatible_launch_version("18.20.2"));
+        assert!(!adapter.explicitly_incompatible_launch_version("19.0.0"));
+        assert!(!adapter.explicitly_incompatible_launch_version("20.4.1"));
+        assert!(adapter.explicitly_incompatible_launch_version("invalid"));
+        assert!(adapter.history_resume_version_supported("18.21.0"));
+        assert!(adapter.history_resume_version_supported("19.1.0"));
+        assert!(!adapter.history_resume_version_supported("19.1.0-beta.1"));
+        let args = adapter
+            .launch_args(Some("ses_01H"), LaunchMode::Normal)
+            .unwrap();
+        assert_eq!(args, ["--resume", "ses_01H"]);
+        assert_eq!(
+            adapter.resume_latest_args(LaunchMode::Normal).unwrap(),
+            ["--continue"]
+        );
+        assert!(adapter.launch_args(None, LaunchMode::Yolo).is_err());
+        assert_eq!(
+            adapter.install_command().as_deref(),
+            Some("bun add -g @oh-my-pi/pi-coding-agent")
+        );
+        assert!(adapter.native_install_command().is_none());
+        assert!(adapter.npm_install_command().is_none());
+        assert_eq!(
+            adapter.source_upgrade_command("bun", Some("18.20.2")).as_deref(),
+            Some("bun update -g @oh-my-pi/pi-coding-agent")
+        );
+        assert_eq!(
+            adapter.source_upgrade_command("native", Some("18.20.2")).as_deref(),
+            Some("omp update")
+        );
+        assert!(adapter.source_upgrade_command("unknown", Some("18.20.2")).is_none());
+        assert!(adapter.npm_packages().is_empty());
+        assert!(adapter.install_guidance().0.contains("can1357/oh-my-pi"));
+    }
+
+    #[test]
+    fn pi_registration_behavior_is_unchanged() {
+        let registry = Registry::builtins();
+        let pi = registry.get("pi").expect("Pi 仍应注册");
+        assert_eq!(pi.command(), "pi");
+        assert_eq!(pi.npm_package(), "@earendil-works/pi-coding-agent");
+        assert_eq!(
+            pi.launch_args(Some("session-1"), LaunchMode::Normal)
+                .unwrap(),
+            ["--session", "session-1"]
+        );
+        assert!(pi.accounts().is_some());
+        assert!(pi.descriptor().configuration.is_some());
+        assert!(Preferences::default().managed_tools.contains(&CliId::Pi));
+    }
+}

@@ -1,0 +1,20 @@
+{
+  "capability": "lifecycle",
+  "name": "Wide compatibility: baseline only, no upper bound, invalid versions unverified",
+  "case": {
+    "kind": "version-policy",
+    "accepted": [
+      "18.20.2",
+      "18.20.3",
+      "18.21.0",
+      "18.19.0",
+      "19.0.0",
+      "19.4.2",
+      "20.0.0",
+      "25.1.7",
+      "v20.3.1",
+      "18.20.2+build.7"
+    ],
+    "rejected": ["invalid", "1.0", "20", "19.0.0-beta.1", ""]
+  }
+}

@@ -192,9 +192,11 @@ export default {
   },
   install: {
     sourceNative: 'Native',
+    sourceBun: 'Bun',
     sourceOther: 'Other',
     updateNative: 'Update native',
     updateNpm: 'Update npm',
+    updateBun: 'Update Bun',
     update: 'Update',
     notInstalled: 'Not installed',
     currentLatest: 'Current {{current}} · latest {{latest}}',
@@ -224,6 +226,7 @@ export default {
     installLink: ' Install ↗',
     installNative: 'Install native',
     installNpm: 'Install npm',
+    installBun: 'Install with Bun',
     install: 'Install',
     officialGuide: 'Official install guide ↗',
     customPath: 'Custom path',
@@ -1012,6 +1015,9 @@ export default {
     contextRetry: 'Read again',
   },
   adapters: {
+    omp: {
+      configurationPending: 'OMP configuration editing is not delivered yet; this version does not read or write ~/.omp files.',
+    },
     cursor: { installLabel: 'Add local plugin' },
     shared: {
       modelAria: 'Model {{id}}',

@@ -21,6 +21,7 @@ pub(crate) mod minimax_code;
 pub mod model_directory;
 pub mod official;
 pub(crate) mod opencode;
+pub mod omp;
 pub(crate) mod pi;
 pub mod plugins;
 pub mod providers;
@@ -52,3 +53,5 @@ pub static ANTIGRAVITY: antigravity::Antigravity = antigravity::Antigravity;
 pub static KIRO: kiro::Kiro = kiro::Kiro;
 pub static CURSOR: cursor::Cursor = cursor::Cursor;
 pub static MINIMAX_CODE: minimax_code::MiniMaxCode = minimax_code::MiniMaxCode;
+/// oh-my-pi: independent CLI, registered default-off like the other additions.
+pub static OMP: omp::Omp = omp::Omp;

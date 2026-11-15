@@ -1401,6 +1401,23 @@ pub trait CliAdapter: Sync {
     fn recognizes_native_install_path(&self, _path: &Path) -> bool {
         false
     }
+    /// Adapter-owned installation source label for a probed path. Shared source
+    /// detection applies it after the native/npm checks and before falling back
+    /// to `unknown`, so an adapter can name a verified channel (for example a
+    /// Bun global install) without shared services branching on CLI ids.
+    fn installation_source(&self, _path: &Path) -> Option<&'static str> {
+        None
+    }
+    /// Runtime dependencies required by an identified installation source.
+    /// Empty keeps the historical shared Node/npm dependency panel.
+    fn runtime_dependencies(
+        &self,
+        _source: &str,
+        _installed: bool,
+        _home: &Path,
+    ) -> Vec<adapter::Dependency> {
+        Vec::new()
+    }
     fn native_binary_directories(&self, _home: &Path) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -1457,6 +1474,29 @@ pub trait CliAdapter: Sync {
             Some(_) => self.npm_uninstall_command(),
             None => None,
         }
+    }
+    /// Source-aware install command. The default preserves the historical
+    /// single-channel behavior; an adapter with more channels overrides this so
+    /// shared maintenance never has to know CLI-specific source names.
+    fn source_install_command(&self, source: Option<&str>) -> Option<String> {
+        match source {
+            None => self.install_command(),
+            Some("npm_shim") => self.npm_install_command(),
+            Some("native") => self.native_install_command(),
+            Some(_) => None,
+        }
+    }
+    /// Source-aware upgrade command. The default keeps the identified install
+    /// line policy.
+    fn source_upgrade_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        self.upgrade_command_for_version(source, version)
+    }
+    /// Source-aware uninstall command. The default keeps the legacy npm-only
+    /// uninstall surface.
+    fn source_uninstall_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        (source == "npm_shim")
+            .then(|| self.npm_uninstall_command_for_version(version))
+            .flatten()
     }
     /// Explicit cross-major upgrade declared by the adapter for the identified
     /// install. `None` hides the action; a declared action without a command

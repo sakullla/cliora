@@ -191,6 +191,12 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
             }
         }
     }
+    // Adapter-owned verified channel (for example Bun's global bin). Applied
+    // after npm so existing shim detection is unchanged, and before the unknown
+    // fallback so shared services never have to branch on a CLI id.
+    if let Some(source) = adapter.installation_source(path) {
+        return source;
+    }
     "unknown"
 }
 
@@ -281,7 +287,13 @@ fn node_dependency_status(
     }
 }
 
-fn dependencies(adapter: &dyn CliAdapter, source: &str, no_candidates: bool) -> Vec<Dependency> {
+fn dependencies(adapter: &dyn CliAdapter, source: &str, installed: bool, home: &Path, no_candidates: bool) -> Vec<Dependency> {
+    // Adapter-owned runtime first: e.g. a Bun-based CLI must not be told to
+    // install Node/npm. An empty declaration keeps the historical panel.
+    let owned = adapter.runtime_dependencies(source, installed, home);
+    if !owned.is_empty() {
+        return owned;
+    }
     let mut result = Vec::new();
     let needs_npm = source == "npm_shim" || (no_candidates && adapter.node_required_when_missing());
     if needs_npm {
@@ -365,7 +377,8 @@ fn install_command(adapter: &dyn CliAdapter) -> Option<String> {
 }
 
 fn upgrade_command(adapter: &dyn CliAdapter, source: &str, version: Option<&str>) -> Option<String> {
-    adapter.upgrade_command_for_version(source, version)
+    // Source-aware: the adapter owns which channel's update command applies.
+    adapter.source_upgrade_command(source, version)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -603,19 +616,26 @@ fn run_version_controlled(path: &Path, adapter: &dyn CliAdapter, cancelled: &dyn
 }
 
 /// Verify the channel that was actually installed, without probing unrelated
-/// copies or resolving native configuration. Cancellation remains effective.
-pub(crate) fn verify_installation(registry: &Registry, id: &str, home: &Path, npm: bool, cancelled: &dyn Fn() -> bool) -> Result<Installation, String> {
+/// copies or resolving native configuration. `expected_source` is the source
+/// selected before maintenance; `None` accepts any identified (non-`unknown`)
+/// channel, which covers a first install whose channel the adapter chose.
+/// Cancellation remains effective.
+pub(crate) fn verify_installation(registry: &Registry, id: &str, home: &Path, expected_source: Option<&str>, cancelled: &dyn Fn() -> bool) -> Result<Installation, String> {
     let adapter = registry.get(id).ok_or("未注册的 CLI 适配器")?;
     for group in group_probe_paths(candidates(adapter, home)) {
         for path in group {
             if cancelled() { return Err("安装验证已取消，请重新检查后重试".into()); }
             let source = source_of(&path, adapter);
-            if if npm { source != "npm_shim" } else { !matches!(source, "native" | "claude_native") } { continue; }
+            let matches = match expected_source {
+                Some(expected) => source == expected,
+                None => source != "unknown",
+            };
+            if !matches { continue; }
             let installation = run_version_controlled(&path, adapter, cancelled);
             if installation.status == "available" { return Ok(installation); }
         }
     }
-    Err("安装命令已结束，但尚未验证到可运行的命令。请检查日志、npm 全局目录及文件占用后重试".into())
+    Err("安装命令已结束，但尚未验证到可运行的命令。请检查日志、安装来源目录及文件占用后重试".into())
 }
 
 pub fn probe_path(tool: CliId, path: &Path) -> Installation {
@@ -1001,7 +1021,7 @@ fn finish_installation_probe(
         },
         install_url,
         upgrade_hint,
-        dependencies: dependencies(adapter, source, no_candidates),
+        dependencies: dependencies(adapter, source, runnable, home, no_candidates),
         install_command: if runnable {
             None
         } else {
@@ -1604,5 +1624,75 @@ mod tests {
                 assert_eq!(policy.projection, projection, "{id}");
             }
         }
+    }
+
+    /// Adapter-owned source and dependency hooks must reach shared services
+    /// without any CLI-id branch. Defaults keep the historical behaviour.
+    #[test]
+    fn adapter_owned_source_and_runtime_dependency_hooks_replace_the_unknown_fallback() {        struct Declared;
+        impl CliAdapter for Declared {
+            fn id(&self) -> &'static str { "fixture_declared_source" }
+            fn name(&self) -> &'static str { "Fixture declared source" }
+            fn command(&self) -> &'static str { "fixture-declared" }
+            fn npm_package(&self) -> &'static str { "" }
+            fn version_identity(&self, _: &str, _: &str) -> bool { false }
+            fn native_files(&self, _: Scope, _: &Path, _: Option<&Path>, _: bool) -> Vec<NativeFile> { Vec::new() }
+            fn interface_formats(&self) -> &'static [&'static str] { &[] }
+            fn file_kind(&self, _: &str) -> Result<crate::native::format::FileKind, String> { Err("none".into()) }
+            fn connection_documents(&self, _: &crate::native::profile::Connection, _: Scope) -> Result<std::collections::BTreeMap<String, serde_json::Value>, String> { Ok(Default::default()) }
+            fn write_connection_secret(&self, _: &crate::native::profile::RegisteredProfile, _: Scope, _: &dyn crate::credentials::CredentialStore, _: &mut crate::native::apply::NativeSecrets) -> Result<(), String> { Ok(()) }
+            fn has_native_secret(&self, _: &str, _: &serde_json::Value) -> bool { false }
+            fn inspect_values(&self, _: &serde_json::Value, _: &serde_json::Value, _: &serde_json::Value) -> adapters::InspectionFields { Default::default() }
+            fn launch_args(&self, _: Option<&str>, _: adapters::LaunchMode) -> Result<Vec<String>, String> { Ok(Vec::new()) }
+            fn install_guidance(&self) -> (&'static str, &'static str) { ("", "") }
+            fn installation_source(&self, _: &Path) -> Option<&'static str> { Some("bun") }
+            fn runtime_dependencies(&self, _: &str, _: bool, _: &Path) -> Vec<Dependency> {
+                vec![Dependency { name: "Bun", status: "found", detail: "fixture runtime", help_url: "https://bun.sh/docs/installation" }]
+            }
+        }
+        let path = Path::new("/opt/fixture/omp");
+        assert_eq!(source_of(path, &Declared), "bun", "适配器来源在 unknown 之前生效");
+        assert_eq!(source_of(path, &adapters::PI), "unknown", "默认适配器行为不变");
+        let declared = dependencies(&Declared, "unknown", false, Path::new("/home/example"), true);
+        assert_eq!(declared.len(), 1);
+        assert_eq!(declared[0].name, "Bun");
+        assert!(!declared.iter().any(|item| item.name == "Node.js"));
+        // Without a declaration the historical Node/npm panel still applies.
+        let legacy = dependencies(&adapters::OPENCODE, "npm_shim", true, Path::new("/home/example"), false);
+        assert!(legacy.iter().any(|item| item.name == "npm"));
+    }
+
+    /// Post-maintenance verification follows the adapter-declared source. The
+    /// old implementation guessed the channel from the command prefix, which
+    /// broke every non-npm channel.
+    #[test]
+    fn verification_requires_the_expected_adapter_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join(".bun/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let executable = {
+            #[cfg(windows)]
+            {
+                let path = bin.join("omp.ps1");
+                std::fs::write(&path, "Write-Output 'omp/18.20.2'\n").unwrap();
+                path
+            }
+            #[cfg(unix)]
+            {
+                let path = bin.join("omp");
+                std::fs::write(&path, "#!/bin/sh\necho 'omp/18.20.2'\n").unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                path
+            }
+        };
+        assert!(executable.is_file());
+        let registry = Registry::builtins();
+        let installation = verify_installation(&registry, "omp", temp.path(), Some("bun"), &|| false).unwrap();
+        assert_eq!(installation.source, "bun");
+        assert_eq!(installation.version.as_deref(), Some("18.20.2"));
+        // A different expected source is never accepted by inference.
+        assert!(verify_installation(&registry, "omp", temp.path(), Some("native"), &|| false).is_err());
+        assert!(verify_installation(&registry, "omp", temp.path(), Some("npm_shim"), &|| false).is_err());
     }
 }

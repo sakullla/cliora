@@ -192,10 +192,13 @@ export default {
   },
   install: {
     sourceNative: '原生',
+    sourceBun: 'Bun',
     sourceOther: '其他',
     updateNative: '更新原生',
     updateNpm: '更新 npm',
+    updateBun: '更新 Bun',
     update: '更新',
+    installBun: '用 Bun 安装',
     notInstalled: '未安装',
     currentLatest: '当前 {{current}} · 最新 {{latest}}',
     currentUpToDate: '当前 {{current}} · 已是最新',
@@ -1012,6 +1015,9 @@ export default {
     contextRetry: '重新读取',
   },
   adapters: {
+    omp: {
+      configurationPending: 'OMP 配置编辑尚未交付；当前版本不读取、不写入 ~/.omp 文件。',
+    },
     cursor: { installLabel: '添加本地插件' },
     shared: {
       modelAria: '模型 {{id}}',

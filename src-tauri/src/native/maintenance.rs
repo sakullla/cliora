@@ -31,22 +31,34 @@ pub fn cancel(tool: &str) {
     }
 }
 
-fn script(adapter: &dyn CliAdapter, action: &str, source: &str, version: Option<&str>) -> Result<String, String> {
-    if !matches!(source, "npm_shim" | "native" | "unknown") { return Err("未知安装来源".into()); }
-    match action {
-        "install" => match source {
-            "npm_shim" => adapter.npm_install_command(),
-            "native" => adapter.native_install_command(),
-            _ => adapter.install_command(),
-        },
-        "install_native" => adapter.native_install_command(),
-        // Regular updates and uninstalls follow the identified install line;
+/// Resolve one adapter-owned lifecycle command. `expected` is the source the
+/// post-run probe must verify; `None` accepts any identified channel (used by an
+/// install whose source the adapter chose). No CLI-id or source whitelist lives
+/// here: unknown sources simply have no adapter-declared command.
+fn script(adapter: &dyn CliAdapter, action: &str, source: &str, version: Option<&str>) -> Result<(String, Option<String>), String> {
+    let resolved = match action {
+        "install" => {
+            let requested = (source != "unknown").then_some(source);
+            adapter.source_install_command(requested).map(|command| (command, requested.map(str::to_owned)))
+        }
+        "install_native" => adapter
+            .source_install_command(Some("native"))
+            .map(|command| (command, Some("native".to_owned()))),
+        // Regular updates and uninstalls follow the identified install source;
         // the explicit major upgrade only runs the adapter-declared command.
-        "upgrade" => adapter.upgrade_command_for_version(source, version),
-        "upgrade_major" => adapter.major_upgrade(source, version).and_then(|action| action.command),
-        "uninstall_npm" => adapter.npm_uninstall_command_for_version(version),
+        "upgrade" => adapter
+            .source_upgrade_command(source, version)
+            .map(|command| (command, Some(source.to_owned()))),
+        "upgrade_major" => adapter.major_upgrade(source, version).and_then(|action| action.command).map(|command| (command, None)),
+        "uninstall_npm" => adapter
+            .source_uninstall_command("npm_shim", version)
+            .map(|command| (command, None)),
+        "uninstall" => adapter
+            .source_uninstall_command(source, version)
+            .map(|command| (command, None)),
         _ => None,
-    }.ok_or_else(|| "没有可直接执行的命令".into())
+    };
+    resolved.ok_or_else(|| "没有可直接执行的命令".into())
 }
 
 fn shell(script: &str, home: &Path) -> Command {
@@ -367,7 +379,7 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
 pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, version: Option<&str>, home: &Path, progress: impl Fn(MaintenanceProgress)) -> Result<MaintenanceResult, String> {
     let source = if source == "claude_native" { "native" } else { source };
     let adapter = registry.get(tool).ok_or("此 CLI 适配器未注册")?;
-    let script = script(adapter, action, source, version)?;
+    let (script, expected_source) = script(adapter, action, source, version)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     {
         let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
@@ -381,16 +393,10 @@ pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, ver
     // Failures can also modify shims: never keep pre-install probe evidence.
     adapter::invalidate_probe_cache(tool);
     let output = output?;
-    if action == "uninstall_npm" { return Ok(MaintenanceResult { output, version: None }); }
-    let npm = script.starts_with("npm ");
-    let verify = |npm: bool| adapter::verify_installation(registry, tool, home, npm, &|| cancelled.load(Ordering::Relaxed));
-    // The official cross-major path may move the install between channels, so
-    // it accepts whichever verified channel the upgraded CLI actually uses.
-    let installation = if action == "upgrade_major" {
-        verify(npm).or_else(|_| verify(!npm))?
-    } else {
-        verify(npm)?
-    };
+    if action.starts_with("uninstall") { return Ok(MaintenanceResult { output, version: None }); }
+    // Verification follows the real source contract instead of guessing from a
+    // command prefix: a Bun command must verify a Bun source on every platform.
+    let installation = adapter::verify_installation(registry, tool, home, expected_source.as_deref(), &|| cancelled.load(Ordering::Relaxed))?;
     Ok(MaintenanceResult { output, version: installation.version.clone() })
 }
 
@@ -462,29 +468,53 @@ mod tests {
     #[test]
     fn install_line_selection_controls_update_uninstall_and_major_upgrade_scripts() {
         let opencode = &crate::adapters::OPENCODE;
-        let upgrade_v2 = script(opencode, "upgrade", "npm_shim", Some("2.0.29")).unwrap();
+        let (upgrade_v2, expected) = script(opencode, "upgrade", "npm_shim", Some("2.0.29")).unwrap();
+        assert_eq!(expected.as_deref(), Some("npm_shim"));
         assert!(upgrade_v2.contains("@opencode/cli@latest"), "{upgrade_v2}");
-        let upgrade_v1 = script(opencode, "upgrade", "npm_shim", Some("1.19.0")).unwrap();
+        let (upgrade_v1, _) = script(opencode, "upgrade", "npm_shim", Some("1.19.0")).unwrap();
         assert!(upgrade_v1.contains("opencode-ai@latest"), "{upgrade_v1}");
         assert_eq!(
             script(opencode, "uninstall_npm", "npm_shim", Some("2.0.29")).unwrap(),
-            "npm uninstall -g @opencode/cli"
+            ("npm uninstall -g @opencode/cli".to_string(), None)
         );
         assert_eq!(
             script(opencode, "upgrade_major", "npm_shim", Some("1.19.0")).unwrap(),
-            "opencode upgrade --major"
+            ("opencode upgrade --major".to_string(), None)
         );
         // Unknown versions or sources never produce a line-specific command.
         assert!(script(opencode, "upgrade", "npm_shim", None).is_err());
         assert!(script(opencode, "uninstall_npm", "npm_shim", None).is_err());
         assert!(script(opencode, "upgrade_major", "unknown", Some("1.19.0")).is_err());
         assert!(script(opencode, "upgrade_major", "npm_shim", Some("1.18.34")).is_err());
+        // An adapter-owned source label never reaches a shared whitelist: a
+        // source without an adapter command simply has no executable entry.
+        assert!(script(opencode, "upgrade", "bun", Some("2.0.29")).is_err());
         // A legacy single-line adapter keeps its exact command policy.
         let pi = &crate::adapters::PI;
         assert_eq!(
             script(pi, "upgrade", "npm_shim", None).unwrap(),
-            pi.npm_install_command().unwrap()
+            (pi.npm_install_command().unwrap(), Some("npm_shim".to_string()))
         );
+    }
+
+    #[test]
+    fn adapter_owned_sources_resolve_install_upgrade_and_uninstall_without_id_branches() {
+        let omp = &crate::adapters::OMP;
+        let (install, expected) = script(omp, "install", "unknown", None).unwrap();
+        assert_eq!(install, "bun add -g @oh-my-pi/pi-coding-agent");
+        assert_eq!(expected, None, "首次安装由适配器选择通道，验证任一已识别来源");
+        assert!(script(omp, "install", "bun", None).is_ok());
+        assert!(script(omp, "install_native", "native", None).is_err(), "预编译安装地址未核实，不得猜测");
+        let (upgrade_bun, expected) = script(omp, "upgrade", "bun", Some("18.20.2")).unwrap();
+        assert_eq!(upgrade_bun, "bun update -g @oh-my-pi/pi-coding-agent");
+        assert_eq!(expected.as_deref(), Some("bun"), "升级后必须按 Bun 来源验证");
+        let (upgrade_native, expected) = script(omp, "upgrade", "native", Some("18.20.2")).unwrap();
+        assert_eq!(upgrade_native, "omp update");
+        assert_eq!(expected.as_deref(), Some("native"));
+        assert!(script(omp, "upgrade", "unknown", Some("18.20.2")).is_err());
+        let (uninstall, _) = script(omp, "uninstall", "bun", Some("18.20.2")).unwrap();
+        assert_eq!(uninstall, "bun remove -g @oh-my-pi/pi-coding-agent");
+        assert!(script(omp, "uninstall", "native", Some("18.20.2")).is_err());
     }
 
     #[test]

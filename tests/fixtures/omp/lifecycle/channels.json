@@ -1,0 +1,20 @@
+{
+  "capability": "lifecycle",
+  "name": "Bun, package payload, standalone image and unknown paths stay distinct",
+  "case": {
+    "kind": "channels",
+    "cases": [
+      { "path": "{home}/.bun/bin/omp", "channel": "bun", "native": false },
+      { "path": "{home}/.bun/bin/omp.exe", "channel": "bun", "native": false },
+      { "path": "/usr/local/bin/omp", "channel": "standalone", "native": true },
+      { "path": "/opt/omp/bin/omp.exe", "channel": "standalone", "native": true },
+      {
+        "path": "/home/example/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/cli.ts",
+        "channel": "package",
+        "native": false
+      },
+      { "path": "/usr/local/bin/pi", "channel": "unknown", "native": false },
+      { "path": "/usr/local/bin/other", "channel": "unknown", "native": false }
+    ]
+  }
+}

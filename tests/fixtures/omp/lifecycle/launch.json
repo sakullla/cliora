@@ -1,0 +1,13 @@
+{
+  "capability": "lifecycle",
+  "name": "Resume uses OMP --resume/--continue and never Pi --session",
+  "case": {
+    "kind": "launch",
+    "cases": [
+      { "mode": "normal", "session": null, "args": [] },
+      { "mode": "normal", "session": "ses_01H", "args": ["--resume", "ses_01H"] },
+      { "mode": "normal", "latest": true, "args": ["--continue"] },
+      { "mode": "yolo", "session": null, "expectError": true }
+    ]
+  }
+}
