@@ -1,0 +1,37 @@
+{
+  "name": "OMP project overrides stay read-only and never create a user-root doctor entry",
+  "capability": "plugins",
+  "case": {
+    "action": "supplement",
+    "project": true,
+    "lock": {
+      "plugins": {
+        "t5-market-plugin": {
+          "version": "2.0.0",
+          "enabledFeatures": null,
+          "enabled": true
+        }
+      },
+      "settings": {}
+    },
+    "overrides": {
+      "disabled": ["t5-market-plugin"],
+      "features": { "t5-market-plugin": ["extra"] }
+    },
+    "entries": [
+      {
+        "id": "t5-market-plugin@t5-market",
+        "name": "T5 Market Plugin",
+        "source": "t5-market-plugin@t5-market",
+        "version": "2.0.0",
+        "scope": "project",
+        "enabled": true,
+        "state": "installed_load_unknown",
+        "policy": "",
+        "readOnly": false
+      }
+    ],
+    "doctor": false,
+    "policyContains": ["项目覆盖", "项目覆盖功能：extra"]
+  }
+}

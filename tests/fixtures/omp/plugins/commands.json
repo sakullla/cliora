@@ -1,0 +1,63 @@
+{
+  "name": "OMP plugin commands keep the native subcommands, scope and doctor action",
+  "capability": "plugins",
+  "case": {
+    "action": "commands",
+    "cases": [
+      {
+        "action": "install",
+        "source": "@scope/pkg@1.2.3",
+        "project": false,
+        "args": ["plugin", "install", "@scope/pkg@1.2.3", "--json"]
+      },
+      {
+        "action": "install",
+        "source": "local-plugin",
+        "project": true,
+        "expectError": true
+      },
+      {
+        "action": "install",
+        "source": "fixture@marketplace",
+        "project": true,
+        "args": ["plugin", "install", "fixture@marketplace", "--json", "--scope", "project"]
+      },
+      {
+        "action": "install",
+        "source": "fixture@1.2.3",
+        "project": true,
+        "expectError": true
+      },
+      {
+        "action": "install",
+        "source": "fixture@v2",
+        "project": true,
+        "expectError": true
+      },
+      {
+        "action": "update",
+        "source": "fixture@marketplace",
+        "project": true,
+        "args": ["plugin", "upgrade", "fixture@marketplace", "--json", "--scope", "project"]
+      },
+      {
+        "action": "disable",
+        "source": "fixture@marketplace",
+        "project": true,
+        "args": ["plugin", "disable", "fixture@marketplace", "--json", "--scope", "project"]
+      },
+      {
+        "action": "doctor",
+        "source": "fixture",
+        "project": false,
+        "args": ["plugin", "doctor", "--fix", "--json"]
+      },
+      {
+        "action": "doctor",
+        "source": "fixture",
+        "project": true,
+        "expectError": true
+      }
+    ]
+  }
+}

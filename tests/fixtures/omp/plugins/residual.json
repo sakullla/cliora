@@ -1,0 +1,36 @@
+{
+  "name": "OMP lock residual is reported with a doctor recovery entry",
+  "capability": "plugins",
+  "case": {
+    "action": "supplement",
+    "lock": {
+      "plugins": {
+        "t5-fixture-plugin": {
+          "version": "1.2.3",
+          "enabledFeatures": null,
+          "enabled": true
+        },
+        "deleted-plugin": {
+          "version": "9.9.9",
+          "enabled": false
+        }
+      },
+      "settings": {}
+    },
+    "entries": [
+      {
+        "id": "t5-fixture-plugin",
+        "name": "T5 Fixture Plugin",
+        "source": "t5-fixture-plugin",
+        "version": "1.2.3",
+        "scope": "user",
+        "enabled": true,
+        "state": "installed_load_unknown",
+        "policy": "",
+        "readOnly": false
+      }
+    ],
+    "doctor": true,
+    "policyContains": ["用户锁文件仍记录 deleted-plugin", "磁盘包不存在", "doctor"]
+  }
+}
