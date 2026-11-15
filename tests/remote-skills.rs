@@ -34,7 +34,8 @@ fn all_builtin_skill_adapters_publish_their_own_remote_read_write_roots() {
         ("open_code", ".config/opencode/skills"), ("zcode", ".zcode/skills"), ("qoder_cn", ".qoder/skills"), ("kimi_code", ".kimi-code/skills"),
         ("deepseek", ".dsh/skills"), ("codebuddy", ".codebuddy/skills"), ("mimo_code", ".config/mimocode/skills"), ("cline", ".cline/skills"),
         ("devin", ".config/devin/skills"), ("command_code", ".commandcode/skills"), ("antigravity", ".gemini/antigravity-cli/skills"),
-        ("kiro", ".kiro/skills"), ("cursor", ".cursor/skills"), ("minimax_code", ".minimax/skills")];
+        ("kiro", ".kiro/skills"), ("cursor", ".cursor/skills"), ("minimax_code", ".minimax/skills"),
+        ("omp", ".omp/agent/skills")];
     let registry = Registry::builtins();
     assert_eq!(registry.iter().filter(|adapter| adapter.supports_skills()).count(), expected.len());
     for (id, root) in expected {

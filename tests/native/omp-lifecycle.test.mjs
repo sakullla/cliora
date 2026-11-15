@@ -125,7 +125,7 @@ test('resource fixtures use the resources capability and kind dispatch', async (
 test('OMP copy exists in both languages while capabilities stay explicit', async () => {
   const zh = await locale('zh');
   const en = await locale('en');
-  assert.ok(zh.adapters.omp.configurationPending.length > 0);
-  assert.ok(en.adapters.omp.configurationPending.length > 0);
-  assert.notEqual(zh.adapters.omp.configurationPending, en.adapters.omp.configurationPending);
+  assert.ok(zh.adapters.omp.label.length > 0);
+  assert.ok(en.adapters.omp.label.length > 0);
+  assert.notEqual(zh.adapters.omp.label, en.adapters.omp.label);
 });

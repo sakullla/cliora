@@ -78,6 +78,40 @@ impl CredentialStore for FailingStore {
 }
 
 #[test]
+fn omp_external_mcp_is_read_only_and_native_names_win() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let native = temp.path().join(".omp/agent/mcp.json");
+    write_parent(
+        &native,
+        r#"{"mcpServers":{"shared":{"command":"native"},"bad":{"type":"websocket","url":"https://example.test"}},"disabledServers":["shared"]}"#,
+    );
+    let external = temp.path().join(".claude/mcp.json");
+    write_parent(
+        &external,
+        r#"{"mcpServers":{"shared":{"command":"external"},"github":{"type":"http","url":"https://example.test/mcp"}}}"#,
+    );
+    write_parent(
+        &temp.path().join(".omp/agent/config.yml"),
+        "enabledProviders:\n  - claude\n",
+    );
+    let entries = list_native(&db, &registry, temp.path(), &target("omp").target).unwrap();
+    let shared = entries.iter().find(|entry| entry.name == "shared").unwrap();
+    assert!(!shared.read_only);
+    assert_eq!(shared.command, "native");
+    assert!(!shared.enabled, "OMP disabledServers must hide a same-name native entry");
+    let github = entries.iter().find(|entry| entry.name == "github").unwrap();
+    assert!(github.read_only);
+    assert_eq!(github.source.as_deref(), Some("Claude Code"));
+    assert!(github.detail.as_deref().unwrap().contains(".claude"));
+    // A malformed native entry keeps the valid ones visible and reports its own issue.
+    let bad = entries.iter().find(|entry| entry.name == "bad").unwrap();
+    assert!(bad.issue.as_deref().unwrap().contains("未知"));
+    assert!(!bad.enabled);
+}
+
+#[test]
 fn draft_preview_and_cancel_leave_database_and_native_files_untouched() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();

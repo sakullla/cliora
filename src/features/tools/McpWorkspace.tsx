@@ -48,6 +48,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [remoteIssues, setRemoteIssues] = useState<Array<{ kind?: string; path?: string; message: string }>>([]);
   const [stale, setStale] = useState(false);
   /** The saved entry the document shows; its working copy lives in the draft below. */
   const [selected, setSelected] = useState<NativeMcpEntry | null>(null);
@@ -101,11 +102,19 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
     const request = ++loadSequence.current;
     setListLoading(true);
     try {
-      const value = remoteTargetId
-        ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh }) as { entries?: NativeMcpEntry[] }).entries ?? [])
-        : await native.listNativeMcp(readTarget);
+      if (remoteTargetId) {
+        const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh }) as { entries?: NativeMcpEntry[]; issues?: Array<{ kind?: string; path?: string; message: string }> };
+        if (!mounted.current || request !== loadSequence.current) return;
+        setEntries(store.entries ?? []);
+        setRemoteIssues(store.issues ?? []);
+      } else {
+        const value = await native.listNativeMcp(readTarget);
+        if (!mounted.current || request !== loadSequence.current) return;
+        setEntries(value);
+        setRemoteIssues([]);
+      }
       if (!mounted.current || request !== loadSequence.current) return;
-      setEntries(value); setLoadError(''); setStale(false);
+      setLoadError(''); setStale(false);
     } catch (value) {
       if (!mounted.current || request !== loadSequence.current) return;
       setLoadError(errorText(value)); setStale(entries.length > 0);
@@ -167,6 +176,8 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   }
   async function openEntry(item: NativeMcpEntry, edit = false) {
     if (busy) return;
+    // A foreign source is read-only: opening never starts an edit draft.
+    if (item.readOnly) edit = false;
     if (!creating && selected?.name === item.name) { if (edit) setMode('edit'); return; }
     if (!await canReplace()) return;
     loadEntry(item, edit);
@@ -200,6 +211,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   }
   async function save() {
     if (!opened) return;
+    if (selected?.readOnly) { setError(t('tools.skills.stateReadOnly')); return; }
     if (scope === 'project' && !project) { setError(t('tools.mcp.pickProject')); return; }
     if (hasMcpIssues(mcpDraftIssues(draft))) { setShowIssues(true); return; }
     setBusy(true); setError('');
@@ -333,6 +345,8 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         <span className={doc.rowSummary}>{summary || t(remote ? 'library.resources.noUrl' : 'library.resources.noCommand')}</span>
         <span className={doc.rowMeta}>
           <Badge>{mcpTransportBadge(item.transport)}</Badge>
+          {item.source && <Badge><Icon name="lock" size={10} />{item.source}</Badge>}
+          {item.issue && <Badge tone="warning">{item.issue}</Badge>}
           <Badge tone={item.enabled ? 'success' : 'neutral'} dot>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
           {item.protectedValues && <Badge><Icon name="lock" size={10} />{t('tools.mcp.detailProtected')}</Badge>}
         </span>
@@ -410,15 +424,17 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
           badges={<>
             <Badge tone={isRemoteMcp(selected.transport) ? 'info' : 'neutral'}>{mcpTransportBadge(selected.transport)}</Badge>
             <Badge tone={enabled ? 'success' : 'neutral'} dot>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+            {selected.source && <Badge><Icon name="lock" size={10} />{selected.source}</Badge>}
+            {selected.issue && <Badge tone="warning">{selected.issue}</Badge>}
             {linkedInLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
             {selected.protectedValues && <Badge><Icon name="lock" size={10} />{t('tools.mcp.detailProtected')}</Badge>}
           </>}
           tools={<>
-            {!preview && <ModeSwitch mode={mode} editable disabled={busy} onChange={setMode} />}
+            {!preview && !selected.readOnly && <ModeSwitch mode={mode} editable disabled={busy} onChange={setMode} />}
             {openedLibrary && onOpenLibrary && <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.mcp.openLibrary')} title={t('tools.mcp.openLibrary')} onClick={() => onOpenLibrary(openedLibrary.id)} icon={<Icon name="library" size={15} />} />}
-            <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.mcp.removeFromTool')} title={t('tools.mcp.removeFromTool')} disabled={busy} onClick={() => void removeNative(selected)} icon={<Icon name="trash" size={15} />} />
+            {!selected.readOnly && <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.mcp.removeFromTool')} title={t('tools.mcp.removeFromTool')} disabled={busy} onClick={() => void removeNative(selected)} icon={<Icon name="trash" size={15} />} />}
           </>}
-          meta={<><ToolIcon toolId={toolId} size={14} /><span>{where || toolId}</span>{remoteTargetId && <span>{t('tools.mcp.targetRemoteHint')}</span>}</>}
+          meta={<><ToolIcon toolId={toolId} size={14} /><span>{where || toolId}</span>{remoteTargetId && <span>{t('tools.mcp.targetRemoteHint')}</span>}{selected.readOnly && selected.detail && <span>{selected.detail}</span>}</>}
         />
         {errorStrip}
         {review ?? (mode === 'read'
@@ -442,6 +458,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       search={<SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
       notices={<>
         <RemoteReadStatus state={remoteReads} />
+        {remoteIssues.length > 0 && <StatusBanner tone="warning" action={<Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button>}>{remoteIssues.map(issue => issue.message).join('；')}</StatusBanner>}
         {stale && <StatusBanner tone="warning" action={loadError ? <Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button> : undefined}>{t('tools.mcp.stale')}</StatusBanner>}
         {loadError && entries.length > 0 && !stale && <StatusBanner tone="error" action={<Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button>}>{loadError}</StatusBanner>}
       </>}

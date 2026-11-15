@@ -1,0 +1,9 @@
+{
+  "capability": "resources",
+  "name": "Generated and foreign Skill roots are read-only observations",
+  "case": {
+    "kind": "skills",
+    "action": "observations",
+    "sources": ["自动学习", "Claude Code", "Codex", ".agents"]
+  }
+}

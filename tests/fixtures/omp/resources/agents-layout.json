@@ -1,0 +1,12 @@
+{
+  "capability": "resources",
+  "name": "OMP user and project Agent roots and the bundled agent names",
+  "case": {
+    "kind": "agents",
+    "action": "layout",
+    "expect": {
+      "user": "{home}/.omp/agent/agents",
+      "project": "{project}/.omp/agents"
+    }
+  }
+}

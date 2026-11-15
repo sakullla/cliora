@@ -1,0 +1,12 @@
+{
+  "capability": "resources",
+  "name": "OMP user and project MCP paths use the native mcp.json table",
+  "case": {
+    "kind": "mcp",
+    "action": "layout",
+    "expect": {
+      "user": "{home}/.omp/agent/mcp.json",
+      "project": "{project}/.omp/mcp.json"
+    }
+  }
+}

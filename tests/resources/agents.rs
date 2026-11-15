@@ -1262,3 +1262,38 @@ fn opencode_version_resolved_writes_stay_in_the_entrys_own_container() {
         assert!(parsed.get(native).is_none(), "{version:?}");
     }
 }
+
+#[test]
+fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    let definition = project.join(".omp/agents/reviewer.md");
+    let body = "---\nname: reviewer\ndescription: T4 reviewer\nunknownField: keep-me\n---\n\nReview body.\n";
+    write(&definition, body);
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let credentials = MemoryStore::default();
+    let target = target("omp", &project);
+    let before = snapshot_inner(&home, &target, &[], None).unwrap();
+    let entry = before.entries.iter().find(|entry| entry.name == "reviewer").unwrap();
+    assert!(entry.enabled);
+    assert!(!entry.read_only, "{entry:?}");
+
+    let mut disable = request(&home, &target, "disable", Some(entry), "", None);
+    disable.name = "reviewer".into();
+    let disabled = operate(&db, &credentials, &home, &disable).unwrap();
+    let entry = disabled.snapshot.entries.iter().find(|entry| entry.name == "reviewer").unwrap();
+    assert!(!entry.enabled);
+    assert_eq!(fs::read_to_string(&definition).unwrap(), body, "定义文件不被移动或改写");
+    let config = fs::read_to_string(project.join(".omp/config.yml")).unwrap();
+    assert!(config.contains("disabledAgents:"));
+    assert!(config.contains("reviewer"));
+
+    let mut enable = request(&home, &target, "enable", Some(entry), "", None);
+    enable.name = "reviewer".into();
+    let enabled = operate(&db, &credentials, &home, &enable).unwrap();
+    assert!(enabled.snapshot.entries.iter().find(|entry| entry.name == "reviewer").unwrap().enabled);
+    assert_eq!(fs::read_to_string(&definition).unwrap(), body);
+    let config = fs::read_to_string(project.join(".omp/config.yml")).unwrap();
+    assert!(!config.contains("reviewer"));
+}

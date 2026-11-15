@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use crate::adapters::LaunchMode;
 
 /// A check failed: the product contradicts the declared behaviour.
+#[derive(Debug)]
 pub enum CaseError {
     Failed(String),
     /// The capability is not delivered yet, or the real CLI was unavailable.
@@ -449,8 +450,8 @@ mod tests {
                 &context(),
             );
             assert!(
-                matches!(outcome, Err(CaseError::Unverified(_))),
-                "{kind} 应分派到尚未交付的模块并返回 unverified"
+                matches!(outcome, Err(CaseError::Failed(_))),
+                "{kind} 应分派到已交付的模块并报告缺少 action"
             );
         }
         assert!(matches!(

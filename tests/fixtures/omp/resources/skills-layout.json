@@ -1,0 +1,12 @@
+{
+  "capability": "resources",
+  "name": "OMP user and project Skills roots and native context rules",
+  "case": {
+    "kind": "skills",
+    "action": "layout",
+    "expect": {
+      "user": "{home}/.omp/agent/skills",
+      "project": "{project}/.omp/skills"
+    }
+  }
+}

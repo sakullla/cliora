@@ -294,6 +294,26 @@ impl CliAdapter for Omp {
         mcp::entry_view(entry)
     }
 
+    fn mcp_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<Vec<crate::adapters::McpObservation>, String> {
+        let _ = scope;
+        Ok(mcp::observations(home, project)
+            .into_iter()
+            .map(|observation| crate::adapters::McpObservation {
+                name: observation.name,
+                entry: observation.entry,
+                source: observation.source,
+                path: observation.path,
+                enabled: observation.source_enabled,
+                detail: "OMP 从其他工具发现的只读配置；启停只写 OMP 自有覆盖",
+            })
+            .collect())
+    }
+
     fn mcp_document(
         &self,
         definition: &McpDefinition,
@@ -339,6 +359,10 @@ impl CliAdapter for Omp {
         project: Option<&Path>,
     ) -> Vec<SkillObservation> {
         skills::observations(scope, home, project)
+    }
+
+    fn remote_skill_directories(&self) -> Vec<crate::adapters::RemoteSkillDirectory> {
+        skills::remote_directories()
     }
 
     fn skill_switch_location(

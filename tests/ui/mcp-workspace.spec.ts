@@ -4,13 +4,14 @@ import { openCli } from './cli-switcher';
 type Call = { command: string; args: any };
 
 /** One managed CLI (Codex) with the MCP tab open. Native writes are supported and every IPC is recorded. */
-async function install(page: Page, options: { failList?: boolean } = {}) {
-  await page.addInitScript((settings: { failList: boolean }) => {
+async function install(page: Page, options: { failList?: boolean; external?: boolean } = {}) {
+  await page.addInitScript((settings: { failList: boolean; external: boolean }) => {
     const state = {
       entries: [
         { name: 'server-one', transport: 'stdio', command: 'npx', args: ['-y', 'server-one'], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, enabled: true, protectedValues: false },
         { name: 'remote-service', transport: 'http', command: '', args: [], cwd: '', url: 'https://example.test/mcp', env: {}, headers: {}, inLibrary: false, enabled: false, protectedValues: false },
         { name: 'vault', transport: 'stdio', command: 'uvx', args: ['vault'], cwd: '', url: '', env: { API_TOKEN: 'secret-token' }, headers: {}, inLibrary: false, enabled: true, protectedValues: true },
+        ...(settings.external ? [{ name: 'github', transport: 'http', command: '', args: [], cwd: '', url: 'https://api.githubcopilot.com/mcp/', env: {}, headers: {}, inLibrary: false, enabled: false, protectedValues: false, source: 'Claude Code', readOnly: true, detail: '只读来源 · /home/me/.claude/mcp.json', issue: null }] : []),
       ],
       definitions: [{ id: 'mcp-1', name: 'server-one', transport: 'stdio', command: 'npx', args: ['-y', 'server-one'], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, version: 3 }],
       calls: [] as Call[],
@@ -56,7 +57,7 @@ async function install(page: Page, options: { failList?: boolean } = {}) {
       if (command.startsWith('plugin:event|')) return 1;
       throw new Error(`Unexpected IPC: ${command}`);
     } } });
-  }, { failList: options.failList === true });
+  }, { failList: options.failList === true, external: options.external === true });
   await page.goto('/');
   await openCli(page, 'Codex');
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
@@ -336,4 +337,17 @@ test('the keyboard selects a row, edits and saves, and closing returns focus to 
   await detail.getByRole('button', { name: '关闭详情' }).click();
   await expect(detail).toHaveCount(0);
   await expect(row(page, 'remote-service')).toBeFocused();
+});
+
+test('an externally discovered MCP is read-only and names its source', async ({ page }) => {
+  await install(page, { external: true });
+  const foreign = list(page).getByRole('listitem').filter({ hasText: 'github' });
+  await expect(foreign).toContainText('Claude Code');
+  await expect(foreign).toContainText('已停用');
+  await row(page, 'github').click();
+  const detail = card(page, 'github');
+  await expect(detail).toContainText('/home/me/.claude/mcp.json');
+  await expect(detail.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
+  await expect(detail.getByRole('button', { name: '从 CLI 移除' })).toHaveCount(0);
+  await expect(detail.getByRole('region', { name: 'MCP 详情' })).toBeVisible();
 });

@@ -1,0 +1,12 @@
+{
+  "capability": "resources",
+  "name": "OMP native context rules use AGENTS.md per scope",
+  "case": {
+    "kind": "rules",
+    "action": "layout",
+    "expect": {
+      "user": "{home}/.omp/agent/skills",
+      "project": "{project}/.omp/skills"
+    }
+  }
+}

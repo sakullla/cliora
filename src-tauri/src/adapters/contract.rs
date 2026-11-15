@@ -298,6 +298,18 @@ pub struct SkillObservation {
     pub detail: &'static str,
 }
 
+/// A read-only MCP server discovered from another tool or plugin package.
+/// `source` is the display label, `path` the native file that owns it.
+#[derive(Clone, Debug)]
+pub struct McpObservation {
+    pub name: String,
+    pub entry: Value,
+    pub source: &'static str,
+    pub path: PathBuf,
+    pub enabled: bool,
+    pub detail: &'static str,
+}
+
 /// Adapter-owned remote resource mappings. Absence is an unsupported capability;
 /// shared transports never substitute another CLI's native directory.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -1265,6 +1277,17 @@ pub trait CliAdapter: Sync {
         let root = parsed.get(location.root);
         Ok(root.and_then(|root| location.child.map_or(Some(root), |child| root.get(child)))
             .and_then(Value::as_object).cloned().unwrap_or_default())
+    }
+    /// Read-only servers this CLI also discovers from other tools or packages.
+    /// The shared MCP view appends them with their source and never writes the
+    /// source file. Adapters that do not translate foreign configs return empty.
+    fn mcp_observations(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Result<Vec<McpObservation>, String> {
+        Ok(Vec::new())
     }
     /// Normalize an entry for display, including its native enabled/disabled state.
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }

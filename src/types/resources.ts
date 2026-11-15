@@ -37,7 +37,18 @@ export type McpDraftTargetRequest = McpTargetRequest & { operation?: McpTargetOp
 export type McpTargetResult = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; path: string | null; operation: McpTargetOperation; status: 'ready' | 'conflict' | 'unsupported' | 'written' | 'removed' | 'failed'; detail: string; baselineHash: string | null; previewToken: string | null; existing: unknown | null; proposed: unknown | null };
 export type McpDraftPreview = { draft: McpDraft; definition: McpDefinition; targets: McpTargetResult[] };
 export type McpCommitResult = { definition: McpDefinition; targets: McpTargetResult[] };
-export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
+export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & {
+  enabled: boolean;
+  protectedValues: boolean;
+  /** Read-only source label when another tool or plugin owns the definition. */
+  source?: string | null;
+  /** True for externally discovered entries; Cliora never writes their file. */
+  readOnly?: boolean;
+  /** Native file/package that owns a read-only entry. */
+  detail?: string | null;
+  /** Per-entry parse or schema problem; the rest of the list stays usable. */
+  issue?: string | null;
+};
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
 export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | string; enabled: boolean; writable: boolean; detail: string; text: string; fingerprint: string };

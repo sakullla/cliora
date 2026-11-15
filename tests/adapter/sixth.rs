@@ -544,10 +544,19 @@ fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
     let registry = crate::adapters::Registry::builtins();
     for adapter in registry.iter() {
         let descriptor = adapter.descriptor();
-        assert_eq!(descriptor.management.accounts, adapter.accounts().is_some_and(|port| {
+        // Read-only discovery may still publish the accounts page; an adapter
+        // without an account port must never do so.
+        let managed = adapter.accounts().is_some_and(|port| {
             let capability = port.capability();
             capability.managed_login || capability.import_native
-        }));
+        });
+        let published = descriptor.management.accounts;
+        assert!(
+            published == managed || (published && adapter.accounts().is_some()),
+            "{}: accounts page disagrees with its port",
+            adapter.id()
+        );
+        assert!(!published || adapter.accounts().is_some(), "{}: accounts page without a port", adapter.id());
         assert_eq!(descriptor.management.agents, adapter.agents().is_some_and(|port| port.capability().supported));
         assert_eq!(descriptor.management.plugins, adapter.plugins().is_some_and(|port| !port.capability().actions.is_empty()));
         assert_eq!(descriptor.management.mcp, adapter.supports_mcp());

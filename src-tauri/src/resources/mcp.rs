@@ -148,6 +148,18 @@ pub struct NativeMcpEntry {
     pub headers: IndexMap<String, String>,
     pub enabled: bool,
     pub protected_values: bool,
+    /// Display label of a read-only foreign source; absent for CLI-owned entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// True for a server discovered from another tool or plugin package.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Native file or package that owns a read-only entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Per-entry parse/schema problem; other entries stay visible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -644,69 +656,143 @@ pub fn list_native(
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
     let redact = adapter.mcp_redacts_secrets();
-    Ok(entries
+    let mut native: Vec<NativeMcpEntry> = entries
         .iter()
-        .filter_map(|(name, raw)| {
-            let view = adapter.mcp_entry_view(raw);
-            let raw = view.as_object()?;
-            let command = raw.get("command");
-            let (command, args) = match command {
-                Some(Value::String(command)) => (
-                    command.clone(),
-                    raw.get("args")
-                        .and_then(Value::as_array)
-                        .map(|args| {
-                            args.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                ),
-                Some(Value::Array(command)) => {
-                    let mut parts = command.iter().filter_map(Value::as_str);
-                    (
-                        parts.next().unwrap_or("").to_owned(),
-                        parts.map(str::to_owned).collect(),
-                    )
-                }
-                _ => (String::new(), Vec::new()),
-            };
-            let url = raw
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let (env, env_protected) = visible_secret_map(raw.get("env").or_else(|| raw.get("environment")), redact);
-            let (headers, header_protected) = visible_secret_map(raw.get("headers").or_else(|| raw.get("http_headers")), redact);
-            Some(NativeMcpEntry {
-                name: name.clone(),
-                transport: if url.is_empty() {
-                    McpTransport::Stdio
-                } else if !["type", "transport"].iter().any(|key| raw.get(*key).and_then(Value::as_str) == Some("sse")) {
-                    McpTransport::Http
-                } else {
-                    McpTransport::Sse
-                },
-                command,
-                args,
-                cwd: raw.get("cwd").and_then(Value::as_str).unwrap_or("").to_owned(),
-                url,
-                env,
-                headers,
-                enabled: raw
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .or_else(|| {
-                        raw.get("disabled")
-                            .and_then(Value::as_bool)
-                            .map(|value| !value)
-                    })
-                    .unwrap_or(true),
-                protected_values: env_protected || header_protected,
-            })
-        })
-        .collect())
+        .map(|(name, raw)| visible_entry_of(name, raw, redact, adapter))
+        .collect();
+    let project = match target.scope {
+        Scope::Global => None,
+        Scope::Project => Some(projects::checked_directory(
+            target.project_path.as_deref().ok_or("请选择项目目录")?,
+        )?),
+    };
+    let observations = adapter
+        .mcp_observations(target.scope, home, project.as_deref())
+        .unwrap_or_default();
+    for observation in observations {
+        if native.iter().any(|entry| entry.name == observation.name) {
+            continue;
+        }
+        let mut entry = visible_entry_of(&observation.name, &observation.entry, redact, adapter);
+        entry.enabled = observation.enabled;
+        entry.read_only = true;
+        entry.source = Some(observation.source.to_owned());
+        entry.detail = Some(
+            if observation.detail.is_empty() {
+                observation.path.display().to_string()
+            } else {
+                format!("{} · {}", observation.detail, observation.path.display())
+            },
+        );
+        native.push(entry);
+    }
+    Ok(native)
+}
+
+fn visible_entry_of(
+    name: &str,
+    raw_value: &Value,
+    redact: bool,
+    adapter: &dyn crate::adapters::CliAdapter,
+) -> NativeMcpEntry {
+    let view = adapter.mcp_entry_view(raw_value);
+    let raw = view.as_object();
+    let raw = match raw {
+        Some(raw) => raw,
+        None => {
+            return NativeMcpEntry {
+                name: name.to_owned(),
+                transport: McpTransport::Stdio,
+                command: String::new(),
+                args: Vec::new(),
+                cwd: String::new(),
+                url: String::new(),
+                env: IndexMap::new(),
+                headers: IndexMap::new(),
+                enabled: false,
+                protected_values: false,
+                source: None,
+                read_only: false,
+                detail: None,
+                issue: Some("MCP 条目不是对象".into()),
+            }
+        }
+    };
+    let command = raw.get("command");
+    let (command, args) = match command {
+        Some(Value::String(command)) => (
+            command.clone(),
+            raw.get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        Some(Value::Array(command)) => {
+            let mut parts = command.iter().filter_map(Value::as_str);
+            (
+                parts.next().unwrap_or("").to_owned(),
+                parts.map(str::to_owned).collect(),
+            )
+        }
+        _ => (String::new(), Vec::new()),
+    };
+    let url = raw
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let (env, env_protected) =
+        visible_secret_map(raw.get("env").or_else(|| raw.get("environment")), redact);
+    let (headers, header_protected) =
+        visible_secret_map(raw.get("headers").or_else(|| raw.get("http_headers")), redact);
+    let raw_type = raw
+        .get("type")
+        .or_else(|| raw.get("transport"))
+        .and_then(Value::as_str);
+    let transport = if matches!(raw_type, Some("sse")) {
+        McpTransport::Sse
+    } else if !url.is_empty() {
+        McpTransport::Http
+    } else {
+        McpTransport::Stdio
+    };
+    NativeMcpEntry {
+        name: name.to_owned(),
+        transport,
+        command,
+        args,
+        cwd: raw
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        url,
+        env,
+        headers,
+        enabled: raw
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .or_else(|| raw.get("disabled").and_then(Value::as_bool).map(|value| !value))
+            .unwrap_or(true),
+        protected_values: env_protected || header_protected,
+        source: None,
+        read_only: false,
+        detail: None,
+        issue: raw
+            .get("issue")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                let raw_type = raw_type?;
+                (!matches!(raw_type, "stdio" | "http" | "sse" | "local" | "remote"))
+                    .then(|| format!("未知的 MCP 传输类型：{raw_type}"))
+            }),
+    }
 }
 
 pub fn preview_targets(
