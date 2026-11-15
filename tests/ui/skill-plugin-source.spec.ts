@@ -82,3 +82,22 @@ test('read-only Skill source starts a new selection where the press lands, even 
   expect(first.includes(second)).toBe(true);
   expect(second).not.toBe(first);
 });
+
+test('a plugin-owned Skill states why it is read-only and offers no write surface', async ({ page }) => {
+  await mockPluginSkills(page);
+  const list = await openSkills(page);
+  const row = list.getByRole('button', { name: /requirement-split-estimator/ });
+  await row.click();
+  const article = page.getByRole('article');
+  await expect(article.getByText('由插件 sdlc@sdlc-marketplace 提供：随插件加载和更新，不能在这里修改或启用。')).toBeVisible();
+  await expect(article.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
+  await expect(article.getByRole('switch')).toHaveCount(0);
+  // 源码 stays read-only, so browsing the source is not a write path.
+  await article.getByRole('button', { name: '源码', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('aria-readonly', 'true');
+  await expect(article.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
+  // The shared header close returns focus to this Skill.
+  await article.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(article).toHaveCount(0);
+  await expect(row).toBeFocused();
+});

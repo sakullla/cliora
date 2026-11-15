@@ -1,4 +1,4 @@
-import { Children, createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Children, createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent as ReactFocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { writeClipboard } from '../../lib/clipboard';
@@ -41,11 +41,13 @@ export type DocumentWorkspaceProps = {
   /** Narrow pages show this above the document. Wide pages hide it. */
   backLabel?: string;
   onBack?: () => void;
+  /** Accessible name of the header close control. Defaults to `common.dialog.close`. */
+  closeLabel?: string;
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
 };
 
-type Shell = { focused: boolean; toggleFocus: () => void };
-const ShellContext = createContext<Shell>({ focused: false, toggleFocus: () => {} });
+type Shell = { focused: boolean; toggleFocus: () => void; close: { label: string; run: () => void } | null };
+const ShellContext = createContext<Shell>({ focused: false, toggleFocus: () => {}, close: null });
 
 const widthKey = 'cliora:document-list-width';
 const focusKey = 'cliora:document-focus';
@@ -69,7 +71,7 @@ function storedFocus() {
  * Page height is the content area left after the chrome, so the outer page
  * never scrolls the reader away.
  */
-export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions, search, filters, listFooter, listFooterLabel, notices, list, document, documentKey, placeholder, backLabel, onBack, onKeyDown }: DocumentWorkspaceProps) {
+export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions, search, filters, listFooter, listFooterLabel, notices, list, document, documentKey, placeholder, backLabel, onBack, closeLabel, onKeyDown }: DocumentWorkspaceProps) {
   const { t } = useTranslation();
   const root = useRef<HTMLElement>(null);
   const split = useRef<HTMLDivElement>(null);
@@ -133,10 +135,38 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
     rows[next].click();
   };
 
+  // Leaving a document puts focus back on its row, so the keyboard user keeps
+  // their place instead of landing on <body> when the document unmounts.
+  const lastRow = useRef<HTMLButtonElement | null>(null);
+  const open = !!document;
+  const onListFocus = (event: ReactFocusEvent<HTMLDivElement>) => {
+    if (open) return; // An open document returns to its own row; a cancelled switch must not steal it.
+    const row = (event.target as HTMLElement).closest<HTMLButtonElement>(`.${styles.row}`);
+    if (row) lastRow.current = row;
+  };
+  // Closing names the row the document belongs to before it unmounts; documents
+  // that disappear for other reasons (deletion, rescan) fall back to the last row.
+  const closeDocument = () => {
+    const current = root.current?.querySelector<HTMLButtonElement>(`.${styles.row}[aria-current]`);
+    if (current) lastRow.current = current;
+    onBack?.();
+  };
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) { wasOpen.current = true; return; }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    const rows = [...(root.current?.querySelectorAll<HTMLButtonElement>(`.${styles.row}:not(:disabled)`) ?? [])];
+    const target = lastRow.current?.isConnected ? lastRow.current : rows[0];
+    lastRow.current = null;
+    target?.focus();
+  }, [open]);
+
+  const close = document && onBack ? { label: closeLabel ?? t('common.dialog.close'), run: closeDocument } : null;
   const view = document ? 'document' : 'list';
   const single = !document && !placeholder;
   const hasHead = heading || count || actions || search || filters;
-  return <ShellContext value={{ focused: focused && !!document, toggleFocus }}>
+  return <ShellContext value={{ focused: focused && !!document, toggleFocus, close }}>
     <section ref={root} className={styles.page} aria-label={label} data-view={view} data-focus={(focused && !!document) || undefined} data-document-shell="" onKeyDown={onKeyDown}>
       {Children.count(notices) > 0 && <div className={styles.notices}>{notices}</div>}
       <div ref={split} className={styles.split} data-single={single || undefined} style={{ '--list-width': `${width}px` } as CSSProperties}>
@@ -150,13 +180,13 @@ export function DocumentWorkspace({ label, toolbarLabel, heading, count, actions
             {search && <div className={styles.listSearch}>{search}</div>}
             {filters && <div className={styles.listFilters}>{filters}</div>}
           </div>}
-          <div className={styles.listBody} onKeyDown={onListKey}>{list}</div>
+          <div className={styles.listBody} onKeyDown={onListKey} onFocus={onListFocus}>{list}</div>
           {listFooter && <div className={styles.listFoot} role="group" aria-label={listFooterLabel}>{listFooter}</div>}
         </div>
         {!single && <div className={styles.resizer} role="separator" aria-orientation="vertical" aria-label={t('common.document.resize')} title={t('common.document.resize')} aria-valuemin={minWidth} aria-valuemax={maxWidth} aria-valuenow={width} tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={() => setWidth(defaultWidth)} onKeyDown={onSeparatorKey} />}
         {!single && <div ref={pane} className={styles.documentPane}>
           {document ? <>
-            {onBack && <Button variant="ghost" size="sm" className={styles.back} icon={<Icon name="arrowLeft" size={14} />} onClick={onBack}>{backLabel}</Button>}
+            {onBack && <Button variant="ghost" size="sm" className={styles.back} icon={<Icon name="arrowLeft" size={14} />} onClick={closeDocument}>{backLabel}</Button>}
             <div className={styles.documentBody}>{document}</div>
           </> : placeholder}
         </div>}
@@ -179,11 +209,16 @@ export function FocusToggle() {
  * optional second line for source notes and secondary actions.
  */
 export function DocumentHeader({ title, badges, tools, meta, metaActions }: { title: ReactNode; badges?: ReactNode; tools?: ReactNode; meta?: ReactNode; metaActions?: ReactNode }) {
+  const { close } = useContext(ShellContext);
   return <header className={styles.header}>
     <div className={styles.titleRow}>
       <h3 title={typeof title === 'string' ? title : undefined}>{title}</h3>
       {badges && <span className={styles.badges}>{badges}</span>}
-      <span className={styles.tools}>{tools}<FocusToggle /></span>
+      <span className={styles.tools}>
+        {tools}
+        {close && <IconButton size="sm" className={styles.iconButton} aria-label={close.label} title={close.label} onClick={close.run} icon={<Icon name="close" size={15} />} />}
+        <FocusToggle />
+      </span>
     </div>
     {(meta || metaActions) && <div className={styles.metaRow}>
       {meta && <span className={styles.metaText}>{meta}</span>}

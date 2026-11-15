@@ -430,6 +430,7 @@ export default {
   },
   memory: {
     remoteSourceLabel: 'Remote host resource',
+    readonlyNote: 'Read-only source: {{reason}}',
   },
   mcp: {
     rowOpen: 'View {{name}}',
@@ -617,6 +618,8 @@ export default {
     pluginNotLoadedNamed: '{{name}} · not currently loaded',
     pluginWillLoadNamed: '{{name}} · loads with the plugin',
     pluginReadOnlyNamed: '{{name}} · read-only',
+    pluginReadonlyNote: 'Provided by the {{name}} plugin: it loads and updates with that plugin, so it cannot be edited or enabled here.',
+    readonlyNote: 'Read-only source: you can read it and view its source, but cannot edit or enable it here.',
     recoveryTitle: 'Skills installation needs checking',
     recoveryDetail: 'Launches of the related CLI are paused. Abnormal backups are kept; recovery can be retried after checking the directory.',
     recoveryProject: 'Project {{path}}',
@@ -853,6 +856,7 @@ export default {
       memory: 'Memory',
     },
     memoryUnavailable: 'Memory unavailable',
+    closeDocument: 'Close details',
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
     frameCurrent: 'Edit the files in use',
     frameCommon: 'Edit common configuration',

@@ -35,10 +35,10 @@ async function closeInstall(page: Page) {
   await page.getByRole('dialog', { name: '安装新插件' }).getByRole('button', { name: '取消', exact: true }).click();
 }
 
-async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false) {
+async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false, skillsCapability = true) {
   const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\example-dev`;
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\example-dev\agents`;
-  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource }) => {
+  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
     const state = { holdWorkspace, calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
@@ -47,7 +47,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
     Object.assign(window, { isTauri: true, pluginsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [toolId], theme: 'system' }, tools: [{ id: toolId, name: toolId === 'pi' ? 'Pi' : 'Claude Code' }] };
-      if (command === 'list_cli_adapters') return { registered: [{ id: toolId, name: toolId === 'pi' ? 'Pi' : 'Claude Code', interfaceFormats: ['anthropic_messages'], login: { hint: '原生登录' } }], managedIds: [toolId], preservedUnknown: [] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: toolId, name: toolId === 'pi' ? 'Pi' : 'Claude Code', interfaceFormats: ['anthropic_messages'], management: { skills: skillsCapability }, login: { hint: '原生登录' } }], managedIds: [toolId], preservedUnknown: [] };
       if (command === 'list_projects') return [{ id: 'project', name: '测试项目', path: '/fixture/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
       if (['list_usage_queries', 'list_usage_cache', 'list_accounts'].includes(command)) return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
@@ -96,6 +96,14 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
         return { path: args.path, content, format: args.path.endsWith('.json') ? 'json' : 'markdown', truncated: false };
       }
       if (command === 'reveal_native_plugin_path') { state.revealCalls.push(args.path ?? null); return null; }
+      // The Skills workspace reads one plugin skill so a contents jump can land on it.
+      if (command === 'scan_native_skills') return [{ name: 'lint-check', path: '/fixture/plugins/fixture/skills/lint', digest: null, state: 'external', detail: 'Runs lint', packageId: null, source: 'plugin', pluginName: 'fixture@market', pluginEnabled: true, issues: [] }];
+      if (command === 'read_native_skill') return { name: 'lint-check', path: args.directory, content: '---\nname: lint-check\ndescription: Runs lint\n---\n# Lint\n\nRun the linter before shipping.\n' };
+      if (command === 'analyze_skill_document') return { name: 'lint-check', description: 'Runs lint', license: null, compatibility: null, metadata: [], allowedTools: [], extra: [], bodyLine: 4, issues: [] };
+      if (command === 'list_skill_recovery_issues' || command === 'list_skill_packages' || command === 'list_skill_installations') return [];
+      if (command === 'get_skill_enabled') return false;
+      if (command === 'list_native_skill_files') return { files: [], truncated: false };
+      if (command === 'resolve_native_skill_references') return (args.targets as string[]).map(() => null);
       if (command === 'scan_native_agents') return { target: args.target, capability: { version: '2.1.287', supported: true, format: 'markdown', template: '---\nname: new\n---\n', detail: '下一次委派加载' }, entries: [{ id: 'fixture@market:reviewer', name: 'reviewer', description: 'Reviews code', path: '/fixture/plugins/fixture/agents/reviewer.md', format: 'markdown', content: '---\nname: reviewer\ndescription: Reviews code\n---\nRead the diff first.', enabled: true, readOnly: true, owner: '插件：fixture@market', detail: '' }], baseline: 'agents-baseline', detail: '原生定义管理' };
       if (command === 'operate_native_plugin') {
         const req = args.request;
@@ -112,7 +120,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       return null;
     } } });
-  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, extendedPath, extendedResource });
+  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, extendedPath, extendedResource });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace && !emptyEntries && !(deferFull && noPreview)) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
@@ -601,6 +609,31 @@ test('a bundled agent opens in Agents and its owner link returns to the plugin',
   await agent.getByRole('button', { name: '查看所属插件' }).click();
   await expect(page.getByRole('tab', { name: '插件', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('article', { name: '插件详情' }).getByRole('heading', { name: 'Fixture plugin', exact: true })).toBeVisible();
+});
+
+test('a bundled Skill opens in Skills and locates the target document', async ({ page }) => {
+  await setup(page);
+  const details = await openFixture(page);
+  const items = details.getByRole('list', { name: '插件内容' });
+  const lint = items.getByRole('listitem').filter({ hasText: 'lint-check' });
+  await lint.getByRole('button', { name: '在 Skill 中打开' }).click();
+  await expect(page.getByRole('tab', { name: 'Skill', exact: true })).toHaveAttribute('aria-selected', 'true');
+  // The jump selects that directory in the Skill list and opens its document.
+  const row = page.getByRole('navigation', { name: 'Skill 列表' }).getByRole('button', { name: /lint-check/ });
+  await expect(row).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByRole('region', { name: 'SKILL.md 预览' })).toContainText('Run the linter before shipping.');
+  const reads = await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'read_native_skill').map((call: any) => call.args.directory));
+  expect(reads).toEqual(['/fixture/plugins/fixture/skills/lint']);
+});
+
+test('a jump entry is absent when the target capability is unavailable', async ({ page }) => {
+  await setup(page, false, false, false, false, false, false, false, false, false, 'claude_code', false, false);
+  const details = await openFixture(page);
+  const items = details.getByRole('list', { name: '插件内容' });
+  // Agents stays available, so its jump entry stays; Skills is unavailable, so the Skill entry is not offered.
+  await expect(items.getByRole('listitem').filter({ hasText: 'reviewer' }).getByRole('button', { name: '在 Agents 中打开' })).toBeVisible();
+  await expect(items.getByRole('listitem').filter({ hasText: 'lint-check' }).getByRole('button', { name: '在 Skill 中打开' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Skill', exact: true })).toHaveCount(0);
 });
 
 test('a failed contents read explains the problem and retries', async ({ page }) => {

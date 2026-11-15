@@ -792,7 +792,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const currentScope = current ? scopeOf(current.entry, currentStore) : null;
   const currentModified = currentParsed?.modified ? relativeTime(currentParsed.modified, i18n.language) : null;
 
-  return <DocumentWorkspace documentKey={compose ? 'new' : selected} label={t('tools.workspace.view.memory')} toolbarLabel={aggregate ? t('common.memory.toolbar') : undefined} onKeyDown={onEditorKey} backLabel={t('common.memory.back')} onBack={() => { void closeDocument(); }}
+  return <DocumentWorkspace documentKey={compose ? 'new' : selected} label={t('tools.workspace.view.memory')} toolbarLabel={aggregate ? t('common.memory.toolbar') : undefined} onKeyDown={onEditorKey} backLabel={t('common.memory.back')} onBack={() => { void closeDocument(); }} closeLabel={t('tools.workspace.closeDocument')}
     heading={aggregate ? t('tools.workspace.view.memory') : undefined}
     count={aggregate && total > 0 ? filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length }) : undefined}
     actions={aggregate ? <>
@@ -870,6 +870,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         </> : undefined}
       />
       {propertiesPanel}
+      {!can('edit') && limitation && <p className={doc.strip} data-tone="warn"><Icon name="lock" size={14} /><span>{t('tools.memory.readonlyNote', { reason: limitation })}</span></p>}
       {editing
         ? <div className={doc.editor}><CodeEditor key={current.key} label={t('common.memory.textLabel')} format="markdown" value={draft} onChange={setDraft} readOnly={busy} documentId={current.key} /></div>
         : <div className={doc.body} role="region" aria-label={t('common.memory.textLabel')} tabIndex={0}>

@@ -430,6 +430,7 @@ export default {
   },
   memory: {
     remoteSourceLabel: '远程主机资源',
+    readonlyNote: '只读来源：{{reason}}',
   },
   mcp: {
     rowOpen: '查看 {{name}}',
@@ -617,6 +618,8 @@ export default {
     pluginNotLoadedNamed: '{{name}} · 当前不会加载',
     pluginWillLoadNamed: '{{name}} · 会随插件加载',
     pluginReadOnlyNamed: '{{name}} · 只读',
+    pluginReadonlyNote: '由插件 {{name}} 提供：随插件加载和更新，不能在这里修改或启用。',
+    readonlyNote: '只读来源：可以阅读和查看源码，不能在这里修改或启用。',
     recoveryTitle: 'Skill 安装需要检查',
     recoveryDetail: '相关 CLI 启动会暂停。异常备份已保留；检查目录后可重新尝试恢复。',
     recoveryProject: '项目 {{path}}',
@@ -853,6 +856,7 @@ export default {
       memory: '记忆',
     },
     memoryUnavailable: '记忆暂不可用',
+    closeDocument: '关闭详情',
     discardMessage: '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？',
     frameCurrent: '修改正在使用的文件',
     frameCommon: '修改通用配置',

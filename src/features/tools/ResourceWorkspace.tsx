@@ -740,6 +740,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       {selected && <PathLine path={selected.source} label={t('common.document.source_')} />}
       {selected?.description && <p>{selected.description}</p>}
     </div>}
+    {subject && !canEditSkill && !openedFile && !adding && subject.state !== 'unreadable' && <p className={doc.strip} data-tone="warn"><Icon name="lock" size={14} /><span>{origin === 'plugin' && subject.pluginName ? t('tools.skills.pluginReadonlyNote', { name: subject.pluginName }) : t('tools.skills.readonlyNote')}</span></p>}
     {selected && canEditSkill && selected.compatibility && <label className={doc.strip} data-tone="warn"><input type="checkbox" checked={dependencyChecked} onChange={event => setDependencyChecked(event.target.checked)} /><span>{t('tools.skills.compatibilityChecked', { requirement: selected.compatibility })}</span></label>}
     {subject?.state === 'unreadable' && subject.detail && subject.detail !== error && <p className={doc.strip} data-tone="warn"><Icon name="alert" size={14} /><span>{subject.detail}</span></p>}
     {(outcome || error) && <div className={styles.docStatus}>{status}</div>}
@@ -760,7 +761,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     </DocumentFoot>}
   </article>;
 
-  return <DocumentWorkspace documentKey={adding ? 'new' : selectedId} label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} onKeyDown={onEditorKey}
+  return <DocumentWorkspace documentKey={adding ? 'new' : selectedId} label={t('tools.workspace.view.skills')} toolbarLabel={needsProject ? undefined : t('tools.skills.toolbar')} backLabel={t('tools.skills.back')} onBack={() => { void closeDocument(); }} closeLabel={t('tools.workspace.closeDocument')} onKeyDown={onEditorKey}
     heading={needsProject ? undefined : t('tools.workspace.view.skills')}
     count={needsProject || !entries.length ? undefined : t('tools.skills.count', { filtered: visible.length, total: entries.length })}
     actions={needsProject || (remoteTargetId && !remoteWritable) ? undefined : <IconButton variant="primary" size="sm" aria-label={t('tools.skills.add')} title={t('tools.skills.add')} disabled={busy} onClick={() => void openAdding()} icon={<Icon name="plus" size={16} />} />}

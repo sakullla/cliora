@@ -263,8 +263,14 @@ test('the memory list leads with title, summary, and user or project scope', asy
   await entryButton(page, 'beta-note').click();
   await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-beta');
   await expect(reader(page).getByText('只读', { exact: true })).toBeVisible();
+  // The document states the reason instead of only a badge tooltip.
+  await expect(reader(page).getByText(`只读来源：${readOnlyLimitation}`)).toBeVisible();
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存记忆' })).toHaveCount(0);
+  // The shared header close returns to the list with focus on the entry it came from.
+  await reader(page).getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(reader(page)).toHaveCount(0);
+  await expect(entryButton(page, 'beta-note')).toBeFocused();
 });
 
 test('frontmatter supplies titles, types, and descriptions; search and type filters narrow the list', async ({ page }) => {
@@ -393,19 +399,38 @@ test('open, edit, and save carry the entry target and only affect that store', a
   expect(lists.every(call => call.args.toolId === 'alpha')).toBe(true);
 });
 
-test('unsaved edits ask before switching to another entry', async ({ page }) => {
+test('unsaved edits ask once before switching to another entry', async ({ page }) => {
   await install(page);
   await openMemory(page);
   await editEntry(page, 'a-note');
   await editor(page).fill('draft-a');
   await entryButton(page, 'b-note').click();
   await expect(page.getByRole('heading', { name: '放弃未保存的更改？' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
   await page.getByRole('button', { name: '取消' }).click();
+  // Cancelling restores the original entry with its draft, not the clicked one.
   await expect(editor(page)).toHaveText('draft-a');
+  await expect(entryButton(page, 'a-note')).toHaveAttribute('aria-current', 'true');
   await entryButton(page, 'b-note').click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
   await page.getByRole('button', { name: '放弃更改' }).click();
   await expect(reader(page)).toContainText('from-b');
   expect((await memoryCalls(page)).some(call => call.command === 'save_memory')).toBe(false);
+});
+
+test('a narrow page returns from the document to the entry it came from', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 900 });
+  await install(page);
+  await openMemory(page);
+  const list = page.getByRole('navigation', { name: '记忆列表' });
+  await entryButton(page, 'a-note').click();
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-a');
+  await expect(list).toBeHidden();
+  await reader(page).getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(reader(page)).toHaveCount(0);
+  await expect(list).toBeVisible();
+  await expect(entryButton(page, 'a-note')).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
 });
 
 test('delete asks for confirmation and cancel leaves the entry', async ({ page }) => {

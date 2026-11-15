@@ -378,7 +378,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
       </>}
   </div> : null;
 
-  return <>{installDialog}<DocumentWorkspace documentKey={preview ? `${selectedKey}|${preview.item.path}|${preview.item.name}` : selectedKey} label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.toolbar')} backLabel={t('common.dialog.back')} onBack={closeDetails}
+  return <>{installDialog}<DocumentWorkspace documentKey={preview ? `${selectedKey}|${preview.item.path}|${preview.item.name}` : selectedKey} label={t('tools.plugins.label')} toolbarLabel={t('tools.plugins.toolbar')} backLabel={t('common.dialog.back')} onBack={closeDetails} closeLabel={t('tools.plugins.closeDetails')}
     heading={t('tools.plugins.title')}
     count={countText}
     actions={<>
@@ -445,7 +445,6 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
         </>}
         tools={<>
           {entryActions(opened).map(action => <Button size="sm" key={action} variant={action === 'uninstall' ? 'ghost' : action === 'update' ? 'secondary' : action === 'enable' ? 'primary' : 'secondary'} className={action === 'uninstall' ? styles.danger : undefined} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</Button>)}
-          <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.closeDetails')} title={t('tools.plugins.closeDetails')} onClick={closeDetails} icon={<Icon name="close" size={15} />} />
         </>}
         meta={<span className={styles.meta}>
           <span><Icon name="package" size={12} />{origin(opened)}</span>

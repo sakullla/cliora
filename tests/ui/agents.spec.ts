@@ -131,6 +131,51 @@ test('definition edit import lifecycle keeps context and package ownership', asy
   expect(actions).toEqual(['save', 'disable', 'enable', 'create', 'delete']);
 });
 
+test('a dirty draft asks once and the shared close returns focus to its row', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await setup(page);
+  const list = page.getByRole('list', { name: 'Agent 定义' });
+  const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
+  await row(page, 'reviewer').getByRole('button').click();
+  const card = page.getByRole('article', { name: 'reviewer' });
+  await card.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor.fill('---\nname: reviewer\n---\nunsaved close draft');
+  // Switching rows asks exactly once; cancelling restores the same entry and its draft.
+  await row(page, 'plugin-agent').getByRole('button').click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await page.getByRole('dialog').getByRole('button', { name: '取消' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(card).toBeVisible();
+  await expect(editor).toContainText('unsaved close draft');
+  await expect(row(page, 'reviewer').getByRole('button')).toHaveAttribute('aria-current', 'true');
+  // The header close is the same single question; cancelling keeps the draft open.
+  await card.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await page.getByRole('dialog').getByRole('button', { name: '取消' }).click();
+  await expect(editor).toContainText('unsaved close draft');
+  await card.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await page.getByRole('dialog').getByRole('button', { name: '放弃修改' }).click();
+  await expect(card).toHaveCount(0);
+  await expect(list).toBeVisible();
+  await expect(row(page, 'reviewer').getByRole('button')).toBeFocused();
+});
+
+test('a read-only definition has no write surface and closes back to its row', async ({ page }) => {
+  await setup(page);
+  await row(page, 'plugin-agent').getByRole('button').click();
+  const owned = page.getByRole('article', { name: 'plugin-agent' });
+  await expect(owned.getByText('请通过所属插件或组织策略管理')).toBeVisible();
+  await expect(owned.getByRole('button', { name: '保存定义' })).toHaveCount(0);
+  await owned.getByRole('button', { name: '源码', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true });
+  await expect(editor).toHaveAttribute('aria-readonly', 'true');
+  await expect(owned.getByRole('button', { name: '保存定义' })).toHaveCount(0);
+  await owned.getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(owned).toHaveCount(0);
+  await expect(row(page, 'plugin-agent').getByRole('button')).toBeFocused();
+});
+
 test('external conflict preserves draft and navigating prompts before discarding', { tag: '@integration' }, async ({ page }) => {
   await setup(page);
   await row(page, 'reviewer').getByRole('button').click();

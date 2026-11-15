@@ -187,6 +187,41 @@ test('specification notes mark rows, explain each issue, and clear after a fixin
   await expect(list.getByRole('button', { name: /crud-page/ })).not.toContainText('规范提示');
 });
 
+test('a draft survives reading and asks once before another Skill replaces it', async ({ page }) => {
+  await mockSkills(page);
+  const list = await openSkills(page);
+  const pdf = list.getByRole('button', { name: /pdf-processing/ });
+  await pdf.click();
+  const article = page.getByRole('article');
+  const preview = page.getByRole('region', { name: 'SKILL.md 预览' });
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'SKILL.md', exact: true });
+  await editor.fill('---\nname: pdf-processing\ndescription: Draft summary\n---\nDraft body\n');
+  // Reading shows the draft and its unsaved state without dropping it.
+  await article.getByRole('button', { name: '阅读', exact: true }).click();
+  await expect(preview).toContainText('Draft summary');
+  await expect(article.getByText('有未保存的更改')).toBeVisible();
+  await expect(article.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
+  // Another Skill asks exactly once; cancelling keeps this Skill and its draft.
+  await list.getByRole('button', { name: /minimal/ }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await page.getByRole('dialog').getByRole('button', { name: '取消' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(pdf).toHaveAttribute('aria-current', 'true');
+  await article.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(editor).toContainText('Draft body');
+  // Discarding opens the other Skill and writes nothing.
+  await list.getByRole('button', { name: /minimal/ }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '放弃修改' }).click();
+  await expect(preview.getByRole('heading', { name: 'Minimal body' })).toBeVisible();
+  const calls = await page.evaluate(() => (window as unknown as { __skillCalls: string[] }).__skillCalls);
+  expect(calls).not.toContain('save_native_skill');
+  // The shared header close returns to the list with focus on this Skill.
+  await page.getByRole('article').getByRole('button', { name: '关闭详情', exact: true }).click();
+  await expect(page.getByRole('article')).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /minimal/ })).toBeFocused();
+});
+
 test('an unreadable YAML header is reported and the whole file stays readable', async ({ page }) => {
   await mockSkills(page);
   const list = await openSkills(page);
