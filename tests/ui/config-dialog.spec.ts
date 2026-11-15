@@ -1235,8 +1235,85 @@ test('a comparison that cannot be read is unconfirmed instead of applied or inva
   await expect(row.getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
 });
 
+test('extra TOML the profile does not own keeps it in effect while a managed value is still checked', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const live = page.locator('[data-tools-live]');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  const checked = await comparisons();
+  // The MCP page and the CLI write the same config.toml; those tables are not this profile's content.
+  await page.evaluate(() => {
+    (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model = "one" # 本机手感\n\n[mcp_servers.docs]\ncommand = "npx"\nargs = [\n  "-y",\n  "some-server",\n]\n\n[projects."/tmp/demo"]\ntrust_level = "trusted"\n', proposed: 'model = "one"\n' };
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect.poll(comparisons).toBeGreaterThan(checked);
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  // The managed value itself is still compared: a different model is an external edit.
+  const afterExtras = await comparisons();
+  await page.evaluate(() => {
+    (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model = "edited"\n\n[mcp_servers.docs]\ncommand = "npx"\n', proposed: 'model = "one"\n' };
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
+  await expect(row).toHaveAttribute('data-profile-state', 'external');
+  await expect(row.getByText('原生文件已外部修改', { exact: true })).toBeVisible();
+  await expect(live).toHaveAttribute('data-live-state', 'external');
+  await expect(live).not.toContainText('当前生效');
+  // Applying again writes the value back, so the row returns to being in effect.
+  await row.getByRole('button', { name: '重新应用', exact: true }).click();
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+});
+
+test('extra YAML the profile does not own keeps it in effect while a managed value is still checked', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const live = page.locator('[data-tools-live]');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  const checked = await comparisons();
+  const proposed = 'provider: gateway\nmodel: one\nlimits:\n  context: 8192\n';
+  await page.evaluate((proposed) => {
+    (window as any).workspaceFixture.nativeFile = { format: 'yaml', current: '# written by the CLI itself\nprovider: gateway\nmodel: one\ntheme: dark\nextra:\n  nested: true\nlimits:\n  context: 8192\n', proposed };
+    window.dispatchEvent(new Event('focus'));
+  }, proposed);
+  await expect.poll(comparisons).toBeGreaterThan(checked);
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+  // A managed value under a managed key is still compared.
+  const afterExtras = await comparisons();
+  await page.evaluate((proposed) => {
+    (window as any).workspaceFixture.nativeFile = { format: 'yaml', current: 'provider: gateway\nmodel: one\nextra:\n  nested: true\nlimits:\n  context: 4096\n', proposed };
+    window.dispatchEvent(new Event('focus'));
+  }, proposed);
+  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
+  await expect(row).toHaveAttribute('data-profile-state', 'external');
+  await expect(live).toHaveAttribute('data-live-state', 'external');
+  await row.getByRole('button', { name: '重新应用', exact: true }).click();
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
+});
+
+test('a native file no comparison can read is unconfirmed instead of in effect', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toHaveAttribute('data-profile-state', 'active');
+  // Every native file is sensitive, so there is nothing to compare against the applied content.
+  await page.evaluate(() => { (window as any).workspaceFixture.nativeSensitive = true; window.dispatchEvent(new Event('focus')); });
+  await expect(row).toHaveAttribute('data-profile-state', 'unconfirmed');
+  await expect(row.getByText('状态未确认', { exact: true })).toBeVisible();
+  await expect(row.getByText('正在使用', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-tools-live]')).toHaveAttribute('data-live-state', 'unconfirmed');
+  await expect(page.locator('[data-tools-live]')).toHaveAttribute('data-live-tone', 'unknown');
+});
+
 test('a scope with no applied binding is not compared and keeps its saved state', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  // The first read of the applied scope owns a comparison; wait for it before counting a later one.
+  await expect.poll(comparisons).toBeGreaterThan(0);
   await page.evaluate(() => { const fixture = (window as any).workspaceFixture; fixture.binding = null; fixture.calls.length = 0; window.dispatchEvent(new Event('focus')); });
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row).toHaveAttribute('data-profile-state', 'saved');

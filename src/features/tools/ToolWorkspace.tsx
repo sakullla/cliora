@@ -229,7 +229,12 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const appliedFile = async (value: RegisteredToolWorkspace): Promise<ConfigurationNativeFileState> => {
       const profile = value.binding ? value.profiles.find(item => item.id === value.binding!.profileId) : null;
       if (!profile || !configurationApplicationState(profile, value.binding, value.common).applied) return 'unchecked';
-      if (!value.probe.nativeFiles.some(file => !file.sensitive)) return 'unchecked';
+      const files = value.probe.nativeFiles;
+      // Nothing to read at all: the binding's own statement is the only fact there is.
+      if (!files.length) return 'unchecked';
+      // Every file is sensitive, so nothing can be compared; the state stays unconfirmed rather
+      // than falling back to "in effect".
+      if (!files.some(file => !file.sensitive)) return 'unknown';
       try { return configurationAppliedFileState((await native.compareRegisteredApplication(profile.id, nextScope, nextProject))?.files ?? []); }
       catch { return 'unknown'; }
     };
