@@ -591,6 +591,163 @@ export async function probeQoder(engine, marker, temporary, context = {}) {
   return record;
 }
 
+// ------------------------------------------------------------------- omp ----
+/** Isolate every environment key OMP uses to relocate its config/state. */
+export function ompMemoryEnvironment(homeRoot, temporary, inherited = process.env) {
+  const env = { ...inherited };
+  const overrides = new Set([
+    'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR', 'PI_CONFIG_FILES',
+    'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+  ]);
+  for (const key of Object.keys(env)) {
+    if (overrides.has(key.toUpperCase())) delete env[key];
+  }
+  env.HOME = homeRoot;
+  env.USERPROFILE = homeRoot;
+  env.LOCALAPPDATA = path.join(temporary, 'omp-localappdata');
+  env.APPDATA = path.join(temporary, 'omp-appdata');
+  env.TEMP = path.join(temporary, 'omp-temp');
+  env.TMP = env.TEMP;
+  return env;
+}
+
+async function resolveOmpMemoryRunner() {
+  const explicit = process.env.CLIORA_OMP_MEMORY ?? process.env.CLIORA_OMP_NATIVE;
+  if (explicit) {
+    try {
+      await fs.access(explicit);
+      return commandRunner({ target: explicit, shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(explicit) });
+    } catch {}
+  }
+  return commandRunner(await resolveExecutable('omp'));
+}
+
+const ompNormal = value => value.replaceAll('\\', '/').toLowerCase();
+
+/**
+ * OMP memory: the local Markdown root and the `memory.backend` switch are
+ * exercised through the product engine in an isolated HOME, and the real CLI
+ * both reads the files (`omp read memory://root`) and reports the switch value
+ * (`omp config get/set memory.backend`). Hindsight/Mnemopi/Sharpshooter stay
+ * native-only: the probe only proves the product neither publishes their data
+ * as Markdown nor rewrites the chosen value.
+ */
+export async function probeOmp(engine, marker, temporary, context) {
+  const record = { tool: 'omp', cli: 'omp', marker, scope: 'project (isolated HOME)', checks: [] };
+  const runner = context.runners.omp;
+  if (!runner) { record.result = 'unverified'; record.reason = 'omp 未安装或不在 PATH（可设 CLIORA_OMP_MEMORY 指向隔离的 18.20.2）'; return record; }
+  const root = await fs.realpath(temporary);
+  const isolatedHome = path.join(root, 'omp-home');
+  const project = path.join(root, 'omp-project');
+  const database = path.join(root, 'engine', 'omp', 'engine.sqlite');
+  const env = ompMemoryEnvironment(isolatedHome, root);
+  for (const target of [isolatedHome, project, database]) await assertProbePath(root, target);
+  await fs.mkdir(isolatedHome, { recursive: true });
+  await fs.mkdir(project, { recursive: true });
+  const base = { tool: 'omp', home: isolatedHome, database };
+  const runOmp = async (args, options = {}) => {
+    const result = await run(runner.command, runner.wrap(args), { cwd: options.cwd ?? project, env, timeout: options.timeout ?? 240_000 });
+    return { ...result, text: `${result.stdout}\n${result.stderr}`.trim() };
+  };
+  const configPath = () => path.join(isolatedHome, '.omp', 'agent', 'config.yml');
+  const backendValue = async () => {
+    const result = await runOmp(['config', 'get', 'memory.backend', '--json']);
+    try { return JSON.parse(result.stdout).value; } catch { return null; }
+  };
+  const op = request => engine.request({ ...base, ...request }, env);
+  const aggregate = () => op({ op: 'aggregate' });
+  const fixture = async name => JSON.parse(await fs.readFile(path.join(repository, 'tests/fixtures/omp/memory', name), 'utf8'));
+  try {
+    const layout = (await fixture('layout.json')).case;
+    const backendCase = (await fixture('backend.json')).case;
+    const version = await runOmp(['--version']);
+    record.version = version.text.slice(0, 120);
+    check(record, 'real omp reports its version', /omp\/\d+\.\d+\.\d+/.test(version.text), version.text);
+    const pathResult = await runOmp(['config', 'path']);
+    check(record, 'omp config path resolves the isolated agent dir',
+      ompNormal(pathResult.text).endsWith('/.omp/agent') && ompNormal(pathResult.text).startsWith(ompNormal(isolatedHome)),
+      pathResult.text);
+    check(record, 'fresh isolated home defaults memory.backend to off', await backendValue() === 'off', `value=${await backendValue()}`);
+
+    // Declared verified enum values are accepted by the real CLI contract.
+    for (const value of backendCase.verifiedValues ?? ['off', 'local', 'hindsight', 'mnemopi', 'sharpshooter']) {
+      await runOmp(['config', 'set', `memory.backend`, value]);
+      check(record, `memory.backend=${value} is accepted`, await backendValue() === value, `value=${await backendValue()}`);
+    }
+    await runOmp(['config', 'set', 'memory.backend', 'off']);
+
+    const empty = await aggregate();
+    check(record, 'off publishes the native backend state and no local store',
+      empty.stores.length === 0 && empty.entries.length === 0
+      && (empty.switchGroups ?? []).some(group => group.id === 'memory.backend' && group.enabled === false && group.detail.includes('off')),
+      JSON.stringify({ stores: empty.stores.length, groups: empty.switchGroups }));
+    check(record, 'off reports no false empty Markdown entry', (empty.failedSources ?? []).length === 0, JSON.stringify(empty.failedSources));
+
+    await op({ op: 'group', group: 'memory.backend', enabled: true });
+    check(record, 'engine switch on writes the native memory.backend', await backendValue() === 'local', `value=${await backendValue()}`);
+
+    const resolved = await engine.resolve('omp', 'project', isolatedHome, project, env);
+    const directory = await assertProbePath(root, resolved.directory);
+    check(record, 'product resolves the project bank under memories', ompNormal(directory).includes('/.omp/agent/memories/--') && ompNormal(directory).endsWith('--'), directory);
+
+    const configText = await fs.readFile(configPath(), 'utf8').catch(() => '');
+    check(record, 'written config keeps the native YAML shape', /memory:\s*\n\s+backend:\s*local/.test(configText), configText.replaceAll('\n', ' '));
+
+    const ids = layout.entries ?? ['MEMORY', 'learned', 'memory_summary'];
+    for (const id of ids) {
+      const saved = await op({ op: 'save', scope: 'project', project, id, baseline: '', confirmExternal: true, text: `${marker} ${id} body from the product engine\n` });
+      check(record, `engine save lands on the native ${id} file`, ompNormal(saved.path).startsWith(ompNormal(directory)) && saved.path.endsWith(`${id}.md`), saved.path);
+    }
+    const list = await op({ op: 'list', scope: 'project', project });
+    check(record, 'engine lists the same native family', ids.every(id => list.entries.some(entry => entry.id === id)), list.entries.map(entry => entry.id).join(','));
+
+    const summary = await runOmp(['read', 'memory://root']);
+    check(record, 'real omp reads memory://root from the engine-written root', summary.text.includes(marker), summary.text.slice(0, 240));
+    const registry = await runOmp(['read', 'memory://root/MEMORY.md']);
+    check(record, 'real omp reads memory://root/MEMORY.md', registry.text.includes(marker), registry.text.slice(0, 240));
+    const learned = await runOmp(['read', 'memory://root/learned.md']);
+    check(record, 'real omp reads memory://root/learned.md', learned.text.includes(marker), learned.text.slice(0, 240));
+
+    // Remote/SQLite/decision-file backends stay native: no Markdown store, no
+    // rewrite of the chosen value, and the local files are not destroyed.
+    await runOmp(['config', 'set', 'memory.backend', 'hindsight']);
+    const remote = await aggregate();
+    check(record, 'hindsight publishes no local Markdown store',
+      remote.stores.length === 0 && remote.entries.length === 0
+      && (remote.switchGroups ?? []).some(group => group.id === 'memory.backend' && group.enabled === false && group.detail.includes('hindsight')),
+      JSON.stringify(remote.switchGroups));
+    let refused = null;
+    try { await op({ op: 'save', scope: 'project', project, id: ids[0], baseline: '', confirmExternal: true, text: 'must not be written\n' }); }
+    catch (error) { refused = error.message; }
+    check(record, 'remote backend refuses a Markdown write with a reason', !!refused && refused.includes('hindsight'), refused ?? 'write unexpectedly succeeded');
+    await op({ op: 'group', group: 'memory.backend', enabled: false });
+    check(record, 'turning the managed switch off keeps the native hindsight value', await backendValue() === 'hindsight', `value=${await backendValue()}`);
+    check(record, 'switching backends keeps every local memory file',
+      await fs.stat(path.join(directory, `${ids[0]}.md`)).then(() => true, () => false));
+
+    // An unrecognised value is preserved and reported; OMP itself falls back to
+    // the default off without removing the raw value.
+    await fs.writeFile(configPath(), 'memory:\n  backend: future-backend\n');
+    const unknown = await aggregate();
+    check(record, 'unknown backend value is reported as unverified',
+      (unknown.switchGroups ?? []).some(group => group.detail.includes('未核实值 future-backend')),
+      JSON.stringify(unknown.switchGroups));
+    await op({ op: 'group', group: 'memory.backend', enabled: false });
+    check(record, 'unknown native value is never overwritten',
+      (await fs.readFile(configPath(), 'utf8')).includes('backend: future-backend')
+      && await backendValue() === 'off',
+      `value=${await backendValue()}`);
+  } finally {
+    await fs.rm(isolatedHome, { recursive: true, force: true });
+    await fs.rm(project, { recursive: true, force: true });
+    await fs.rm(path.join(root, 'omp-localappdata'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'omp-appdata'), { recursive: true, force: true });
+    await fs.rm(path.join(root, 'omp-temp'), { recursive: true, force: true });
+  }
+  record.result = record.checks.every(item => item.passed) ? 'passed' : 'failed';
+  return record;
+}
+
 const RECIPES = {
   qoder_cn: probeQoder,
   claude_code: probeClaude,
@@ -598,6 +755,7 @@ const RECIPES = {
   codebuddy: probeCodebuddy,
   mimo_code: probeMimo,
   grok: probeGrok,
+  omp: probeOmp,
 };
 
 const VERDICT_REFS = {
@@ -606,6 +764,7 @@ const VERDICT_REFS = {
   codebuddy: 'codebuddy/integration.md',
   mimo_code: 'mimo/verdict.md',
   grok: 'verdicts/grok.md',
+  omp: '../omp-memory.md',
   kimi_code: 'kimi/verdict.md',
   minimax_code: 'minimax/verdict.md',
   antigravity: 'antigravity/verdict.md',
@@ -664,6 +823,7 @@ export async function verifyMemoryNative({ only, report: reportPath, summary: su
   const catalog = JSON.parse((await requireSuccess(binary, ['catalog'])).stdout);
   const runners = {};
   for (const cli of ['claude', 'codex', 'codebuddy', 'mimo', 'grok']) runners[cli] = commandRunner(await resolveExecutable(cli));
+  runners.omp = await resolveOmpMemoryRunner();
   const marker = `CLIORA-DELIVERY-${createHash('sha256').update(`${Date.now()}${Math.random()}`).digest('hex').slice(0, 8).toUpperCase()}`;
   const published = catalog.filter(entry => entry.published).map(entry => entry.tool);
   if (only) {

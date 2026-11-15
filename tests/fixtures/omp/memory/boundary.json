@@ -1,0 +1,8 @@
+{
+  "capability": "memory",
+  "name": "Non-local memory.backend values publish no Markdown store and keep native data",
+  "case": {
+    "action": "boundary",
+    "backends": ["off", "hindsight", "mnemopi", "sharpshooter", "future-backend"]
+  }
+}

@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openCli } from './cli-switcher';
 
 type MemoryTargetArgs = { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null; storeDirectory?: string };
-type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string; requests?: { target: MemoryTargetArgs; id: string }[] } };
+type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string; requests?: { target: MemoryTargetArgs; id: string }[]; groupId?: string; enabled?: boolean } };
 
 const readOnlyLimitation = '只读存储，不能新建、编辑、删除或启停';
 
@@ -20,14 +20,16 @@ async function setMode(page: Page, mode: string) {
   await page.evaluate(value => { (window as unknown as { __memory: { mode: string } }).__memory.mode = value; }, mode);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number; backend?: 'local' | 'hindsight' } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
   const copies = options.copies ?? 0;
+  const backend = options.backend ?? null;
   const storePaths = { alphaGlobal: alphaGlobalStore, alphaA: alphaAStore, alphaB: alphaBStore, beta: betaStore, epsilon: epsilonStores };
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies }) => {
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies, backend: initialBackend }) => {
     const state = {
       mode,
+      backend: initialBackend as string | null,
       reads: 0,
       deleted: [] as string[],
       texts: {
@@ -40,7 +42,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
     };
     (window as unknown as { __memory: typeof state }).__memory = state;
     // The suggestion is the stored workspace context of the project-only CLI (delta).
-    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' } }));
+    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' }, ...(initialBackend ? { zeta: { scope: 'project', projectPath: suggested, resource: 'config' } } : {}) }));
     else localStorage.removeItem('cliora:workspace-context');
     const full = ['list', 'open', 'create', 'edit', 'delete', 'master_switch', 'item_enable'];
     const base = (id: string, name: string, memory?: unknown) => ({
@@ -59,6 +61,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           base('gamma', 'Gamma'),
           base('delta', 'Delta', { scope: { global: false, project: true }, targets: ['project'], operations: full }),
           base('epsilon', 'Epsilon', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'] }),
+          ...(initialBackend ? [base('zeta', 'Zeta', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'master_switch'], limitation: 'OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。' })] : []),
         ];
     const ids = registered.map(item => item.id);
     const workspace = () => ({
@@ -85,6 +88,19 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         const entries = [entry('one-note', stores.epsilon[0], 'C:\\Work\\one', one), entry('two-note', stores.epsilon[1], 'C:\\Work\\two', two)];
         const three = { toolId: 'epsilon', scope: 'project', projectPath: null, storeDirectory: 'C:/home/.epsilon/projects/three/memory' };
         return { toolId, failedSources: [], entries, stores: summarize(entries, [['C:\\Work\\one', stores.epsilon[0], one], ['C:\\Work\\two', stores.epsilon[1], two], ['C:\\Work\\three', 'C:/home/.epsilon/projects/three/memory', three]]), switchShared: true };
+      }
+      if (toolId === 'zeta') {
+        const backend = state.backend ?? 'hindsight';
+        const storage = backend === 'local'
+          ? '本机 Markdown（MEMORY.md、memory_summary.md、learned.md）'
+          : backend === 'off'
+            ? '原生默认 off，本机 Markdown 文件保留但不会被读取'
+            : '远程 Hindsight bank（另含 hindsight-outbox 投递队列，可能失败或待投递）';
+        const detail = `当前后端：${backend}（${storage}）`;
+        if (backend !== 'local') return { toolId, failedSources: [], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: false, detail }] };
+        const target = { toolId: 'zeta', scope: 'project', projectPath: 'C:/A', storeDirectory: 'C:/home/.omp/agent/memories/--c--a--' };
+        const entries = ['learned', 'memory_summary'].map(id => entry(id, 'C:/home/.omp/agent/memories/--c--a--', '--c--a--', target));
+        return { toolId, failedSources: [], entries, stores: summarize(entries, [['--c--a--', 'C:/home/.omp/agent/memories/--c--a--', target]]).map(store => ({ ...store, inUse: true, detail: '' })), switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail }] };
       }
       if (toolId !== 'alpha') return { toolId, failedSources: [], entries: [], stores: [], switchShared: false };
       const globalTarget = { toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: stores.alphaGlobal };
@@ -134,12 +150,16 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
             return null;
           }
           if (command === 'set_memory_enabled') return null;
+          if (command === 'set_memory_switch_group') {
+            if (args.groupId === 'memory.backend') state.backend = args.enabled ? 'local' : 'off';
+            return null;
+          }
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
           return null;
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies, backend });
 }
 
 
@@ -805,6 +825,30 @@ test('scope switches remain reachable with no stores and preserve native-default
   await page.getByRole('combobox', { name: '用户记忆' }).selectOption('on');
   await expect(page.getByRole('combobox', { name: '用户记忆' })).toHaveValue('on');
   await expect(page.getByRole('button', { name: '新建记忆' }).first()).toBeEnabled();
+});
+
+
+test('OMP reports a non-local memory backend without offering Markdown entries', async ({ page }) => {
+  await install(page, { backend: 'hindsight' });
+  await openMemory(page, 'Zeta');
+  // The native backend value and its boundary are visible, and the generic
+  // empty state is not dressed up as an editable Markdown family.
+  await expect(page.getByText(/当前后端：hindsight/)).toBeVisible();
+  await expect(page.getByText(/hindsight-outbox/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+  await expect(entryButton(page, 'memory_summary')).toHaveCount(0);
+  // Selecting the managed local backend shows the real native files.
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('on');
+  await expect(entryButton(page, 'memory_summary')).toBeVisible();
+  await expect(page.getByText(/当前后端：local/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toBeEnabled();
+  const calls = await memoryCalls(page);
+  expect(calls.some(call => call.command === 'set_memory_switch_group' && call.args.groupId === 'memory.backend' && call.args.enabled === true)).toBe(true);
+  // Turning the managed backend off hides the Markdown write entry again but
+  // keeps the state visible.
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
+  await expect(page.getByText(/当前后端：off/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
 });
 
 
