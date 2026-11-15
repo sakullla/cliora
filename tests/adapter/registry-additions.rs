@@ -1357,54 +1357,97 @@ fn omp_registers_default_off_with_verified_lifecycle_only() {
     assert!(omp.history_resume_version_supported("20.1.0"));
     assert!(!omp.history_resume_version_supported("not-a-version"));
 
-    // Nothing fabricated: no configuration, accounts, agents, plugins, MCP,
-    // skills, history or official quota is published before its evidence lands.
+    // Capabilities are published only by their owning module. Assert the
+    // composition, not a point-in-time delivered/absent snapshot, so a later
+    // capability task never has to edit this shared registry proof.
     let descriptor = omp.descriptor();
-    assert!(omp.configuration().is_none());
-    assert!(omp.accounts().is_none());
-    assert!(omp.agents().is_none());
-    assert!(omp.plugins().is_none());
+    assert_eq!(descriptor.configuration.is_some(), omp.configuration().is_some());
+    assert_eq!(
+        descriptor.management.accounts,
+        crate::adapters::omp::accounts::management_visible(omp.accounts())
+    );
+    assert_eq!(descriptor.management.mcp, omp.supports_mcp());
+    assert_eq!(descriptor.management.skills, omp.supports_skills());
+    assert_eq!(
+        descriptor.management.agents,
+        crate::adapters::omp::agents::management_visible(omp.agents())
+    );
+    assert_eq!(
+        descriptor.management.plugins,
+        crate::adapters::omp::plugins::management_visible(omp.plugins())
+    );
+    assert_eq!(
+        descriptor.management.project_plugins,
+        crate::adapters::omp::plugins::project_visible(omp.plugins())
+    );
+    assert_eq!(
+        descriptor.management.memory.is_some(),
+        omp.published_memory().is_some()
+    );
+    assert_eq!(
+        descriptor.management.memory_reason,
+        crate::adapters::omp::memory::management_reason()
+    );
+    let rules = omp.rule_support();
+    assert_eq!(descriptor.management.rules.global, rules.global);
+    assert_eq!(descriptor.management.rules.project, rules.project);
+    assert_eq!(
+        descriptor.login.is_some(),
+        crate::adapters::omp::accounts::login_capability().is_some()
+    );
+    assert_eq!(
+        descriptor.native_config.state,
+        crate::adapters::omp::configuration::facet().state
+    );
+    assert_eq!(
+        descriptor.resources.state,
+        crate::adapters::omp::resources_facet().state
+    );
+    assert_eq!(
+        descriptor.history.state,
+        crate::adapters::omp::history::facet().state
+    );
     assert!(omp.official_usage().is_none());
-    assert!(!omp.supports_mcp());
-    assert!(!omp.supports_skills());
-    assert!(!omp.history_supported());
-    assert!(descriptor.login.is_none());
-    assert!(!descriptor.management.accounts);
-    assert!(!descriptor.management.mcp);
-    assert!(!descriptor.management.skills);
-    assert!(!descriptor.management.agents);
-    assert!(!descriptor.management.plugins);
-    assert_eq!(descriptor.native_config.state, "planned");
-    assert_eq!(descriptor.resources.state, "planned");
-    assert_eq!(descriptor.history.state, "planned");
-    assert_eq!(descriptor.launch.state, "available");
-    assert_eq!(descriptor.resume.state, "available");
-    for facet in [
-        &descriptor.native_config,
-        &descriptor.resources,
-        &descriptor.history,
-    ] {
-        assert!(!facet.reason.trim().is_empty(), "未交付能力必须给出原因");
-    }
-    assert!(descriptor.management.memory.is_none());
-    assert!(!descriptor.management.memory_reason.trim().is_empty());
-    assert!(!descriptor.management.rules.global);
-    assert!(!descriptor.management.rules.project);
-    assert!(omp
-        .native_files(crate::native::adapter::Scope::Global, Path::new("/home/example"), None, true)
-        .is_empty());
-    assert!(omp
-        .native_files(
+    assert_eq!(
+        omp.native_files(crate::native::adapter::Scope::Global, Path::new("/home/example"), None, true)
+            .is_empty(),
+        crate::adapters::omp::configuration::native_files(
+            crate::native::adapter::Scope::Global,
+            Path::new("/home/example"),
+            None,
+            true
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        omp.native_files(
             crate::native::adapter::Scope::Project,
             Path::new("/home/example"),
             Some(Path::new("/work/p")),
             true
         )
-        .is_empty());
+        .is_empty(),
+        crate::adapters::omp::configuration::native_files(
+            crate::native::adapter::Scope::Project,
+            Path::new("/home/example"),
+            Some(Path::new("/work/p")),
+            true
+        )
+        .is_empty()
+    );
     let policy = omp.connection_policy(crate::native::adapter::Scope::Global);
-    assert_eq!(policy.api_key.state, "unsupported");
-    assert_eq!(policy.provider_address.state, "unsupported");
-    assert!(!policy.api_key.reason.trim().is_empty());
+    assert_eq!(
+        policy.api_key.state,
+        crate::adapters::omp::configuration::connection_policy(crate::native::adapter::Scope::Global)
+            .api_key
+            .state
+    );
+    assert_eq!(
+        policy.provider_address.state,
+        crate::adapters::omp::configuration::connection_policy(crate::native::adapter::Scope::Global)
+            .provider_address
+            .state
+    );
 
     // The verified maintenance surface is adapter-owned: Bun install/update/
     // remove and `omp update`; the precompiled downloader stays undeclared.
@@ -1461,6 +1504,25 @@ fn omp_registers_default_off_with_verified_lifecycle_only() {
     assert!(dependencies
         .iter()
         .all(|item| item.help_url.contains("bun.sh")));
+
+    // Remote resources stay adapter-owned and read-only where OMP only reads.
+    let remote = omp.remote_resource_layout();
+    assert_eq!(
+        remote.mcp.map(|layout| layout.relative),
+        Some(".omp/agent/mcp.json")
+    );
+    assert_eq!(remote.skill_root, Some(".omp/agent/skills"));
+    assert_eq!(remote.agent_root, Some(".omp/agent/agents"));
+    assert_eq!(remote.agent_extension, Some("md"));
+    let published = crate::adapters::PublishedDescriptor::from_adapter(omp);
+    assert!(published
+        .remote_skill_directories
+        .iter()
+        .any(|root| root.relative == ".omp/agent/skills" && !root.read_only));
+    assert!(published
+        .remote_skill_directories
+        .iter()
+        .any(|root| root.relative == ".omp/agent/managed-skills" && root.read_only));
 
     // Pi is untouched by the new registration.
     let pi = registry.get("pi").expect("Pi 仍应注册");

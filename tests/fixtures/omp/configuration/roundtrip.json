@@ -1,0 +1,37 @@
+{
+  "capability": "configuration",
+  "name": "editing one model and one role preserves unknown fields, other providers and unedited roles",
+  "case": {
+    "kind": "roundtrip",
+    "config": "modelRoles:\n  default: alpha/one\n  smol: beta/small\n  customRole: alpha/one\nretry:\n  maxRetries: 3\nunverifiedExtension:\n  keep: true\n",
+    "models": "providers:\n  alpha:\n    api: openai-responses\n    baseUrl: https://alpha.example.test/v1\n    apiKey: ${OMP_ALPHA_API_KEY}\n    customProviderField:\n      keep: true\n    models:\n      - id: one\n        name: One\n        contextWindow: 200000\n        customModelField: keep\n      - id: two\n        name: Two\n  beta:\n    api: anthropic-messages\n    baseUrl: https://beta.example.test\n    auth: none\n    models:\n      - id: small\n",
+    "actions": [
+      {
+        "version": 1,
+        "target": { "kind": "model", "provider": "alpha", "id": "one" },
+        "operation": "set",
+        "field": "contextWindow",
+        "value": 100000
+      },
+      {
+        "version": 1,
+        "target": { "kind": "settings" },
+        "operation": "set",
+        "field": "modelRoles.slow",
+        "value": "alpha/two"
+      }
+    ],
+    "expect": {
+      "/settings/modelRoles/default": "alpha/one",
+      "/settings/modelRoles/slow": "alpha/two",
+      "/models/providers/alpha/models/0/contextWindow": 100000
+    },
+    "preserve": [
+      "/settings/modelRoles/customRole",
+      "/settings/unverifiedExtension/keep",
+      "/models/providers/alpha/customProviderField/keep",
+      "/models/providers/alpha/models/0/customModelField",
+      "/models/providers/beta/auth"
+    ]
+  }
+}

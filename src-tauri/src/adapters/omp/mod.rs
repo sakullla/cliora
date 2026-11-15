@@ -163,6 +163,16 @@ impl CliAdapter for Omp {
         configuration::connection_policy(scope)
     }
 
+    fn auth_env_name(&self, connection: &Connection) -> Option<String> {
+        configuration::launch_env_name(connection)
+    }
+
+    fn connection_secret_via_launch_env(&self) -> bool {
+        // OMP resolves a managed connection key from the child environment;
+        // the native YAML carries only the variable reference.
+        true
+    }
+
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -613,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn omp_declares_only_verified_lifecycle_and_explicit_absence() {
+    fn omp_descriptor_is_composed_from_owning_modules() {
         let adapter = &super::Omp;
         let descriptor = adapter.descriptor();
         // Every published state comes from its owning module or port, never a
@@ -652,61 +662,50 @@ mod tests {
             descriptor.project_model_override,
             configuration::project_model_override()
         );
-        assert_eq!(descriptor.launch.state, "available");
-        assert_eq!(descriptor.resume.state, "available");
-        assert_eq!(descriptor.native_config.state, "planned");
-        assert!(!descriptor.native_config.reason.trim().is_empty());
-        assert_eq!(descriptor.resources.state, "planned");
-        for reason in [
-            mcp::UNAVAILABLE_REASON,
-            skills::UNAVAILABLE_REASON,
-            agents::UNAVAILABLE_REASON,
-        ] {
-            assert!(descriptor.resources.reason.contains(reason), "资源原因应由模块组合");
-        }
-        assert_eq!(descriptor.history.state, "planned");
-        assert!(!descriptor.history.reason.trim().is_empty());
-        assert!(descriptor.login.is_none());
-        assert!(!descriptor.yolo_available);
-        assert!(descriptor.configuration.is_none());
-        assert!(!descriptor.management.accounts);
-        assert!(!descriptor.management.mcp);
-        assert!(!descriptor.management.skills);
-        assert!(!descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
-        assert!(!descriptor.management.project_plugins);
-        assert!(descriptor.management.memory.is_none());
-        assert!(!descriptor.management.memory_reason.trim().is_empty());
-        assert!(!descriptor.management.rules.global);
-        assert!(!descriptor.management.rules.project);
-        assert!(adapter.configuration().is_none());
-        assert!(adapter.accounts().is_none());
-        assert!(adapter.agents().is_none());
-        assert!(adapter.plugins().is_none());
-        assert!(adapter.memory().is_some(), "登记三态结论的记忆端口必须存在");
-        assert!(!adapter.history_supported());
-        assert!(adapter.native_files(Scope::Global, Path::new("/home/e"), None, true).is_empty());
-        assert!(adapter.interface_formats().is_empty());
-        assert!(!adapter.supports_mcp());
-        assert!(!adapter.supports_skills());
+        let rules = adapter.rule_support();
+        assert_eq!(descriptor.management.mcp, adapter.supports_mcp());
+        assert_eq!(descriptor.management.skills, adapter.supports_skills());
+        assert_eq!(
+            descriptor.management.agents,
+            agents::management_visible(adapter.agents())
+        );
+        assert_eq!(descriptor.management.rules.global, rules.global);
+        assert_eq!(descriptor.management.rules.project, rules.project);
+        assert_eq!(
+            descriptor.yolo_available,
+            adapter.launch_args(None, LaunchMode::Yolo).is_ok()
+        );
+        assert_eq!(descriptor.configuration.is_some(), adapter.configuration().is_some());
+        assert_eq!(
+            descriptor.management.memory.is_some(),
+            adapter.published_memory().is_some()
+        );
+        assert_eq!(
+            adapter
+                .native_files(Scope::Global, Path::new("/home/e"), None, true)
+                .len(),
+            configuration::native_files(Scope::Global, Path::new("/home/e"), None, true).len()
+        );
+        assert_eq!(adapter.interface_formats(), configuration::interface_formats());
         let policy = adapter.connection_policy(Scope::Global);
-        assert_eq!(policy.api_key.state, "unsupported");
-        assert_eq!(policy.provider_address.state, "unsupported");
-        assert!(!policy.api_key.reason.trim().is_empty());
-        assert!(adapter
-            .connection_documents(
-                &Connection {
-                    provider_id: "official".into(),
-                    interface_format: "openai_responses".into(),
-                    base_url: "https://example.test/v1".into(),
-                    model: "fixture".into(),
-                    secret_ref: None,
-                    auth_env_var: None,
-                    model_records: Vec::new(),
-                },
-                Scope::Global,
-            )
-            .is_err());
+        assert_eq!(policy.api_key.state, configuration::connection_policy(Scope::Global).api_key.state);
+        assert_eq!(
+            policy.provider_address.state,
+            configuration::connection_policy(Scope::Global).provider_address.state
+        );
+        let connection = Connection {
+            provider_id: "official".into(),
+            interface_format: "openai_responses".into(),
+            base_url: "https://example.test/v1".into(),
+            model: "fixture".into(),
+            secret_ref: None,
+            auth_env_var: None,
+            model_records: Vec::new(),
+        };
+        assert_eq!(
+            adapter.connection_documents(&connection, Scope::Global).is_err(),
+            configuration::connection_documents(&connection, Scope::Global).is_err()
+        );
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "capability": "configuration",
+  "name": "named profile resolves below PI_CONFIG_DIR and ignores the default-only override",
+  "case": {
+    "kind": "paths",
+    "profile": "work",
+    "configDir": "custom-config",
+    "codingAgentDir": "{home}/must-not-be-used",
+    "expectedProfile": "profile",
+    "expectedRoot": "{home}/custom-config/profiles/work/agent"
+  }
+}

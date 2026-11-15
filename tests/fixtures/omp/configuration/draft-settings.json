@@ -1,0 +1,17 @@
+{
+  "capability": "configuration",
+  "name": "config.yml keeps model roles as strings and retry as an object",
+  "case": {
+    "kind": "draft",
+    "role": "settings",
+    "valid": [
+      "modelRoles:\n  default: alpha/one\n  customRole: beta/small\nretry:\n  maxRetries: 3\n",
+      "modelRoles:\n  default: alpha/one\n"
+    ],
+    "invalid": [
+      "modelRoles:\n  default: 3\n",
+      "modelRoles:\n  default: alpha/one\nretry: 3\n",
+      "- modelRoles\n"
+    ]
+  }
+}

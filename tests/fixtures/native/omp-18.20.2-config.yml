@@ -1,0 +1,15 @@
+modelRoles:
+  default: alpha/one
+  smol: beta/small
+  slow: alpha/one
+  plan: beta/small
+  customRole: alpha/one
+retry:
+  maxRetries: 3
+  baseDelayMs: 250
+  fallbackOn: any
+unverifiedExtension:
+  keep: true
+  nested:
+    - one
+    - two
