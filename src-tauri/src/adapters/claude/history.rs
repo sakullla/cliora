@@ -8,10 +8,12 @@ use sha2::{Digest, Sha256};
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
     check_cancelled, contains_bytes, discover_jsonl_controlled_in, discover_jsonl_with_control,
-    read_jsonl_filtered, source_fingerprint_controlled, text_content, timestamp, valid_native_id,
+    read_jsonl_fields, source_fingerprint_controlled, text_content, timestamp, valid_native_id,
     AgentKind, ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
     ParsedSession, SessionIdentity, UsageAttribution, UsageEvent,
 };
+
+const HISTORY_FIELDS: &[&str] = &["type", "timestamp", "uuid", "message", "sessionId", "cwd", "customTitle", "aiTitle", "requestId", "agentName", "subagentName", "subagent_type"];
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
@@ -221,7 +223,7 @@ pub fn parse_controlled(
     let mut events = BTreeMap::<String, RequestUsage>::new();
     let mut attributions = BTreeMap::<String, Vec<UsageAttribution>>::new();
     let mut seen = HashSet::new();
-    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
+    let partial = read_jsonl_fields(source, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
         let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
         if matches!(kind, "ai-title" | "custom-title") {
             if let Some(title) = row.get("customTitle").or_else(|| row.get("aiTitle")).and_then(Value::as_str).filter(|title| !title.trim().is_empty()) {
@@ -287,7 +289,7 @@ pub fn parse_controlled(
                 let mut native_key = None;
                 let mut native_name = None;
                 let parent_id = session.native_id.clone();
-                let read = read_jsonl_filtered(&nested, cancelled, skip_row, |line, row| {
+                let read = read_jsonl_fields(&nested, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
                     if native_key.is_none() {
                         native_key = distinct_session_id(&row, parent_id.as_deref());
                     }
@@ -396,7 +398,7 @@ pub fn identity_controlled(
     let mut accepted = 0usize;
     let mut earliest: Option<i64> = None;
     let mut latest: Option<i64> = None;
-    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
+    let partial = read_jsonl_fields(source, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
         let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
         if matches!(kind, "ai-title" | "custom-title") {
             if let Some(title) = row

@@ -35,6 +35,7 @@ docs/architecture/*
 !docs/architecture/cli-maintenance.md
 !docs/architecture/terminal-attachments.md
 !docs/architecture/terminal-activity.md
+!docs/architecture/history-adapters.md
 
 # Track this redesign's verification document and its dedicated UI captures only.
 !docs/verification/
@@ -46,6 +47,7 @@ docs/verification/*
 !docs/verification/git-worktree-performance.md
 !docs/verification/session-recovery-status-2026-11-13.md
 !docs/verification/tools-resource-performance-2026-11-15.md
+!docs/verification/history-remote-2026-11-16.md
 !docs/verification/performance-installation/
 docs/verification/performance-installation/*
 !docs/verification/performance-installation/README.md

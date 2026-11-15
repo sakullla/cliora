@@ -177,6 +177,8 @@ export default {
     detailFailedNext: 'Reload the session.',
     refreshed: 'Local records refreshed.',
     remoteRefreshed: 'Refreshed usage records for this host.',
+    remoteHistoryUnavailable: 'Remote native history is not supported for this tool yet.',
+    remoteHistoryBounds: 'Recent sessions are read first. Long records may be marked partial; complete records remain on the remote host.',
     remoteCoverage: 'Native sessions on this host',
     remoteUnavailable: 'No remote session index is available for this host.',
     remoteSessionDetail: 'Resume this remote session in the workbench to view its live details.',

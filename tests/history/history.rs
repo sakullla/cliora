@@ -1440,7 +1440,7 @@ fn opencode_v2_storage_lists_parses_usage_and_variant_model() {
     let sources = opencode::sources(temp.path()).unwrap();
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].native_id.as_deref(), Some("ses_v2_fixture"));
-    assert_eq!(sources[0].fingerprint, "opencode-session-v3|v2|1792026341382");
+    assert_eq!(sources[0].fingerprint, "opencode-session-v4|v2|1792026341382");
     let session = opencode::parse(&sources[0]).unwrap();
     assert_eq!(session.title, "T8 verify session");
     assert_eq!(session.cwd.as_deref(), Some("C:/verify/project"));
@@ -2228,3 +2228,28 @@ fn legacy_rows_without_association_fields_are_unknown_and_have_no_jump() {
     assert!(fs::read_to_string(md_path).unwrap().contains("归属：未知"));
 }
 
+
+
+#[test]
+fn selected_json_fields_keep_native_values_and_validate_discarded_subtrees() {
+    let source = br#"{"type":"message","content":{"text":"kept"},"debug":{"nested":[1,2,{"unused":true}]}}"#;
+    let selected = parse_json_fields(source, Some(&["type", "content"])).unwrap();
+    assert_eq!(selected, serde_json::json!({"type":"message","content":{"text":"kept"}}));
+    assert!(parse_json_fields(br#"{"type":"message","debug":[invalid]}"#, Some(&["type"])).is_err());
+    assert!(parse_json_fields(br#"{"type":"message"} trailing"#, Some(&["type"])).is_err());
+}
+
+#[test]
+#[ignore = "fixed JSON projection performance measurement"]
+fn performance_json_projection() {
+    let row = serde_json::to_vec(&serde_json::json!({"type":"message", "content":"visible text", "debug": (0..20000).map(|index| serde_json::json!({"index":index,"arguments":"diagnostic".repeat(10)})).collect::<Vec<_>>() })).unwrap();
+    for selected in [false,true] {
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            let value = parse_json_fields(&row, if selected { Some(&["type","content"]) } else { None }).unwrap();
+            assert_eq!(value["content"], "visible text");
+            std::hint::black_box(value);
+        }
+        eprintln!("history JSON projection selected={selected} bytes={} iterations=20 elapsed_ms={:.2}", row.len(), started.elapsed().as_secs_f64()*1000.0);
+    }
+}

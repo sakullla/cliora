@@ -457,6 +457,26 @@ pub fn source_fingerprint(path: &Path) -> Result<String, String> {
 }
 
 #[test]
+#[ignore = "read-only history benchmark; writes only a temporary index"]
+fn performance_selected_history_sources() {
+    let home = dirs::home_dir().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("history-bench.db")).unwrap();
+    let registry = Registry::builtins();
+    for tool in ["antigravity", "codebuddy", "open_code", "codex", "claude_code", "pi"] {
+        let adapter = registry.get(tool).unwrap();
+        for pass in ["cold", "warm"] {
+            let start = std::time::Instant::now();
+            let sources = adapter.history_sources(&home);
+            let discovery_ms = start.elapsed().as_millis();
+            let report = scan_adapter_sources(&db, adapter, sources);
+            eprintln!("history {tool} {pass}: discovery={discovery_ms}ms total={}ms sources={} failed={}", start.elapsed().as_millis(), report.source_count, report.failed_count);
+            assert_eq!(report.failed_count, 0);
+        }
+    }
+}
+
+#[test]
 #[ignore = "read-only local performance check; native files are read, index is temporary"]
 fn performance_readonly_local() {
     let home = dirs::home_dir().unwrap();
@@ -690,6 +710,18 @@ pub fn read_jsonl_filtered(
     source: &HistorySource,
     cancelled: &dyn Fn() -> bool,
     skip: impl Fn(&[u8]) -> bool,
+    consume: impl FnMut(usize, Value),
+) -> Result<bool, String> {
+    read_jsonl_fields(source, cancelled, skip, None, consume)
+}
+
+/// Adapters can retain only the top-level fields their parser consumes. Ignored
+/// subtrees are validated without allocating Value trees for tool/debug payloads.
+pub fn read_jsonl_fields(
+    source: &HistorySource,
+    cancelled: &dyn Fn() -> bool,
+    skip: impl Fn(&[u8]) -> bool,
+    fields: Option<&[&str]>,
     mut consume: impl FnMut(usize, Value),
 ) -> Result<bool, String> {
     check_cancelled(cancelled)?;
@@ -713,7 +745,7 @@ pub fn read_jsonl_filtered(
             Row::Kept => {
                 let text = line.strip_suffix(b"\r").unwrap_or(&line[..]);
                 if !text.iter().all(u8::is_ascii_whitespace) {
-                    match serde_json::from_slice::<Value>(text) {
+                    match parse_json_fields(text, fields) {
                         Ok(value) => consume(index, value),
                         Err(_) => partial = true,
                     }
@@ -724,6 +756,32 @@ pub fn read_jsonl_filtered(
     }
     check_cancelled(cancelled)?;
     Ok(partial)
+}
+
+fn parse_json_fields(text: &[u8], fields: Option<&[&str]>) -> Result<Value, serde_json::Error> {
+    use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor};
+    let Some(fields) = fields else { return serde_json::from_slice(text); };
+    struct Selected<'a>(&'a [&'a str]);
+    impl<'de> Visitor<'de> for Selected<'_> {
+        type Value = Value;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result { formatter.write_str("a history JSON object") }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut result = serde_json::Map::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if self.0.contains(&key.as_str()) { result.insert(key, map.next_value()?); }
+                else { map.next_value::<IgnoredAny>()?; }
+            }
+            Ok(Value::Object(result))
+        }
+    }
+    impl<'de> DeserializeSeed<'de> for Selected<'_> {
+        type Value = Value;
+        fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> { deserializer.deserialize_map(self) }
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(text);
+    let value = Selected(fields).deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(value)
 }
 
 enum Row {

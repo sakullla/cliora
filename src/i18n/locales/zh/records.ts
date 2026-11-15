@@ -177,6 +177,8 @@ export default {
     detailFailedNext: '请重新加载会话。',
     refreshed: '已刷新本机记录。',
     remoteRefreshed: '已刷新当前主机的记录。',
+    remoteHistoryUnavailable: '此工具尚未支持读取远程原生会话。',
+    remoteHistoryBounds: '优先读取各工具的近期记录；超长记录会标记为部分内容，完整记录仍保留在远端。',
     remoteCoverage: '来自当前主机的原生会话',
     remoteUnavailable: '远程主机没有可用的会话索引。',
     remoteSessionDetail: '远程会话详情请在工作台继续会话后查看。',

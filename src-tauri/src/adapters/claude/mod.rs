@@ -32,10 +32,12 @@ const REMOTE_NATIVE_DOCUMENTS: &[RemoteNativeDocument] = &[
 
 const REMOTE_HISTORY: RemoteHistoryLayout = RemoteHistoryLayout {
     relative: ".claude/projects",
-    pinned: &[],
+    fallbacks: &[], pinned: &[],
     sessions: &["*.jsonl"],
     companion: Some("subagents"),
     order: RemoteHistoryOrder::MtimeDesc,
+    sqlite: None,
+    catalogs: &[],
 };
 
 // Injected by a running Claude Code into its subprocesses; a fresh terminal session

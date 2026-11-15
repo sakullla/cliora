@@ -2118,6 +2118,17 @@ pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &
     })
 }
 
+/// The child was spawned with process_group(0), so this id names our own group.
+/// Use the OS primitive instead of spawning `kill` for every completed SSH read.
+#[cfg(unix)]
+fn kill_owned_process_group(child_id: u32) {
+    let Ok(group) = i32::try_from(child_id) else { return; };
+    if group <= 1 { return; }
+    unsafe extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
+    // SIGKILL is 9 on supported Unix targets. A group already gone is normal.
+    unsafe { kill(-group, 9); }
+}
+
 fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_payload: Option<Vec<u8>>) -> Result<std::process::Output, RemoteError> {
     let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, deadline));
     context.check()?;
@@ -2186,7 +2197,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
             #[cfg(windows)]
             let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
             #[cfg(unix)]
-            { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+            kill_owned_process_group(child.id());
             let _ = child.kill(); let _ = child.wait();
             if let Some(task) = stdin_task.take() { let _ = task.join(); }
             let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2201,7 +2212,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
                 #[cfg(windows)]
                 let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
                 #[cfg(unix)]
-                { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+                kill_owned_process_group(child.id());
                 let _ = child.kill(); let _ = child.wait();
                 if let Some(task) = stdin_task.take() { let _ = task.join(); }
                 let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2216,7 +2227,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
     #[cfg(windows)]
     let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
     #[cfg(unix)]
-    { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+    kill_owned_process_group(child.id());
     if let Some(task) = stdin_task.take() { let _ = task.join(); }
     let output = std::process::Output {
         status,

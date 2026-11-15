@@ -2,16 +2,18 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use sha2::{Digest, Sha256};
 
 use serde_json::Value;
 
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
-    discover_jsonl_with_control, raw_string_after, read_jsonl_filtered, text_content, timestamp,
+    discover_jsonl_with_control, raw_string_after, read_jsonl_fields, text_content, timestamp,
     valid_native_id, HistoryMessageKind, HistorySource, ParsedSession, SessionIdentity, UsageEvent,
 };
+
+const HISTORY_FIELDS: &[&str] = &["type", "timestamp", "payload"];
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
@@ -82,45 +84,46 @@ fn discover_sources(home: &Path, cancelled: &dyn Fn() -> bool, metadata: bool) -
 
 // Native display names are stored outside rollouts. Read each catalog once,
 // and bind only the matching thread title into its incremental fingerprint.
-type TitleCache = HashMap<PathBuf, (String, HashMap<String, String>)>;
+type TitleCache = HashMap<PathBuf, (String, Arc<HashMap<String, String>>)>;
 static NATIVE_TITLE_CACHE: OnceLock<Mutex<TitleCache>> = OnceLock::new();
 
-fn native_title_stamp(root: &Path) -> String {
-    fn stamp(path: PathBuf) -> String {
-        let Ok(metadata) = std::fs::metadata(path) else { return "missing".into(); };
-        let modified = metadata.modified().ok()
-            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|value| value.as_nanos()).unwrap_or_default();
-        format!("{}:{modified}", metadata.len())
-    }
-    let index = root.join("session_index.jsonl");
-    let state = std::fs::read_dir(root).ok().into_iter().flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite")))
-        .max_by_key(|path| std::fs::metadata(path).and_then(|value| value.modified()).ok());
-    format!("{}|{}", stamp(index), state.map(stamp).unwrap_or_else(|| "missing".into()))
+fn native_title_database(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root).ok().into_iter().flatten().filter_map(Result::ok)
+        .map(|entry| entry.path()).filter(|path| !path.is_symlink())
+        .filter_map(|path| {
+            let generation = path.file_stem()?.to_str()?.strip_prefix("state_")?.parse::<u32>().ok()?;
+            (path.extension().is_some_and(|extension| extension == "sqlite")).then_some((generation, path))
+        }).max_by_key(|(generation, _)| *generation).map(|(_, path)| path)
 }
 
-fn native_titles(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, String>, String> {
-    let stamp = native_title_stamp(root);
+fn native_title_stamp(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    use crate::history::source_cache::{database_stamp, optional_stamp};
+    let index = optional_stamp(&root.join("session_index.jsonl"), cancelled)?;
+    let database = native_title_database(root).map(|path| database_stamp(&path, cancelled)).transpose()?.unwrap_or_else(|| "missing".into());
+    Ok(format!("{index}|{database}"))
+}
+
+fn native_titles(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<HashMap<String, String>>, String> {
+    let stamp = match native_title_stamp(root, cancelled) {
+        Ok(stamp) => stamp,
+        Err(error) if cancelled() => return Err(error),
+        // Optional title catalogs never hide otherwise readable rollouts.
+        Err(_) => return native_titles_uncached(root, cancelled).map(Arc::new),
+    };
     let cache = NATIVE_TITLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some((cached_stamp, titles)) = cache.lock().unwrap_or_else(|error| error.into_inner()).get(root).cloned() {
         if cached_stamp == stamp { return Ok(titles); }
     }
-    let titles = native_titles_uncached(root, cancelled)?;
+    let titles = Arc::new(native_titles_uncached(root, cancelled)?);
     let mut values = cache.lock().unwrap_or_else(|error| error.into_inner());
     if values.len() >= 16 { values.clear(); }
-    values.insert(root.to_owned(), (stamp, titles.clone()));
+    if native_title_stamp(root, cancelled)? == stamp { values.insert(root.to_owned(), (stamp, titles.clone())); }
     Ok(titles)
 }
 
 fn native_titles_uncached(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, String>, String> {
     let mut titles = HashMap::new();
-    let mut databases = std::fs::read_dir(root).ok().into_iter().flatten().filter_map(Result::ok)
-        .map(|entry| entry.path()).filter(|path| !path.is_symlink()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite"))).collect::<Vec<_>>();
-    databases.sort_by_key(|path| path.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.strip_prefix("state_")).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
-    if let Some(path) = databases.last() {
+    if let Some(path) = native_title_database(root) {
         if let Ok(db) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
             let _ = db.busy_timeout(std::time::Duration::from_millis(100));
             if let Ok(mut statement) = db.prepare("SELECT id,title FROM threads") {
@@ -227,7 +230,7 @@ pub fn parse_controlled(
     let mut previous_snapshot: Option<(TokenCounts, TokenCounts)> = None;
     let mut model: Option<String> = None;
     let mut records = std::collections::HashSet::<String>::new();
-    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
+    let partial = read_jsonl_fields(source, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let payload = row.get("payload").unwrap_or(&Value::Null);
         match row.get("type").and_then(Value::as_str) {
@@ -367,7 +370,7 @@ pub fn identity_controlled(
     let mut accepted = 0usize;
     let mut earliest: Option<i64> = None;
     let mut latest: Option<i64> = None;
-    let partial = read_jsonl_filtered(source, cancelled, skip_row, |_line, row| {
+    let partial = read_jsonl_fields(source, cancelled, skip_row, Some(HISTORY_FIELDS), |_line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let payload = row.get("payload").unwrap_or(&Value::Null);
         match row.get("type").and_then(Value::as_str) {
@@ -425,6 +428,21 @@ mod tests {
 
     /// Recovery reads a light path; the fields it returns must equal what a
     /// full parse keeps, including the timestamp fallbacks and the title.
+    #[test]
+    fn title_catalog_reuses_shared_values_and_observes_wal_updates() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let db = rusqlite::Connection::open(root.join("state_5.sqlite")).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT); INSERT INTO threads VALUES ('fixture-thread','first title');").unwrap();
+        let first = native_titles(root, &|| false).unwrap();
+        let same = native_titles(root, &|| false).unwrap();
+        assert!(Arc::ptr_eq(&first, &same));
+        db.execute("UPDATE threads SET title='updated in WAL'", []).unwrap();
+        let updated = native_titles(root, &|| false).unwrap();
+        assert!(!Arc::ptr_eq(&first, &updated));
+        assert_eq!(updated["fixture-thread"], "updated in WAL");
+    }
+
     #[test]
     fn recovery_identity_equals_full_parse_identity() {
         let home = tempfile::tempdir().unwrap();
