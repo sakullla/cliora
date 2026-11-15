@@ -1,10 +1,33 @@
 import { useEffect, useState } from 'react';
 import { native } from '../../lib/native';
 import type { Scope } from '../../types/native';
+import type { McpTargetResult, SkillTargetResult } from '../../types/resources';
 import i18n from '../../i18n';
 
 type Target = { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null };
 const scopeKey = (target: Target) => JSON.stringify([target.toolId, target.scope, target.projectPath]);
+
+/** Per-target Skill write state, read from the native result instead of assumed.
+ * `ok` is a real write; `unchanged` means native found the target already current. */
+export type SkillWriteState = 'ok' | 'unchanged' | 'removed' | 'failed';
+export function skillWriteState(result: SkillTargetResult): SkillWriteState {
+  if (result.status === 'installed') return 'ok';
+  if (result.status === 'already_current') return 'unchanged';
+  if (result.status === 'removed') return 'removed';
+  return 'failed';
+}
+
+/** Per-target MCP state of a committed draft. `unchanged` is a native run that
+ * matched the file already (`already_matching`); a leftover preview status is
+ * `unconfirmed`, never a write. */
+export type McpWriteState = 'written' | 'unchanged' | 'removed' | 'failed' | 'unsupported' | 'unconfirmed';
+export function mcpWriteState(result: McpTargetResult): McpWriteState {
+  if (result.status === 'written') return result.detail === 'already_matching' ? 'unchanged' : 'written';
+  if (result.status === 'removed') return 'removed';
+  if (result.status === 'unsupported') return 'unsupported';
+  if (result.status === 'failed') return 'failed';
+  return 'unconfirmed';
+}
 
 export function useAccountLabels(remote = false) {
   const [labels, setLabels] = useState<Record<string, string>>({});

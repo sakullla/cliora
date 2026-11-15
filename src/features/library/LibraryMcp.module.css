@@ -131,6 +131,23 @@
 .notes[data-tone='warning'] p { color: var(--warning); }
 .targetPanel > .error { flex: none; font-size: var(--fs-caption); }
 
+/* Per-target result of the last commit: written, unchanged, removed, or not done. */
+.results { display: grid; flex: none; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: var(--accent-soft); }
+.results[data-tone='warning'] { border-color: var(--warning-line); background: var(--warning-soft); }
+.resultHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.resultHead > svg { flex: none; color: var(--success); }
+.results[data-tone='warning'] .resultHead > svg { color: var(--warning); }
+.resultHead > span { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.resultList { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.resultList li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.resultList li > svg { flex: none; color: var(--success); }
+.resultList li[data-state='failed'] { color: var(--danger); }
+.resultList li[data-state='failed'] > svg { color: var(--danger); }
+.resultList li[data-state='unsupported'], .resultList li[data-state='unconfirmed'] { color: var(--warning); }
+.resultList li[data-state='unsupported'] > svg, .resultList li[data-state='unconfirmed'] > svg { color: var(--warning); }
+.resultState { flex: 1 1 auto; min-width: 0; }
+.resultFoot { display: flex; justify-content: flex-start; }
+
 .conflict { grid-area: conflict; display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
 .conflictHead { display: flex; align-items: flex-start; gap: var(--space-2); color: var(--warning); }
 .conflictHead > svg { flex: none; margin-top: var(--space-0_5); }

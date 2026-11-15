@@ -483,7 +483,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           <div className={styles.editorForm}>
             <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
           </div>
-          {!remoteTargetId && <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.cwd, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} />}
+          {!remoteTargetId && <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.cwd, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConfirmationChange={setConfirmation} onRetry={() => void save()} />}
         </div>
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">

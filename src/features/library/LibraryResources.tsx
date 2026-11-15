@@ -1,5 +1,5 @@
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
-import { removalContext, useAccountLabels } from './resourceContexts';
+import { removalContext, skillWriteState, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
@@ -38,9 +38,9 @@ type LibrarySkill = SkillPackage & { remoteToolId?: string; remoteReadOnly?: boo
 /** Where the card's files actually live: the library package, a remote root, or a read-only remote root. */
 type SkillSource = 'managed' | 'remote' | 'remoteReadOnly';
 /** One target of an import or sync, so a partial result names what worked and what did not. */
-type TargetOutcome = { name: string; state: 'ok' | 'failed' | 'conflict'; detail: string };
+type TargetOutcome = { name: string; toolId: string; scope: Scope; projectPath: string | null; state: 'ok' | 'unchanged' | 'removed' | 'failed' | 'conflict'; detail: string };
 /** Results belong to the host that produced them, so an old host cannot inherit new rows. */
-type OutcomeReport = { host: string | null; rows: TargetOutcome[] };
+type OutcomeReport = { host: string | null; packageId: string | null; rows: TargetOutcome[] };
 
 function remoteSkillPackages(toolIds: string[], stores: unknown[]): LibrarySkill[] {
   return stores.flatMap((value, index) => ((value as { entries?: NativeSkillEntry[] }).entries ?? []).map(entry => {
@@ -194,20 +194,22 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       ...checked.map((toolId) => ({ toolId, scope: 'global' as const, projectPath: null })),
     ];
     if (item && targets.length) {
-      // Every target keeps its own row: a skipped target is a result, not a silent success.
+      // Every target keeps its own row: a skipped or unchanged target is a result, not a silent success.
       const rows: TargetOutcome[] = [];
       for (const target of targets) {
         const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
+        const row = { name, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath };
         const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
         if (preview?.status === 'conflict') {
-          rows.push({ name, state: 'conflict', detail: preview.detail || t('library.resources.resultConflictDetail') });
+          rows.push({ ...row, state: 'conflict', detail: preview.detail || t('library.resources.resultConflictDetail') });
           continue;
         }
         const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
-        rows.push({ name, state: outcome.status === 'failed' ? 'failed' : 'ok', detail: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') });
+        const state = skillWriteState(outcome);
+        rows.push({ ...row, state, detail: state === 'ok' ? t('library.resources.synced') : state === 'unchanged' ? t('library.resources.resultUnchanged') : outcome.detail || t('library.distribute.noWrite') });
       }
       await reloadSkills();
-      const report: OutcomeReport | null = rows.length ? { host: remoteTargetId ?? null, rows } : null;
+      const report: OutcomeReport | null = rows.length ? { host: remoteTargetId ?? null, packageId: item.id, rows } : null;
       setOutcomes(report);
       const failed = rows.filter((row) => row.state === 'failed');
       const conflicts = rows.filter((row) => row.state === 'conflict');
@@ -220,6 +222,35 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     setOutcomes(null);
     setNotice(t('library.resources.addedToLibrary'));
     setError('');
+  }
+
+  /** Retry only the failed targets of the current report; successful rows stay as returned. */
+  async function retrySkillImport() {
+    const current = outcomes && outcomes.host === (remoteTargetId ?? null) ? outcomes : null;
+    const unfinished = current?.rows.filter((row) => row.state === 'failed') ?? [];
+    if (!current?.packageId || !unfinished.length) return;
+    setBusy(true); setError('');
+    try {
+      const retried: TargetOutcome[] = [];
+      for (const row of unfinished) {
+        // Re-preview first: a target that now conflicts is reported, never silently replaced.
+        const preview = await native.previewSkillTarget(current.packageId, row.toolId, row.scope, row.projectPath);
+        if (preview?.status === 'conflict') { retried.push({ ...row, state: 'conflict', detail: preview.detail || t('library.resources.resultConflictDetail') }); continue; }
+        const outcome = await native.installSkill(current.packageId, row.toolId, row.scope, row.projectPath, preview?.previewToken ?? null, false);
+        const state = skillWriteState(outcome);
+        retried.push({ ...row, state, detail: state === 'ok' ? t('library.resources.synced') : state === 'unchanged' ? t('library.resources.resultUnchanged') : outcome.detail || t('library.distribute.noWrite') });
+      }
+      await reloadSkills();
+      const key = (row: TargetOutcome) => JSON.stringify([row.toolId, row.scope, row.projectPath]);
+      const replaced = new Map(retried.map((row) => [key(row), row]));
+      const rows = current.rows.map((row) => replaced.get(key(row)) ?? row);
+      setOutcomes({ ...current, rows });
+      const stillFailed = rows.filter((row) => row.state === 'failed');
+      setError(stillFailed.length ? stillFailed.map((row) => t('library.resources.syncEntry', { name: row.name, result: row.detail })).join(t('tools.quota.errorSeparator')) : '');
+      const conflicts = retried.filter((row) => row.state === 'conflict');
+      if (conflicts.length) { const item = packages.find((entry) => entry.id === current.packageId); if (item) { setSkillSeed([]); setSkillTarget(item); } }
+    } catch (value) { setError(failure(value)); }
+    finally { setBusy(false); }
   }
 
   async function importPreview(preview: SkillImportPreview, kind: 'local' | 'zip' | 'local_zip', source: string, subdirectory: string | null) {
@@ -324,14 +355,18 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     setBusy(true); setError(''); setNotice('');
     try {
       if (place) {
-        await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
+        const outcome = await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
+        // A returned result is the only evidence of removal; the installation
+        // stays and the failure is shown instead of announcing a removal.
+        if (outcome && outcome.status !== 'removed') { setError(outcome.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
         setNotice(t('library.page.removed', { where, tool: toolName }));
       } else {
         const preview = await native.previewSkillTarget(item.id, toolId, scope, projectPath);
         if (preview?.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceSkillTitle'), confirmLabel: t('library.resources.replaceInstall') })) return;
         const outcome = await native.installSkill(item.id, toolId, scope, projectPath, preview?.previewToken ?? null, preview?.status === 'conflict');
-        if (outcome.status === 'failed') { setError(outcome.detail); return; }
-        setNotice(t('library.resources.installedTo', { where, tool: toolName }));
+        const state = skillWriteState(outcome);
+        if (state === 'failed') { setError(outcome.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
+        setNotice(state === 'unchanged' ? t('library.resources.unchangedTo', { where, tool: toolName }) : t('library.resources.installedTo', { where, tool: toolName }));
       }
       await reloadSkills();
     } catch (value) { setError(failure(value)); }
@@ -343,9 +378,21 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
   // Only rows of the current host render; a stale report never speaks for another host.
-  const report = outcomes && outcomes.host === (remoteTargetId ?? null) ? outcomes.rows : null;
-  const allOk = !!report && report.every((row) => row.state === 'ok');
-  const count = (state: TargetOutcome['state']) => report?.filter((row) => row.state === state).length ?? 0;
+  const report = outcomes && outcomes.host === (remoteTargetId ?? null) ? outcomes : null;
+  const reportRows = report?.rows ?? null;
+  const settled = (row: TargetOutcome) => row.state === 'ok' || row.state === 'unchanged' || row.state === 'removed';
+  const allOk = !!reportRows && reportRows.every(settled);
+  const count = (state: TargetOutcome['state']) => reportRows?.filter((row) => row.state === state).length ?? 0;
+  const resultHeadline = () => {
+    if (!reportRows) return '';
+    if (allOk) {
+      // A target that was already current is not a write, so the headline says which is which.
+      if (!count('unchanged')) return t('library.resources.resultOk', { total: reportRows.length });
+      if (!count('ok') && !count('removed')) return t('library.resources.resultUnchangedOnly', { total: reportRows.length });
+      return t('library.resources.resultWrittenUnchanged', { ok: count('ok') + count('removed'), unchanged: count('unchanged') });
+    }
+    return t(count('conflict') ? 'library.resources.resultConflict' : count('unchanged') ? 'library.resources.resultMixedUnchanged' : 'library.resources.resultMixed', { total: reportRows.length, ok: count('ok'), failed: count('failed'), conflict: count('conflict'), unchanged: count('unchanged') });
+  };
   const stale = loaded && !!loadError;
   const installsUnknown = loaded && !remoteTargetId && !installsKnown && !loading;
   // Before the first read commits (or while it runs) there is no outcome yet: wait, never show a failure.
@@ -366,9 +413,10 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
       <Badge tone={needle ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: libraryPackages.length, total: packages.filter((entry) => entry.inLibrary !== false).length })}</Badge>
       <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
     </div>}
-    {report && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
-      <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{t(allOk ? 'library.resources.resultOk' : count('conflict') ? 'library.resources.resultConflict' : 'library.resources.resultMixed', { total: report.length, ok: count('ok'), failed: count('failed'), conflict: count('conflict') })}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
-      <ul className={styles.resultList}>{report.map((row, index) => <li key={`${row.name}:${index}`} data-state={row.state}><Icon name={row.state === 'ok' ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
+    {reportRows && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
+      <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{resultHeadline()}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
+      <ul className={styles.resultList}>{reportRows.map((row, index) => <li key={`${row.name}:${index}`} data-state={row.state}><Icon name={settled(row) ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>
+      {!!count('failed') && !!report?.packageId && <div className={styles.resultFoot}><Button size="sm" disabled={busy} onClick={() => void retrySkillImport()}>{t('library.resources.retryUnfinished')}</Button></div>}
     </section>}
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {emptyView ?? libraryPackages.map((item) => {

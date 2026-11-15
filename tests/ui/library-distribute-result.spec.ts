@@ -10,11 +10,15 @@ type Config = {
   /** Per-target preview status; anything missing is 'ready'. */
   previews?: Record<string, 'ready' | 'conflict'>;
   /** Per-target install result; anything missing is installed. */
-  installs?: Record<string, 'installed' | 'failed'>;
+  installs?: Record<string, 'installed' | 'failed' | 'already_current'>;
+  /** Per-target removal result; anything missing is removed. */
+  removes?: Record<string, 'removed' | 'failed'>;
   /** Initial read failures; tests flip them through `window.__skillReads`. */
   reads?: { packagesFail?: boolean; installsFail?: boolean };
   /** Starts with one library package installed on Codex. */
   seeded?: boolean;
+  /** With `seeded`, leaves the package uninstalled so its marks can install. */
+  uninstalled?: boolean;
 };
 
 async function mockLibrary(page: Page, config: Config = {}) {
@@ -51,7 +55,7 @@ async function mockLibrary(page: Page, config: Config = {}) {
           }
           if (command === 'list_skill_installations') {
             if (reads.installsFail) throw { message: 'skill install fixture denied' };
-            return args.packageId === 'pkg-seed' ? [{ packageId: 'pkg-seed', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/codex/skills/seeded-skill', state: 'current', digest: 'seed' }] : [];
+            return args.packageId === 'pkg-seed' && !config.uninstalled ? [{ packageId: 'pkg-seed', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/codex/skills/seeded-skill', state: 'current', digest: 'seed' }] : [];
           }
           if (command === 'list_skill_zip_entries') return [''];
           if (command === 'preview_skill_https_zip') return { name: 'alpha', source: args.source, digest: 'new-digest', existingDigest: null, fileCount: 2, changes: [], compatibility: null };
@@ -67,8 +71,16 @@ async function mockLibrary(page: Page, config: Config = {}) {
           }
           if (command === 'install_skill') {
             writes.push({ command, args });
-            const result = config.installs?.[String(args.toolId)] ?? 'installed';
-            return { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: `/tmp/${args.toolId}/skills/alpha`, status: result, detail: result === 'failed' ? '写入失败：目录不可写' : '完成' };
+            // Tests flip `window.__skillInstallMode` to change a target between runs.
+            const overrides = (window as any).__skillInstallMode ?? {};
+            const result = overrides[String(args.toolId)] ?? config.installs?.[String(args.toolId)] ?? 'installed';
+            return { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: `/tmp/${args.toolId}/skills/alpha`, status: result, detail: result === 'failed' ? '写入失败：目录不可写' : result === 'already_current' ? '原生内容已相同' : '完成' };
+          }
+          if (command === 'remove_skill') {
+            writes.push({ command, args });
+            const overrides = (window as any).__skillRemoveMode ?? {};
+            const result = overrides[String(args.toolId)] ?? config.removes?.[String(args.toolId)] ?? 'removed';
+            return { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: `/tmp/${args.toolId}/skills/seeded-skill`, status: result, detail: result === 'failed' ? '目录不可写' : '完成' };
           }
           return null;
         },
@@ -133,7 +145,9 @@ test('a conflicted target is a skipped result row, not a silent success', async 
   // The existing replace flow still opens the Skill, where the replacement is confirmed.
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '修改 Skill', exact: true }) });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('没有勾选 CLI，不会写入任何目标。')).toBeVisible();
   await dialog.getByRole('checkbox', { name: 'Codex', exact: true }).check();
+  await expect(dialog.getByText('将安装到 Codex')).toBeVisible();
   await dialog.getByRole('button', { name: '安装到所选 CLI' }).click();
   await expect(dialog.getByRole('button', { name: '确认替换' })).toBeVisible();
   await dialog.getByRole('button', { name: '确认替换' }).click();
@@ -147,6 +161,9 @@ test('an import without targets shows no result panel', async ({ page }) => {
   await importSkill(page, []);
   await expect(page.getByRole('button', { name: 'alpha', exact: true })).toBeVisible();
   await expect(resultPanel(page)).toHaveCount(0);
+  // The result is a library save only, and no target was attempted.
+  await expect(page.getByRole('status').filter({ hasText: '已放进资料库。' })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__distWrites.length)).toBe(0);
 });
 
 test('Skill package and install-location failures are not shown as an empty library or "not installed"', async ({ page }) => {
@@ -186,8 +203,261 @@ test('Skill package and install-location failures are not shown as an empty libr
   expect(await page.evaluate(() => (window as any).__distWrites.length)).toBe(0);
 });
 
-/* Long-term rules: the body save, the list refresh and each target's update are reported apart. */
-const ruleTools = [
+test('a partial Skill import names the unfinished target and retries only that one', async ({ page }) => {
+  await mockLibrary(page, { installs: { claude_code: 'failed' } });
+  await page.goto('/');
+  await openSkills(page);
+  await importSkill(page, ['Codex', 'Claude Code']);
+  const panel = resultPanel(page);
+  await expect(panel).toHaveAttribute('data-tone', 'warning');
+  await expect(panel).toContainText('1 个成功，1 个失败');
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toContainText('写入失败：目录不可写');
+  await page.evaluate(() => { (window as any).__skillInstallMode = { claude_code: 'installed' }; });
+  await panel.getByRole('button', { name: '重试未完成的目标', exact: true }).click();
+  // Recovery keeps the row that already worked and re-checks the unfinished target.
+  await expect(panel).not.toHaveAttribute('data-tone', 'warning');
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Codex' })).toHaveAttribute('data-state', 'ok');
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'ok');
+  await expect(panel.getByRole('button', { name: '重试未完成的目标', exact: true })).toHaveCount(0);
+  const installs = await page.evaluate(() => (window as any).__distWrites.filter((entry: { command: string }) => entry.command === 'install_skill').map((entry: { args: { toolId: string } }) => entry.args.toolId));
+  expect(installs).toEqual(['codex', 'claude_code', 'claude_code']);
+});
+
+test('a Skill target that is already current is unchanged, not a second write', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, uninstalled: true, installs: { codex: 'already_current' } });
+  await page.goto('/');
+  await openSkills(page);
+  const card = page.getByRole('region', { name: '资料库内容' }).locator('[data-skill-id="pkg-seed"]');
+  await card.getByRole('button', { name: 'Codex · 未安装' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Codex 已是最新，没有重复写入。' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '已安装到 Codex' })).toHaveCount(0);
+});
+
+test('an import reports a target that was already current as unchanged next to the real write', async ({ page }) => {
+  await mockLibrary(page, { installs: { codex: 'already_current' } });
+  await page.goto('/');
+  await openSkills(page);
+  await importSkill(page, ['Codex', 'Claude Code']);
+  const panel = resultPanel(page);
+  await expect(panel).not.toHaveAttribute('data-tone', 'warning');
+  await expect(panel).toContainText('1 个已处理，1 个未变化');
+  const unchanged = panel.getByRole('listitem').filter({ hasText: 'Codex' });
+  await expect(unchanged).toHaveAttribute('data-state', 'unchanged');
+  await expect(unchanged).toContainText('已是最新，没有重复写入');
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Claude Code' })).toHaveAttribute('data-state', 'ok');
+});
+
+test('a failed Skill removal inside the dialog reports the native reason without a retry that would install', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, removes: { codex: 'failed' } });
+  await page.goto('/');
+  await openSkills(page);
+  await page.getByRole('button', { name: '修改' }).click();
+  const editor = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '修改 Skill', exact: true }) });
+  await editor.getByRole('button', { name: '移除', exact: true }).click();
+  await page.getByRole('dialog', { name: '从该工具移除' }).getByRole('button', { name: '移除', exact: true }).click();
+  const panel = editor.getByRole('status', { name: 'Skill 写入结果' });
+  await expect(panel).toHaveAttribute('data-tone', 'warning');
+  await expect(panel.getByRole('listitem')).toHaveCount(1);
+  await expect(panel.getByRole('listitem')).toHaveAttribute('data-state', 'failed');
+  await expect(panel).toContainText('Codex：目录不可写');
+  // Recovery for a failed removal is its own confirmed 移除 action, not a reinstall.
+  await expect(panel.getByRole('button', { name: '重试未完成的目标', exact: true })).toHaveCount(0);
+  await expect(editor.locator('ul').filter({ hasText: '全局 · 已安装' }).getByText('Codex')).toBeVisible();
+});
+
+test('a failed Skill removal keeps the installation with its native reason', async ({ page }) => {
+  await mockLibrary(page, { seeded: true, removes: { codex: 'failed' } });
+  await page.goto('/');
+  await openSkills(page);
+  const library = page.getByRole('region', { name: '资料库内容' });
+  const mark = library.locator('[data-skill-id="pkg-seed"]').getByRole('button', { name: 'Codex · 已生效' });
+  await expect(mark).toHaveAttribute('aria-pressed', 'true');
+  await mark.click();
+  await expect(page.getByRole('alert')).toContainText('目录不可写');
+  await expect(page.getByRole('status').filter({ hasText: '已从' })).toHaveCount(0);
+  await expect(library.locator('[data-skill-id="pkg-seed"]').getByRole('button', { name: 'Codex · 已生效' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+/* MCP: the library save, the pre-submit target set and each committed target are separate claims. */
+type McpConfig = {
+  /** Seeded placement for the fixture definition; an empty list keeps it library-only. */
+  placements?: Array<{ toolId: string }>;
+  /** Per-target commit result; anything missing is written. */
+  commits?: Record<string, 'written' | 'failed' | 'already_matching'>;
+};
+
+async function mockMcp(page: Page, config: McpConfig = {}) {
+  await page.addInitScript(({ tools, config }) => {
+    const definitions: Array<Record<string, unknown>> = config.placements ? [{ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: ['-y'], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, version: 1 }] : [];
+    const placements: Array<Record<string, unknown>> = (config.placements ?? []).map((item) => ({ definitionId: 'mcp-1', toolId: item.toolId, scope: 'global', projectPath: null, contextId: null, enabled: true }));
+    const writes: string[] = [];
+    const commits: Array<Record<string, unknown>> = [];
+    const save = (draft: Record<string, any>) => {
+      const item = { ...draft, id: draft.id || `mcp-${definitions.length + 1}`, version: (draft.expectedVersion ?? 0) + 1 };
+      const index = definitions.findIndex((old) => old.id === item.id);
+      if (index < 0) definitions.push(item); else definitions[index] = item;
+      return item;
+    };
+    const descriptor = (tool: { id: string; name: string }) => ({
+      id: tool.id, name: tool.name, interfaceFormats: [], projectModelOverride: false, yoloAvailable: false,
+      launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' },
+      resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
+      management: { accounts: false, mcp: true, skills: false, agents: false, plugins: false, projectPlugins: false },
+    });
+    Object.assign(window, {
+      isTauri: true,
+      __mcpWrites: writes,
+      __mcpCommits: commits,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map((tool) => tool.id), theme: 'system' }, tools: tools.map((tool) => ({ id: tool.id, name: tool.name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: tools.map(descriptor), managedIds: tools.map((tool) => tool.id), preservedUnknown: [] };
+          if (command === 'list_projects' || command === 'list_library_items' || command === 'list_accounts' || command === 'list_rule_placements') return [];
+          if (command === 'list_mcp_definitions') return definitions;
+          if (command === 'list_mcp_placements') return placements;
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          if (command === 'get_registered_tool_workspace') return {
+            probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
+            profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          };
+          if (command === 'save_mcp_definition') { writes.push(command); return save(args.draft); }
+          if (command === 'preview_mcp_draft') {
+            writes.push(command);
+            const definition = save(args.draft);
+            return { draft: args.draft, definition, targets: args.targets.map((target: Record<string, any>) => ({ ...target, operation: target.operation ?? 'write', status: 'ready', detail: '将写入这个 CLI', path: '/tmp/config.toml', baselineHash: 'hash-baseline', previewToken: `token-${target.toolId}`, existing: null, proposed: { command: 'npx' } })) };
+          }
+          if (command === 'commit_mcp_draft') {
+            writes.push(command);
+            commits.push(args);
+            const definition = save(args.draft);
+            const overrides = (window as any).__mcpCommitMode ?? {};
+            const targets = args.targets.map((target: Record<string, any>) => {
+              const mode = overrides[String(target.toolId)] ?? config.commits?.[String(target.toolId)] ?? 'written';
+              if (target.operation !== 'remove') {
+                const index = placements.findIndex((place) => place.definitionId === definition.id && place.toolId === target.toolId);
+                const place = { definitionId: definition.id, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath ?? null, contextId: target.contextId ?? null, enabled: target.enabled };
+                if (index < 0) placements.push(place); else placements[index] = place;
+              }
+              return { ...target, path: '/tmp/config.toml', baselineHash: 'hash-baseline', existing: null, proposed: null, status: mode === 'failed' ? 'failed' : 'written', detail: mode === 'failed' ? '写入失败：目录不可写' : mode === 'already_matching' ? 'already_matching' : 'committed' };
+            });
+            return { definition, targets };
+          }
+          return null;
+        },
+      },
+    });
+  }, { tools, config });
+}
+
+async function openMcp(page: Page) {
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('region', { name: '资料库内容' }).getByRole('tab', { name: 'MCP', exact: true }).click();
+}
+
+const mcpPanel = (dialog: Locator) => dialog.getByRole('status', { name: 'MCP 写入结果' });
+const mcpWrites = (page: Page) => page.evaluate(() => (window as any).__mcpWrites as string[]);
+
+test('an MCP saved without targets stays in the library and claims no native write', async ({ page }) => {
+  await mockMcp(page);
+  await page.goto('/');
+  await openMcp(page);
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('filesystem');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('npx');
+  // The pre-submit state says it is a library-only save, not a write.
+  await expect(dialog.getByText('没有勾选 CLI，只保存到资料库。')).toBeVisible();
+  await dialog.locator('[data-dialog-save]').click();
+  await expect(dialog).toHaveCount(0);
+  const toast = page.getByRole('status').filter({ hasText: '已保存在资料库。' });
+  await expect(toast).toBeVisible();
+  await expect(toast).not.toContainText('已写入');
+  // Only the definition save ran: no preview and no commit were submitted.
+  expect(await mcpWrites(page)).toEqual(['save_mcp_definition']);
+});
+
+test('an MCP save-and-distribute run states the target changes before it submits', async ({ page }) => {
+  await mockMcp(page, { placements: [{ toolId: 'codex' }] });
+  await page.goto('/');
+  await openMcp(page);
+  await page.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  const targets = dialog.getByRole('region', { name: '写入到 CLI' });
+  await expect(targets.getByRole('listitem')).toHaveCount(2);
+  await expect(targets.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
+  await targets.getByRole('checkbox', { name: 'Claude Code', exact: true }).check();
+  await expect(targets).toContainText('将写入 Claude Code');
+  await targets.getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
+  await expect(targets).toContainText('将写入 Claude Code');
+  await expect(targets).toContainText('将从 Codex 移除');
+  await targets.getByRole('checkbox', { name: 'Codex', exact: true }).check();
+  await expect(targets).not.toContainText('将从');
+  await dialog.locator('[data-dialog-save]').click();
+  // The preview lists exactly the reviewed set before the commit is authorized.
+  const preview = dialog.getByRole('group', { name: 'MCP 写入预览' });
+  await expect(preview).toContainText('Codex');
+  await expect(preview).toContainText('Claude Code');
+  expect(await mcpWrites(page)).toEqual(['preview_mcp_draft']);
+  await dialog.locator('[data-dialog-save]').click();
+  await expect(dialog).toHaveCount(0);
+  const commits = await page.evaluate(() => (window as any).__mcpCommits as Array<{ targets: Array<{ toolId: string }> }>);
+  expect(commits).toHaveLength(1);
+  expect(commits[0].targets.map((target) => target.toolId).sort()).toEqual(['claude_code', 'codex']);
+});
+
+test('an MCP run with one failed target keeps both rows and offers the unfinished retry', async ({ page }) => {
+  await mockMcp(page, { placements: [{ toolId: 'codex' }], commits: { claude_code: 'failed' } });
+  await page.goto('/');
+  await openMcp(page);
+  await page.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('checkbox', { name: 'Claude Code', exact: true }).check();
+  await dialog.locator('[data-dialog-save]').click();
+  await dialog.locator('[data-dialog-save]').click();
+  const panel = mcpPanel(dialog);
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-tone', 'warning');
+  await expect(panel.getByRole('listitem')).toHaveCount(2);
+  await expect(panel.getByRole('listitem').filter({ hasText: 'Codex' })).toHaveAttribute('data-state', 'written');
+  const failed = panel.getByRole('listitem').filter({ hasText: 'Claude Code' });
+  await expect(failed).toHaveAttribute('data-state', 'failed');
+  await expect(failed).toContainText('写入失败：目录不可写');
+  await expect(dialog.getByRole('region', { name: '写入到 CLI' }).getByRole('alert')).toContainText('Claude Code：写入失败：目录不可写');
+  // The failed detail stays readable inside the panel instead of widening the dialog.
+  const overflow = await panel.evaluate((element) => ({ panel: element.scrollWidth - element.clientWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth }));
+  expect(overflow.panel).toBeLessThanOrEqual(1);
+  expect(overflow.page).toBeLessThanOrEqual(1);
+  // The dialog stays open with the draft for recovery.
+  await expect(page.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('npx');
+  await page.evaluate(() => { (window as any).__mcpCommitMode = { claude_code: 'written' }; });
+  await panel.getByRole('button', { name: '重试未完成的目标', exact: true }).click();
+  // The retry re-previews the reviewed target set instead of replaying the failed commit.
+  await expect(dialog.getByRole('group', { name: 'MCP 写入预览' })).toBeVisible();
+  expect(await mcpWrites(page)).toEqual(['preview_mcp_draft', 'commit_mcp_draft', 'preview_mcp_draft']);
+  await dialog.locator('[data-dialog-save]').click();
+  await expect(dialog).toHaveCount(0);
+  const commits = await page.evaluate(() => (window as any).__mcpCommits as Array<{ targets: unknown[] }>);
+  expect(commits).toHaveLength(2);
+});
+
+test('an MCP target already matching the file is unchanged, not written', async ({ page }) => {
+  await mockMcp(page, { placements: [{ toolId: 'codex' }], commits: { codex: 'already_matching' } });
+  await page.goto('/');
+  await openMcp(page);
+  await page.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('[data-dialog-save]').click();
+  await dialog.locator('[data-dialog-save]').click();
+  await expect(dialog).toHaveCount(0);
+  const toast = page.getByRole('status').filter({ hasText: 'Codex 已是最新，没有重复写入。' });
+  await expect(toast).toBeVisible();
+  await expect(toast).not.toContainText('已写入');
+});
+
+/* Long-term rules: the body save, the list refresh and each target's update are reported apart. */const ruleTools = [
   { id: 'codex', name: 'Codex' },
   { id: 'claude_code', name: 'Claude Code' },
   { id: 'opencode', name: 'OpenCode' },

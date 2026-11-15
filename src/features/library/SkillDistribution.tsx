@@ -1,4 +1,4 @@
-import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
+import { removalContext, skillWriteState, useResourceContexts, useAccountLabels, type SkillWriteState } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -12,6 +12,7 @@ import type { SkillInstallation, SkillPackage, SkillTargetPreview } from '../../
 import { samePath, scopeLabel } from './CliMarks';
 import { CliTargetGrid } from './CliTargetGrid';
 import { Button } from '../../components/ui';
+import { Icon } from '../../components/Icon';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -22,6 +23,10 @@ function text(error: unknown) {
 function stateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
+
+/** One target of the last write in this dialog. `detail` is the native message
+ * (or the reason nothing changed), never an inferred success. */
+type TargetRow = { toolId: string; state: SkillWriteState | 'conflict'; detail: string; op: 'install' | 'remove' };
 
 export function SkillDistribution({ item, tools, projects, installations, initialTools = [], autoRun = false, onChanged }: { item: SkillPackage; tools: AdapterDescriptor[]; projects: Project[]; installations: SkillInstallation[]; initialTools?: string[]; autoRun?: boolean;   onChanged: () => Promise<void> }) {
   const { t } = useTranslation();
@@ -36,7 +41,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   const [pending, setPending] = useState<Array<SkillTargetPreview & { toolId: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [rows, setRows] = useState<TargetRow[]>([]);
   const activePath = scope === 'project' ? projectPath : null;
   const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
   const placed = installations.filter((entry) => entry.packageId === item.id);
@@ -53,18 +58,19 @@ export function SkillDistribution({ item, tools, projects, installations, initia
     if (scope === 'project' && !projectPath) { setError(t('tools.mcp.pickProject')); return; }
     ids = ids.filter((id) => contexts.ready(targetFor(id)));
     if (!ids.length) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setRows([]);
     try {
       const conflicts: Array<SkillTargetPreview & { toolId: string }> = [];
-      const notes: string[] = [];
+      const written: TargetRow[] = [];
       for (const toolId of ids) {
         const preview = allowTakeover ? pending.find((entry) => entry.toolId === toolId) ?? null : await native.previewSkillTarget(item.id, toolId, scope, activePath);
         if (!allowTakeover && preview?.status === 'conflict') { conflicts.push({ ...preview, toolId }); continue; }
         const outcome = await native.installSkill(item.id, toolId, scope, activePath, preview?.previewToken ?? null, allowTakeover && preview?.status === 'conflict');
-        notes.push(t('library.distribute.writeEntry', { target: tools.find((tool) => tool.id === toolId)?.name ?? toolId, detail: outcome.status === 'failed' ? outcome.detail : t('tools.skills.stateInstalled') }));
+        const state = skillWriteState(outcome);
+        written.push({ toolId, state, op: 'install', detail: state === 'ok' ? t('tools.skills.stateInstalled') : state === 'unchanged' ? t('library.skillDist.unchanged') : outcome.detail || t('library.distribute.noWrite') });
       }
       setPending(conflicts);
-      if (notes.length) setNotice(notes.join(t('tools.quota.errorSeparator')));
+      setRows([...written, ...conflicts.map((entry): TargetRow => ({ toolId: entry.toolId, state: 'conflict', op: 'install', detail: entry.detail || t('library.resources.resultConflictDetail') }))]);
       await onChanged();
     } catch (value) { setError(text(value)); }
     finally { setBusy(false); }
@@ -79,13 +85,44 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   async function remove(entry: SkillInstallation) {
     if (!contexts.ready(entry)) return;
     if (!await confirmAction(t('library.skillDist.confirmRemove', { tool: tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId, name: item.name }), () => true, { title: t('library.skillDist.removeTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setRows([]);
     try {
-      await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
+      const outcome = await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
+      // A returned result is the only evidence of removal; anything but `removed`
+      // keeps the installation and says why instead of announcing a removal that did not happen.
+      if (outcome && outcome.status !== 'removed') {
+        setRows([{ toolId: entry.toolId, state: 'failed', op: 'remove', detail: outcome.detail || t('library.distribute.noWrite') }]);
+        setError(outcome.detail || t('library.resources.cannotWrite', { tool: toolName(entry.toolId) }));
+        await onChanged();
+        return;
+      }
+      if (outcome) setRows([{ toolId: entry.toolId, state: 'removed', op: 'remove', detail: t('library.distribute.resultRemoved') }]);
       await onChanged();
     } catch (value) { setError(text(value)); }
     finally { setBusy(false); }
   }
+
+  const installFailedIds = rows.filter((row) => row.state === 'failed' && row.op === 'install').map((row) => row.toolId);
+  // A failed removal is retried from its own 移除 button, which keeps the confirmation.
+  const incomplete = rows.some((row) => row.state === 'failed' || row.state === 'conflict');
+  const countOf = (states: Array<TargetRow['state']>) => rows.filter((row) => states.includes(row.state)).length;
+  const toolName = (toolId: string) => tools.find((tool) => tool.id === toolId)?.name ?? toolId;
+  // Pre-submit summary: the checked targets and what each one will change.
+  const readySelected = selected.filter((id) => contexts.ready(targetFor(id)));
+  const changeOf = (toolId: string) => {
+    const place = placed.find((entry) => entry.toolId === toolId && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)));
+    if (!place) return 'add' as const;
+    if (place.state === 'conflict') return 'conflict' as const;
+    if (place.state === 'update_available' || place.state === 'missing') return 'update' as const;
+    return 'current' as const;
+  };
+  const namesOf = (change: 'add' | 'update' | 'current' | 'conflict') => readySelected.filter((id) => changeOf(id) === change).map(toolName);
+  const summary = [
+    namesOf('add').length ? t('library.skillDist.summaryAdd', { names: namesOf('add').join('、') }) : '',
+    namesOf('update').length ? t('library.skillDist.summaryUpdate', { names: namesOf('update').join('、') }) : '',
+    namesOf('conflict').length ? t('library.skillDist.summaryConflict', { names: namesOf('conflict').join('、') }) : '',
+    namesOf('current').length ? t('library.skillDist.summaryCurrent', { names: namesOf('current').join('、') }) : '',
+  ].filter(Boolean);
 
   return <div className={styles.skillAdd}>
     <section className={styles.skillSection}>
@@ -115,6 +152,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
         }} />
       </div>
       <CliTargetGrid tools={tools} selected={selected} disabled={(id) => !contexts.ready(targetFor(id))} onToggle={(id, checked) => { setSelected(checked ? [...selected, id] : selected.filter((item) => item !== id)); setPending([]); }} />
+      <p data-skill-summary>{summary.length ? summary.join(t('library.skillDist.summaryJoin')) : t('library.skillDist.summaryNone')}</p>
       <div className={styles.actions}><Button variant={pending.length ? 'secondary' : 'primary'} disabled={busy || !selected.some((id) => contexts.ready(targetFor(id)))} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? t('library.skillDist.syncSelected') : t('library.skillDist.installSelected')}</Button></div>
     </section>
     {!!pending.length && <section className={styles.skillSection}>
@@ -123,7 +161,11 @@ export function SkillDistribution({ item, tools, projects, installations, initia
       {pending.map((entry) => <p key={entry.toolId}>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId} · {entry.detail}</p>)}
       <div className={styles.actions}><Button variant="primary" disabled={busy} onClick={() => void install(true)}>{t('library.skillDist.confirmReplace')}</Button></div>
     </section>}
-    {notice && <p className={styles.notice} role="status">{notice}</p>}
+    {!!rows.length && <section className={styles.result} data-tone={incomplete ? 'warning' : undefined} role="status" aria-label={t('library.skillDist.resultAria')}>
+      <div className={styles.resultHead}><Icon name={incomplete ? 'alert' : 'check'} size={16} /><span>{t(incomplete ? 'library.skillDist.resultIncomplete' : 'library.skillDist.resultDone', { total: rows.length, ok: countOf(['ok', 'removed']), unchanged: countOf(['unchanged']), failed: countOf(['failed']), conflict: countOf(['conflict']) })}</span></div>
+      <ul className={styles.resultList}>{rows.map((row) => <li key={row.toolId} data-state={row.state}><Icon name={row.state === 'failed' || row.state === 'conflict' ? 'alert' : 'check'} size={14} /><span className={styles.resultState}>{t('library.distribute.writeEntry', { target: toolName(row.toolId), detail: row.detail })}</span></li>)}</ul>
+      {!!installFailedIds.length && <div className={styles.actions}><Button size="sm" disabled={busy} onClick={() => void install(false, installFailedIds)}>{t('library.skillDist.resultRetry')}</Button></div>}
+    </section>}
     {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: tools.find((tool) => tool.id === issue.toolId)?.name ?? issue.toolId, scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;

@@ -1,4 +1,4 @@
-import { useResourceContexts, useAccountLabels } from './resourceContexts';
+import { mcpWriteState, useResourceContexts, useAccountLabels, type McpWriteState } from './resourceContexts';
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CodeEditor } from '../../components/CodeEditor';
@@ -39,7 +39,9 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   formStamp: string;
   onWillDistribute: (active: boolean) => void;
   onConfirmationChange: (state: McpConfirmation) => void;
-}>(function McpDistribution({ definition, tools, projects, placements, formStamp, onWillDistribute, onConfirmationChange }, ref) {
+  /** Recovery entry after a partial run; re-runs the save-and-distribute flow. */
+  onRetry?: () => void;
+}>(function McpDistribution({ definition, tools, projects, placements, formStamp, onWillDistribute, onConfirmationChange, onRetry }, ref) {
   const { t } = useTranslation();
   const panelId = useId();
   const placedFor = (nextScope: Scope, nextPath: string | null) => placements.filter((item) => item.definitionId === definition.id && contexts.matches(item) && item.scope === nextScope && (nextScope === 'global' || samePath(item.projectPath, nextPath)));
@@ -108,9 +110,10 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const where = nextScope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(nextScope, nextPath, projects) }) : '';
     return `${where}${toolName(toolId)}`;
   }
-  function noticeFor(written: McpTargetResult[], removed: McpTargetResult[]) {
+  function noticeFor(written: McpTargetResult[], removed: McpTargetResult[], unchanged: McpTargetResult[] = []) {
     const parts: string[] = [];
     if (written.length) parts.push(t('library.distribute.written', { targets: written.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、') }));
+    if (unchanged.length) parts.push(t('library.distribute.unchanged', { targets: unchanged.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、') }));
     if (removed.length) parts.push(t('library.distribute.removed', { where: scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, activePath, projects) }) : '', names: removed.map((item) => toolName(item.toolId)).join('、') }));
     return parts.join('');
   }
@@ -144,14 +147,19 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   }
   async function finish(saved: McpDefinition, committed: McpTargetResult[]): Promise<McpDistributeOutcome> {
     setResults(committed);
-    const failed = committed.filter((item) => item.status !== 'written' && item.status !== 'removed');
-    if (failed.length) {
-      const message = failed.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
+    // Only a returned write/removal counts as finished; a target still carrying
+    // its preview status has no write evidence and stays unfinished.
+    const unfinished = committed.filter((item) => {
+      const state = mcpWriteState(item);
+      return state !== 'written' && state !== 'unchanged' && state !== 'removed';
+    });
+    if (unfinished.length) {
+      const message = unfinished.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: mcpWriteState(item) === 'unconfirmed' ? t('library.distribute.resultUnconfirmed') : item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
       setError(message);
       return { status: 'failed', message, definition: saved };
     }
     onConfirmationChange('none');
-    return { status: 'written', notice: noticeFor(committed.filter((item) => item.status === 'written'), committed.filter((item) => item.status === 'removed')), definition: saved };
+    return { status: 'written', notice: noticeFor(committed.filter((item) => mcpWriteState(item) === 'written'), committed.filter((item) => item.status === 'removed'), committed.filter((item) => mcpWriteState(item) === 'unchanged')), definition: saved };
   }
   async function inspect(draft: McpDraft): Promise<McpDistributeOutcome> {
     const ids = selected.filter((id) => contexts.ready(targetFor(id)));
@@ -253,6 +261,16 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     removing.length ? t('library.distribute.summaryRemove', { names: removing.join('、') }) : '',
     outside ? t('library.distribute.summaryOutside', { count: outside }) : '',
   ].filter(Boolean);
+  // Each committed target speaks for itself: a partial run never reads as overall success.
+  const resultRows = (results ?? []).map((item) => ({ item, state: mcpWriteState(item) }));
+  const resultLabel = (item: McpTargetResult, state: McpWriteState) => state === 'written' ? t('library.distribute.resultWritten')
+    : state === 'unchanged' ? t('library.distribute.resultUnchanged')
+    : state === 'removed' ? t('library.distribute.resultRemoved')
+    : state === 'unsupported' ? item.detail || t('library.distribute.resultUnsupported')
+    : state === 'unconfirmed' ? t('library.distribute.resultUnconfirmed')
+    : item.detail || t('library.distribute.noWrite');
+  const resultCount = (states: McpWriteState[]) => resultRows.filter((row) => states.includes(row.state)).length;
+  const resultIncomplete = resultRows.some((row) => row.state === 'failed' || row.state === 'unsupported' || row.state === 'unconfirmed');
 
   return <div className={styles.distributeContents}>
     <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`} data-mcp-targets>
@@ -288,7 +306,11 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       {contexts.issues.some((issue) => !inView(issue)) && <div className={styles.notes} data-tone="warning">
         {contexts.issues.filter((issue) => !inView(issue)).map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
       </div>}
-      {results && <div className={styles.notes} role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.status === 'removed' ? t('library.distribute.resultRemoved') : item.detail })}</p>)}</div>}
+      {results && <section className={styles.results} data-tone={resultIncomplete ? 'warning' : undefined} role="status" aria-label={t('library.distribute.resultAria')}>
+        <div className={styles.resultHead}><Icon name={resultIncomplete ? 'alert' : 'check'} size={16} /><span>{t(resultIncomplete ? 'library.distribute.resultIncomplete' : 'library.distribute.resultDone', { total: resultRows.length, ok: resultCount(['written', 'removed']), unchanged: resultCount(['unchanged']), unfinished: resultCount(['failed', 'unsupported', 'unconfirmed']) })}</span></div>
+        <ul className={styles.resultList}>{resultRows.map((row) => <li key={JSON.stringify([row.item.toolId, row.item.scope, row.item.projectPath, row.item.contextId])} data-state={row.state}><Icon name={row.state === 'written' || row.state === 'unchanged' || row.state === 'removed' ? 'check' : 'alert'} size={14} /><span className={styles.resultState}>{t('library.distribute.resultEntry', { tool: placeLabel(row.item.toolId, row.item.scope, row.item.projectPath), result: resultLabel(row.item, row.state) })}</span></li>)}</ul>
+        {resultIncomplete && onRetry && <div className={styles.resultFoot}><Button size="sm" onClick={() => onRetry()}>{t('library.distribute.resultRetry')}</Button></div>}
+      </section>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </section>
     {preview && <div className={styles.conflict} data-conflict={preview.some(item => item.status === 'conflict') || undefined} role="group" aria-label={t('tools.mcp.previewLabel')}>

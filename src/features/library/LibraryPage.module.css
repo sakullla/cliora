@@ -139,6 +139,7 @@
 .resultState { flex: 1 1 auto; min-width: 0; color: var(--text-2); }
 .resultList li[data-state="failed"] .resultState { color: var(--danger); }
 .resultList li[data-state="conflict"] .resultState { color: var(--warning); }
+.resultFoot { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .resultList li .resultPath, .resultList li .resultDetail { flex: 1 1 100%; padding-left: calc(var(--space-3) + var(--space-2_5)); }
 .resultList li .resultPath { font-family: var(--font-mono); }
 .resultList li .resultDetail { color: var(--text-2); }
